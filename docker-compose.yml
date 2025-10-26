@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  wb-calculator:
+    build: .
+    container_name: wb-calculator
+    ports:
+      - "${PORT:-5000}:5000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./processed:/app/processed
+      - ./data:/app/data
+    environment:
+      - APP_SECRET_KEY=${APP_SECRET_KEY:-wb-calculator-secret}
+      - PORT=5000
+    restart: unless-stopped
+

@@ -1,0 +1,13 @@
+__pycache__/
+.venv/
+.env
+*.pyc
+*.pyo
+uploads/*
+processed/*
+data/state.json
+*.xlsx
+*.csv
+.idea/
+*.log
+
