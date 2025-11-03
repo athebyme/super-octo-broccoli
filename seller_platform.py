@@ -24,7 +24,12 @@ from wildberries_api import WildberriesAPIError, list_cards
 # Настройка приложения
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'wb-seller-platform-secret-key-change-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///seller_platform.db')
+BASE_DIR = Path(__file__).resolve().parent
+DATA_ROOT = BASE_DIR / 'data'
+DEFAULT_DB_PATH = DATA_ROOT / 'seller_platform.db'
+DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+default_db_uri = os.environ.get('DATABASE_URL') or f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
+app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else ''
 
@@ -36,13 +41,12 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
 
-BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_ROOT = BASE_DIR / 'uploads'
 PROCESSED_ROOT = BASE_DIR / 'processed'
 
 
 def ensure_storage_roots() -> None:
-    for folder in (UPLOAD_ROOT, PROCESSED_ROOT):
+    for folder in (UPLOAD_ROOT, PROCESSED_ROOT, DATA_ROOT):
         folder.mkdir(parents=True, exist_ok=True)
 
 
