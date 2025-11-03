@@ -122,10 +122,11 @@
                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                         <td class="px-6 py-4">
                             {% if product.photos_json %}
-                                {% set photos = product.photos_json|safe|from_json %}
-                                {% if photos %}
-                                <img src="{{ photos[0] }}"
+                                {% set photo_indices = product.photos_json|safe|from_json %}
+                                {% if photo_indices and photo_indices|length > 0 %}
+                                <img src="{{ wb_photo_url(product.nm_id, photo_indices[0], 'c246x328') }}"
                                      alt="{{ product.title }}"
+                                     onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2264%22 height=%2264%22%3E%3Crect width=%22100%25%22 height=%22100%25%22 fill=%22%23e5e7eb%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2216%22 fill=%22%239ca3af%22%3ENo photo%3C/text%3E%3C/svg%3E'"
                                      class="w-16 h-16 object-cover rounded-lg">
                                 {% else %}
                                 <div class="w-16 h-16 bg-gray-200 dark:bg-gray-600 rounded-lg flex items-center justify-center">

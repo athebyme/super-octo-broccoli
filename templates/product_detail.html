@@ -18,20 +18,32 @@
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
             <!-- Фотографии -->
             <div>
-                {% if photos %}
+                {% if photos and photos|length > 0 %}
                 <div id="photoGallery" class="mb-4">
                     <img id="mainPhoto"
-                         src="{{ photos[0] }}"
+                         src="{{ wb_photo_url(product.nm_id, photos[0], 'big') }}"
                          alt="{{ product.title }}"
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"
                          class="w-full h-96 object-contain bg-gray-100 dark:bg-gray-700 rounded-lg">
+                    <!-- Fallback если фото не загрузилось -->
+                    <div class="w-full h-96 bg-gray-200 dark:bg-gray-700 rounded-lg items-center justify-center" style="display:none;">
+                        <div class="text-center text-gray-400">
+                            <svg class="w-24 h-24 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                            </svg>
+                            <p>Фото недоступно</p>
+                        </div>
+                    </div>
                 </div>
                 <!-- Миниатюры -->
                 {% if photos|length > 1 %}
                 <div class="grid grid-cols-4 gap-2">
-                    {% for photo in photos[:8] %}
-                    <img src="{{ photo }}"
+                    {% for photo_index in photos[:8] %}
+                    {% set photo_url = wb_photo_url(product.nm_id, photo_index, 'c246x328') %}
+                    <img src="{{ photo_url }}"
                          alt="Фото {{ loop.index }}"
-                         onclick="changeMainPhoto('{{ photo }}')"
+                         onclick="changeMainPhoto('{{ wb_photo_url(product.nm_id, photo_index, 'big') }}')"
+                         onerror="this.style.opacity='0.3'"
                          class="w-full h-20 object-cover rounded cursor-pointer hover:opacity-75 transition-opacity">
                     {% endfor %}
                 </div>

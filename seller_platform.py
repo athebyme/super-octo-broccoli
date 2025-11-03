@@ -38,6 +38,62 @@ app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else ''
 
+# Helper функции для работы с WB фотографиями
+def wb_photo_url(nm_id: int, photo_index: int = 1, size: str = 'big') -> str:
+    """
+    Формирует URL фотографии товара Wildberries
+
+    Args:
+        nm_id: Артикул WB (nmID)
+        photo_index: Номер фотографии (1, 2, 3, ...)
+        size: Размер фотографии ('big', 'c246x328', 'c516x688', 'tm')
+
+    Returns:
+        Полный URL фотографии
+
+    Формат URL: https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nmId}/images/{size}/{index}.webp
+    """
+    if not nm_id:
+        return ''
+
+    vol = nm_id // 100000
+    part = nm_id // 1000
+
+    # Определяем номер корзины по vol
+    if vol >= 0 and vol <= 143:
+        basket = '01'
+    elif vol >= 144 and vol <= 287:
+        basket = '02'
+    elif vol >= 288 and vol <= 431:
+        basket = '03'
+    elif vol >= 432 and vol <= 719:
+        basket = '04'
+    elif vol >= 720 and vol <= 1007:
+        basket = '05'
+    elif vol >= 1008 and vol <= 1061:
+        basket = '06'
+    elif vol >= 1062 and vol <= 1115:
+        basket = '07'
+    elif vol >= 1116 and vol <= 1169:
+        basket = '08'
+    elif vol >= 1170 and vol <= 1313:
+        basket = '09'
+    elif vol >= 1314 and vol <= 1601:
+        basket = '10'
+    elif vol >= 1602 and vol <= 1655:
+        basket = '11'
+    elif vol >= 1656 and vol <= 1919:
+        basket = '12'
+    elif vol >= 1920 and vol <= 2045:
+        basket = '13'
+    elif vol >= 2046 and vol <= 2189:
+        basket = '14'
+    else:
+        basket = '15'
+
+    return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/{size}/{photo_index}.webp"
+
+
 # Добавляем встроенные функции Python в контекст Jinja2
 app.jinja_env.globals.update({
     'min': min,
@@ -45,6 +101,7 @@ app.jinja_env.globals.update({
     'len': len,
     'int': int,
     'str': str,
+    'wb_photo_url': wb_photo_url,
 })
 
 # Инициализация расширений
@@ -783,12 +840,20 @@ def sync_products():
                 brand = card_data.get('brand', '')
                 object_name = card_data.get('object', '')
 
-                # Медиа
+                # Медиа - сохраняем количество фотографий, а не URL
+                # URL будем формировать динамически в шаблонах через wb_photo_url()
                 media = card_data.get('mediaFiles', [])
-                photos = [m.get('big') for m in media if m.get('big')]
-                photos_json = json.dumps(photos) if photos else None
 
-                video = next((m.get('big') for m in media if m.get('mediaType') == 'video'), None)
+                # Подсчитываем количество фотографий (не видео)
+                photo_count = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
+
+                # Сохраняем список индексов фотографий [1, 2, 3, ...]
+                photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
+                photos_json = json.dumps(photo_indices) if photo_indices else None
+
+                # Видео обрабатываем отдельно
+                video_media = next((m for m in media if m.get('mediaType') == 'video'), None)
+                video = video_media.get('big') if video_media else None
 
                 # Размеры
                 sizes = card_data.get('sizes', [])
