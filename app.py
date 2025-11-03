@@ -421,9 +421,17 @@ def append_totals_row(df: pd.DataFrame) -> pd.DataFrame:
 
 
 
-def save_processed_report(df: pd.DataFrame, summary: Dict[str, float]) -> Path:
+def save_processed_report(
+    df: pd.DataFrame,
+    summary: Dict[str, float],
+    *,
+    output_dir: Optional[Path] = None,
+    store_latest_alias: bool = True,
+) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = PROCESSED_DIR / f"wb_profit_{timestamp}.xlsx"
+    target_dir = output_dir or PROCESSED_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    output_path = target_dir / f"wb_profit_{timestamp}.xlsx"
     df_with_totals = append_totals_row(df)
     summary_df = pd.DataFrame(
         [
@@ -443,7 +451,8 @@ def save_processed_report(df: pd.DataFrame, summary: Dict[str, float]) -> Path:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         df_with_totals.to_excel(writer, index=False, sheet_name="Продажи")
         summary_df.to_excel(writer, index=False, sheet_name="Сводка")
-    (PROCESSED_DIR / "latest.xlsx").write_bytes(output_path.read_bytes())
+    if store_latest_alias:
+        (target_dir / "latest.xlsx").write_bytes(output_path.read_bytes())
     return output_path
 
 
