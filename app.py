@@ -2,6 +2,7 @@ import json
 import os
 import re
 from datetime import datetime
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -37,6 +38,9 @@ REQUIRED_STAT_COLUMNS = {
 }
 
 DEFAULT_COLUMN_INDICES = list(range(34)) + [36]
+
+ARTICLE_ID_RE = re.compile(r"(?i)^id[-_](\d+)")
+NUMERIC_TOKEN_PATTERN = re.compile(r"\d{3,}")
 
 
 def ensure_directories() -> None:
@@ -105,35 +109,75 @@ def normalise_price_map(price_df: pd.DataFrame) -> Dict[str, float]:
 def collect_numeric_tokens(value) -> List[str]:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return []
+    return list(_collect_numeric_tokens_cached(str(value)))
+
+
+def _normalise_numeric_token(token: str) -> str:
+    stripped = token.lstrip("0")
+    return stripped or "0"
+
+
+@lru_cache(maxsize=100_000)
+def _collect_numeric_tokens_cached(value: str) -> Tuple[str, ...]:
     tokens: List[str] = []
-    for item in re.findall(r"\d{3,}", str(value)):
-        normalized = item.lstrip("0") or "0"
+    for item in NUMERIC_TOKEN_PATTERN.findall(value):
+        normalized = _normalise_numeric_token(item)
         if normalized not in tokens:
             tokens.append(normalized)
-    return tokens
+    return tuple(tokens)
 
 
-def resolve_purchase_price(row: pd.Series, price_map: Dict[str, float]) -> Optional[float]:
-    candidates: List[str] = []
+def resolve_purchase_prices(df: pd.DataFrame, price_map: Dict[str, float]) -> pd.Series:
+    if df.empty or not price_map:
+        return pd.Series(0.0, index=df.index, dtype=float)
 
-    article = row.get("Артикул поставщика")
-    if isinstance(article, str):
-        lowered = article.lower()
-        if lowered.startswith(("id-", "id_")):
-            match = re.match(r"(?i)id[-_](\d+)", article)
+    article_column = "Артикул поставщика"
+    vendor_column = "Код номенклатуры"
+    barcode_column = "Баркод"
+
+    article_values = (
+        df[article_column] if article_column in df.columns else pd.Series([None] * len(df), index=df.index)
+    )
+    vendor_values = (
+        df[vendor_column] if vendor_column in df.columns else pd.Series([None] * len(df), index=df.index)
+    )
+    barcode_values = (
+        df[barcode_column] if barcode_column in df.columns else pd.Series([None] * len(df), index=df.index)
+    )
+
+    get_price = price_map.get
+    resolved: List[float] = []
+
+    article_list = article_values.tolist()
+    vendor_token_lists = [collect_numeric_tokens(value) for value in vendor_values.tolist()]
+    barcode_token_lists = [collect_numeric_tokens(value) for value in barcode_values.tolist()]
+
+    for article, vendor_tokens, barcode_tokens in zip(article_list, vendor_token_lists, barcode_token_lists):
+        price: Optional[float] = None
+
+        if isinstance(article, str):
+            match = ARTICLE_ID_RE.match(article)
             if match:
-                value = match.group(1).lstrip("0") or "0"
-                candidates.append(value)
+                candidate = _normalise_numeric_token(match.group(1))
+                matched_price = get_price(candidate)
+                if matched_price is not None:
+                    price = matched_price
 
-    for field in ("Код номенклатуры", "Баркод"):
-        for token in collect_numeric_tokens(row.get(field)):
-            if token not in candidates:
-                candidates.append(token)
+        if price is None:
+            candidates: List[str] = list(vendor_tokens)
+            for token in barcode_tokens:
+                if token not in candidates:
+                    candidates.append(token)
 
-    for candidate in candidates:
-        if candidate in price_map:
-            return price_map[candidate]
-    return None
+            for candidate in candidates:
+                matched_price = get_price(candidate)
+                if matched_price is not None:
+                    price = matched_price
+                    break
+
+        resolved.append(float(price) if price is not None else 0.0)
+
+    return pd.Series(resolved, index=df.index, dtype=float)
 
 
 def allocate_logistics(
@@ -210,11 +254,7 @@ def compute_profit_table(
     quantity = pd.to_numeric(working_df[quantity_column], errors="coerce").fillna(0.0)
     payout = pd.to_numeric(working_df[payout_column], errors="coerce").fillna(0.0)
 
-    purchase_prices = (
-        working_df.apply(lambda row: resolve_purchase_price(row, price_map), axis=1)
-        .fillna(0.0)
-        .astype(float)
-    )
+    purchase_prices = resolve_purchase_prices(working_df, price_map)
     article_series = working_df[article_column].astype(str)
     quantity_by_article = working_df.groupby(article_column)[quantity_column].sum().to_dict()
 

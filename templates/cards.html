@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}���������� �������� - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">���������� ��������</h1>
+        <p class="mt-2 text-sm text-gray-600">
+            ���������� ������ WB Content API ��� ������� ���������� ��������. ������������ ������� ��������� �����
+            � ������� ��������.
+        </p>
+    </div>
+
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+        <form method="get" class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {% if seller_options %}
+            <div>
+                <label for="seller_id" class="block text-sm font-medium text-gray-700 mb-1">
+                    ��������
+                </label>
+                <select id="seller_id" name="seller_id"
+                        class="block w-full rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    <option value="">�������� ��������</option>
+                    {% for option in seller_options %}
+                    <option value="{{ option.id }}" {% if option.id == selected_seller_id %}selected{% endif %}>
+                        {{ option.company_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            <div>
+                <label for="search" class="block text-sm font-medium text-gray-700 mb-1">
+                    ����� �� ��������/�����
+                </label>
+                <input type="text" id="search" name="search" value="{{ search }}"
+                       class="block w-full rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                       placeholder="�����, NM ID ��� ��������">
+            </div>
+
+            <div>
+                <label for="limit" class="block text-sm font-medium text-gray-700 mb-1">
+                    ����������
+                </label>
+                <input type="number" id="limit" name="limit" value="{{ limit }}"
+                       min="1" max="1000"
+                       class="block w-full rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                <p class="mt-1 text-xs text-gray-500">���������� �������� WB — 1000.</p>
+            </div>
+
+            <div>
+                <label for="updated_at" class="block text-sm font-medium text-gray-700 mb-1">
+                    Cursor updatedAt
+                </label>
+                <input type="text" id="updated_at" name="updated_at" value="{{ updated_at or '' }}"
+                       class="block w-full rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                       placeholder="2024-01-01T00:00:00Z">
+                <p class="mt-1 text-xs text-gray-500">����������� ��� �������� WB.</p>
+            </div>
+
+            <div class="sm:col-span-2 lg:col-span-4 flex items-end justify-between">
+                <div class="text-sm text-gray-500">
+                    {% if seller %}
+                        {% if seller.wb_api_key %}
+                            API ����� ���������.
+                        {% else %}
+                            ��� API ����� ������ �� ��������� — ���������� ����������� �������.
+                        {% endif %}
+                    {% elif seller_options %}
+                        �������� ��������, ����� �������� �������� WB.
+                    {% endif %}
+                </div>
+                <button type="submit"
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    ��������
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {% if api_error %}
+    <div class="mt-6 rounded-md bg-red-50 border border-red-200 p-4">
+        <div class="flex">
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-red-800">������ WB API</h3>
+                <p class="mt-2 text-sm text-red-700">{{ api_error }}</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if additional_errors %}
+    <div class="mt-4 rounded-md bg-yellow-50 border border-yellow-200 p-4">
+        <h3 class="text-sm font-medium text-yellow-800 mb-2">������� ��������</h3>
+        <ul class="list-disc list-inside text-sm text-yellow-700 space-y-1">
+            {% for message in additional_errors %}
+            <li>{{ message }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if not api_error %}
+        {% if cards %}
+        <div class="mt-8">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-medium text-gray-900">�������� �������� ({{ cards|length }})</h2>
+                {% if cursor %}
+                <div class="text-xs text-gray-500">
+                    Cursor:
+                    {% for key, value in cursor.items() %}
+                        <span class="ml-2"><span class="font-medium">{{ key }}:</span> {{ value }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="mt-4 overflow-x-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                ������
+                            </th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                NM ID
+                            </th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                ��������
+                            </th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                �����
+                            </th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                ������
+                            </th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                �����������
+                            </th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                ����.
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        {% for card in cards %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {{ card.vendor_code or '—' }}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {{ card.nm_id or '—' }}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-900">
+                                <div class="font-medium">{{ card.title or '—' }}</div>
+                                <div class="text-xs text-gray-500 mt-1">
+                                    {{ card.card.get('object') or card.card.get('objectID') or '' }}
+                                </div>
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {{ card.brand or '—' }}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {{ card.subject or '—' }}
+                            </td>
+                            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                <div>{{ card.photo_count }} фото</div>
+                                <div>{{ card.barcode_count }} SKU</div>
+                            </td>
+                            <td class="px-4 py-3 text-sm text-gray-500">
+                                <details class="space-y-2">
+                                    <summary class="cursor-pointer text-indigo-600 hover:text-indigo-800 text-sm">JSON</summary>
+                                    <pre class="bg-gray-50 border border-gray-200 rounded-md p-3 overflow-x-auto text-xs text-gray-700">{{ card.card | tojson(indent=2) }}</pre>
+                                </details>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        <div class="mt-8 rounded-md bg-white border border-gray-200 p-6 text-center text-sm text-gray-600">
+            �������� �� ������. ��������� ������� ������ ��� ����� ������������.
+        </div>
+        {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

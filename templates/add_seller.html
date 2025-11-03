@@ -28,7 +28,6 @@
                                placeholder="username">
                         <p class="mt-1 text-sm text-gray-500">Будет использоваться для входа в систему</p>
                     </div>
-
                     <div>
                         <label for="email" class="block text-sm font-medium text-gray-700 mb-1">
                             Email <span class="text-red-500">*</span>
@@ -79,6 +78,18 @@
                         <input type="text" id="wb_seller_id" name="wb_seller_id"
                                class="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                                placeholder="12345678">
+                    </div>
+
+                    <div>
+                        <label for="wb_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                            API токен Wildberries
+                        </label>
+                        <textarea id="wb_api_key" name="wb_api_key" rows="3"
+                                  class="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                  placeholder="Вставьте персональный ключ из кабинета WB."></textarea>
+                        <p class="mt-1 text-sm text-gray-500">
+                            Токен сохраняется за продавцом и используется для запросов Content API.
+                        </p>
                     </div>
 
                     <div>

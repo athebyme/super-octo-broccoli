@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -19,6 +19,7 @@ from app import (
     save_processed_report,
 )
 from models import db, User, Seller, SellerReport
+from wildberries_api import WildberriesAPIError, list_cards
 
 # Настройка приложения
 app = Flask(__name__)
@@ -97,6 +98,28 @@ def get_latest_report(seller_id: int) -> Optional[SellerReport]:
         .order_by(SellerReport.created_at.desc())
         .first()
     )
+
+
+def summarise_card(card: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract frequently used fields from a WB card payload for presentation."""
+    sizes = card.get('sizes') or []
+    photo_candidates = card.get('mediaFiles') or card.get('photos') or []
+    barcode_count = 0
+    for size in sizes:
+        if isinstance(size, dict):
+            barcode_count += len(size.get('skus') or [])
+
+    return {
+        'vendor_code': card.get('vendorCode') or card.get('supplierVendorCode'),
+        'nm_id': card.get('nmID') or card.get('nmId'),
+        'title': card.get('title') or card.get('subjectName') or card.get('name'),
+        'brand': card.get('brand'),
+        'subject': card.get('subjectName') or card.get('subjectID'),
+        'updated_at': card.get('updatedAt') or card.get('updateAt') or card.get('modifiedAt'),
+        'photo_count': len(photo_candidates) if isinstance(photo_candidates, list) else 0,
+        'barcode_count': barcode_count,
+        'card': card,
+    }
 
 
 @login_manager.user_loader
@@ -293,6 +316,80 @@ def reports():
     )
 
 
+@app.route('/cards', methods=['GET'])
+@login_required
+def cards():
+    seller: Optional[Seller] = None
+    seller_options: List[Seller] = []
+    selected_seller_id: Optional[int] = None
+
+    if current_user.is_admin:
+        seller_options = (
+            Seller.query.join(User)
+            .order_by(Seller.company_name.asc())
+            .all()
+        )
+        selected_seller_id = request.args.get('seller_id', type=int)
+        if selected_seller_id:
+            seller = Seller.query.get(selected_seller_id)
+            if not seller:
+                flash('Продавец с указанным ID не найден.', 'warning')
+    else:
+        seller = current_user.seller
+        if not seller:
+            flash('Учетная запись продавца не привязана к текущему пользователю.', 'warning')
+            return redirect(url_for('dashboard'))
+
+    search = request.args.get('search', '').strip()
+    updated_at = request.args.get('updated_at', '').strip() or None
+    limit = request.args.get('limit', type=int)
+    limit = max(1, min(limit or 50, 1_000))
+
+    cards_payload: List[Dict[str, Any]] = []
+    prepared_cards: List[Dict[str, Any]] = []
+    cursor: Dict[str, Any] = {}
+    api_error: Optional[str] = None
+    additional_errors: List[str] = []
+
+    if seller:
+        if not seller.wb_api_key:
+            api_error = 'Для выбранного продавца не сохранён API токен Wildberries.'
+        else:
+            try:
+                response = list_cards(
+                    seller.wb_api_key,
+                    limit=limit,
+                    search=search or None,
+                    updated_at=updated_at,
+                )
+                cards_payload = response.get('cards') or []
+                cursor = response.get('cursor') or {}
+                prepared_cards = [summarise_card(card) for card in cards_payload]
+
+                error_text = (response.get('errorText') or '').strip()
+                if error_text:
+                    additional_errors.append(error_text)
+                extra = response.get('additionalErrors') or []
+                additional_errors.extend([str(item) for item in extra if str(item).strip()])
+            except WildberriesAPIError as exc:
+                api_error = str(exc)
+
+    return render_template(
+        'cards.html',
+        seller=seller,
+        seller_options=seller_options,
+        selected_seller_id=selected_seller_id,
+        cards=prepared_cards,
+        raw_cards=cards_payload,
+        cursor=cursor,
+        api_error=api_error,
+        additional_errors=additional_errors,
+        search=search,
+        limit=limit,
+        updated_at=updated_at,
+    )
+
+
 @app.route('/reports/<int:report_id>/download')
 @login_required
 def download_report(report_id: int):
@@ -341,6 +438,7 @@ def add_seller():
         company_name = request.form.get('company_name', '').strip()
         contact_phone = request.form.get('contact_phone', '').strip()
         wb_seller_id = request.form.get('wb_seller_id', '').strip()
+        wb_api_key = request.form.get('wb_api_key', '').strip()
         notes = request.form.get('notes', '').strip()
 
         # Валидация
@@ -375,6 +473,7 @@ def add_seller():
                 company_name=company_name,
                 contact_phone=contact_phone,
                 wb_seller_id=wb_seller_id,
+                wb_api_key=wb_api_key or None,
                 notes=notes
             )
             db.session.add(seller)
@@ -403,6 +502,7 @@ def edit_seller(seller_id):
         company_name = request.form.get('company_name', '').strip()
         contact_phone = request.form.get('contact_phone', '').strip()
         wb_seller_id = request.form.get('wb_seller_id', '').strip()
+        wb_api_key = request.form.get('wb_api_key', '').strip()
         notes = request.form.get('notes', '').strip()
         is_active = request.form.get('is_active') == 'on'
         new_password = request.form.get('new_password', '').strip()
@@ -429,6 +529,7 @@ def edit_seller(seller_id):
             seller.company_name = company_name
             seller.contact_phone = contact_phone
             seller.wb_seller_id = wb_seller_id
+            seller.wb_api_key = wb_api_key or None
             seller.notes = notes
 
             db.session.commit()
