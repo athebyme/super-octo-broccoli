@@ -38,6 +38,15 @@ app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else ''
 
+# Добавляем встроенные функции Python в контекст Jinja2
+app.jinja_env.globals.update({
+    'min': min,
+    'max': max,
+    'len': len,
+    'int': int,
+    'str': str,
+})
+
 # Инициализация расширений
 db.init_app(app)
 login_manager = LoginManager()
