@@ -18,8 +18,11 @@ from app import (
     read_statistics,
     save_processed_report,
 )
-from models import db, User, Seller, SellerReport
+from models import db, User, Seller, SellerReport, Product, APILog
 from wildberries_api import WildberriesAPIError, list_cards
+import json
+import time
+from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 
 # Настройка приложения
 app = Flask(__name__)
@@ -569,6 +572,324 @@ def delete_seller(seller_id):
         flash(f'Ошибка при удалении: {str(e)}', 'danger')
 
     return redirect(url_for('admin_panel'))
+
+
+# ============= НАСТРОЙКИ API =============
+
+@app.route('/api-settings', methods=['GET', 'POST'])
+@login_required
+def api_settings():
+    """Настройка API ключей Wildberries"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        wb_api_key = request.form.get('wb_api_key', '').strip()
+
+        if not wb_api_key:
+            flash('Введите API ключ', 'warning')
+            return render_template('api_settings.html', seller=current_user.seller)
+
+        # Проверить валидность ключа
+        try:
+            with WildberriesAPIClient(wb_api_key, sandbox=False) as client:
+                if client.test_connection():
+                    # Ключ валиден — сохраняем
+                    current_user.seller.wb_api_key = wb_api_key
+                    current_user.seller.api_sync_status = 'ready'
+                    db.session.commit()
+
+                    flash('API ключ успешно сохранен и проверен', 'success')
+                    return redirect(url_for('dashboard'))
+                else:
+                    flash('Не удалось подключиться к API. Проверьте ключ.', 'danger')
+
+        except WBAuthException:
+            flash('Ошибка авторизации. Проверьте правильность API ключа.', 'danger')
+        except WBAPIException as e:
+            flash(f'Ошибка проверки API ключа: {str(e)}', 'danger')
+        except Exception as e:
+            flash(f'Неожиданная ошибка: {str(e)}', 'danger')
+
+    return render_template('api_settings.html', seller=current_user.seller)
+
+
+# ============= КАРТОЧКИ ТОВАРОВ =============
+
+@app.route('/products')
+@login_required
+def products_list():
+    """Список карточек товаров с пагинацией"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    # Параметры пагинации
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(per_page, 100)  # Максимум 100 на странице
+
+    # Фильтры
+    search = request.args.get('search', '').strip()
+    active_only = request.args.get('active_only', type=bool)
+
+    # Построение запроса
+    query = Product.query.filter_by(seller_id=current_user.seller.id)
+
+    if active_only:
+        query = query.filter_by(is_active=True)
+
+    if search:
+        # Поиск по артикулу, названию или бренду
+        search_filter = db.or_(
+            Product.vendor_code.ilike(f'%{search}%'),
+            Product.title.ilike(f'%{search}%'),
+            Product.brand.ilike(f'%{search}%'),
+            Product.nm_id.cast(db.String).ilike(f'%{search}%')
+        )
+        query = query.filter(search_filter)
+
+    # Сортировка по дате обновления (новые первыми)
+    query = query.order_by(Product.updated_at.desc())
+
+    # Пагинация
+    pagination = query.paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
+
+    products = pagination.items
+    total_products = current_user.seller.products.count()
+    active_products = current_user.seller.products.filter_by(is_active=True).count()
+
+    return render_template(
+        'products.html',
+        products=products,
+        pagination=pagination,
+        total_products=total_products,
+        active_products=active_products,
+        search=search,
+        active_only=active_only,
+        seller=current_user.seller
+    )
+
+
+@app.route('/products/sync', methods=['POST'])
+@login_required
+def sync_products():
+    """Синхронизация карточек товаров через API WB"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if not current_user.seller.has_valid_api_key():
+        flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
+        return redirect(url_for('api_settings'))
+
+    try:
+        current_user.seller.api_sync_status = 'syncing'
+        db.session.commit()
+
+        start_time = time.time()
+
+        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            # Получаем все карточки
+            all_cards = client.get_all_cards(batch_size=100)
+
+            # Статистика
+            created_count = 0
+            updated_count = 0
+
+            for card_data in all_cards:
+                nm_id = card_data.get('nmID')
+                if not nm_id:
+                    continue
+
+                # Ищем существующую карточку
+                product = Product.query.filter_by(
+                    seller_id=current_user.seller.id,
+                    nm_id=nm_id
+                ).first()
+
+                # Извлекаем данные из API
+                vendor_code = card_data.get('vendorCode', '')
+                title = card_data.get('title', '')
+                brand = card_data.get('brand', '')
+                object_name = card_data.get('object', '')
+
+                # Медиа
+                media = card_data.get('mediaFiles', [])
+                photos = [m.get('big') for m in media if m.get('big')]
+                photos_json = json.dumps(photos) if photos else None
+
+                video = next((m.get('big') for m in media if m.get('mediaType') == 'video'), None)
+
+                # Размеры
+                sizes = card_data.get('sizes', [])
+                sizes_json = json.dumps(sizes) if sizes else None
+
+                if product:
+                    # Обновление существующей карточки
+                    product.vendor_code = vendor_code
+                    product.title = title
+                    product.brand = brand
+                    product.object_name = object_name
+                    product.photos_json = photos_json
+                    product.video_url = video
+                    product.sizes_json = sizes_json
+                    product.last_sync = datetime.utcnow()
+                    product.is_active = True
+                    updated_count += 1
+                else:
+                    # Создание новой карточки
+                    product = Product(
+                        seller_id=current_user.seller.id,
+                        nm_id=nm_id,
+                        imt_id=card_data.get('imtID'),
+                        vendor_code=vendor_code,
+                        title=title,
+                        brand=brand,
+                        object_name=object_name,
+                        supplier_vendor_code=card_data.get('supplierVendorCode', ''),
+                        photos_json=photos_json,
+                        video_url=video,
+                        sizes_json=sizes_json,
+                        last_sync=datetime.utcnow(),
+                        is_active=True
+                    )
+                    db.session.add(product)
+                    created_count += 1
+
+            # Сохраняем все изменения
+            db.session.commit()
+
+            # Обновляем статус синхронизации
+            current_user.seller.api_last_sync = datetime.utcnow()
+            current_user.seller.api_sync_status = 'success'
+            db.session.commit()
+
+            elapsed = time.time() - start_time
+
+            # Логируем успешный запрос
+            APILog.log_request(
+                seller_id=current_user.seller.id,
+                endpoint='/content/v2/get/cards/list',
+                method='GET',
+                status_code=200,
+                response_time=elapsed,
+                success=True
+            )
+
+            flash(
+                f'Синхронизация завершена за {elapsed:.1f}с: '
+                f'{created_count} новых, {updated_count} обновлено',
+                'success'
+            )
+
+    except WBAuthException:
+        current_user.seller.api_sync_status = 'auth_error'
+        db.session.commit()
+
+        APILog.log_request(
+            seller_id=current_user.seller.id,
+            endpoint='/content/v2/get/cards/list',
+            method='GET',
+            status_code=401,
+            response_time=0,
+            success=False,
+            error_message='Authentication failed'
+        )
+
+        flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
+
+    except WBAPIException as e:
+        current_user.seller.api_sync_status = 'error'
+        db.session.commit()
+
+        APILog.log_request(
+            seller_id=current_user.seller.id,
+            endpoint='/content/v2/get/cards/list',
+            method='GET',
+            status_code=500,
+            response_time=0,
+            success=False,
+            error_message=str(e)
+        )
+
+        flash(f'Ошибка API WB: {str(e)}', 'danger')
+
+    except Exception as e:
+        current_user.seller.api_sync_status = 'error'
+        db.session.commit()
+        flash(f'Ошибка синхронизации: {str(e)}', 'danger')
+
+    return redirect(url_for('products_list'))
+
+
+@app.route('/products/<int:product_id>')
+@login_required
+def product_detail(product_id):
+    """Детальная информация о товаре"""
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        flash('У вас нет доступа к этому товару', 'danger')
+        return redirect(url_for('products_list'))
+
+    # Парсим JSON данные
+    photos = json.loads(product.photos_json) if product.photos_json else []
+    sizes = json.loads(product.sizes_json) if product.sizes_json else []
+
+    return render_template(
+        'product_detail.html',
+        product=product,
+        photos=photos,
+        sizes=sizes
+    )
+
+
+# ============= API ЛОГИ =============
+
+@app.route('/api-logs')
+@login_required
+def api_logs():
+    """Просмотр логов API запросов"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+
+    # Логи для текущего продавца
+    pagination = APILog.query.filter_by(
+        seller_id=current_user.seller.id
+    ).order_by(
+        APILog.created_at.desc()
+    ).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
+
+    logs = pagination.items
+
+    # Статистика
+    total_requests = current_user.seller.api_logs.count()
+    failed_requests = current_user.seller.api_logs.filter_by(success=False).count()
+    success_rate = ((total_requests - failed_requests) / total_requests * 100) if total_requests > 0 else 0
+
+    return render_template(
+        'api_logs.html',
+        logs=logs,
+        pagination=pagination,
+        total_requests=total_requests,
+        failed_requests=failed_requests,
+        success_rate=success_rate
+    )
 
 
 # ============= ИНИЦИАЛИЗАЦИЯ БД =============
