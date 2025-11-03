@@ -597,31 +597,70 @@ def api_settings():
 
     if request.method == 'POST':
         wb_api_key = request.form.get('wb_api_key', '').strip()
+        force_save = request.form.get('force_save') == 'on'
 
         if not wb_api_key:
             flash('Введите API ключ', 'warning')
             return render_template('api_settings.html', seller=current_user.seller)
 
-        # Проверить валидность ключа
-        try:
-            with WildberriesAPIClient(wb_api_key, sandbox=False) as client:
-                if client.test_connection():
-                    # Ключ валиден — сохраняем
-                    current_user.seller.wb_api_key = wb_api_key
-                    current_user.seller.api_sync_status = 'ready'
-                    db.session.commit()
+        # Проверить валидность ключа (если не force_save)
+        if not force_save:
+            try:
+                app.logger.info(f"Testing WB API connection for seller {current_user.seller.id}")
+                with WildberriesAPIClient(wb_api_key, sandbox=False, timeout=10) as client:
+                    if client.test_connection():
+                        # Ключ валиден — сохраняем
+                        current_user.seller.wb_api_key = wb_api_key
+                        current_user.seller.api_sync_status = 'ready'
+                        db.session.commit()
 
-                    flash('API ключ успешно сохранен и проверен', 'success')
-                    return redirect(url_for('dashboard'))
-                else:
-                    flash('Не удалось подключиться к API. Проверьте ключ.', 'danger')
+                        flash('API ключ успешно сохранен и проверен ✓', 'success')
+                        return redirect(url_for('dashboard'))
+                    else:
+                        # Тест не прошёл, но сохраняем с warning
+                        app.logger.warning(f"API test failed for seller {current_user.seller.id}")
+                        current_user.seller.wb_api_key = wb_api_key
+                        current_user.seller.api_sync_status = 'error'
+                        db.session.commit()
 
-        except WBAuthException:
-            flash('Ошибка авторизации. Проверьте правильность API ключа.', 'danger')
-        except WBAPIException as e:
-            flash(f'Ошибка проверки API ключа: {str(e)}', 'danger')
-        except Exception as e:
-            flash(f'Неожиданная ошибка: {str(e)}', 'danger')
+                        flash('API ключ сохранен, но проверка соединения не удалась. '
+                              'Проверьте правильность ключа и наличие доступа к API Wildberries.', 'warning')
+                        return redirect(url_for('dashboard'))
+
+            except WBAuthException as e:
+                app.logger.error(f"Auth error for seller {current_user.seller.id}: {e}")
+                # Сохраняем с ошибкой
+                current_user.seller.wb_api_key = wb_api_key
+                current_user.seller.api_sync_status = 'auth_error'
+                db.session.commit()
+                flash(f'Ошибка авторизации: {str(e)}. Ключ сохранен, но требует проверки.', 'warning')
+                return redirect(url_for('dashboard'))
+
+            except WBAPIException as e:
+                app.logger.error(f"API error for seller {current_user.seller.id}: {e}")
+                # Сохраняем с ошибкой
+                current_user.seller.wb_api_key = wb_api_key
+                current_user.seller.api_sync_status = 'api_error'
+                db.session.commit()
+                flash(f'Ошибка API: {str(e)}. Ключ сохранен, возможны проблемы с соединением.', 'warning')
+                return redirect(url_for('dashboard'))
+
+            except Exception as e:
+                app.logger.exception(f"Unexpected error testing API for seller {current_user.seller.id}: {e}")
+                # Сохраняем с ошибкой
+                current_user.seller.wb_api_key = wb_api_key
+                current_user.seller.api_sync_status = 'unknown_error'
+                db.session.commit()
+                flash(f'Не удалось проверить ключ: {str(e)}. Ключ сохранен для повторной попытки.', 'warning')
+                return redirect(url_for('dashboard'))
+        else:
+            # Принудительное сохранение без проверки
+            app.logger.info(f"Force saving API key for seller {current_user.seller.id}")
+            current_user.seller.wb_api_key = wb_api_key
+            current_user.seller.api_sync_status = 'unchecked'
+            db.session.commit()
+            flash('API ключ сохранен без проверки', 'info')
+            return redirect(url_for('dashboard'))
 
     return render_template('api_settings.html', seller=current_user.seller)
 
@@ -636,55 +675,60 @@ def products_list():
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
 
-    # Параметры пагинации
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 50, type=int)
-    per_page = min(per_page, 100)  # Максимум 100 на странице
+    try:
+        # Параметры пагинации
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        per_page = min(per_page, 100)  # Максимум 100 на странице
 
-    # Фильтры
-    search = request.args.get('search', '').strip()
-    active_only = request.args.get('active_only', type=bool)
+        # Фильтры
+        search = request.args.get('search', '').strip()
+        active_only = request.args.get('active_only', type=bool)
 
-    # Построение запроса
-    query = Product.query.filter_by(seller_id=current_user.seller.id)
+        # Построение запроса
+        query = Product.query.filter_by(seller_id=current_user.seller.id)
 
-    if active_only:
-        query = query.filter_by(is_active=True)
+        if active_only:
+            query = query.filter_by(is_active=True)
 
-    if search:
-        # Поиск по артикулу, названию или бренду
-        search_filter = or_(
-            Product.vendor_code.ilike(f'%{search}%'),
-            Product.title.ilike(f'%{search}%'),
-            Product.brand.ilike(f'%{search}%'),
-            Product.nm_id.cast(db.String).ilike(f'%{search}%')
+        if search:
+            # Поиск по артикулу, названию или бренду
+            search_filter = or_(
+                Product.vendor_code.ilike(f'%{search}%'),
+                Product.title.ilike(f'%{search}%'),
+                Product.brand.ilike(f'%{search}%'),
+                Product.nm_id.cast(db.String).ilike(f'%{search}%')
+            )
+            query = query.filter(search_filter)
+
+        # Сортировка по дате обновления (новые первыми)
+        query = query.order_by(Product.updated_at.desc())
+
+        # Пагинация
+        pagination = query.paginate(
+            page=page,
+            per_page=per_page,
+            error_out=False
         )
-        query = query.filter(search_filter)
 
-    # Сортировка по дате обновления (новые первыми)
-    query = query.order_by(Product.updated_at.desc())
+        products = pagination.items
+        total_products = current_user.seller.products.count()
+        active_products = current_user.seller.products.filter_by(is_active=True).count()
 
-    # Пагинация
-    pagination = query.paginate(
-        page=page,
-        per_page=per_page,
-        error_out=False
-    )
-
-    products = pagination.items
-    total_products = current_user.seller.products.count()
-    active_products = current_user.seller.products.filter_by(is_active=True).count()
-
-    return render_template(
-        'products.html',
-        products=products,
-        pagination=pagination,
-        total_products=total_products,
-        active_products=active_products,
-        search=search,
-        active_only=active_only,
-        seller=current_user.seller
-    )
+        return render_template(
+            'products.html',
+            products=products,
+            pagination=pagination,
+            total_products=total_products,
+            active_products=active_products,
+            search=search,
+            active_only=active_only,
+            seller=current_user.seller
+        )
+    except Exception as e:
+        app.logger.exception(f"Error in products_list: {e}")
+        flash(f'Ошибка при загрузке карточек товаров: {str(e)}', 'danger')
+        return redirect(url_for('dashboard'))
 
 
 @app.route('/products/sync', methods=['POST'])

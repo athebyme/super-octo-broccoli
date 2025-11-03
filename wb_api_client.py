@@ -189,7 +189,9 @@ class WildberriesAPIClient:
             kwargs['timeout'] = self.timeout
 
         # Логирование запроса
-        logger.info(f"WB API Request: {method} {url}")
+        params_str = f" params={kwargs.get('params')}" if kwargs.get('params') else ""
+        logger.info(f"WB API Request: {method} {url}{params_str}")
+        logger.debug(f"API Key (first 10 chars): {self.api_key[:10]}...")
         start_time = time.time()
 
         try:
@@ -216,15 +218,24 @@ class WildberriesAPIClient:
             return response
 
         except requests.exceptions.Timeout:
-            logger.error(f"Request timeout for {url}")
-            raise WBAPIException(f"Timeout при запросе к API ({self.timeout}s)")
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error for {url}")
-            raise WBAPIException("Ошибка соединения с API Wildberries")
+            logger.error(f"Request timeout for {url} after {self.timeout}s")
+            raise WBAPIException(f"Timeout при запросе к API ({self.timeout}s). Попробуйте позже.")
+        except requests.exceptions.SSLError as e:
+            logger.error(f"SSL error for {url}: {e}")
+            raise WBAPIException(f"Ошибка SSL соединения: {str(e)}. Проверьте сетевое подключение.")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error for {url}: {e}")
+            error_msg = str(e)
+            if "Name or service not known" in error_msg or "getaddrinfo failed" in error_msg:
+                raise WBAPIException("Не удалось разрешить имя хоста API Wildberries. Проверьте интернет-соединение.")
+            elif "Connection refused" in error_msg:
+                raise WBAPIException("Подключение отклонено сервером API Wildberries. Проверьте URL и доступность API.")
+            else:
+                raise WBAPIException(f"Ошибка соединения с API Wildberries: {error_msg}")
         except (WBAuthException, WBRateLimitException, WBAPIException):
             raise
         except Exception as e:
-            logger.exception(f"Unexpected error: {e}")
+            logger.exception(f"Unexpected error for {url}: {e}")
             raise WBAPIException(f"Неожиданная ошибка: {str(e)}")
 
     # ==================== CONTENT API ====================
@@ -414,12 +425,19 @@ class WildberriesAPIClient:
             True если подключение успешно
         """
         try:
+            logger.info(f"Testing API connection to {self.CONTENT_API_URL}")
             # Пробуем получить одну карточку
-            self.get_cards_list(limit=1)
-            logger.info("API connection test successful")
+            result = self.get_cards_list(limit=1)
+            logger.info(f"API connection test successful. Response keys: {list(result.keys())}")
             return True
+        except WBAuthException as e:
+            logger.error(f"API auth test failed: {e}")
+            return False
         except WBAPIException as e:
             logger.error(f"API connection test failed: {e}")
+            return False
+        except Exception as e:
+            logger.exception(f"Unexpected error during connection test: {e}")
             return False
 
     def close(self):

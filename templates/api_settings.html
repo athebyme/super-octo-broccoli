@@ -83,12 +83,27 @@
             </div>
 
             <!-- Показать/скрыть пароль -->
-            <div class="mb-6">
+            <div class="mb-4">
                 <label class="inline-flex items-center">
                     <input type="checkbox"
                            onclick="toggleApiKey()"
                            class="rounded text-blue-600 focus:ring-blue-500">
                     <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Показать API ключ</span>
+                </label>
+            </div>
+
+            <!-- Принудительное сохранение -->
+            <div class="mb-6">
+                <label class="inline-flex items-center">
+                    <input type="checkbox"
+                           name="force_save"
+                           class="rounded text-orange-600 focus:ring-orange-500">
+                    <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                        Сохранить без проверки соединения
+                        <span class="text-xs text-gray-500 block">
+                            (используйте, если есть проблемы с сетью)
+                        </span>
+                    </span>
                 </label>
             </div>
 
