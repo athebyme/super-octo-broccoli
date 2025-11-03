@@ -56,12 +56,12 @@ def _request_json(url: str, *, api_key: str, payload: Dict[str, Any]) -> Dict[st
         data = response.json()
     except ValueError as exc:  # pragma: no cover - defensive
         raise WildberriesAPIError(
-            f"WB API returned a non-JSON response (status {response.status_code})."
+            f"WB API вернул ответ, который не удалось разобрать как JSON (status {response.status_code})."
         ) from exc
 
     if response.status_code >= 400 or data.get("error"):
         message = data.get("errorText") or response.text
-        raise WildberriesAPIError(message.strip() or "Unknown WB API error.")
+        raise WildberriesAPIError(message.strip() or "Неизвестная ошибка WB API.")
 
     return data
 
@@ -82,7 +82,7 @@ def list_cards(
     :param updated_at: optional cursor value for pagination
     """
     if not api_key:
-        raise WildberriesAPIError("API key is missing.")
+        raise WildberriesAPIError("API токен не передан.")
 
     query = CardsQuery(api_key=api_key, limit=limit, search=search, updated_at=updated_at)
     payload = query.to_payload()

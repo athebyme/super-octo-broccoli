@@ -101,9 +101,9 @@ def get_latest_report(seller_id: int) -> Optional[SellerReport]:
 
 
 def summarise_card(card: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract frequently used fields from a WB card payload for presentation."""
+    """Подготовить ключевые поля карточки для отображения."""
     sizes = card.get('sizes') or []
-    photo_candidates = card.get('mediaFiles') or card.get('photos') or []
+    media_files = card.get('mediaFiles') or card.get('photos') or []
     barcode_count = 0
     for size in sizes:
         if isinstance(size, dict):
@@ -116,7 +116,7 @@ def summarise_card(card: Dict[str, Any]) -> Dict[str, Any]:
         'brand': card.get('brand'),
         'subject': card.get('subjectName') or card.get('subjectID'),
         'updated_at': card.get('updatedAt') or card.get('updateAt') or card.get('modifiedAt'),
-        'photo_count': len(photo_candidates) if isinstance(photo_candidates, list) else 0,
+        'photo_count': len(media_files) if isinstance(media_files, list) else 0,
         'barcode_count': barcode_count,
         'card': card,
     }
@@ -316,6 +316,8 @@ def reports():
     )
 
 
+
+
 @app.route('/cards', methods=['GET'])
 @login_required
 def cards():
@@ -342,8 +344,8 @@ def cards():
 
     search = request.args.get('search', '').strip()
     updated_at = request.args.get('updated_at', '').strip() or None
-    limit = request.args.get('limit', type=int)
-    limit = max(1, min(limit or 50, 1_000))
+    limit = request.args.get('limit', type=int) or 50
+    limit = max(1, min(limit, 1_000))
 
     cards_payload: List[Dict[str, Any]] = []
     prepared_cards: List[Dict[str, Any]] = []
@@ -353,7 +355,7 @@ def cards():
 
     if seller:
         if not seller.wb_api_key:
-            api_error = 'Для выбранного продавца не сохранён API токен Wildberries.'
+            api_error = 'Для выбранного продавца не указан API токен Wildberries.'
         else:
             try:
                 response = list_cards(
@@ -369,8 +371,10 @@ def cards():
                 error_text = (response.get('errorText') or '').strip()
                 if error_text:
                     additional_errors.append(error_text)
-                extra = response.get('additionalErrors') or []
-                additional_errors.extend([str(item) for item in extra if str(item).strip()])
+                for extra in response.get('additionalErrors') or []:
+                    text_message = str(extra).strip()
+                    if text_message:
+                        additional_errors.append(text_message)
             except WildberriesAPIError as exc:
                 api_error = str(exc)
 
