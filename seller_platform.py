@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Платформа для продавцов WB - основной файл приложения
 """
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from sqlalchemy import or_
 
 from app import (
     DEFAULT_COLUMN_INDICES,
@@ -43,6 +45,15 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
+
+
+@app.after_request
+def after_request(response):
+    """Устанавливаем правильную кодировку UTF-8 для всех ответов"""
+    if response.content_type and response.content_type.startswith('text/html'):
+        response.content_type = 'text/html; charset=utf-8'
+    return response
+
 
 UPLOAD_ROOT = BASE_DIR / 'uploads'
 PROCESSED_ROOT = BASE_DIR / 'processed'
@@ -642,7 +653,7 @@ def products_list():
 
     if search:
         # Поиск по артикулу, названию или бренду
-        search_filter = db.or_(
+        search_filter = or_(
             Product.vendor_code.ilike(f'%{search}%'),
             Product.title.ilike(f'%{search}%'),
             Product.brand.ilike(f'%{search}%'),
@@ -832,6 +843,10 @@ def sync_products():
 @login_required
 def product_detail(product_id):
     """Детальная информация о товаре"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
     product = Product.query.get_or_404(product_id)
 
     # Проверка доступа
