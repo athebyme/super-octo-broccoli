@@ -50,6 +50,29 @@ class Seller(db.Model):
     notes = db.Column(db.Text)  # Заметки админа
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    reports = db.relationship(
+        'SellerReport',
+        backref='seller',
+        cascade='all, delete-orphan',
+        lazy='dynamic',
+    )
 
     def __repr__(self) -> str:
         return f'<Seller {self.company_name}>'
+
+
+class SellerReport(db.Model):
+    """История расчетов прибыли продавца"""
+    __tablename__ = 'seller_reports'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    statistics_path = db.Column(db.String(500), nullable=False)
+    price_path = db.Column(db.String(500), nullable=False)
+    processed_path = db.Column(db.String(500), nullable=False)
+    selected_columns = db.Column(db.JSON, nullable=False, default=list)
+    summary = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self) -> str:
+        return f'<SellerReport {self.id} seller={self.seller_id}>'

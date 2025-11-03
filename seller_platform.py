@@ -5,17 +5,27 @@ import os
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
+from typing import List, Optional
 
-from flask import Flask, render_template, redirect, url_for, flash, request
+from flask import Flask, render_template, redirect, url_for, flash, request, send_file, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 
-from models import db, User, Seller
+from app import (
+    DEFAULT_COLUMN_INDICES,
+    column_letters_to_indices,
+    compute_profit_table,
+    gather_columns,
+    read_statistics,
+    save_processed_report,
+)
+from models import db, User, Seller, SellerReport
 
 # Настройка приложения
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'wb-seller-platform-secret-key-change-in-production')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///seller_platform.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else ''
 
 # Инициализация расширений
 db.init_app(app)
@@ -24,6 +34,69 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_ROOT = BASE_DIR / 'uploads'
+PROCESSED_ROOT = BASE_DIR / 'processed'
+
+
+def ensure_storage_roots() -> None:
+    for folder in (UPLOAD_ROOT, PROCESSED_ROOT):
+        folder.mkdir(parents=True, exist_ok=True)
+
+
+def get_seller_storage_dirs(seller_id: int) -> tuple[Path, Path]:
+    ensure_storage_roots()
+    upload_dir = UPLOAD_ROOT / f'seller_{seller_id}'
+    processed_dir = PROCESSED_ROOT / f'seller_{seller_id}'
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir, processed_dir
+
+
+def save_uploaded_file(file_storage, destination: Path) -> Optional[Path]:
+    if not file_storage or not file_storage.filename:
+        return None
+    filename = Path(file_storage.filename).name
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    safe_name = f'{timestamp}_{filename}'
+    target = destination / safe_name
+    file_storage.save(target)
+    return target
+
+
+def build_preview_data(
+    statistics_path: Optional[str],
+    selected_columns: Optional[List[str]],
+) -> tuple[List[str], List[dict], List[str], Optional[str]]:
+    if not statistics_path or not Path(statistics_path).exists():
+        return [], [], selected_columns or [], None
+    try:
+        df = read_statistics(Path(statistics_path))
+        available_columns = gather_columns(df)
+        resolved_columns = selected_columns or column_letters_to_indices(
+            df.columns,
+            DEFAULT_COLUMN_INDICES,
+        )
+        preview_rows: List[dict] = []
+        if resolved_columns:
+            preview_rows = (
+                df[resolved_columns]
+                .head(10)
+                .fillna('')
+                .to_dict(orient='records')
+            )
+        return available_columns, preview_rows, resolved_columns, None
+    except Exception as exc:
+        return [], [], selected_columns or [], str(exc)
+
+
+def get_latest_report(seller_id: int) -> Optional[SellerReport]:
+    return (
+        SellerReport.query.filter_by(seller_id=seller_id)
+        .order_by(SellerReport.created_at.desc())
+        .first()
+    )
 
 
 @login_manager.user_loader
@@ -101,7 +174,139 @@ def logout():
 @login_required
 def dashboard():
     """Главная страница - дашборд продавца"""
-    return render_template('dashboard.html', user=current_user)
+    latest_report = None
+    summary = None
+    latest_filename = None
+    if current_user.seller:
+        latest_report = get_latest_report(current_user.seller.id)
+        if latest_report:
+            summary = latest_report.summary or {}
+            processed_path = Path(latest_report.processed_path)
+            latest_filename = processed_path.name if processed_path.exists() else None
+
+    return render_template(
+        'dashboard.html',
+        user=current_user,
+        latest_report=latest_report,
+        summary=summary,
+        latest_filename=latest_filename,
+    )
+
+
+@app.route('/reports', methods=['GET', 'POST'])
+@login_required
+def reports():
+    if not current_user.seller:
+        flash('Для работы с отчётами обратитесь к администратору.', 'warning')
+        return redirect(url_for('dashboard'))
+
+    seller = current_user.seller
+    upload_dir, processed_dir = get_seller_storage_dirs(seller.id)
+
+    latest_report = get_latest_report(seller.id)
+    statistics_path = latest_report.statistics_path if latest_report else None
+    price_path = latest_report.price_path if latest_report else None
+    selected_columns: List[str] = list(latest_report.selected_columns or []) if latest_report else []
+
+    if request.method == 'POST':
+        selected_columns = request.form.getlist('columns') or selected_columns
+        stat_file = request.files.get('statistics')
+        price_file = request.files.get('prices')
+
+        new_stat_path = save_uploaded_file(stat_file, upload_dir)
+        new_price_path = save_uploaded_file(price_file, upload_dir)
+
+        stat_path = new_stat_path or statistics_path
+        price_path_effective = new_price_path or price_path
+
+        if not stat_path or not Path(stat_path).exists():
+            flash('Загрузите отчёт Wildberries (xlsx).', 'warning')
+            return redirect(url_for('reports'))
+
+        if not price_path_effective or not Path(price_path_effective).exists():
+            flash('Загрузите прайс поставщика (csv).', 'warning')
+            return redirect(url_for('reports'))
+
+        try:
+            df, _, summary = compute_profit_table(
+                Path(stat_path),
+                Path(price_path_effective),
+                selected_columns or None,
+            )
+        except Exception as exc:
+            flash(f'Ошибка обработки: {exc}', 'danger')
+            return redirect(url_for('reports'))
+
+        try:
+            processed_path = save_processed_report(
+                df,
+                summary,
+                output_dir=processed_dir,
+            )
+            report = SellerReport(
+                seller_id=seller.id,
+                statistics_path=str(stat_path),
+                price_path=str(price_path_effective),
+                processed_path=str(processed_path),
+                selected_columns=selected_columns or [],
+                summary=summary,
+            )
+            db.session.add(report)
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            flash(f'Не удалось сохранить отчёт: {exc}', 'danger')
+            return redirect(url_for('reports'))
+
+        flash('Отчёт обновлён.', 'success')
+        return redirect(url_for('reports'))
+
+    available_columns, preview_rows, selected_columns, preview_error = build_preview_data(
+        statistics_path,
+        selected_columns,
+    )
+    if preview_error:
+        flash(f'Не удалось подготовить предпросмотр: {preview_error}', 'warning')
+
+    reports_history = (
+        SellerReport.query.filter_by(seller_id=seller.id)
+        .order_by(SellerReport.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    return render_template(
+        'reports.html',
+        seller=seller,
+        latest_report=latest_report,
+        reports=reports_history,
+        available_columns=available_columns,
+        selected_columns=selected_columns,
+        preview_rows=preview_rows,
+        statistics_ready=bool(statistics_path and Path(statistics_path).exists()),
+        price_ready=bool(price_path and Path(price_path).exists()),
+        statistics_path=statistics_path,
+        price_path=price_path,
+    )
+
+
+@app.route('/reports/<int:report_id>/download')
+@login_required
+def download_report(report_id: int):
+    if not current_user.seller:
+        flash('Недостаточно прав для скачивания отчёта.', 'warning')
+        return redirect(url_for('dashboard'))
+
+    report = SellerReport.query.get_or_404(report_id)
+    if report.seller_id != current_user.seller.id:
+        abort(404)
+
+    path = Path(report.processed_path)
+    if not path.exists():
+        flash('Файл отчёта не найден. Сформируйте новый отчёт.', 'warning')
+        return redirect(url_for('reports'))
+
+    return send_file(path, as_attachment=True, download_name=path.name)
 
 
 # ============= АДМИН ПАНЕЛЬ =============
