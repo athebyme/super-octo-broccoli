@@ -24,7 +24,7 @@
                         </a>
                         <a href="{{ url_for('reports') }}"
                            class="{% if request.endpoint in ['reports', 'download_report'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            &Ocy;&tcy;&chcy;&iecy;&tcy;&ycy;
+                            Отчёты
                         </a>
                         {% if current_user.is_admin %}
                         <a href="{{ url_for('admin_panel') }}"
