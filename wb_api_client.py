@@ -78,12 +78,12 @@ class WildberriesAPIClient:
     """
 
     # Базовые URL для разных API
-    CONTENT_API_URL = "https://suppliers-api.wildberries.ru"
+    CONTENT_API_URL = "https://content-api.wildberries.ru"
     STATISTICS_API_URL = "https://statistics-api.wildberries.ru"
     MARKETPLACE_API_URL = "https://marketplace-api.wildberries.ru"
 
     # Sandbox URLs для тестирования
-    CONTENT_API_SANDBOX = "https://suppliers-api-sandbox.wildberries.ru"
+    CONTENT_API_SANDBOX = "https://content-api-sandbox.wildberries.ru"
     STATISTICS_API_SANDBOX = "https://statistics-api-sandbox.wildberries.ru"
 
     def __init__(
@@ -244,30 +244,50 @@ class WildberriesAPIClient:
         self,
         limit: int = 100,
         offset: int = 0,
-        filter_nm_id: Optional[int] = None
+        filter_nm_id: Optional[int] = None,
+        cursor_updated_at: Optional[str] = None,
+        cursor_nm_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Получить список карточек товаров (Content API)
+        Получить список карточек товаров (Content API v2)
 
         Args:
             limit: Количество карточек (макс 100)
-            offset: Смещение для пагинации
+            offset: Смещение для пагинации (deprecated, используйте cursor)
             filter_nm_id: Фильтр по nmID (артикулу WB)
+            cursor_updated_at: Для пагинации - updatedAt из предыдущего ответа
+            cursor_nm_id: Для пагинации - nmID из предыдущего ответа
 
         Returns:
             Словарь с данными карточек
+
+        Note:
+            API v2 использует POST метод и JSON body вместо GET с query params
         """
         endpoint = "/content/v2/get/cards/list"
 
-        params = {
-            'limit': min(limit, 100),  # WB ограничивает до 100
-            'offset': offset
+        # Формируем body согласно документации WB API v2
+        body = {
+            "settings": {
+                "cursor": {
+                    "limit": min(limit, 100)  # WB ограничивает до 100
+                },
+                "filter": {
+                    "withPhoto": -1  # -1 = все товары
+                }
+            }
         }
 
-        if filter_nm_id:
-            params['nmID'] = filter_nm_id
+        # Добавляем cursor для пагинации (если указан)
+        if cursor_updated_at and cursor_nm_id:
+            body["settings"]["cursor"]["updatedAt"] = cursor_updated_at
+            body["settings"]["cursor"]["nmID"] = cursor_nm_id
 
-        response = self._make_request('GET', 'content', endpoint, params=params)
+        # Фильтр по конкретному nmID
+        if filter_nm_id:
+            body["settings"]["filter"]["textSearch"] = str(filter_nm_id)
+
+        response = self._make_request('POST', 'content', endpoint, json=body)
         return response.json()
 
     def get_card_by_vendor_code(self, vendor_code: str) -> Dict[str, Any]:
@@ -282,12 +302,19 @@ class WildberriesAPIClient:
         """
         endpoint = "/content/v2/get/cards/list"
 
-        params = {
-            'vendorCode': vendor_code,
-            'limit': 1
+        body = {
+            "settings": {
+                "cursor": {
+                    "limit": 1
+                },
+                "filter": {
+                    "textSearch": vendor_code,  # Поиск по артикулу
+                    "withPhoto": -1
+                }
+            }
         }
 
-        response = self._make_request('GET', 'content', endpoint, params=params)
+        response = self._make_request('POST', 'content', endpoint, json=body)
         data = response.json()
 
         cards = data.get('cards', [])
@@ -298,32 +325,58 @@ class WildberriesAPIClient:
 
     def get_all_cards(self, batch_size: int = 100) -> List[Dict[str, Any]]:
         """
-        Получить все карточки товаров с автоматической пагинацией
+        Получить все карточки товаров с автоматической cursor-based пагинацией
 
         Args:
-            batch_size: Размер пачки для одного запроса
+            batch_size: Размер пачки для одного запроса (макс 100)
 
         Returns:
             Список всех карточек
+
+        Note:
+            API v2 использует cursor-based пагинацию вместо offset
         """
         all_cards = []
-        offset = 0
+        cursor_updated_at = None
+        cursor_nm_id = None
 
         while True:
-            data = self.get_cards_list(limit=batch_size, offset=offset)
+            # Запрос с cursor для пагинации
+            data = self.get_cards_list(
+                limit=batch_size,
+                cursor_updated_at=cursor_updated_at,
+                cursor_nm_id=cursor_nm_id
+            )
+
             cards = data.get('cards', [])
 
             if not cards:
+                logger.info(f"No more cards to load. Total: {len(all_cards)}")
                 break
 
             all_cards.extend(cards)
-            offset += len(cards)
+            logger.info(f"Loaded {len(all_cards)} cards so far...")
 
-            # Если карточек меньше чем лимит, значит это последняя пачка
-            if len(cards) < batch_size:
+            # Получаем cursor для следующей страницы
+            cursor = data.get('cursor')
+            if not cursor:
+                logger.info(f"No cursor in response. Total cards: {len(all_cards)}")
                 break
 
-            logger.info(f"Loaded {len(all_cards)} cards so far...")
+            # Если есть cursor, используем его для следующего запроса
+            cursor_updated_at = cursor.get('updatedAt')
+            cursor_nm_id = cursor.get('nmID')
+
+            # Если нет данных для cursor, значит это последняя страница
+            if not cursor_updated_at or not cursor_nm_id:
+                logger.info(f"Pagination complete. Total cards: {len(all_cards)}")
+                break
+
+            # Если total указывает что мы получили все
+            total = cursor.get('total', 0)
+            if total > 0 and len(all_cards) >= total:
+                logger.info(f"All {total} cards loaded")
+                break
 
         logger.info(f"Total cards loaded: {len(all_cards)}")
         return all_cards
@@ -484,25 +537,40 @@ class CachedWBAPIClient(WildberriesAPIClient):
     def _get_cards_list_cached(
         self,
         limit: int,
-        offset: int,
+        cursor_updated_at: Optional[str],
+        cursor_nm_id: Optional[int],
         filter_nm_id: Optional[int],
         timestamp: float  # Для инвалидации кэша по времени
     ) -> Dict[str, Any]:
         """Кэшированная версия get_cards_list"""
-        return super().get_cards_list(limit, offset, filter_nm_id)
+        return super().get_cards_list(
+            limit=limit,
+            cursor_updated_at=cursor_updated_at,
+            cursor_nm_id=cursor_nm_id,
+            filter_nm_id=filter_nm_id
+        )
 
     def get_cards_list(
         self,
         limit: int = 100,
         offset: int = 0,
         filter_nm_id: Optional[int] = None,
+        cursor_updated_at: Optional[str] = None,
+        cursor_nm_id: Optional[int] = None,
         use_cache: bool = True
     ) -> Dict[str, Any]:
-        """Получить карточки с кэшированием"""
+        """Получить карточки с кэшированием (поддержка cursor-based пагинации)"""
         if not use_cache:
-            return super().get_cards_list(limit, offset, filter_nm_id)
+            return super().get_cards_list(
+                limit=limit,
+                offset=offset,
+                filter_nm_id=filter_nm_id,
+                cursor_updated_at=cursor_updated_at,
+                cursor_nm_id=cursor_nm_id
+            )
 
-        cache_key = f"cards_{limit}_{offset}_{filter_nm_id}"
+        # Кэш-ключ теперь включает cursor параметры
+        cache_key = f"cards_{limit}_{cursor_updated_at}_{cursor_nm_id}_{filter_nm_id}"
 
         # Проверка актуальности кэша
         if not self._is_cache_valid(cache_key):
@@ -511,7 +579,9 @@ class CachedWBAPIClient(WildberriesAPIClient):
 
         # Получаем данные (из кэша или API)
         timestamp = self._cache_timestamps.get(cache_key, time.time())
-        return self._get_cards_list_cached(limit, offset, filter_nm_id, timestamp)
+        return self._get_cards_list_cached(
+            limit, cursor_updated_at, cursor_nm_id, filter_nm_id, timestamp
+        )
 
 
 # ==================== ПРИМЕРЫ ИСПОЛЬЗОВАНИЯ ====================
