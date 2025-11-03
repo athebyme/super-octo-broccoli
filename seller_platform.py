@@ -197,6 +197,9 @@ def dashboard():
 @login_required
 def reports():
     if not current_user.seller:
+        if current_user.is_admin:
+            flash('Создайте продавца в админ-панели и войдите под его учётной записью, чтобы работать с отчётами.', 'info')
+            return redirect(url_for('admin_panel'))
         flash('Для работы с отчётами обратитесь к администратору.', 'warning')
         return redirect(url_for('dashboard'))
 
