@@ -162,6 +162,11 @@ class Product(db.Model):
     # Размеры и баркоды
     sizes_json = db.Column(db.Text)  # JSON с размерами и баркодами
 
+    # Характеристики и описание
+    characteristics_json = db.Column(db.Text)  # JSON с характеристиками товара
+    description = db.Column(db.Text)  # Описание товара
+    dimensions_json = db.Column(db.Text)  # JSON с габаритами (длина, ширина, высота)
+
     # Метаданные
     is_active = db.Column(db.Boolean, default=True)  # Активна ли карточка
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -239,3 +244,48 @@ class APILog(db.Model):
         db.session.add(log)
         db.session.commit()
         return log
+
+
+class ProductStock(db.Model):
+    """Остатки товаров по складам"""
+    __tablename__ = 'product_stocks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True)
+    warehouse_id = db.Column(db.Integer, index=True)  # ID склада WB
+    warehouse_name = db.Column(db.String(200))  # Название склада
+
+    # Остатки
+    quantity = db.Column(db.Integer, default=0)  # Доступный остаток
+    quantity_full = db.Column(db.Integer, default=0)  # Полный остаток
+    in_way_to_client = db.Column(db.Integer, default=0)  # В пути к клиенту
+    in_way_from_client = db.Column(db.Integer, default=0)  # В пути от клиента
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с товаром
+    product = db.relationship('Product', backref=db.backref('stocks', lazy='dynamic'))
+
+    # Уникальный индекс product_id + warehouse_id
+    __table_args__ = (
+        db.UniqueConstraint('product_id', 'warehouse_id', name='uq_product_warehouse'),
+        db.Index('idx_product_stocks_product_id', 'product_id'),
+        db.Index('idx_product_stocks_warehouse_id', 'warehouse_id'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<ProductStock product={self.product_id} warehouse={self.warehouse_name} qty={self.quantity}>'
+
+    def to_dict(self):
+        """Конвертировать в словарь для JSON"""
+        return {
+            'warehouse_id': self.warehouse_id,
+            'warehouse_name': self.warehouse_name,
+            'quantity': self.quantity,
+            'quantity_full': self.quantity_full,
+            'in_way_to_client': self.in_way_to_client,
+            'in_way_from_client': self.in_way_from_client,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }

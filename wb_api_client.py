@@ -468,6 +468,62 @@ class WildberriesAPIClient:
         response = self._make_request('GET', 'marketplace', endpoint, params=params)
         return response.json()
 
+    def get_warehouse_stocks(self, skip: int = 0, take: int = 1000) -> Dict[str, Any]:
+        """
+        Получить остатки по складам (Marketplace API)
+
+        Args:
+            skip: Сколько записей пропустить
+            take: Сколько записей получить (макс 1000)
+
+        Returns:
+            Словарь с остатками по складам
+
+        Endpoint: POST /api/v3/stocks/{warehouse_id}
+        """
+        endpoint = "/api/v3/stocks/0"  # 0 = все склады
+
+        body = {
+            "skip": skip,
+            "take": min(take, 1000)  # WB ограничивает до 1000
+        }
+
+        response = self._make_request('POST', 'marketplace', endpoint, json=body)
+        return response.json()
+
+    def get_all_warehouse_stocks(self, batch_size: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Получить все остатки по складам с автоматической пагинацией
+
+        Args:
+            batch_size: Размер пачки для одного запроса (макс 1000)
+
+        Returns:
+            Список всех остатков
+        """
+        all_stocks = []
+        skip = 0
+
+        while True:
+            data = self.get_warehouse_stocks(skip=skip, take=batch_size)
+            stocks = data.get('stocks', [])
+
+            if not stocks:
+                logger.info(f"No more stocks to load. Total: {len(all_stocks)}")
+                break
+
+            all_stocks.extend(stocks)
+            logger.info(f"Loaded {len(all_stocks)} stock records so far...")
+
+            # Если получили меньше чем лимит, значит это последняя пачка
+            if len(stocks) < batch_size:
+                break
+
+            skip += len(stocks)
+
+        logger.info(f"Total stock records loaded: {len(all_stocks)}")
+        return all_stocks
+
     # ==================== УТИЛИТЫ ====================
 
     def test_connection(self) -> bool:
