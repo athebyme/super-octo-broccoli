@@ -817,7 +817,18 @@ def sync_products():
 
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
             # Получаем все карточки
+            app.logger.info(f"🔄 Начинаем загрузку карточек для seller_id={current_user.seller.id}")
             all_cards = client.get_all_cards(batch_size=100)
+            app.logger.info(f"✅ Получено {len(all_cards)} карточек из WB API")
+
+            # Логируем структуру первой карточки для отладки
+            if all_cards:
+                first_card = all_cards[0]
+                app.logger.info(f"📦 Первая карточка: nmID={first_card.get('nmID')}, keys={list(first_card.keys())[:10]}")
+                app.logger.info(f"📷 mediaFiles в первой карточке: {len(first_card.get('mediaFiles', []))}")
+                app.logger.info(f"📷 photos в первой карточке: {len(first_card.get('photos', []))}")
+            else:
+                app.logger.warning("⚠️ API вернул пустой список карточек!")
 
             # Статистика
             created_count = 0
@@ -929,6 +940,8 @@ def sync_products():
             # Сохраняем все изменения
             db.session.commit()
 
+            app.logger.info(f"💾 Сохранено в БД: {created_count} новых, {updated_count} обновлено")
+
             # Обновляем статус синхронизации
             current_user.seller.api_last_sync = datetime.utcnow()
             current_user.seller.api_sync_status = 'success'
@@ -940,11 +953,13 @@ def sync_products():
             APILog.log_request(
                 seller_id=current_user.seller.id,
                 endpoint='/content/v2/get/cards/list',
-                method='GET',
+                method='POST',  # Исправлено на POST
                 status_code=200,
                 response_time=elapsed,
                 success=True
             )
+
+            app.logger.info(f"✅ Синхронизация завершена успешно за {elapsed:.1f}с")
 
             flash(
                 f'Синхронизация завершена за {elapsed:.1f}с: '
@@ -952,18 +967,20 @@ def sync_products():
                 'success'
             )
 
-    except WBAuthException:
+    except WBAuthException as e:
         current_user.seller.api_sync_status = 'auth_error'
         db.session.commit()
+
+        app.logger.error(f"❌ Ошибка авторизации: {str(e)}")
 
         APILog.log_request(
             seller_id=current_user.seller.id,
             endpoint='/content/v2/get/cards/list',
-            method='GET',
+            method='POST',
             status_code=401,
             response_time=0,
             success=False,
-            error_message='Authentication failed'
+            error_message=f'Authentication failed: {str(e)}'
         )
 
         flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
@@ -972,10 +989,12 @@ def sync_products():
         current_user.seller.api_sync_status = 'error'
         db.session.commit()
 
+        app.logger.error(f"❌ Ошибка WB API: {str(e)}")
+
         APILog.log_request(
             seller_id=current_user.seller.id,
             endpoint='/content/v2/get/cards/list',
-            method='GET',
+            method='POST',
             status_code=500,
             response_time=0,
             success=False,
@@ -987,6 +1006,9 @@ def sync_products():
     except Exception as e:
         current_user.seller.api_sync_status = 'error'
         db.session.commit()
+
+        app.logger.exception(f"❌ Неожиданная ошибка синхронизации: {str(e)}")
+
         flash(f'Ошибка синхронизации: {str(e)}', 'danger')
 
     return redirect(url_for('products_list'))
