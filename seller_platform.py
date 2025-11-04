@@ -20,7 +20,7 @@ from app import (
     read_statistics,
     save_processed_report,
 )
-from models import db, User, Seller, SellerReport, Product, APILog
+from models import db, User, Seller, SellerReport, Product, APILog, ProductStock
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
@@ -839,13 +839,42 @@ def sync_products():
                 title = card_data.get('title', '')
                 brand = card_data.get('brand', '')
                 object_name = card_data.get('object', '')
+                description = card_data.get('description', '')
 
-                # Медиа - сохраняем количество фотографий, а не URL
-                # URL будем формировать динамически в шаблонах через wb_photo_url()
+                # Характеристики
+                characteristics = card_data.get('characteristics', [])
+                characteristics_json = json.dumps(characteristics, ensure_ascii=False) if characteristics else None
+
+                # Габариты
+                dimensions = card_data.get('dimensions', {})
+                dimensions_json = json.dumps(dimensions, ensure_ascii=False) if dimensions else None
+
+                # Медиа - подсчитываем количество фотографий
+                # WB хранит фото на CDN, генерируем URL динамически в шаблонах
                 media = card_data.get('mediaFiles', [])
 
-                # Подсчитываем количество фотографий (не видео)
-                photo_count = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
+                # Пробуем несколько способов подсчета фотографий
+                # Вариант 1: по полю big в mediaFiles (старый формат)
+                photo_count_v1 = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
+
+                # Вариант 2: просто все медиафайлы кроме видео
+                photo_count_v2 = len([m for m in media if m.get('mediaType') != 'video'])
+
+                # Вариант 3: photos field может содержать количество
+                photos_field = card_data.get('photos', [])
+                photo_count_v3 = len(photos_field) if photos_field else 0
+
+                # Используем максимальное значение
+                photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
+
+                # Если фоток нет, пробуем альтернативный подход - просто предполагаем что есть до 10 фото
+                if photo_count == 0 and card_data.get('mediaFiles'):
+                    # Предполагаем что есть хотя бы несколько фото
+                    photo_count = len(media) if media else 0
+
+                # Логируем для первых 3 товаров для отладки
+                if created_count + updated_count < 3:
+                    app.logger.info(f"Product {nm_id}: mediaFiles={len(media)}, photos_field={len(photos_field) if photos_field else 0}, photo_count={photo_count}")
 
                 # Сохраняем список индексов фотографий [1, 2, 3, ...]
                 photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
@@ -857,7 +886,7 @@ def sync_products():
 
                 # Размеры
                 sizes = card_data.get('sizes', [])
-                sizes_json = json.dumps(sizes) if sizes else None
+                sizes_json = json.dumps(sizes, ensure_ascii=False) if sizes else None
 
                 if product:
                     # Обновление существующей карточки
@@ -865,6 +894,9 @@ def sync_products():
                     product.title = title
                     product.brand = brand
                     product.object_name = object_name
+                    product.description = description
+                    product.characteristics_json = characteristics_json
+                    product.dimensions_json = dimensions_json
                     product.photos_json = photos_json
                     product.video_url = video
                     product.sizes_json = sizes_json
@@ -881,7 +913,10 @@ def sync_products():
                         title=title,
                         brand=brand,
                         object_name=object_name,
+                        description=description,
                         supplier_vendor_code=card_data.get('supplierVendorCode', ''),
+                        characteristics_json=characteristics_json,
+                        dimensions_json=dimensions_json,
                         photos_json=photos_json,
                         video_url=video,
                         sizes_json=sizes_json,
