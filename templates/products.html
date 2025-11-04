@@ -63,36 +63,146 @@
     </div>
     {% endif %}
 
-    <!-- Поиск и фильтры -->
-    <div class="mb-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-        <form method="GET" action="{{ url_for('products_list') }}" class="flex gap-4">
-            <div class="flex-1">
-                <input type="text"
-                       name="search"
-                       value="{{ search }}"
-                       placeholder="Поиск по артикулу, названию, бренду..."
-                       class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+    <!-- Поиск и расширенные фильтры -->
+    <div class="mb-6 bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <form method="GET" action="{{ url_for('products_list') }}" class="space-y-4">
+            <!-- Поиск -->
+            <div class="flex gap-4">
+                <div class="flex-1">
+                    <input type="text"
+                           name="search"
+                           value="{{ search }}"
+                           placeholder="Поиск по артикулу, названию, бренду..."
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+                <button type="submit"
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    Применить
+                </button>
+                {% if search or filter_brand or filter_category or filter_has_stock or active_only %}
+                <a href="{{ url_for('products_list') }}"
+                   class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                    Сбросить
+                </a>
+                {% endif %}
             </div>
-            <div class="flex items-center gap-2">
-                <input type="checkbox"
-                       name="active_only"
-                       id="active_only"
-                       {% if active_only %}checked{% endif %}
-                       class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
-                <label for="active_only" class="text-sm text-gray-700 dark:text-gray-300">
-                    Только активные
-                </label>
-            </div>
+
+            <!-- Расширенные фильтры -->
+            <details class="group" {% if filter_brand or filter_category or filter_has_stock or sort_by != 'updated_at' %}open{% endif %}>
+                <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                    <svg class="w-5 h-5 transform group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                    Расширенные фильтры и сортировка
+                </summary>
+                <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <!-- Фильтр по бренду -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Бренд
+                        </label>
+                        <select name="brand"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все бренды</option>
+                            {% for brand in brands %}
+                            <option value="{{ brand }}" {% if filter_brand == brand %}selected{% endif %}>
+                                {{ brand }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Фильтр по категории -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Категория
+                        </label>
+                        <select name="category"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все категории</option>
+                            {% for category in categories %}
+                            <option value="{{ category }}" {% if filter_category == category %}selected{% endif %}>
+                                {{ category }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Фильтр по наличию -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Наличие
+                        </label>
+                        <select name="has_stock"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все товары</option>
+                            <option value="yes" {% if filter_has_stock == 'yes' %}selected{% endif %}>В наличии</option>
+                            <option value="no" {% if filter_has_stock == 'no' %}selected{% endif %}>Нет в наличии</option>
+                        </select>
+                    </div>
+
+                    <!-- Сортировка -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Сортировка
+                        </label>
+                        <div class="flex gap-2">
+                            <select name="sort"
+                                    class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                <option value="updated_at" {% if sort_by == 'updated_at' %}selected{% endif %}>Дата обновления</option>
+                                <option value="created_at" {% if sort_by == 'created_at' %}selected{% endif %}>Дата создания</option>
+                                <option value="vendor_code" {% if sort_by == 'vendor_code' %}selected{% endif %}>Артикул</option>
+                                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Название</option>
+                                <option value="brand" {% if sort_by == 'brand' %}selected{% endif %}>Бренд</option>
+                                <option value="category" {% if sort_by == 'category' %}selected{% endif %}>Категория</option>
+                                <option value="nm_id" {% if sort_by == 'nm_id' %}selected{% endif %}>NM ID</option>
+                            </select>
+                            <select name="order"
+                                    class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>↓</option>
+                                <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>↑</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Активные товары -->
+                    <div class="flex items-center gap-2 pt-6">
+                        <input type="checkbox"
+                               name="active_only"
+                               id="active_only"
+                               value="1"
+                               {% if active_only %}checked{% endif %}
+                               class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        <label for="active_only" class="text-sm text-gray-700 dark:text-gray-300">
+                            Только активные
+                        </label>
+                    </div>
+                </div>
+            </details>
+        </form>
+    </div>
+
+    <!-- Панель массовых действий -->
+    <div id="bulkActionBar" class="hidden mb-4 bg-blue-50 dark:bg-blue-900 p-4 rounded-lg shadow">
+        <form method="POST" action="{{ url_for('bulk_products_action') }}" id="bulkActionForm" class="flex items-center gap-4">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Выбрано: <span id="selectedCount">0</span> товаров
+            </span>
+            <select name="action" required
+                    class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                <option value="">Выберите действие...</option>
+                <option value="activate">Активировать</option>
+                <option value="deactivate">Деактивировать</option>
+                <option value="export">Экспорт в CSV</option>
+            </select>
             <button type="submit"
-                    class="px-6 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors">
-                Поиск
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                Применить
             </button>
-            {% if search %}
-            <a href="{{ url_for('products_list') }}"
-               class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
-                Сбросить
-            </a>
-            {% endif %}
+            <button type="button" onclick="clearSelection()"
+                    class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                Отменить выбор
+            </button>
         </form>
     </div>
 
@@ -103,6 +213,10 @@
             <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead class="bg-gray-50 dark:bg-gray-900">
                     <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)"
+                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        </th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                             Фото
                         </th>
@@ -129,6 +243,10 @@
                 <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {% for product in products %}
                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <td class="px-6 py-4">
+                            <input type="checkbox" class="product-checkbox" value="{{ product.id }}" onchange="updateSelection()"
+                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        </td>
                         <td class="px-6 py-4">
                             {% if product.photos_json %}
                                 {% set photo_indices = product.photos_json|safe|from_json %}
@@ -196,13 +314,13 @@
             <div class="flex items-center justify-between">
                 <div class="flex-1 flex justify-between sm:hidden">
                     {% if pagination.has_prev %}
-                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only) }}"
+                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                         Назад
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only) }}"
+                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
                        class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                         Вперед
                     </a>
@@ -223,7 +341,7 @@
                     <div>
                         <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                             {% if pagination.has_prev %}
-                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only) }}"
+                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
                                class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
                                 ‹
                             </a>
@@ -236,7 +354,7 @@
                                         {{ page_num }}
                                     </span>
                                     {% else %}
-                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only) }}"
+                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
                                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600">
                                         {{ page_num }}
                                     </a>
@@ -249,7 +367,7 @@
                             {% endfor %}
 
                             {% if pagination.has_next %}
-                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only) }}"
+                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
                                class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
                                 ›
                             </a>
@@ -302,5 +420,77 @@ setTimeout(function() {
     location.reload();
 }, 5000);
 {% endif %}
+
+// === Массовое редактирование ===
+
+function updateSelection() {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    const checked = Array.from(checkboxes).filter(cb => cb.checked);
+    const count = checked.length;
+
+    // Обновляем счетчик
+    document.getElementById('selectedCount').textContent = count;
+
+    // Показываем/скрываем панель действий
+    const bulkBar = document.getElementById('bulkActionBar');
+    if (count > 0) {
+        bulkBar.classList.remove('hidden');
+
+        // Обновляем hidden inputs в форме
+        const form = document.getElementById('bulkActionForm');
+
+        // Удаляем старые hidden inputs
+        form.querySelectorAll('input[name="product_ids"]').forEach(input => input.remove());
+
+        // Добавляем новые
+        checked.forEach(cb => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'product_ids';
+            input.value = cb.value;
+            form.appendChild(input);
+        });
+    } else {
+        bulkBar.classList.add('hidden');
+    }
+
+    // Обновляем состояние "Выбрать все"
+    const selectAll = document.getElementById('selectAll');
+    selectAll.checked = count === checkboxes.length && count > 0;
+    selectAll.indeterminate = count > 0 && count < checkboxes.length;
+}
+
+function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+    });
+    updateSelection();
+}
+
+function clearSelection() {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = false;
+    });
+    document.getElementById('selectAll').checked = false;
+    updateSelection();
+}
+
+// Подтверждение перед деактивацией/удалением
+document.getElementById('bulkActionForm').addEventListener('submit', function(e) {
+    const action = this.querySelector('select[name="action"]').value;
+    const count = document.querySelectorAll('.product-checkbox:checked').length;
+
+    if (action === 'deactivate') {
+        if (!confirm(`Вы уверены, что хотите деактивировать ${count} товаров?`)) {
+            e.preventDefault();
+        }
+    } else if (action === 'delete') {
+        if (!confirm(`Вы уверены, что хотите удалить ${count} товаров? Это действие нельзя отменить!`)) {
+            e.preventDefault();
+        }
+    }
+});
 </script>
 {% endblock %}

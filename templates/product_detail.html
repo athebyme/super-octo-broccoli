@@ -254,10 +254,10 @@
                 {% for char in characteristics %}
                 <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                        {{ char.name or char.get('Наименование', '—') }}
+                        {{ (char.name or char.get('Наименование', '—')) | format_char_value }}
                     </div>
                     <div class="font-medium text-gray-900 dark:text-white">
-                        {{ char.value or char.get('Значение', '—') }}
+                        {{ (char.value or char.get('Значение', '—')) | format_char_value }}
                     </div>
                 </div>
                 {% endfor %}

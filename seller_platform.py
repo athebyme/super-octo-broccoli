@@ -104,8 +104,24 @@ app.jinja_env.globals.update({
     'wb_photo_url': wb_photo_url,
 })
 
-# Добавляем фильтр для парсинга JSON в шаблонах
+# Добавляем фильтры для шаблонов
 app.jinja_env.filters['from_json'] = json.loads
+
+def format_characteristic_value(value):
+    """Форматирует значение характеристики (обрабатывает массивы и объекты)"""
+    if value is None:
+        return '—'
+    if isinstance(value, list):
+        if len(value) == 0:
+            return '—'
+        # Если список содержит только одно значение, возвращаем его
+        if len(value) == 1:
+            return str(value[0])
+        # Иначе объединяем через запятую
+        return ', '.join(str(v) for v in value)
+    return str(value)
+
+app.jinja_env.filters['format_char_value'] = format_characteristic_value
 
 # Инициализация расширений
 db.init_app(app)
@@ -739,7 +755,7 @@ def api_settings():
 @app.route('/products')
 @login_required
 def products_list():
-    """Список карточек товаров с пагинацией"""
+    """Список карточек товаров с расширенными фильтрами и сортировкой"""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
@@ -748,11 +764,20 @@ def products_list():
         # Параметры пагинации
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 50, type=int)
-        per_page = min(per_page, 100)  # Максимум 100 на странице
+        per_page = min(per_page, 200)  # Увеличено до 200 на странице
 
-        # Фильтры
+        # Базовые фильтры
         search = request.args.get('search', '').strip()
         active_only = request.args.get('active_only', type=bool)
+
+        # Расширенные фильтры
+        filter_brand = request.args.get('brand', '').strip()
+        filter_category = request.args.get('category', '').strip()
+        filter_has_stock = request.args.get('has_stock', '').strip()  # 'yes', 'no', ''
+
+        # Сортировка
+        sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
+        sort_order = request.args.get('order', 'desc')  # 'asc' или 'desc'
 
         # Построение запроса
         query = Product.query.filter_by(seller_id=current_user.seller.id)
@@ -770,8 +795,39 @@ def products_list():
             )
             query = query.filter(search_filter)
 
-        # Сортировка по дате обновления (новые первыми)
-        query = query.order_by(Product.updated_at.desc())
+        # Фильтр по бренду
+        if filter_brand:
+            query = query.filter(Product.brand.ilike(f'%{filter_brand}%'))
+
+        # Фильтр по категории
+        if filter_category:
+            query = query.filter(Product.object_name.ilike(f'%{filter_category}%'))
+
+        # Фильтр по наличию остатков
+        if filter_has_stock == 'yes':
+            # Товары у которых есть хотя бы один остаток > 0
+            query = query.join(ProductStock).filter(ProductStock.quantity > 0)
+        elif filter_has_stock == 'no':
+            # Товары без остатков или с нулевыми остатками
+            query = query.outerjoin(ProductStock).group_by(Product.id).having(
+                db.func.coalesce(db.func.sum(ProductStock.quantity), 0) == 0
+            )
+
+        # Сортировка
+        sort_column = {
+            'updated_at': Product.updated_at,
+            'created_at': Product.created_at,
+            'vendor_code': Product.vendor_code,
+            'title': Product.title,
+            'brand': Product.brand,
+            'nm_id': Product.nm_id,
+            'category': Product.object_name,
+        }.get(sort_by, Product.updated_at)
+
+        if sort_order == 'asc':
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
 
         # Пагинация
         pagination = query.paginate(
@@ -784,6 +840,21 @@ def products_list():
         total_products = current_user.seller.products.count()
         active_products = current_user.seller.products.filter_by(is_active=True).count()
 
+        # Получаем уникальные бренды и категории для фильтров
+        brands = db.session.query(Product.brand).filter(
+            Product.seller_id == current_user.seller.id,
+            Product.brand.isnot(None),
+            Product.brand != ''
+        ).distinct().order_by(Product.brand).all()
+        brands = [b[0] for b in brands]
+
+        categories = db.session.query(Product.object_name).filter(
+            Product.seller_id == current_user.seller.id,
+            Product.object_name.isnot(None),
+            Product.object_name != ''
+        ).distinct().order_by(Product.object_name).all()
+        categories = [c[0] for c in categories]
+
         return render_template(
             'products.html',
             products=products,
@@ -792,12 +863,129 @@ def products_list():
             active_products=active_products,
             search=search,
             active_only=active_only,
+            filter_brand=filter_brand,
+            filter_category=filter_category,
+            filter_has_stock=filter_has_stock,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            brands=brands,
+            categories=categories,
             seller=current_user.seller
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
         flash(f'Ошибка при загрузке карточек товаров: {str(e)}', 'danger')
         return redirect(url_for('dashboard'))
+
+
+@app.route('/products/bulk-action', methods=['POST'])
+@login_required
+def bulk_products_action():
+    """Массовые операции с товарами"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    try:
+        # Получаем параметры
+        action = request.form.get('action', '').strip()
+        product_ids = request.form.getlist('product_ids')
+
+        if not action:
+            flash('Не указано действие', 'warning')
+            return redirect(url_for('products_list'))
+
+        if not product_ids:
+            flash('Не выбраны товары', 'warning')
+            return redirect(url_for('products_list'))
+
+        # Преобразуем в целые числа
+        try:
+            product_ids = [int(pid) for pid in product_ids]
+        except ValueError:
+            flash('Неверный формат ID товаров', 'danger')
+            return redirect(url_for('products_list'))
+
+        # Проверяем что все товары принадлежат текущему продавцу
+        products = Product.query.filter(
+            Product.id.in_(product_ids),
+            Product.seller_id == current_user.seller.id
+        ).all()
+
+        if len(products) != len(product_ids):
+            flash('Некоторые товары не найдены или не принадлежат вам', 'danger')
+            return redirect(url_for('products_list'))
+
+        # Выполняем действие
+        affected_count = 0
+
+        if action == 'activate':
+            # Активировать товары
+            for product in products:
+                product.is_active = True
+                affected_count += 1
+            db.session.commit()
+            flash(f'Активировано товаров: {affected_count}', 'success')
+
+        elif action == 'deactivate':
+            # Деактивировать товары
+            for product in products:
+                product.is_active = False
+                affected_count += 1
+            db.session.commit()
+            flash(f'Деактивировано товаров: {affected_count}', 'success')
+
+        elif action == 'delete':
+            # Удалить товары (мягкое удаление - пометить как неактивные)
+            for product in products:
+                product.is_active = False
+                affected_count += 1
+            db.session.commit()
+            flash(f'Помечено на удаление товаров: {affected_count}', 'success')
+
+        elif action == 'export':
+            # Экспорт в CSV
+            import csv
+            from io import StringIO
+            from flask import make_response
+
+            output = StringIO()
+            writer = csv.writer(output)
+
+            # Заголовки
+            writer.writerow([
+                'ID', 'Артикул', 'NM ID', 'Название', 'Бренд',
+                'Категория', 'Цена', 'Активен', 'Дата создания'
+            ])
+
+            # Данные
+            for product in products:
+                writer.writerow([
+                    product.id,
+                    product.vendor_code,
+                    product.nm_id,
+                    product.title,
+                    product.brand,
+                    product.object_name,
+                    product.price or '',
+                    'Да' if product.is_active else 'Нет',
+                    product.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                ])
+
+            # Создаем response
+            response = make_response(output.getvalue())
+            response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+            response.headers['Content-Disposition'] = f'attachment; filename=products_export_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
+            return response
+
+        else:
+            flash(f'Неизвестное действие: {action}', 'danger')
+
+    except Exception as e:
+        app.logger.exception(f"Error in bulk_products_action: {e}")
+        flash(f'Ошибка при выполнении массовой операции: {str(e)}', 'danger')
+
+    return redirect(url_for('products_list'))
 
 
 @app.route('/products/sync', methods=['POST'])
@@ -1033,22 +1221,49 @@ def sync_warehouse_stocks():
         start_time = time.time()
 
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            # Получаем все остатки по складам
-            app.logger.info(f"🔄 Начинаем загрузку остатков по складам для seller_id={current_user.seller.id}")
-            all_stocks = client.get_all_warehouse_stocks(batch_size=1000)
+            # Получаем все остатки через Statistics API
+            # Используем дату 30 дней назад для получения актуальных данных
+            from datetime import timedelta
+            date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+            app.logger.info(f"🔄 Начинаем загрузку остатков для seller_id={current_user.seller.id}")
+            all_stocks = client.get_stocks(date_from=date_from)
             app.logger.info(f"✅ Получено {len(all_stocks)} записей об остатках из WB API")
 
             # Статистика
             created_count = 0
             updated_count = 0
 
-            # Обрабатываем каждую запись об остатках
+            # Группируем остатки по nmId и складу (Statistics API может возвращать несколько записей)
+            stocks_by_product = {}
             for stock_data in all_stocks:
                 nm_id = stock_data.get('nmId')
-                warehouse_id = stock_data.get('warehouseId')
+                warehouse_name = stock_data.get('warehouseName', 'Неизвестный склад')
 
                 if not nm_id:
                     continue
+
+                key = (nm_id, warehouse_name)
+                if key not in stocks_by_product:
+                    stocks_by_product[key] = {
+                        'nm_id': nm_id,
+                        'warehouse_name': warehouse_name,
+                        'quantity': 0,
+                        'quantity_full': 0,
+                        'barcode': stock_data.get('barcode', ''),
+                        'subject': stock_data.get('subject', ''),
+                    }
+
+                # Суммируем количества (могут быть разные размеры)
+                stocks_by_product[key]['quantity'] += stock_data.get('quantity', 0)
+                stocks_by_product[key]['quantity_full'] += stock_data.get('quantityFull', 0)
+
+            app.logger.info(f"📊 Агрегировано {len(stocks_by_product)} уникальных записей остатков")
+
+            # Обрабатываем каждую агрегированную запись
+            for key, stock_data in stocks_by_product.items():
+                nm_id = stock_data['nm_id']
+                warehouse_name = stock_data['warehouse_name']
 
                 # Находим товар по nm_id
                 product = Product.query.filter_by(
@@ -1060,25 +1275,24 @@ def sync_warehouse_stocks():
                     # Товар не найден - пропускаем (возможно не синхронизированы карточки)
                     continue
 
+                # Генерируем warehouse_id из имени (для уникальности)
+                # WB не возвращает ID склада в Statistics API, используем хеш имени
+                warehouse_id = hash(warehouse_name) % 1000000
+
                 # Ищем существующую запись об остатках для этого товара и склада
                 stock = ProductStock.query.filter_by(
                     product_id=product.id,
                     warehouse_id=warehouse_id
                 ).first()
 
-                warehouse_name = stock_data.get('warehouseName', '')
-                quantity = stock_data.get('quantity', 0)
-                quantity_full = stock_data.get('quantityFull', 0)
-                in_way_to_client = stock_data.get('inWayToClient', 0)
-                in_way_from_client = stock_data.get('inWayFromClient', 0)
+                quantity = stock_data['quantity']
+                quantity_full = stock_data['quantity_full']
 
                 if stock:
                     # Обновляем существующую запись
                     stock.warehouse_name = warehouse_name
                     stock.quantity = quantity
                     stock.quantity_full = quantity_full
-                    stock.in_way_to_client = in_way_to_client
-                    stock.in_way_from_client = in_way_from_client
                     stock.updated_at = datetime.utcnow()
                     updated_count += 1
                 else:
@@ -1089,8 +1303,8 @@ def sync_warehouse_stocks():
                         warehouse_name=warehouse_name,
                         quantity=quantity,
                         quantity_full=quantity_full,
-                        in_way_to_client=in_way_to_client,
-                        in_way_from_client=in_way_from_client
+                        in_way_to_client=0,
+                        in_way_from_client=0
                     )
                     db.session.add(stock)
                     created_count += 1
@@ -1105,8 +1319,8 @@ def sync_warehouse_stocks():
             # Логируем успешный запрос
             APILog.log_request(
                 seller_id=current_user.seller.id,
-                endpoint='/api/v3/stocks/0',
-                method='POST',
+                endpoint='/api/v1/supplier/stocks',
+                method='GET',
                 status_code=200,
                 response_time=elapsed,
                 success=True
@@ -1125,8 +1339,8 @@ def sync_warehouse_stocks():
 
         APILog.log_request(
             seller_id=current_user.seller.id,
-            endpoint='/api/v3/stocks/0',
-            method='POST',
+            endpoint='/api/v1/supplier/stocks',
+            method='GET',
             status_code=401,
             response_time=0,
             success=False,
@@ -1140,8 +1354,8 @@ def sync_warehouse_stocks():
 
         APILog.log_request(
             seller_id=current_user.seller.id,
-            endpoint='/api/v3/stocks/0',
-            method='POST',
+            endpoint='/api/v1/supplier/stocks',
+            method='GET',
             status_code=500,
             response_time=0,
             success=False,
