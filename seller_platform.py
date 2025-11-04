@@ -104,6 +104,9 @@ app.jinja_env.globals.update({
     'wb_photo_url': wb_photo_url,
 })
 
+# Добавляем фильтр для парсинга JSON в шаблонах
+app.jinja_env.filters['from_json'] = json.loads
+
 # Инициализация расширений
 db.init_app(app)
 login_manager = LoginManager()
@@ -1014,6 +1017,146 @@ def sync_products():
     return redirect(url_for('products_list'))
 
 
+@app.route('/products/sync-stocks', methods=['POST'])
+@login_required
+def sync_warehouse_stocks():
+    """Синхронизация остатков по складам через API WB"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if not current_user.seller.has_valid_api_key():
+        flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
+        return redirect(url_for('api_settings'))
+
+    try:
+        start_time = time.time()
+
+        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            # Получаем все остатки по складам
+            app.logger.info(f"🔄 Начинаем загрузку остатков по складам для seller_id={current_user.seller.id}")
+            all_stocks = client.get_all_warehouse_stocks(batch_size=1000)
+            app.logger.info(f"✅ Получено {len(all_stocks)} записей об остатках из WB API")
+
+            # Статистика
+            created_count = 0
+            updated_count = 0
+
+            # Обрабатываем каждую запись об остатках
+            for stock_data in all_stocks:
+                nm_id = stock_data.get('nmId')
+                warehouse_id = stock_data.get('warehouseId')
+
+                if not nm_id:
+                    continue
+
+                # Находим товар по nm_id
+                product = Product.query.filter_by(
+                    seller_id=current_user.seller.id,
+                    nm_id=nm_id
+                ).first()
+
+                if not product:
+                    # Товар не найден - пропускаем (возможно не синхронизированы карточки)
+                    continue
+
+                # Ищем существующую запись об остатках для этого товара и склада
+                stock = ProductStock.query.filter_by(
+                    product_id=product.id,
+                    warehouse_id=warehouse_id
+                ).first()
+
+                warehouse_name = stock_data.get('warehouseName', '')
+                quantity = stock_data.get('quantity', 0)
+                quantity_full = stock_data.get('quantityFull', 0)
+                in_way_to_client = stock_data.get('inWayToClient', 0)
+                in_way_from_client = stock_data.get('inWayFromClient', 0)
+
+                if stock:
+                    # Обновляем существующую запись
+                    stock.warehouse_name = warehouse_name
+                    stock.quantity = quantity
+                    stock.quantity_full = quantity_full
+                    stock.in_way_to_client = in_way_to_client
+                    stock.in_way_from_client = in_way_from_client
+                    stock.updated_at = datetime.utcnow()
+                    updated_count += 1
+                else:
+                    # Создаем новую запись
+                    stock = ProductStock(
+                        product_id=product.id,
+                        warehouse_id=warehouse_id,
+                        warehouse_name=warehouse_name,
+                        quantity=quantity,
+                        quantity_full=quantity_full,
+                        in_way_to_client=in_way_to_client,
+                        in_way_from_client=in_way_from_client
+                    )
+                    db.session.add(stock)
+                    created_count += 1
+
+            # Сохраняем все изменения
+            db.session.commit()
+
+            app.logger.info(f"💾 Сохранено остатков в БД: {created_count} новых, {updated_count} обновлено")
+
+            elapsed = time.time() - start_time
+
+            # Логируем успешный запрос
+            APILog.log_request(
+                seller_id=current_user.seller.id,
+                endpoint='/api/v3/stocks/0',
+                method='POST',
+                status_code=200,
+                response_time=elapsed,
+                success=True
+            )
+
+            app.logger.info(f"✅ Синхронизация остатков завершена успешно за {elapsed:.1f}с")
+
+            flash(
+                f'Синхронизация остатков завершена за {elapsed:.1f}с: '
+                f'{created_count} новых, {updated_count} обновлено',
+                'success'
+            )
+
+    except WBAuthException as e:
+        app.logger.error(f"❌ Ошибка авторизации при загрузке остатков: {str(e)}")
+
+        APILog.log_request(
+            seller_id=current_user.seller.id,
+            endpoint='/api/v3/stocks/0',
+            method='POST',
+            status_code=401,
+            response_time=0,
+            success=False,
+            error_message=f'Authentication failed: {str(e)}'
+        )
+
+        flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
+
+    except WBAPIException as e:
+        app.logger.error(f"❌ Ошибка WB API при загрузке остатков: {str(e)}")
+
+        APILog.log_request(
+            seller_id=current_user.seller.id,
+            endpoint='/api/v3/stocks/0',
+            method='POST',
+            status_code=500,
+            response_time=0,
+            success=False,
+            error_message=str(e)
+        )
+
+        flash(f'Ошибка API WB: {str(e)}', 'danger')
+
+    except Exception as e:
+        app.logger.exception(f"❌ Неожиданная ошибка синхронизации остатков: {str(e)}")
+        flash(f'Ошибка синхронизации остатков: {str(e)}', 'danger')
+
+    return redirect(url_for('products_list'))
+
+
 @app.route('/products/<int:product_id>')
 @login_required
 def product_detail(product_id):
@@ -1032,12 +1175,26 @@ def product_detail(product_id):
     # Парсим JSON данные
     photos = json.loads(product.photos_json) if product.photos_json else []
     sizes = json.loads(product.sizes_json) if product.sizes_json else []
+    characteristics = json.loads(product.characteristics_json) if product.characteristics_json else []
+    dimensions = json.loads(product.dimensions_json) if product.dimensions_json else {}
+
+    # Получаем остатки по складам для этого товара
+    warehouse_stocks = ProductStock.query.filter_by(product_id=product.id).all()
+
+    # Вычисляем общие остатки
+    total_quantity = sum(stock.quantity for stock in warehouse_stocks)
+    total_quantity_full = sum(stock.quantity_full for stock in warehouse_stocks)
 
     return render_template(
         'product_detail.html',
         product=product,
         photos=photos,
-        sizes=sizes
+        sizes=sizes,
+        characteristics=characteristics,
+        dimensions=dimensions,
+        warehouse_stocks=warehouse_stocks,
+        total_quantity=total_quantity,
+        total_quantity_full=total_quantity_full
     )
 
 
