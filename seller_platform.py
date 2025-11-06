@@ -1020,9 +1020,14 @@ def sync_products():
             # Логируем структуру первой карточки для отладки
             if all_cards:
                 first_card = all_cards[0]
-                app.logger.info(f"📦 Первая карточка: nmID={first_card.get('nmID')}, keys={list(first_card.keys())[:10]}")
+                app.logger.info(f"📦 Первая карточка: nmID={first_card.get('nmID')}")
+                app.logger.info(f"📦 Все ключи: {list(first_card.keys())}")
                 app.logger.info(f"📷 mediaFiles в первой карточке: {len(first_card.get('mediaFiles', []))}")
                 app.logger.info(f"📷 photos в первой карточке: {len(first_card.get('photos', []))}")
+                app.logger.info(f"🏷️ object field: '{first_card.get('object')}'")
+                app.logger.info(f"🏷️ objectName field: '{first_card.get('objectName')}'")
+                app.logger.info(f"🏷️ subjectName field: '{first_card.get('subjectName')}'")
+                app.logger.info(f"🏷️ subjectID field: '{first_card.get('subjectID')}'")
             else:
                 app.logger.warning("⚠️ API вернул пустой список карточек!")
 
@@ -1045,7 +1050,15 @@ def sync_products():
                 vendor_code = card_data.get('vendorCode', '')
                 title = card_data.get('title', '')
                 brand = card_data.get('brand', '')
-                object_name = card_data.get('object', '')
+
+                # Категория товара - WB API может возвращать разные поля
+                object_name = (
+                    card_data.get('subjectName') or  # Предпочтительное поле в WB API v2
+                    card_data.get('objectName') or
+                    card_data.get('object') or
+                    ''
+                )
+
                 description = card_data.get('description', '')
 
                 # Характеристики
