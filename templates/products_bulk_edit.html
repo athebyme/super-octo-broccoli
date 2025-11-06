@@ -67,8 +67,70 @@
         productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
         characteristics: [],
         selectedChar: null,
+        selectedValues: [],
+        selectedValuesAdd: [],
         loading: false,
         loadError: null,
+        products: {{ products | tojson | safe }},
+
+        getCurrentValuesForChar(charId) {
+            const values = [];
+            this.products.forEach(product => {
+                try {
+                    const chars = product.characteristics_json ? JSON.parse(product.characteristics_json) : [];
+                    const char = chars.find(c => c.id === charId);
+                    if (char && char.value) {
+                        const valueStr = Array.isArray(char.value) ? char.value.join(', ') : String(char.value);
+                        values.push({
+                            vendor_code: product.vendor_code,
+                            value: valueStr
+                        });
+                    }
+                } catch (e) {
+                    console.error('Error parsing characteristics for product', product.id, e);
+                }
+            });
+            return values;
+        },
+
+        toggleValue(value, operation = 'update') {
+            const arr = operation === 'add' ? this.selectedValuesAdd : this.selectedValues;
+            const idx = arr.indexOf(value);
+            const maxCount = this.selectedChar?.max_count || 0;
+
+            if (idx > -1) {
+                // Убираем если уже выбрано
+                arr.splice(idx, 1);
+            } else {
+                // Добавляем если не превышен лимит
+                if (maxCount > 0 && arr.length >= maxCount) {
+                    alert(`Можно выбрать максимум ${maxCount} значений`);
+                    return false;
+                }
+                arr.push(value);
+            }
+
+            // Обновляем hidden поле
+            if (operation === 'add') {
+                this.selectedValuesAdd = [...arr];
+                document.getElementById('value_char_add').value = arr.join(', ');
+            } else {
+                this.selectedValues = [...arr];
+                document.getElementById('value_char').value = arr.join(', ');
+            }
+            return true;
+        },
+
+        isValueSelected(value, operation = 'update') {
+            const arr = operation === 'add' ? this.selectedValuesAdd : this.selectedValues;
+            return arr.includes(value);
+        },
+
+        canSelectMore(operation = 'update') {
+            const arr = operation === 'add' ? this.selectedValuesAdd : this.selectedValues;
+            const maxCount = this.selectedChar?.max_count || 0;
+            return maxCount === 0 || arr.length < maxCount;
+        },
 
         async loadCharacteristics() {
             if (!this.productCategory) {
@@ -262,10 +324,42 @@
                         </div>
                     </div>
 
+                    <!-- Текущие значения у выбранных товаров -->
+                    <div x-show="selectedChar" class="mb-4">
+                        <template x-if="selectedChar && getCurrentValuesForChar(selectedChar.id).length > 0">
+                            <div class="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                                <h4 class="text-sm font-medium text-gray-700 mb-3 flex items-center">
+                                    <svg class="w-4 h-4 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                    Текущие значения у товаров:
+                                </h4>
+                                <div class="space-y-2 max-h-48 overflow-y-auto">
+                                    <template x-for="item in getCurrentValuesForChar(selectedChar.id)" :key="item.vendor_code">
+                                        <div class="flex items-start py-2 px-3 bg-white rounded border border-gray-100">
+                                            <span class="text-xs font-medium text-gray-500 min-w-[120px]" x-text="item.vendor_code"></span>
+                                            <span class="text-xs text-gray-900 flex-1 ml-3 break-words" x-text="item.value"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="selectedChar && getCurrentValuesForChar(selectedChar.id).length === 0">
+                            <div class="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                <p class="text-sm text-yellow-700 flex items-center">
+                                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                    </svg>
+                                    У выбранных товаров нет значения для этой характеристики
+                                </p>
+                            </div>
+                        </template>
+                    </div>
+
                     <!-- Ввод значения -->
                     <div x-show="selectedChar">
                         <label for="value_char" class="block text-sm font-medium text-gray-700 mb-2">
-                            Значение
+                            Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
                                 (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
@@ -280,14 +374,25 @@
                                     <div class="space-y-2">
                                         <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
                                             <template x-for="val in selectedChar.values" :key="val.id">
-                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer"
+                                                       :class="!canSelectMore() && !isValueSelected(val.value) ? 'opacity-50 cursor-not-allowed' : ''">
                                                     <input type="checkbox"
-                                                           :value="val.value"
-                                                           @change="updateMultiValue()"
+                                                           :checked="isValueSelected(val.value)"
+                                                           @change="toggleValue(val.value)"
+                                                           :disabled="!canSelectMore() && !isValueSelected(val.value)"
                                                            class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                                     <span x-text="val.value" class="text-sm"></span>
                                                 </label>
                                             </template>
+                                        </div>
+                                        <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
+                                            <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
+                                            <button type="button"
+                                                    @click="selectedValues = []; document.getElementById('value_char').value = ''"
+                                                    class="text-indigo-600 hover:text-indigo-800"
+                                                    x-show="selectedValues.length > 0">
+                                                Сбросить
+                                            </button>
                                         </div>
                                         <input type="hidden" name="value" id="value_char">
                                     </div>
@@ -319,13 +424,6 @@
                 </div>
             </div>
 
-            <script>
-                function updateMultiValue() {
-                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
-                    const values = Array.from(checkboxes).map(cb => cb.value);
-                    document.getElementById('value_char').value = values.join(', ');
-                }
-            </script>
 
             <!-- Добавить характеристику -->
             <div x-show="operation === 'add_characteristic'">
@@ -396,13 +494,45 @@
                         </div>
                     </div>
 
+                    <!-- Текущие значения у выбранных товаров -->
+                    <div x-show="selectedChar" class="mb-4">
+                        <template x-if="selectedChar && getCurrentValuesForChar(selectedChar.id).length > 0">
+                            <div class="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                                <h4 class="text-sm font-medium text-gray-700 mb-3 flex items-center">
+                                    <svg class="w-4 h-4 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                    Текущие значения у товаров:
+                                </h4>
+                                <div class="space-y-2 max-h-48 overflow-y-auto">
+                                    <template x-for="item in getCurrentValuesForChar(selectedChar.id)" :key="item.vendor_code">
+                                        <div class="flex items-start py-2 px-3 bg-white rounded border border-gray-100">
+                                            <span class="text-xs font-medium text-gray-500 min-w-[120px]" x-text="item.vendor_code"></span>
+                                            <span class="text-xs text-gray-900 flex-1 ml-3 break-words" x-text="item.value"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="selectedChar && getCurrentValuesForChar(selectedChar.id).length === 0">
+                            <div class="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                <p class="text-sm text-yellow-700 flex items-center">
+                                    <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                    </svg>
+                                    У выбранных товаров нет значения для этой характеристики
+                                </p>
+                            </div>
+                        </template>
+                    </div>
+
                     <!-- Ввод значения -->
                     <div x-show="selectedChar">
                         <label for="value_char_add" class="block text-sm font-medium text-gray-700 mb-2">
-                            Значение
+                            Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
-                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                                (можно указать до <span x-text="selectedChar.max_count"></span> значений)
                             </span>
                         </label>
 
@@ -414,14 +544,25 @@
                                     <div class="space-y-2">
                                         <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
                                             <template x-for="val in selectedChar.values" :key="val.id">
-                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer"
+                                                       :class="!canSelectMore('add') && !isValueSelected(val.value, 'add') ? 'opacity-50 cursor-not-allowed' : ''">
                                                     <input type="checkbox"
-                                                           :value="val.value"
-                                                           @change="updateMultiValueAdd()"
+                                                           :checked="isValueSelected(val.value, 'add')"
+                                                           @change="toggleValue(val.value, 'add')"
+                                                           :disabled="!canSelectMore('add') && !isValueSelected(val.value, 'add')"
                                                            class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                                     <span x-text="val.value" class="text-sm"></span>
                                                 </label>
                                             </template>
+                                        </div>
+                                        <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
+                                            <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
+                                            <button type="button"
+                                                    @click="selectedValuesAdd = []; document.getElementById('value_char_add').value = ''"
+                                                    class="text-indigo-600 hover:text-indigo-800"
+                                                    x-show="selectedValuesAdd.length > 0">
+                                                Сбросить
+                                            </button>
                                         </div>
                                         <input type="hidden" name="value" id="value_char_add">
                                     </div>
@@ -456,14 +597,6 @@
                     Характеристика будет добавлена только к товарам, у которых её ещё нет
                 </p>
             </div>
-
-            <script>
-                function updateMultiValueAdd() {
-                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
-                    const values = Array.from(checkboxes).map(cb => cb.value);
-                    document.getElementById('value_char_add').value = values.join(', ');
-                }
-            </script>
         </div>
 
         <!-- Кнопки действий -->
