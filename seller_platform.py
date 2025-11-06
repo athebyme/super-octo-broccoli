@@ -1412,6 +1412,257 @@ def product_detail(product_id):
     )
 
 
+@app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
+@login_required
+def product_edit(product_id):
+    """Редактирование карточки товара"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        flash('У вас нет доступа к этому товару', 'danger')
+        return redirect(url_for('products_list'))
+
+    if not current_user.seller.has_valid_api_key():
+        flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
+        return redirect(url_for('api_settings'))
+
+    # Парсим JSON данные
+    characteristics = json.loads(product.characteristics_json) if product.characteristics_json else []
+    sizes = json.loads(product.sizes_json) if product.sizes_json else []
+
+    # Получаем конфигурацию доступных характеристик для категории товара
+    characteristics_config = []
+    try:
+        if product.object_name:
+            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+                config_data = client.get_card_characteristics_config(product.object_name)
+                characteristics_config = config_data.get('data', [])
+    except Exception as e:
+        app.logger.warning(f"Не удалось загрузить конфигурацию характеристик: {e}")
+
+    if request.method == 'POST':
+        try:
+            # Получаем данные из формы
+            vendor_code = request.form.get('vendor_code', '').strip()
+            title = request.form.get('title', '').strip()
+            description = request.form.get('description', '').strip()
+            brand = request.form.get('brand', '').strip()
+
+            # Собираем характеристики из формы
+            updated_characteristics = []
+            for char in characteristics:
+                char_id = char.get('id')
+                char_name = char.get('name')
+                if char_id:
+                    new_value = request.form.get(f'char_{char_id}', '').strip()
+                    if new_value:
+                        updated_characteristics.append({
+                            'id': char_id,
+                            'name': char_name,
+                            'value': new_value
+                        })
+
+            # Обновляем карточку через WB API
+            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+                updates = {}
+
+                if vendor_code and vendor_code != product.vendor_code:
+                    updates['vendorCode'] = vendor_code
+
+                if title and title != product.title:
+                    updates['title'] = title
+
+                if description and description != product.description:
+                    updates['description'] = description
+
+                if brand and brand != product.brand:
+                    updates['brand'] = brand
+
+                if updated_characteristics:
+                    updates['characteristics'] = updated_characteristics
+
+                if updates:
+                    # Отправляем обновление в WB
+                    result = client.update_card(product.nm_id, updates)
+
+                    # Обновляем локальную БД
+                    if vendor_code:
+                        product.vendor_code = vendor_code
+                    if title:
+                        product.title = title
+                    if description:
+                        product.description = description
+                    if brand:
+                        product.brand = brand
+                    if updated_characteristics:
+                        product.characteristics_json = json.dumps(updated_characteristics, ensure_ascii=False)
+
+                    product.last_sync = datetime.utcnow()
+                    db.session.commit()
+
+                    flash('Карточка успешно обновлена на Wildberries', 'success')
+                    return redirect(url_for('product_detail', product_id=product.id))
+                else:
+                    flash('Нет изменений для сохранения', 'info')
+
+        except WBAuthException as e:
+            flash(f'Ошибка авторизации: {str(e)}', 'danger')
+        except WBAPIException as e:
+            flash(f'Ошибка WB API: {str(e)}', 'danger')
+        except Exception as e:
+            app.logger.exception(f"Ошибка при обновлении карточки: {e}")
+            flash(f'Ошибка при обновлении: {str(e)}', 'danger')
+
+    return render_template(
+        'product_edit.html',
+        product=product,
+        characteristics=characteristics,
+        characteristics_config=characteristics_config,
+        sizes=sizes
+    )
+
+
+@app.route('/products/bulk-edit', methods=['GET', 'POST'])
+@login_required
+def products_bulk_edit():
+    """Массовое редактирование карточек товаров"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    if not current_user.seller.has_valid_api_key():
+        flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
+        return redirect(url_for('api_settings'))
+
+    # Получаем выбранные товары из сессии или параметров
+    selected_ids = request.args.getlist('ids') or request.form.getlist('product_ids')
+
+    if not selected_ids:
+        flash('Не выбраны товары для редактирования', 'warning')
+        return redirect(url_for('products_list'))
+
+    try:
+        selected_ids = [int(pid) for pid in selected_ids]
+    except ValueError:
+        flash('Неверный формат ID товаров', 'danger')
+        return redirect(url_for('products_list'))
+
+    # Получаем выбранные товары
+    products = Product.query.filter(
+        Product.id.in_(selected_ids),
+        Product.seller_id == current_user.seller.id
+    ).all()
+
+    if not products:
+        flash('Товары не найдены', 'warning')
+        return redirect(url_for('products_list'))
+
+    # Варианты массового редактирования
+    edit_operations = [
+        {'id': 'update_brand', 'name': 'Обновить бренд', 'description': 'Установить одинаковый бренд для всех выбранных товаров'},
+        {'id': 'append_description', 'name': 'Добавить к описанию', 'description': 'Добавить текст в конец описания всех товаров'},
+        {'id': 'replace_description', 'name': 'Заменить описание', 'description': 'Заменить описание всех товаров на новое'},
+        {'id': 'update_characteristic', 'name': 'Обновить характеристику', 'description': 'Изменить значение определенной характеристики'},
+        {'id': 'add_characteristic', 'name': 'Добавить характеристику', 'description': 'Добавить новую характеристику ко всем товарам'},
+    ]
+
+    if request.method == 'POST':
+        operation = request.form.get('operation', '')
+
+        try:
+            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+                success_count = 0
+                error_count = 0
+                errors = []
+
+                if operation == 'update_brand':
+                    new_brand = request.form.get('value', '').strip()
+                    if not new_brand:
+                        flash('Укажите новый бренд', 'warning')
+                        return render_template('products_bulk_edit.html',
+                                             products=products,
+                                             edit_operations=edit_operations)
+
+                    for product in products:
+                        try:
+                            client.update_card(product.nm_id, {'brand': new_brand})
+                            product.brand = new_brand
+                            product.last_sync = datetime.utcnow()
+                            success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+
+                    db.session.commit()
+
+                elif operation == 'append_description':
+                    append_text = request.form.get('value', '').strip()
+                    if not append_text:
+                        flash('Укажите текст для добавления', 'warning')
+                        return render_template('products_bulk_edit.html',
+                                             products=products,
+                                             edit_operations=edit_operations)
+
+                    for product in products:
+                        try:
+                            current_desc = product.description or ''
+                            new_desc = f"{current_desc}\n\n{append_text}".strip()
+                            client.update_card(product.nm_id, {'description': new_desc})
+                            product.description = new_desc
+                            product.last_sync = datetime.utcnow()
+                            success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+
+                    db.session.commit()
+
+                elif operation == 'replace_description':
+                    new_description = request.form.get('value', '').strip()
+                    if not new_description:
+                        flash('Укажите новое описание', 'warning')
+                        return render_template('products_bulk_edit.html',
+                                             products=products,
+                                             edit_operations=edit_operations)
+
+                    for product in products:
+                        try:
+                            client.update_card(product.nm_id, {'description': new_description})
+                            product.description = new_description
+                            product.last_sync = datetime.utcnow()
+                            success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+
+                    db.session.commit()
+
+                # Показываем результаты
+                if success_count > 0:
+                    flash(f'Успешно обновлено товаров: {success_count}', 'success')
+                if error_count > 0:
+                    flash(f'Ошибок при обновлении: {error_count}', 'warning')
+                    for error in errors[:5]:  # Показываем только первые 5 ошибок
+                        flash(error, 'danger')
+
+                return redirect(url_for('products_list'))
+
+        except Exception as e:
+            app.logger.exception(f"Ошибка массового редактирования: {e}")
+            flash(f'Ошибка: {str(e)}', 'danger')
+
+    return render_template(
+        'products_bulk_edit.html',
+        products=products,
+        edit_operations=edit_operations
+    )
+
+
 # ============= API ЛОГИ =============
 
 @app.route('/api-logs')

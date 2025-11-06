@@ -3,13 +3,21 @@
 {% block content %}
 <div class="container mx-auto px-4 py-8">
     <!-- Навигация назад -->
-    <div class="mb-6">
+    <div class="mb-6 flex items-center justify-between">
         <a href="{{ url_for('products_list') }}"
            class="inline-flex items-center text-blue-600 hover:text-blue-700 dark:text-blue-400">
             <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
             </svg>
             Назад к списку товаров
+        </a>
+
+        <a href="{{ url_for('product_edit', product_id=product.id) }}"
+           class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+            </svg>
+            Редактировать
         </a>
     </div>
 

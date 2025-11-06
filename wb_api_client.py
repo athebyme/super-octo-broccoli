@@ -524,6 +524,100 @@ class WildberriesAPIClient:
         logger.info(f"Total stock records loaded: {len(all_stocks)}")
         return all_stocks
 
+    def update_card(
+        self,
+        nm_id: int,
+        updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Обновить карточку товара (Content API v2)
+
+        Args:
+            nm_id: Артикул WB (nmID)
+            updates: Словарь с обновляемыми полями
+                Возможные поля:
+                - vendorCode: артикул продавца
+                - title: название товара
+                - description: описание
+                - brand: бренд
+                - characteristics: список характеристик
+                  [{"id": 123, "value": "значение"}]
+
+        Returns:
+            Результат обновления
+        """
+        endpoint = "/content/v2/card/update"
+
+        # Формируем тело запроса
+        body = {
+            "nmID": nm_id,
+            **updates
+        }
+
+        response = self._make_request('POST', 'content', endpoint, json=body)
+        return response.json()
+
+    def update_card_characteristics(
+        self,
+        nm_id: int,
+        characteristics: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Обновить характеристики карточки товара
+
+        Args:
+            nm_id: Артикул WB (nmID)
+            characteristics: Список характеристик
+                Формат: [{"id": 123, "value": "значение"}, ...]
+
+        Returns:
+            Результат обновления
+        """
+        return self.update_card(nm_id, {"characteristics": characteristics})
+
+    def update_prices(
+        self,
+        prices: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Обновить цены товаров (Prices API)
+
+        Args:
+            prices: Список обновлений цен
+                Формат: [{"nmId": 12345, "price": 1000}, ...]
+
+        Returns:
+            Результат обновления
+        """
+        endpoint = "/public/api/v1/prices"
+
+        body = prices
+
+        response = self._make_request('POST', 'content', endpoint, json=body)
+        return response.json()
+
+    def get_card_characteristics_config(
+        self,
+        object_name: str
+    ) -> Dict[str, Any]:
+        """
+        Получить конфигурацию характеристик для типа товара
+
+        Args:
+            object_name: Название типа товара (например, "Футболки")
+
+        Returns:
+            Конфигурация характеристик с возможными значениями
+        """
+        endpoint = "/content/v2/object/charcs/list/filter"
+
+        body = {
+            "name": object_name
+        }
+
+        response = self._make_request('POST', 'content', endpoint, json=body)
+        return response.json()
+
     # ==================== УТИЛИТЫ ====================
 
     def test_connection(self) -> bool:
