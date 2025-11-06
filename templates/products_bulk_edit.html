@@ -57,7 +57,47 @@
     </div>
 
     <!-- Форма массового редактирования -->
-    <form method="POST" x-data="{ operation: '{{ request.form.get('operation', '') }}' }">
+    <form method="POST" x-data="{
+        operation: '{{ request.form.get('operation', '') }}',
+        categories: [],
+        selectedCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+        characteristics: [],
+        selectedChar: null,
+        loading: false,
+
+        async loadCategories() {
+            try {
+                const response = await fetch('/api/characteristics/categories');
+                const data = await response.json();
+                this.categories = data.categories || [];
+                console.log('Categories loaded:', this.categories);
+            } catch (e) {
+                console.error('Failed to load categories:', e);
+            }
+        },
+
+        async loadCharacteristics() {
+            if (!this.selectedCategory) {
+                console.log('No category selected');
+                return;
+            }
+
+            this.loading = true;
+            this.characteristics = [];
+            this.selectedChar = null;
+
+            try {
+                const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
+                const data = await response.json();
+                this.characteristics = data.characteristics || [];
+                console.log('Characteristics loaded:', this.characteristics);
+            } catch (e) {
+                console.error('Failed to load characteristics:', e);
+            } finally {
+                this.loading = false;
+            }
+        }
+    }" x-init="loadCategories()" @operation-changed.window="if (selectedCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }">
         <!-- Выбор операции -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
             <h2 class="text-lg font-semibold text-gray-900 mb-6">Выберите операцию</h2>
@@ -70,6 +110,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
+                           @change="if (selectedCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
@@ -143,42 +184,7 @@
 
             <!-- Обновить характеристику -->
             <div x-show="operation === 'update_characteristic'"
-                 x-data="{
-                     categories: [],
-                     selectedCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
-                     characteristics: [],
-                     selectedChar: null,
-                     loading: false,
-
-                     async loadCategories() {
-                         try {
-                             const response = await fetch('/api/characteristics/categories');
-                             const data = await response.json();
-                             this.categories = data.categories || [];
-                         } catch (e) {
-                             console.error('Failed to load categories:', e);
-                         }
-                     },
-
-                     async loadCharacteristics() {
-                         if (!this.selectedCategory) return;
-
-                         this.loading = true;
-                         this.characteristics = [];
-                         this.selectedChar = null;
-
-                         try {
-                             const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
-                             const data = await response.json();
-                             this.characteristics = data.characteristics || [];
-                         } catch (e) {
-                             console.error('Failed to load characteristics:', e);
-                         } finally {
-                             this.loading = false;
-                         }
-                     }
-                 }"
-                 x-init="loadCategories(); if (selectedCategory) loadCharacteristics()">
+                 @show.window="if (operation === 'update_characteristic' && selectedCategory) loadCharacteristics()">
                 <div class="space-y-4">
                     <!-- Выбор категории -->
                     <div>
@@ -286,42 +292,7 @@
 
             <!-- Добавить характеристику -->
             <div x-show="operation === 'add_characteristic'"
-                 x-data="{
-                     categories: [],
-                     selectedCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
-                     characteristics: [],
-                     selectedChar: null,
-                     loading: false,
-
-                     async loadCategories() {
-                         try {
-                             const response = await fetch('/api/characteristics/categories');
-                             const data = await response.json();
-                             this.categories = data.categories || [];
-                         } catch (e) {
-                             console.error('Failed to load categories:', e);
-                         }
-                     },
-
-                     async loadCharacteristics() {
-                         if (!this.selectedCategory) return;
-
-                         this.loading = true;
-                         this.characteristics = [];
-                         this.selectedChar = null;
-
-                         try {
-                             const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
-                             const data = await response.json();
-                             this.characteristics = data.characteristics || [];
-                         } catch (e) {
-                             console.error('Failed to load characteristics:', e);
-                         } finally {
-                             this.loading = false;
-                         }
-                     }
-                 }"
-                 x-init="loadCategories(); if (selectedCategory) loadCharacteristics()">
+                 @show.window="if (operation === 'add_characteristic' && selectedCategory) loadCharacteristics()">
                 <div class="space-y-4">
                     <!-- Выбор категории -->
                     <div>
