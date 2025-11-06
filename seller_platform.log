@@ -1,0 +1,14 @@
+nohup: ignoring input
+[2025-11-03 07:56:43 -0500] [714046] [INFO] Starting gunicorn 21.2.0
+[2025-11-03 07:56:43 -0500] [714046] [INFO] Listening at: http://0.0.0.0:5001 (714046)
+[2025-11-03 07:56:43 -0500] [714046] [INFO] Using worker: sync
+[2025-11-03 07:56:43 -0500] [714047] [INFO] Booting worker with pid: 714047
+[2025-11-03 07:56:43 -0500] [714048] [INFO] Booting worker with pid: 714048
+[2025-11-03 07:56:43 -0500] [714049] [INFO] Booting worker with pid: 714049
+[2025-11-03 07:56:43 -0500] [714050] [INFO] Booting worker with pid: 714050
+[2025-11-03 09:27:12 -0500] [714046] [INFO] Handling signal: term
+[2025-11-03 09:27:12 -0500] [714047] [INFO] Worker exiting (pid: 714047)
+[2025-11-03 09:27:12 -0500] [714048] [INFO] Worker exiting (pid: 714048)
+[2025-11-03 09:27:12 -0500] [714049] [INFO] Worker exiting (pid: 714049)
+[2025-11-03 09:27:12 -0500] [714050] [INFO] Worker exiting (pid: 714050)
+[2025-11-03 09:27:13 -0500] [714046] [INFO] Shutting down: Master
