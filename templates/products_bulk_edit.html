@@ -87,6 +87,10 @@
 
                 if (!response.ok) {
                     const errorData = await response.json();
+                    // Показываем suggestion если есть
+                    if (errorData.suggestion) {
+                        throw new Error(errorData.error + ' ' + errorData.suggestion);
+                    }
                     throw new Error(errorData.error || `HTTP ${response.status}`);
                 }
 
@@ -99,7 +103,7 @@
                 }
             } catch (e) {
                 console.error('Failed to load characteristics:', e);
-                this.loadError = 'Ошибка загрузки характеристик: ' + e.message;
+                this.loadError = e.message;
             } finally {
                 this.loading = false;
             }
