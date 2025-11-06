@@ -16,11 +16,20 @@
     </nav>
 
     <!-- Заголовок -->
-    <div class="mb-8">
-        <h1 class="text-3xl font-bold text-gray-900">Редактирование карточки</h1>
-        <p class="mt-2 text-sm text-gray-600">
-            NM ID: {{ product.nm_id }} | Артикул: {{ product.vendor_code }}
-        </p>
+    <div class="mb-8 flex items-start justify-between">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900">Редактирование карточки</h1>
+            <p class="mt-2 text-sm text-gray-600">
+                NM ID: {{ product.nm_id }} | Артикул: {{ product.vendor_code }}
+            </p>
+        </div>
+        <a href="{{ url_for('product_edit_history', product_id=product.id) }}"
+           class="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition border border-gray-300">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            История изменений
+        </a>
     </div>
 
     <form method="POST" class="space-y-8">
