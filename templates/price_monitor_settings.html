@@ -183,9 +183,12 @@ async function manualSync() {
         if (response.ok) {
             let message = `Синхронизация завершена!\n\n`;
             message += `Получено товаров из WB API: ${data.total_cards_from_api}\n`;
-            message += `Проверено товаров в БД: ${data.products_checked}\n`;
+            if (data.products_added > 0) {
+                message += `✓ Добавлено новых товаров: ${data.products_added}\n`;
+            }
+            message += `Проверено товаров: ${data.products_checked}\n`;
             if (data.products_not_in_db > 0) {
-                message += `Товаров не найдено в БД: ${data.products_not_in_db}\n`;
+                message += `⚠ Пропущено товаров: ${data.products_not_in_db}\n`;
             }
             message += `Обнаружено изменений: ${data.changes_detected}\n`;
             message += `Подозрительных изменений: ${data.suspicious_changes}`;

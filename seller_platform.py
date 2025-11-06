@@ -3005,6 +3005,7 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         suspicious_changes = 0
         products_checked = 0
         products_not_in_db = 0
+        products_added = 0
 
         for card in cards:
             nm_id = card.get('nmID')
@@ -3013,9 +3014,50 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
 
             # Находим товар в БД
             product = Product.query.filter_by(seller_id=seller.id, nm_id=nm_id).first()
+
+            # Если товара нет в БД - создаем его
             if not product:
-                products_not_in_db += 1
-                continue
+                try:
+                    # Создаем новый товар из данных WB API
+                    product = Product(
+                        seller_id=seller.id,
+                        nm_id=nm_id,
+                        imt_id=card.get('imtID'),
+                        vendor_code=card.get('vendorCode'),
+                        title=card.get('title'),
+                        brand=card.get('brand'),
+                        object_name=card.get('object'),
+                        is_active=True,
+                        created_at=datetime.utcnow(),
+                        last_sync=datetime.utcnow()
+                    )
+
+                    # Устанавливаем цену и остатки
+                    sizes = card.get('sizes', [])
+                    if sizes:
+                        size = sizes[0]
+                        product.price = size.get('price')
+                        product.discount_price = size.get('discountedPrice', product.price)
+
+                    # Остатки
+                    stocks = card.get('stocks', [])
+                    if stocks:
+                        product.quantity = sum(stock.get('qty', 0) for stock in stocks)
+
+                    db.session.add(product)
+                    db.session.flush()  # Чтобы получить ID
+                    products_added += 1
+                    products_not_in_db += 1
+
+                    app.logger.info(f"Added new product: {nm_id} - {product.vendor_code}")
+
+                    # Для нового товара не создаем историю изменений
+                    continue
+
+                except Exception as e:
+                    app.logger.error(f"Failed to add product {nm_id}: {e}")
+                    products_not_in_db += 1
+                    continue
 
             products_checked += 1
 
@@ -3147,13 +3189,14 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         settings.last_sync_error = None
         db.session.commit()
 
-        app.logger.info(f"Sync completed: {products_checked} products checked, {changes_detected} changes detected, {suspicious_changes} suspicious")
+        app.logger.info(f"Sync completed: {products_added} added, {products_checked} checked, {changes_detected} changes, {suspicious_changes} suspicious")
 
         return {
             'status': 'success',
             'total_cards_from_api': len(cards),
+            'products_added': products_added,
             'products_checked': products_checked,
-            'products_not_in_db': products_not_in_db,
+            'products_not_in_db': products_not_in_db - products_added,  # Не добавленные (были пропущены)
             'changes_detected': changes_detected,
             'suspicious_changes': suspicious_changes,
             'timestamp': datetime.utcnow().isoformat()
