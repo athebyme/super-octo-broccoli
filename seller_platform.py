@@ -1648,6 +1648,32 @@ def products_bulk_edit():
 
     if request.method == 'POST':
         operation = request.form.get('operation', '')
+        start_time = time.time()
+
+        # Создаем запись bulk операции
+        operation_value = request.form.get('value', '').strip()
+
+        # Определяем описание операции
+        operation_descriptions = {
+            'update_brand': f'Обновление бренда на "{operation_value}"',
+            'append_description': f'Добавление к описанию: "{operation_value[:50]}..."',
+            'replace_description': f'Замена описания на: "{operation_value[:50]}..."',
+            'update_characteristic': 'Обновление характеристики',
+            'add_characteristic': 'Добавление характеристики',
+        }
+
+        bulk_operation = BulkEditHistory(
+            seller_id=current_user.seller.id,
+            operation_type=operation,
+            operation_params={'value': operation_value} if operation_value else {},
+            description=operation_descriptions.get(operation, 'Массовая операция'),
+            total_products=len(products),
+            status='in_progress'
+        )
+        db.session.add(bulk_operation)
+        db.session.commit()  # Коммитим чтобы получить ID
+
+        app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
 
         try:
             with WildberriesAPIClient(
@@ -1659,15 +1685,21 @@ def products_bulk_edit():
                 errors = []
 
                 if operation == 'update_brand':
-                    new_brand = request.form.get('value', '').strip()
+                    new_brand = operation_value
                     if not new_brand:
                         flash('Укажите новый бренд', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
                         return render_template('products_bulk_edit.html',
                                              products=products,
                                              edit_operations=edit_operations)
 
                     for product in products:
                         try:
+                            # Снимок ДО
+                            snapshot_before = _create_product_snapshot(product)
+
                             client.update_card(
                                 product.nm_id,
                                 {'brand': new_brand},
@@ -1676,23 +1708,48 @@ def products_bulk_edit():
                             )
                             product.brand = new_brand
                             product.last_sync = datetime.utcnow()
+
+                            # Снимок ПОСЛЕ
+                            snapshot_after = _create_product_snapshot(product)
+
+                            # Создаем запись истории
+                            card_history = CardEditHistory(
+                                product_id=product.id,
+                                seller_id=current_user.seller.id,
+                                bulk_edit_id=bulk_operation.id,
+                                action='update',
+                                changed_fields=['brand'],
+                                snapshot_before=snapshot_before,
+                                snapshot_after=snapshot_after,
+                                wb_synced=True,
+                                wb_sync_status='success'
+                            )
+                            db.session.add(card_history)
+
                             success_count += 1
                         except Exception as e:
                             error_count += 1
-                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"Error in bulk operation: {error_msg}")
 
                     db.session.commit()
 
                 elif operation == 'append_description':
-                    append_text = request.form.get('value', '').strip()
+                    append_text = operation_value
                     if not append_text:
                         flash('Укажите текст для добавления', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
                         return render_template('products_bulk_edit.html',
                                              products=products,
                                              edit_operations=edit_operations)
 
                     for product in products:
                         try:
+                            snapshot_before = _create_product_snapshot(product)
+
                             current_desc = product.description or ''
                             new_desc = f"{current_desc}\n\n{append_text}".strip()
                             client.update_card(
@@ -1703,23 +1760,45 @@ def products_bulk_edit():
                             )
                             product.description = new_desc
                             product.last_sync = datetime.utcnow()
+
+                            snapshot_after = _create_product_snapshot(product)
+
+                            card_history = CardEditHistory(
+                                product_id=product.id,
+                                seller_id=current_user.seller.id,
+                                bulk_edit_id=bulk_operation.id,
+                                action='update',
+                                changed_fields=['description'],
+                                snapshot_before=snapshot_before,
+                                snapshot_after=snapshot_after,
+                                wb_synced=True,
+                                wb_sync_status='success'
+                            )
+                            db.session.add(card_history)
+
                             success_count += 1
                         except Exception as e:
                             error_count += 1
-                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            errors.append(error_msg)
 
                     db.session.commit()
 
                 elif operation == 'replace_description':
-                    new_description = request.form.get('value', '').strip()
+                    new_description = operation_value
                     if not new_description:
                         flash('Укажите новое описание', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
                         return render_template('products_bulk_edit.html',
                                              products=products,
                                              edit_operations=edit_operations)
 
                     for product in products:
                         try:
+                            snapshot_before = _create_product_snapshot(product)
+
                             client.update_card(
                                 product.nm_id,
                                 {'description': new_description},
@@ -1728,12 +1807,186 @@ def products_bulk_edit():
                             )
                             product.description = new_description
                             product.last_sync = datetime.utcnow()
+
+                            snapshot_after = _create_product_snapshot(product)
+
+                            card_history = CardEditHistory(
+                                product_id=product.id,
+                                seller_id=current_user.seller.id,
+                                bulk_edit_id=bulk_operation.id,
+                                action='update',
+                                changed_fields=['description'],
+                                snapshot_before=snapshot_before,
+                                snapshot_after=snapshot_after,
+                                wb_synced=True,
+                                wb_sync_status='success'
+                            )
+                            db.session.add(card_history)
+
                             success_count += 1
                         except Exception as e:
                             error_count += 1
-                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            errors.append(error_msg)
 
                     db.session.commit()
+
+                elif operation == 'update_characteristic':
+                    characteristic_id = request.form.get('char_id', '').strip()
+                    new_value = operation_value
+
+                    if not characteristic_id or not new_value:
+                        flash('Укажите ID характеристики и новое значение', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return render_template('products_bulk_edit.html',
+                                             products=products,
+                                             edit_operations=edit_operations)
+
+                    for product in products:
+                        try:
+                            snapshot_before = _create_product_snapshot(product)
+
+                            # Получаем текущие характеристики
+                            current_characteristics = product.get_characteristics()
+
+                            # Обновляем значение характеристики
+                            char_found = False
+                            for char in current_characteristics:
+                                if str(char.get('id')) == characteristic_id:
+                                    char['value'] = new_value
+                                    char_found = True
+                                    break
+
+                            if not char_found:
+                                # Добавляем новую характеристику если не нашли
+                                current_characteristics.append({
+                                    'id': int(characteristic_id),
+                                    'value': new_value
+                                })
+
+                            # Обновляем через API
+                            client.update_card(
+                                product.nm_id,
+                                {'characteristics': current_characteristics},
+                                log_to_db=True,
+                                seller_id=current_user.seller.id
+                            )
+                            product.set_characteristics(current_characteristics)
+                            product.last_sync = datetime.utcnow()
+
+                            snapshot_after = _create_product_snapshot(product)
+
+                            card_history = CardEditHistory(
+                                product_id=product.id,
+                                seller_id=current_user.seller.id,
+                                bulk_edit_id=bulk_operation.id,
+                                action='update',
+                                changed_fields=['characteristics'],
+                                snapshot_before=snapshot_before,
+                                snapshot_after=snapshot_after,
+                                wb_synced=True,
+                                wb_sync_status='success'
+                            )
+                            db.session.add(card_history)
+
+                            success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            errors.append(error_msg)
+
+                    db.session.commit()
+
+                elif operation == 'add_characteristic':
+                    characteristic_id = request.form.get('char_id', '').strip()
+                    new_value = operation_value
+
+                    if not characteristic_id or not new_value:
+                        flash('Укажите ID характеристики и значение', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return render_template('products_bulk_edit.html',
+                                             products=products,
+                                             edit_operations=edit_operations)
+
+                    for product in products:
+                        try:
+                            snapshot_before = _create_product_snapshot(product)
+
+                            # Получаем текущие характеристики
+                            current_characteristics = product.get_characteristics()
+
+                            # Проверяем, нет ли уже такой характеристики
+                            char_exists = any(str(char.get('id')) == characteristic_id for char in current_characteristics)
+
+                            if not char_exists:
+                                # Добавляем новую характеристику
+                                current_characteristics.append({
+                                    'id': int(characteristic_id),
+                                    'value': new_value
+                                })
+
+                                # Обновляем через API
+                                client.update_card(
+                                    product.nm_id,
+                                    {'characteristics': current_characteristics},
+                                    log_to_db=True,
+                                    seller_id=current_user.seller.id
+                                )
+                                product.set_characteristics(current_characteristics)
+                                product.last_sync = datetime.utcnow()
+
+                                snapshot_after = _create_product_snapshot(product)
+
+                                card_history = CardEditHistory(
+                                    product_id=product.id,
+                                    seller_id=current_user.seller.id,
+                                    bulk_edit_id=bulk_operation.id,
+                                    action='update',
+                                    changed_fields=['characteristics'],
+                                    snapshot_before=snapshot_before,
+                                    snapshot_after=snapshot_after,
+                                    wb_synced=True,
+                                    wb_sync_status='success'
+                                )
+                                db.session.add(card_history)
+                                success_count += 1
+                            else:
+                                # Характеристика уже существует, пропускаем
+                                app.logger.info(f"Product {product.vendor_code} already has characteristic {characteristic_id}, skipping")
+                                success_count += 1  # Считаем успешным (характеристика уже есть)
+
+                        except Exception as e:
+                            error_count += 1
+                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            errors.append(error_msg)
+
+                    db.session.commit()
+
+                else:
+                    # Неизвестная операция
+                    flash(f'Неизвестная операция: {operation}', 'danger')
+                    bulk_operation.status = 'failed'
+                    bulk_operation.completed_at = datetime.utcnow()
+                    db.session.commit()
+                    return render_template('products_bulk_edit.html',
+                                         products=products,
+                                         edit_operations=edit_operations)
+
+                # Обновляем статус bulk операции
+                bulk_operation.success_count = success_count
+                bulk_operation.error_count = error_count
+                bulk_operation.errors_details = errors if errors else None
+                bulk_operation.status = 'completed'
+                bulk_operation.wb_synced = True
+                bulk_operation.completed_at = datetime.utcnow()
+                bulk_operation.duration_seconds = time.time() - start_time
+                db.session.commit()
+
+                app.logger.info(f"✅ Bulk operation {bulk_operation.id} completed: {success_count} success, {error_count} errors")
 
                 # Показываем результаты
                 if success_count > 0:
@@ -1743,11 +1996,21 @@ def products_bulk_edit():
                     for error in errors[:5]:  # Показываем только первые 5 ошибок
                         flash(error, 'danger')
 
-                return redirect(url_for('products_list'))
+                flash(f'Операция сохранена в историю. <a href="{url_for("bulk_edit_history_detail", bulk_id=bulk_operation.id)}" class="underline">Посмотреть детали</a>', 'info')
+                return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
 
         except Exception as e:
             app.logger.exception(f"Ошибка массового редактирования: {e}")
+
+            # Помечаем bulk операцию как failed
+            bulk_operation.status = 'failed'
+            bulk_operation.completed_at = datetime.utcnow()
+            bulk_operation.duration_seconds = time.time() - start_time
+            bulk_operation.errors_details = [str(e)]
+            db.session.commit()
+
             flash(f'Ошибка: {str(e)}', 'danger')
+            return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
 
     return render_template(
         'products_bulk_edit.html',
