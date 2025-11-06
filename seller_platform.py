@@ -2983,34 +2983,18 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         # Создаем клиент API
         wb_client = WildberriesAPIClient(seller.wb_api_key)
 
-        # Получаем список товаров
+        # Получаем ВСЕ товары через cursor-based пагинацию
+        app.logger.info(f"Starting to fetch all products for seller {seller.id} using pagination...")
         try:
-            cards_response = wb_client.get_cards_list(limit=1000)
-            app.logger.info(f"Cards response structure: {list(cards_response.keys()) if cards_response else 'None'}")
+            cards = wb_client.get_all_cards(batch_size=100)
+            app.logger.info(f"Successfully fetched {len(cards)} cards from WB API for seller {seller.id}")
         except Exception as e:
+            app.logger.error(f"Failed to fetch products from WB API: {str(e)}")
             raise Exception(f'Failed to fetch products from WB API: {str(e)}')
 
-        if not cards_response:
-            raise Exception('Empty response from WB API')
-
-        # Проверяем наличие ошибки в ответе
-        if 'error' in cards_response:
-            error_msg = cards_response.get('error', 'Unknown error')
-            raise Exception(f'WB API error: {error_msg}')
-
-        # WB API может возвращать разные структуры:
-        # Вариант 1 (v2): {'cards': [...], 'cursor': {...}}
-        # Вариант 2 (v1): {'data': {'cards': [...]}}
-        if 'cards' in cards_response:
-            # Прямая структура (v2)
-            cards = cards_response.get('cards', [])
-        elif 'data' in cards_response:
-            # Вложенная структура (v1)
-            cards = cards_response.get('data', {}).get('cards', [])
-        else:
-            # Неизвестная структура
-            app.logger.error(f"Unexpected WB API response structure: {cards_response}")
-            raise Exception(f'Unexpected response structure from WB API. Keys: {list(cards_response.keys())}')
+        if not cards:
+            app.logger.warning(f"No cards returned from WB API for seller {seller.id}")
+            # Это не ошибка - просто у продавца нет товаров
 
         if not isinstance(cards, list):
             raise Exception(f'Expected cards to be a list, got {type(cards).__name__}')
