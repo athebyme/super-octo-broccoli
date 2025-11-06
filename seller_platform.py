@@ -2413,6 +2413,111 @@ def api_logs():
     )
 
 
+# ============= API ENDPOINTS =============
+
+@app.route('/api/characteristics/categories')
+@login_required
+def api_characteristics_categories():
+    """Получить список всех категорий (object_name) из товаров продавца"""
+    if not current_user.seller:
+        return {'error': 'No seller profile'}, 403
+
+    # Получаем уникальные object_name из товаров
+    categories = db.session.query(Product.object_name).filter(
+        Product.seller_id == current_user.seller.id,
+        Product.object_name.isnot(None),
+        Product.object_name != ''
+    ).distinct().all()
+
+    # Преобразуем в список строк
+    category_list = [cat[0] for cat in categories]
+
+    return {
+        'categories': sorted(category_list),
+        'count': len(category_list)
+    }
+
+
+@app.route('/api/characteristics/<object_name>')
+@login_required
+def api_characteristics_by_category(object_name):
+    """
+    Получить характеристики для категории из WB API
+
+    Args:
+        object_name: Название категории (например, "Футболки")
+
+    Returns:
+        JSON с характеристиками и их возможными значениями
+    """
+    if not current_user.seller:
+        return {'error': 'No seller profile'}, 403
+
+    if not current_user.seller.has_valid_api_key():
+        return {'error': 'WB API key not configured'}, 400
+
+    try:
+        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            result = client.get_card_characteristics_config(object_name)
+
+            # Преобразуем результат в более удобный формат
+            characteristics = []
+            for item in result.get('data', []):
+                char = {
+                    'id': item.get('charcID'),
+                    'name': item.get('name'),
+                    'required': item.get('required', False),
+                    'max_count': item.get('maxCount', 1),  # Количество возможных значений
+                    'unit_name': item.get('unitName'),
+                    'values': []
+                }
+
+                # Добавляем возможные значения если они есть
+                if item.get('dictionary'):
+                    for dict_item in item['dictionary']:
+                        char['values'].append({
+                            'id': dict_item.get('unitID'),
+                            'value': dict_item.get('value')
+                        })
+
+                characteristics.append(char)
+
+            return {
+                'object_name': object_name,
+                'characteristics': characteristics,
+                'count': len(characteristics)
+            }
+
+    except WBAPIException as e:
+        app.logger.error(f"WB API error getting characteristics for {object_name}: {e}")
+        return {'error': str(e)}, 400
+    except Exception as e:
+        app.logger.exception(f"Error getting characteristics for {object_name}: {e}")
+        return {'error': 'Internal server error'}, 500
+
+
+@app.route('/api/products/<int:product_id>/characteristics')
+@login_required
+def api_product_characteristics(product_id):
+    """Получить текущие характеристики товара"""
+    if not current_user.seller:
+        return {'error': 'No seller profile'}, 403
+
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        return {'error': 'Access denied'}, 403
+
+    return {
+        'product_id': product.id,
+        'nm_id': product.nm_id,
+        'vendor_code': product.vendor_code,
+        'object_name': product.object_name,
+        'characteristics': product.get_characteristics()
+    }
+
+
 # ============= ИНИЦИАЛИЗАЦИЯ БД =============
 
 @app.cli.command()

@@ -142,74 +142,288 @@
             </div>
 
             <!-- Обновить характеристику -->
-            <div x-show="operation === 'update_characteristic'">
+            <div x-show="operation === 'update_characteristic'"
+                 x-data="{
+                     categories: [],
+                     selectedCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+                     characteristics: [],
+                     selectedChar: null,
+                     loading: false,
+
+                     async loadCategories() {
+                         try {
+                             const response = await fetch('/api/characteristics/categories');
+                             const data = await response.json();
+                             this.categories = data.categories || [];
+                         } catch (e) {
+                             console.error('Failed to load categories:', e);
+                         }
+                     },
+
+                     async loadCharacteristics() {
+                         if (!this.selectedCategory) return;
+
+                         this.loading = true;
+                         this.characteristics = [];
+                         this.selectedChar = null;
+
+                         try {
+                             const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
+                             const data = await response.json();
+                             this.characteristics = data.characteristics || [];
+                         } catch (e) {
+                             console.error('Failed to load characteristics:', e);
+                         } finally {
+                             this.loading = false;
+                         }
+                     }
+                 }"
+                 x-init="loadCategories(); if (selectedCategory) loadCharacteristics()">
                 <div class="space-y-4">
+                    <!-- Выбор категории -->
                     <div>
-                        <label for="char_id" class="block text-sm font-medium text-gray-700 mb-2">
-                            ID характеристики
+                        <label for="category_select" class="block text-sm font-medium text-gray-700 mb-2">
+                            Категория товара
                         </label>
-                        <input type="text"
-                               name="char_id"
-                               id="char_id"
-                               placeholder="Например: 14177"
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <select x-model="selectedCategory"
+                                @change="loadCharacteristics()"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">-- Выберите категорию --</option>
+                            <template x-for="cat in categories" :key="cat">
+                                <option :value="cat" x-text="cat"></option>
+                            </template>
+                        </select>
+                        <p class="mt-1 text-sm text-gray-500">
+                            Выбрана первая категория из ваших товаров
+                        </p>
                     </div>
-                    <div>
-                        <label for="value_char" class="block text-sm font-medium text-gray-700 mb-2">
-                            Новое значение
+
+                    <!-- Выбор характеристики -->
+                    <div x-show="selectedCategory">
+                        <label for="char_select" class="block text-sm font-medium text-gray-700 mb-2">
+                            Характеристика
+                            <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
-                        <input type="text"
-                               name="value"
-                               id="value_char"
-                               placeholder="Введите новое значение характеристики"
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <select x-model="selectedChar"
+                                @change="if(selectedChar) { document.getElementById('char_id').value = selectedChar.id }"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                :disabled="loading || characteristics.length === 0">
+                            <option value="">-- Выберите характеристику --</option>
+                            <template x-for="char in characteristics" :key="char.id">
+                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                            </template>
+                        </select>
+                        <input type="hidden" name="char_id" id="char_id">
+                        <p x-show="characteristics.length === 0 && !loading" class="mt-1 text-sm text-yellow-600">
+                            Характеристики не найдены для этой категории
+                        </p>
+                    </div>
+
+                    <!-- Ввод значения -->
+                    <div x-show="selectedChar">
+                        <label for="value_char" class="block text-sm font-medium text-gray-700 mb-2">
+                            Значение
+                            <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
+                            <span x-show="selectedChar && selectedChar.max_count > 1" class="text-xs text-gray-500">
+                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                            </span>
+                        </label>
+
+                        <!-- Если есть словарь значений - показываем выпадающий список -->
+                        <template x-if="selectedChar && selectedChar.values && selectedChar.values.length > 0">
+                            <div>
+                                <!-- Для множественных значений -->
+                                <template x-if="selectedChar.max_count > 1">
+                                    <div class="space-y-2">
+                                        <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
+                                            <template x-for="val in selectedChar.values" :key="val.id">
+                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                                                    <input type="checkbox"
+                                                           :value="val.value"
+                                                           @change="updateMultiValue()"
+                                                           class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                                    <span x-text="val.value" class="text-sm"></span>
+                                                </label>
+                                            </template>
+                                        </div>
+                                        <input type="hidden" name="value" id="value_char">
+                                    </div>
+                                </template>
+
+                                <!-- Для одиночных значений -->
+                                <template x-if="selectedChar.max_count === 1">
+                                    <select name="value"
+                                            id="value_char"
+                                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                        <option value="">-- Выберите значение --</option>
+                                        <template x-for="val in selectedChar.values" :key="val.id">
+                                            <option :value="val.value" x-text="val.value"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Если нет словаря - свободный ввод -->
+                        <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
+                            <input type="text"
+                                   name="value"
+                                   id="value_char_manual"
+                                   placeholder="Введите значение характеристики"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </template>
                     </div>
                 </div>
-                <p class="mt-2 text-sm text-gray-600">
-                    ID характеристики можно найти в детальной информации о товаре
-                </p>
             </div>
 
+            <script>
+                function updateMultiValue() {
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+                    const values = Array.from(checkboxes).map(cb => cb.value);
+                    document.getElementById('value_char').value = values.join(', ');
+                }
+            </script>
+
             <!-- Добавить характеристику -->
-            <div x-show="operation === 'add_characteristic'">
+            <div x-show="operation === 'add_characteristic'"
+                 x-data="{
+                     categories: [],
+                     selectedCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+                     characteristics: [],
+                     selectedChar: null,
+                     loading: false,
+
+                     async loadCategories() {
+                         try {
+                             const response = await fetch('/api/characteristics/categories');
+                             const data = await response.json();
+                             this.categories = data.categories || [];
+                         } catch (e) {
+                             console.error('Failed to load categories:', e);
+                         }
+                     },
+
+                     async loadCharacteristics() {
+                         if (!this.selectedCategory) return;
+
+                         this.loading = true;
+                         this.characteristics = [];
+                         this.selectedChar = null;
+
+                         try {
+                             const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
+                             const data = await response.json();
+                             this.characteristics = data.characteristics || [];
+                         } catch (e) {
+                             console.error('Failed to load characteristics:', e);
+                         } finally {
+                             this.loading = false;
+                         }
+                     }
+                 }"
+                 x-init="loadCategories(); if (selectedCategory) loadCharacteristics()">
                 <div class="space-y-4">
+                    <!-- Выбор категории -->
                     <div>
-                        <label for="char_id_add" class="block text-sm font-medium text-gray-700 mb-2">
-                            ID характеристики
+                        <label for="category_select_add" class="block text-sm font-medium text-gray-700 mb-2">
+                            Категория товара
                         </label>
-                        <input type="text"
-                               name="char_id"
-                               id="char_id_add"
-                               placeholder="Например: 14177"
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <select x-model="selectedCategory"
+                                @change="loadCharacteristics()"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">-- Выберите категорию --</option>
+                            <template x-for="cat in categories" :key="cat">
+                                <option :value="cat" x-text="cat"></option>
+                            </template>
+                        </select>
                     </div>
-                    <div>
-                        <label for="value_char_add" class="block text-sm font-medium text-gray-700 mb-2">
-                            Значение характеристики
+
+                    <!-- Выбор характеристики -->
+                    <div x-show="selectedCategory">
+                        <label for="char_select_add" class="block text-sm font-medium text-gray-700 mb-2">
+                            Характеристика
+                            <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
-                        <input type="text"
-                               name="value"
-                               id="value_char_add"
-                               placeholder="Введите значение характеристики"
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <select x-model="selectedChar"
+                                @change="if(selectedChar) { document.getElementById('char_id_add').value = selectedChar.id }"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                :disabled="loading || characteristics.length === 0">
+                            <option value="">-- Выберите характеристику --</option>
+                            <template x-for="char in characteristics" :key="char.id">
+                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                            </template>
+                        </select>
+                        <input type="hidden" name="char_id" id="char_id_add">
+                    </div>
+
+                    <!-- Ввод значения -->
+                    <div x-show="selectedChar">
+                        <label for="value_char_add" class="block text-sm font-medium text-gray-700 mb-2">
+                            Значение
+                            <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
+                            <span x-show="selectedChar && selectedChar.max_count > 1" class="text-xs text-gray-500">
+                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                            </span>
+                        </label>
+
+                        <!-- Если есть словарь значений - показываем выпадающий список -->
+                        <template x-if="selectedChar && selectedChar.values && selectedChar.values.length > 0">
+                            <div>
+                                <!-- Для множественных значений -->
+                                <template x-if="selectedChar.max_count > 1">
+                                    <div class="space-y-2">
+                                        <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
+                                            <template x-for="val in selectedChar.values" :key="val.id">
+                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                                                    <input type="checkbox"
+                                                           :value="val.value"
+                                                           @change="updateMultiValueAdd()"
+                                                           class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                                    <span x-text="val.value" class="text-sm"></span>
+                                                </label>
+                                            </template>
+                                        </div>
+                                        <input type="hidden" name="value" id="value_char_add">
+                                    </div>
+                                </template>
+
+                                <!-- Для одиночных значений -->
+                                <template x-if="selectedChar.max_count === 1">
+                                    <select name="value"
+                                            id="value_char_add_select"
+                                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                        <option value="">-- Выберите значение --</option>
+                                        <template x-for="val in selectedChar.values" :key="val.id">
+                                            <option :value="val.value" x-text="val.value"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Если нет словаря - свободный ввод -->
+                        <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
+                            <input type="text"
+                                   name="value"
+                                   id="value_char_add_manual"
+                                   placeholder="Введите значение характеристики"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </template>
                     </div>
                 </div>
+
                 <p class="mt-2 text-sm text-gray-600">
                     Характеристика будет добавлена только к товарам, у которых её ещё нет
                 </p>
-                <div class="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                    <div class="flex items-start">
-                        <svg class="h-5 w-5 text-blue-400 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
-                        </svg>
-                        <div class="ml-3">
-                            <p class="text-sm text-blue-700">
-                                ID характеристики можно найти в детальной информации о товаре. В будущей версии будет добавлен удобный выбор из справочника Wildberries.
-                            </p>
-                        </div>
-                    </div>
-                </div>
             </div>
+
+            <script>
+                function updateMultiValueAdd() {
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+                    const values = Array.from(checkboxes).map(cb => cb.value);
+                    document.getElementById('value_char_add').value = values.join(', ');
+                }
+            </script>
         </div>
 
         <!-- Кнопки действий -->

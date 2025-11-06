@@ -199,6 +199,24 @@ class Product(db.Model):
             'last_sync': self.last_sync.isoformat() if self.last_sync else None
         }
 
+    def get_characteristics(self):
+        """Получить характеристики товара как список словарей"""
+        if not self.characteristics_json:
+            return []
+        try:
+            import json
+            return json.loads(self.characteristics_json)
+        except:
+            return []
+
+    def set_characteristics(self, characteristics):
+        """Установить характеристики товара из списка словарей"""
+        try:
+            import json
+            self.characteristics_json = json.dumps(characteristics, ensure_ascii=False)
+        except:
+            self.characteristics_json = '[]'
+
 
 class APILog(db.Model):
     """Логи взаимодействия с API WB"""
