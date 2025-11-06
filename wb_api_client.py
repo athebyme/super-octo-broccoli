@@ -92,7 +92,8 @@ class WildberriesAPIClient:
         sandbox: bool = False,
         max_retries: int = 3,
         rate_limit: int = 100,
-        timeout: int = 30
+        timeout: int = 30,
+        db_logger_callback = None
     ):
         """
         Args:
@@ -101,10 +102,12 @@ class WildberriesAPIClient:
             max_retries: Максимальное количество повторов при ошибках
             rate_limit: Максимальное количество запросов в минуту
             timeout: Таймаут запроса в секундах
+            db_logger_callback: Функция для логирования в БД
         """
         self.api_key = api_key
         self.sandbox = sandbox
         self.timeout = timeout
+        self.db_logger_callback = db_logger_callback
 
         # Rate limiter
         self.rate_limiter = RateLimiter(max_requests=rate_limit, time_window=60)
@@ -158,6 +161,8 @@ class WildberriesAPIClient:
         method: str,
         api_type: str,
         endpoint: str,
+        log_to_db: bool = False,
+        seller_id: int = None,
         **kwargs
     ) -> requests.Response:
         """
@@ -194,12 +199,44 @@ class WildberriesAPIClient:
         logger.debug(f"API Key (first 10 chars): {self.api_key[:10]}...")
         start_time = time.time()
 
+        # Сохраняем request body для логирования
+        request_body_str = None
+        if 'json' in kwargs and kwargs['json']:
+            try:
+                import json as json_module
+                request_body_str = json_module.dumps(kwargs['json'], ensure_ascii=False)
+            except:
+                request_body_str = str(kwargs['json'])
+
         try:
             response = self.session.request(method, url, **kwargs)
 
             # Логирование времени выполнения
             elapsed = time.time() - start_time
             logger.info(f"WB API Response: {response.status_code} ({elapsed:.2f}s)")
+
+            # Сохраняем response body для логирования
+            response_body_str = None
+            try:
+                response_body_str = response.text
+            except:
+                pass
+
+            # Логируем в БД если предоставлен callback
+            if log_to_db and self.db_logger_callback and seller_id:
+                try:
+                    self.db_logger_callback(
+                        seller_id=seller_id,
+                        endpoint=endpoint,
+                        method=method,
+                        status_code=response.status_code,
+                        response_time=elapsed,
+                        success=(response.status_code < 400),
+                        request_body=request_body_str,
+                        response_body=response_body_str
+                    )
+                except Exception as log_error:
+                    logger.warning(f"Failed to log to DB: {log_error}")
 
             # Обработка ошибок
             if response.status_code == 401:
@@ -217,8 +254,26 @@ class WildberriesAPIClient:
 
             return response
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            elapsed = time.time() - start_time
             logger.error(f"Request timeout for {url} after {self.timeout}s")
+
+            # Логируем timeout в БД
+            if log_to_db and self.db_logger_callback and seller_id:
+                try:
+                    self.db_logger_callback(
+                        seller_id=seller_id,
+                        endpoint=endpoint,
+                        method=method,
+                        status_code=None,
+                        response_time=elapsed,
+                        success=False,
+                        error_message=f"Timeout after {self.timeout}s",
+                        request_body=request_body_str
+                    )
+                except Exception as log_error:
+                    logger.warning(f"Failed to log timeout to DB: {log_error}")
+
             raise WBAPIException(f"Timeout при запросе к API ({self.timeout}s). Попробуйте позже.")
         except requests.exceptions.SSLError as e:
             logger.error(f"SSL error for {url}: {e}")
@@ -246,7 +301,9 @@ class WildberriesAPIClient:
         offset: int = 0,
         filter_nm_id: Optional[int] = None,
         cursor_updated_at: Optional[str] = None,
-        cursor_nm_id: Optional[int] = None
+        cursor_nm_id: Optional[int] = None,
+        log_to_db: bool = False,
+        seller_id: int = None
     ) -> Dict[str, Any]:
         """
         Получить список карточек товаров (Content API v2)
@@ -287,7 +344,12 @@ class WildberriesAPIClient:
         if filter_nm_id:
             body["settings"]["filter"]["textSearch"] = str(filter_nm_id)
 
-        response = self._make_request('POST', 'content', endpoint, json=body)
+        response = self._make_request(
+            'POST', 'content', endpoint,
+            log_to_db=log_to_db,
+            seller_id=seller_id,
+            json=body
+        )
         return response.json()
 
     def get_card_by_vendor_code(self, vendor_code: str) -> Dict[str, Any]:
@@ -528,7 +590,9 @@ class WildberriesAPIClient:
         self,
         nm_id: int,
         updates: Dict[str, Any],
-        merge_with_existing: bool = True
+        merge_with_existing: bool = True,
+        log_to_db: bool = False,
+        seller_id: int = None
     ) -> Dict[str, Any]:
         """
         Обновить карточку товара (Content API v2)
@@ -544,6 +608,8 @@ class WildberriesAPIClient:
                 - characteristics: список характеристик
                   [{"id": 123, "value": "значение"}]
             merge_with_existing: Если True, сначала получит полную карточку и объединит с изменениями
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
 
         Returns:
             Результат обновления
@@ -559,7 +625,11 @@ class WildberriesAPIClient:
         if merge_with_existing:
             logger.info(f"📥 Fetching full card for nmID={nm_id} to merge changes")
             try:
-                full_card = self.get_card_by_nm_id(nm_id)
+                full_card = self.get_card_by_nm_id(
+                    nm_id,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id
+                )
                 if not full_card:
                     raise WBAPIException(f"Card nmID={nm_id} not found in WB API")
 
@@ -581,7 +651,12 @@ class WildberriesAPIClient:
         logger.debug(f"Card to send keys: {list(card_to_send.keys())}")
 
         try:
-            response = self._make_request('POST', 'content', endpoint, json=[card_to_send])
+            response = self._make_request(
+                'POST', 'content', endpoint,
+                log_to_db=log_to_db,
+                seller_id=seller_id,
+                json=[card_to_send]
+            )
             result = response.json()
             logger.info(f"✅ Card nmID={nm_id} update response: {result}")
             return result
@@ -634,13 +709,17 @@ class WildberriesAPIClient:
 
     def get_card_by_nm_id(
         self,
-        nm_id: int
+        nm_id: int,
+        log_to_db: bool = False,
+        seller_id: int = None
     ) -> Optional[Dict[str, Any]]:
         """
         Получить полную карточку товара по nmID
 
         Args:
             nm_id: Артикул WB (nmID)
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
 
         Returns:
             Полная карточка товара или None если не найдена
@@ -648,7 +727,12 @@ class WildberriesAPIClient:
         logger.info(f"🔍 Getting card by nmID={nm_id}")
 
         try:
-            data = self.get_cards_list(limit=1, filter_nm_id=nm_id)
+            data = self.get_cards_list(
+                limit=1,
+                filter_nm_id=nm_id,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
             cards = data.get('cards', [])
 
             if not cards:

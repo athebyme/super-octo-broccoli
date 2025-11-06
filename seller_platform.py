@@ -20,7 +20,7 @@ from app import (
     read_statistics,
     save_processed_report,
 )
-from models import db, User, Seller, SellerReport, Product, APILog, ProductStock
+from models import db, User, Seller, SellerReport, Product, APILog, ProductStock, CardEditHistory
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
@@ -950,6 +950,10 @@ def bulk_products_action():
             from flask import make_response
 
             output = StringIO()
+
+            # Добавляем UTF-8 BOM для корректного отображения кириллицы в Excel
+            output.write('\ufeff')
+
             writer = csv.writer(output)
 
             # Заголовки
@@ -972,8 +976,9 @@ def bulk_products_action():
                     product.created_at.strftime('%Y-%m-%d %H:%M:%S')
                 ])
 
-            # Создаем response
-            response = make_response(output.getvalue())
+            # Создаем response с правильной кодировкой
+            csv_data = output.getvalue().encode('utf-8-sig')
+            response = make_response(csv_data)
             response.headers['Content-Type'] = 'text/csv; charset=utf-8'
             response.headers['Content-Disposition'] = f'attachment; filename=products_export_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
             return response
@@ -1412,6 +1417,24 @@ def product_detail(product_id):
     )
 
 
+def _create_product_snapshot(product: Product) -> dict:
+    """Создать снимок состояния продукта для истории изменений"""
+    return {
+        'nm_id': product.nm_id,
+        'vendor_code': product.vendor_code,
+        'title': product.title,
+        'brand': product.brand,
+        'description': product.description,
+        'object_name': product.object_name,
+        'price': float(product.price) if product.price else None,
+        'discount_price': float(product.discount_price) if product.discount_price else None,
+        'quantity': product.quantity,
+        'characteristics': json.loads(product.characteristics_json) if product.characteristics_json else [],
+        'last_sync': product.last_sync.isoformat() if product.last_sync else None,
+        'is_active': product.is_active
+    }
+
+
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
 @login_required
 def product_edit(product_id):
@@ -1449,6 +1472,9 @@ def product_edit(product_id):
         try:
             app.logger.info(f"📝 Starting edit for product {product.id} (nmID={product.nm_id}, vendor_code={product.vendor_code})")
 
+            # Создаем снимок ПЕРЕД изменениями
+            snapshot_before = _create_product_snapshot(product)
+
             # Получаем данные из формы
             vendor_code = request.form.get('vendor_code', '').strip()
             title = request.form.get('title', '').strip()
@@ -1474,7 +1500,10 @@ def product_edit(product_id):
             app.logger.debug(f"Updated characteristics count: {len(updated_characteristics)}")
 
             # Обновляем карточку через WB API
-            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            with WildberriesAPIClient(
+                current_user.seller.wb_api_key,
+                db_logger_callback=APILog.log_request
+            ) as client:
                 updates = {}
 
                 if vendor_code and vendor_code != product.vendor_code:
@@ -1497,7 +1526,12 @@ def product_edit(product_id):
 
                     # Отправляем обновление в WB
                     try:
-                        result = client.update_card(product.nm_id, updates)
+                        result = client.update_card(
+                            product.nm_id,
+                            updates,
+                            log_to_db=True,
+                            seller_id=current_user.seller.id
+                        )
                         app.logger.info(f"✅ WB API response: {result}")
                     except Exception as api_error:
                         app.logger.error(f"❌ WB API error for nmID={product.nm_id}: {str(api_error)}")
@@ -1505,21 +1539,44 @@ def product_edit(product_id):
                         raise
 
                     # Обновляем локальную БД
+                    changed_fields = []
                     if vendor_code:
                         product.vendor_code = vendor_code
+                        changed_fields.append('vendor_code')
                     if title:
                         product.title = title
+                        changed_fields.append('title')
                     if description:
                         product.description = description
+                        changed_fields.append('description')
                     if brand:
                         product.brand = brand
+                        changed_fields.append('brand')
                     if updated_characteristics:
                         product.characteristics_json = json.dumps(updated_characteristics, ensure_ascii=False)
+                        changed_fields.append('characteristics')
 
                     product.last_sync = datetime.utcnow()
+
+                    # Создаем снимок ПОСЛЕ изменений
+                    snapshot_after = _create_product_snapshot(product)
+
+                    # Сохраняем историю изменений
+                    history = CardEditHistory(
+                        product_id=product.id,
+                        seller_id=current_user.seller.id,
+                        action='update',
+                        changed_fields=changed_fields,
+                        snapshot_before=snapshot_before,
+                        snapshot_after=snapshot_after,
+                        wb_synced=True,
+                        wb_sync_status='success'
+                    )
+                    db.session.add(history)
                     db.session.commit()
 
                     app.logger.info(f"✅ Product {product.id} updated successfully in database")
+                    app.logger.info(f"📝 Created CardEditHistory record {history.id} with changed fields: {changed_fields}")
                     flash('Карточка успешно обновлена на Wildberries', 'success')
                     return redirect(url_for('product_detail', product_id=product.id))
                 else:
@@ -1593,7 +1650,10 @@ def products_bulk_edit():
         operation = request.form.get('operation', '')
 
         try:
-            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            with WildberriesAPIClient(
+                current_user.seller.wb_api_key,
+                db_logger_callback=APILog.log_request
+            ) as client:
                 success_count = 0
                 error_count = 0
                 errors = []
@@ -1608,7 +1668,12 @@ def products_bulk_edit():
 
                     for product in products:
                         try:
-                            client.update_card(product.nm_id, {'brand': new_brand})
+                            client.update_card(
+                                product.nm_id,
+                                {'brand': new_brand},
+                                log_to_db=True,
+                                seller_id=current_user.seller.id
+                            )
                             product.brand = new_brand
                             product.last_sync = datetime.utcnow()
                             success_count += 1
@@ -1630,7 +1695,12 @@ def products_bulk_edit():
                         try:
                             current_desc = product.description or ''
                             new_desc = f"{current_desc}\n\n{append_text}".strip()
-                            client.update_card(product.nm_id, {'description': new_desc})
+                            client.update_card(
+                                product.nm_id,
+                                {'description': new_desc},
+                                log_to_db=True,
+                                seller_id=current_user.seller.id
+                            )
                             product.description = new_desc
                             product.last_sync = datetime.utcnow()
                             success_count += 1
@@ -1650,7 +1720,12 @@ def products_bulk_edit():
 
                     for product in products:
                         try:
-                            client.update_card(product.nm_id, {'description': new_description})
+                            client.update_card(
+                                product.nm_id,
+                                {'description': new_description},
+                                log_to_db=True,
+                                seller_id=current_user.seller.id
+                            )
                             product.description = new_description
                             product.last_sync = datetime.utcnow()
                             success_count += 1
@@ -1679,6 +1754,177 @@ def products_bulk_edit():
         products=products,
         edit_operations=edit_operations
     )
+
+
+# ============= ИСТОРИЯ ИЗМЕНЕНИЙ КАРТОЧЕК =============
+
+@app.route('/products/<int:product_id>/history')
+@login_required
+def product_edit_history(product_id):
+    """Просмотр истории изменений карточки товара"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        flash('У вас нет доступа к этому товару', 'danger')
+        return redirect(url_for('products_list'))
+
+    # Получаем историю изменений
+    history_records = CardEditHistory.query.filter_by(
+        product_id=product.id
+    ).order_by(CardEditHistory.created_at.desc()).all()
+
+    return render_template(
+        'product_edit_history.html',
+        product=product,
+        history_records=history_records
+    )
+
+
+@app.route('/products/<int:product_id>/history/<int:history_id>/revert', methods=['POST'])
+@login_required
+def revert_product_edit(product_id, history_id):
+    """Откатить изменения карточки товара к предыдущему состоянию"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        flash('У вас нет доступа к этому товару', 'danger')
+        return redirect(url_for('products_list'))
+
+    if not current_user.seller.has_valid_api_key():
+        flash('API ключ Wildberries не настроен.', 'warning')
+        return redirect(url_for('api_settings'))
+
+    # Находим запись истории
+    history = CardEditHistory.query.get_or_404(history_id)
+
+    # Проверка что история принадлежит этому продукту
+    if history.product_id != product.id:
+        abort(403)
+
+    # Проверка что можно откатить
+    if not history.can_revert():
+        flash('Это изменение нельзя откатить', 'warning')
+        return redirect(url_for('product_edit_history', product_id=product.id))
+
+    try:
+        app.logger.info(f"🔄 Reverting product {product.id} to state before history {history.id}")
+
+        # Создаем снимок текущего состояния (до отката)
+        snapshot_before_revert = _create_product_snapshot(product)
+
+        # Получаем состояние для восстановления
+        snapshot_to_restore = history.snapshot_before
+
+        # Подготавливаем данные для отправки в WB API
+        updates = {}
+        reverted_fields = []
+
+        if 'vendor_code' in history.changed_fields and 'vendor_code' in snapshot_to_restore:
+            updates['vendorCode'] = snapshot_to_restore['vendor_code']
+            reverted_fields.append('vendor_code')
+
+        if 'title' in history.changed_fields and 'title' in snapshot_to_restore:
+            updates['title'] = snapshot_to_restore['title']
+            reverted_fields.append('title')
+
+        if 'description' in history.changed_fields and 'description' in snapshot_to_restore:
+            updates['description'] = snapshot_to_restore['description']
+            reverted_fields.append('description')
+
+        if 'brand' in history.changed_fields and 'brand' in snapshot_to_restore:
+            updates['brand'] = snapshot_to_restore['brand']
+            reverted_fields.append('brand')
+
+        if 'characteristics' in history.changed_fields and 'characteristics' in snapshot_to_restore:
+            updates['characteristics'] = snapshot_to_restore['characteristics']
+            reverted_fields.append('characteristics')
+
+        if not updates:
+            flash('Нет полей для отката', 'warning')
+            return redirect(url_for('product_edit_history', product_id=product.id))
+
+        # Отправляем обновление в WB API
+        with WildberriesAPIClient(
+            current_user.seller.wb_api_key,
+            db_logger_callback=APILog.log_request
+        ) as client:
+            result = client.update_card(
+                product.nm_id,
+                updates,
+                log_to_db=True,
+                seller_id=current_user.seller.id
+            )
+            app.logger.info(f"✅ Revert WB API response: {result}")
+
+        # Обновляем локальную БД
+        if 'vendor_code' in reverted_fields:
+            product.vendor_code = snapshot_to_restore['vendor_code']
+        if 'title' in reverted_fields:
+            product.title = snapshot_to_restore['title']
+        if 'description' in reverted_fields:
+            product.description = snapshot_to_restore['description']
+        if 'brand' in reverted_fields:
+            product.brand = snapshot_to_restore['brand']
+        if 'characteristics' in reverted_fields:
+            product.characteristics_json = json.dumps(
+                snapshot_to_restore['characteristics'],
+                ensure_ascii=False
+            )
+
+        product.last_sync = datetime.utcnow()
+
+        # Создаем снимок после отката
+        snapshot_after_revert = _create_product_snapshot(product)
+
+        # Помечаем оригинальную запись как откаченную
+        history.reverted = True
+        history.reverted_at = datetime.utcnow()
+
+        # Создаем новую запись истории для самого отката
+        revert_history = CardEditHistory(
+            product_id=product.id,
+            seller_id=current_user.seller.id,
+            action='revert',
+            changed_fields=reverted_fields,
+            snapshot_before=snapshot_before_revert,
+            snapshot_after=snapshot_after_revert,
+            wb_synced=True,
+            wb_sync_status='success',
+            reverted_by_history_id=history.id,
+            user_comment=f'Откат изменений от {history.created_at.strftime("%Y-%m-%d %H:%M:%S")}'
+        )
+
+        # Связываем откат с оригинальной записью
+        history.reverted_by_history_id = revert_history.id
+
+        db.session.add(revert_history)
+        db.session.commit()
+
+        app.logger.info(f"✅ Product {product.id} reverted successfully")
+        app.logger.info(f"📝 Created revert history record {revert_history.id}")
+        flash('Изменения успешно откачены', 'success')
+
+    except WBAuthException as e:
+        app.logger.error(f"❌ Auth error during revert: {str(e)}")
+        flash(f'Ошибка авторизации WB API: {str(e)}', 'danger')
+    except WBAPIException as e:
+        app.logger.error(f"❌ WB API error during revert: {str(e)}")
+        flash(f'Ошибка WB API: {str(e)}', 'danger')
+    except Exception as e:
+        app.logger.exception(f"❌ Unexpected error during revert: {e}")
+        flash(f'Ошибка при откате: {str(e)}', 'danger')
+
+    return redirect(url_for('product_edit_history', product_id=product.id))
 
 
 # ============= API ЛОГИ =============

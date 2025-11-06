@@ -213,6 +213,10 @@ class APILog(db.Model):
     status_code = db.Column(db.Integer)  # Код ответа
     response_time = db.Column(db.Float)  # Время ответа в секундах
 
+    # Тела запроса и ответа
+    request_body = db.Column(db.Text)  # JSON body запроса
+    response_body = db.Column(db.Text)  # JSON body ответа
+
     # Результат
     success = db.Column(db.Boolean, default=True)  # Успешен ли запрос
     error_message = db.Column(db.Text)  # Сообщение об ошибке
@@ -230,7 +234,8 @@ class APILog(db.Model):
 
     @staticmethod
     def log_request(seller_id: int, endpoint: str, method: str, status_code: int,
-                    response_time: float, success: bool = True, error_message: str = None):
+                    response_time: float, success: bool = True, error_message: str = None,
+                    request_body: str = None, response_body: str = None):
         """Создать запись лога"""
         log = APILog(
             seller_id=seller_id,
@@ -239,11 +244,69 @@ class APILog(db.Model):
             status_code=status_code,
             response_time=response_time,
             success=success,
-            error_message=error_message
+            error_message=error_message,
+            request_body=request_body,
+            response_body=response_body
         )
         db.session.add(log)
         db.session.commit()
         return log
+
+
+class CardEditHistory(db.Model):
+    """История изменений карточек товаров"""
+    __tablename__ = 'card_edit_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Что изменилось
+    action = db.Column(db.String(50), nullable=False)  # 'update', 'create', 'delete'
+    changed_fields = db.Column(db.JSON)  # Список измененных полей
+
+    # Снимок данных ДО изменения
+    snapshot_before = db.Column(db.JSON)  # Полное состояние карточки до изменения
+
+    # Снимок данных ПОСЛЕ изменения
+    snapshot_after = db.Column(db.JSON)  # Полное состояние карточки после изменения
+
+    # Результат синхронизации с WB
+    wb_synced = db.Column(db.Boolean, default=False)  # Синхронизировано ли с WB
+    wb_sync_status = db.Column(db.String(50))  # 'success', 'failed', 'pending'
+    wb_error_message = db.Column(db.Text)  # Сообщение об ошибке от WB
+
+    # Откат
+    reverted = db.Column(db.Boolean, default=False)  # Было ли отменено
+    reverted_at = db.Column(db.DateTime)  # Когда отменено
+    reverted_by_history_id = db.Column(db.Integer, db.ForeignKey('card_edit_history.id'))  # ID истории отката
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    user_comment = db.Column(db.Text)  # Комментарий пользователя
+
+    # Связи
+    product = db.relationship('Product', backref='edit_history')
+
+    def __repr__(self) -> str:
+        return f'<CardEditHistory {self.action} product_id={self.product_id}>'
+
+    def can_revert(self) -> bool:
+        """Можно ли откатить это изменение"""
+        return not self.reverted and self.snapshot_before is not None
+
+    def get_changes_summary(self) -> dict:
+        """Получить краткую сводку изменений"""
+        if not self.changed_fields:
+            return {}
+
+        summary = {}
+        for field in self.changed_fields:
+            before = self.snapshot_before.get(field) if self.snapshot_before else None
+            after = self.snapshot_after.get(field) if self.snapshot_after else None
+            summary[field] = {'before': before, 'after': after}
+
+        return summary
 
 
 class ProductStock(db.Model):
