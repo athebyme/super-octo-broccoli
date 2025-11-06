@@ -2983,23 +2983,82 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         # Создаем клиент API
         wb_client = WildberriesAPIClient(seller.wb_api_key)
 
-        # Получаем ВСЕ товары через cursor-based пагинацию
-        app.logger.info(f"Starting to fetch all products for seller {seller.id} using pagination...")
-        try:
-            cards = wb_client.get_all_cards(batch_size=100)
-            app.logger.info(f"Successfully fetched {len(cards)} cards from WB API for seller {seller.id}")
-        except Exception as e:
-            app.logger.error(f"Failed to fetch products from WB API: {str(e)}")
-            raise Exception(f'Failed to fetch products from WB API: {str(e)}')
+        # Получаем ВСЕ товары через cursor-based пагинацию с детальным логированием
+        app.logger.info(f"Starting to fetch all products for seller {seller.id} using cursor-based pagination...")
+
+        all_cards = []
+        cursor_updated_at = None
+        cursor_nm_id = None
+        page_num = 0
+
+        while True:
+            page_num += 1
+            app.logger.info(f"📄 Fetching page {page_num} (cursor: updatedAt={cursor_updated_at}, nmID={cursor_nm_id})...")
+
+            try:
+                # Получаем одну страницу
+                data = wb_client.get_cards_list(
+                    limit=100,
+                    cursor_updated_at=cursor_updated_at,
+                    cursor_nm_id=cursor_nm_id
+                )
+            except Exception as e:
+                app.logger.error(f"❌ Failed to fetch page {page_num}: {str(e)}")
+                raise Exception(f'Failed to fetch products from WB API on page {page_num}: {str(e)}')
+
+            # Получаем карточки из ответа
+            page_cards = data.get('cards', [])
+
+            if not page_cards:
+                app.logger.info(f"⏹ No more cards on page {page_num}. Pagination complete.")
+                break
+
+            all_cards.extend(page_cards)
+            app.logger.info(f"✓ Page {page_num}: loaded {len(page_cards)} cards. Total so far: {len(all_cards)}")
+
+            # Получаем cursor для следующей страницы
+            cursor = data.get('cursor')
+            if not cursor:
+                app.logger.info(f"⏹ No cursor in response on page {page_num}. This is the last page.")
+                break
+
+            # Проверяем есть ли total
+            total = cursor.get('total', 0)
+            if total > 0:
+                app.logger.info(f"📊 Total products according to cursor: {total}")
+                if len(all_cards) >= total:
+                    app.logger.info(f"✓ Loaded all {total} cards. Stopping pagination.")
+                    break
+
+            # Получаем данные для следующего cursor
+            next_updated_at = cursor.get('updatedAt')
+            next_nm_id = cursor.get('nmID')
+
+            if not next_updated_at or not next_nm_id:
+                app.logger.info(f"⏹ No cursor data (updatedAt={next_updated_at}, nmID={next_nm_id}). Last page reached.")
+                break
+
+            # Проверка на зацикливание
+            if cursor_updated_at == next_updated_at and cursor_nm_id == next_nm_id:
+                app.logger.warning(f"⚠️  Cursor not changing! Breaking to avoid infinite loop.")
+                break
+
+            cursor_updated_at = next_updated_at
+            cursor_nm_id = next_nm_id
+
+            # Ограничение на количество страниц для безопасности
+            if page_num >= 1000:
+                app.logger.warning(f"⚠️  Reached max pages limit (1000). Stopping.")
+                break
+
+        cards = all_cards
+        app.logger.info(f"✅ Pagination complete! Fetched {len(cards)} cards in {page_num} pages for seller {seller.id}")
 
         if not cards:
             app.logger.warning(f"No cards returned from WB API for seller {seller.id}")
-            # Это не ошибка - просто у продавца нет товаров
 
         if not isinstance(cards, list):
             raise Exception(f'Expected cards to be a list, got {type(cards).__name__}')
-
-        app.logger.info(f"Found {len(cards)} cards from WB API for seller {seller.id}")
 
         changes_detected = 0
         suspicious_changes = 0
