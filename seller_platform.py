@@ -131,6 +131,69 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
 
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_ROOT = BASE_DIR / 'uploads'
+PROCESSED_ROOT = BASE_DIR / 'processed'
+
+
+def ensure_storage_roots() -> None:
+    for folder in (UPLOAD_ROOT, PROCESSED_ROOT):
+        folder.mkdir(parents=True, exist_ok=True)
+
+
+def get_seller_storage_dirs(seller_id: int) -> tuple[Path, Path]:
+    ensure_storage_roots()
+    upload_dir = UPLOAD_ROOT / f'seller_{seller_id}'
+    processed_dir = PROCESSED_ROOT / f'seller_{seller_id}'
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir, processed_dir
+
+
+def save_uploaded_file(file_storage, destination: Path) -> Optional[Path]:
+    if not file_storage or not file_storage.filename:
+        return None
+    filename = Path(file_storage.filename).name
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    safe_name = f'{timestamp}_{filename}'
+    target = destination / safe_name
+    file_storage.save(target)
+    return target
+
+
+def build_preview_data(
+    statistics_path: Optional[str],
+    selected_columns: Optional[List[str]],
+) -> tuple[List[str], List[dict], List[str], Optional[str]]:
+    if not statistics_path or not Path(statistics_path).exists():
+        return [], [], selected_columns or [], None
+    try:
+        df = read_statistics(Path(statistics_path))
+        available_columns = gather_columns(df)
+        resolved_columns = selected_columns or column_letters_to_indices(
+            df.columns,
+            DEFAULT_COLUMN_INDICES,
+        )
+        preview_rows: List[dict] = []
+        if resolved_columns:
+            preview_rows = (
+                df[resolved_columns]
+                .head(10)
+                .fillna('')
+                .to_dict(orient='records')
+            )
+        return available_columns, preview_rows, resolved_columns, None
+    except Exception as exc:
+        return [], [], selected_columns or [], str(exc)
+
+
+def get_latest_report(seller_id: int) -> Optional[SellerReport]:
+    return (
+        SellerReport.query.filter_by(seller_id=seller_id)
+        .order_by(SellerReport.created_at.desc())
+        .first()
+    )
+
 
 @app.after_request
 def after_request(response):
