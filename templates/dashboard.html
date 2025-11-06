@@ -248,6 +248,19 @@
                     <p class="text-xs text-gray-500">История запросов</p>
                 </div>
             </a>
+
+            <a href="{{ url_for('bulk_edit_history') }}"
+               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <div class="flex-shrink-0 w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-900">История операций</p>
+                    <p class="text-xs text-gray-500">Массовые изменения</p>
+                </div>
+            </a>
         </div>
     </div>
 

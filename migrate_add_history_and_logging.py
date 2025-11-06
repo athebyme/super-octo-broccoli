@@ -75,7 +75,49 @@ def migrate_database(db_path: str):
         else:
             print("  ⚠️  Таблица products не существует (будет создана при первом запуске приложения)")
 
-        # === Миграция 3: Создание таблицы card_edit_history ===
+        # === Миграция 3: Создание таблицы bulk_edit_history ===
+        print("📝 Проверка таблицы bulk_edit_history...")
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='bulk_edit_history'
+        """)
+
+        if not cursor.fetchone():
+            print("  ➕ Создание таблицы bulk_edit_history")
+            cursor.execute("""
+                CREATE TABLE bulk_edit_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    operation_type VARCHAR(50) NOT NULL,
+                    operation_params TEXT,
+                    description TEXT,
+                    total_products INTEGER DEFAULT 0,
+                    success_count INTEGER DEFAULT 0,
+                    error_count INTEGER DEFAULT 0,
+                    errors_details TEXT,
+                    status VARCHAR(50) DEFAULT 'pending',
+                    wb_synced BOOLEAN DEFAULT 0,
+                    reverted BOOLEAN DEFAULT 0,
+                    reverted_at DATETIME,
+                    reverted_by_user_id INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME,
+                    duration_seconds REAL,
+                    FOREIGN KEY (seller_id) REFERENCES sellers(id),
+                    FOREIGN KEY (reverted_by_user_id) REFERENCES users(id)
+                )
+            """)
+
+            # Создание индексов
+            cursor.execute("CREATE INDEX idx_bulk_edit_history_seller_id ON bulk_edit_history(seller_id)")
+            cursor.execute("CREATE INDEX idx_bulk_edit_history_created_at ON bulk_edit_history(created_at)")
+
+            conn.commit()
+            print("  ✓ Таблица bulk_edit_history создана с индексами")
+        else:
+            print("  ✓ Таблица bulk_edit_history уже существует")
+
+        # === Миграция 4: Создание таблицы card_edit_history ===
         print("📝 Проверка таблицы card_edit_history...")
         cursor.execute("""
             SELECT name FROM sqlite_master
@@ -89,6 +131,7 @@ def migrate_database(db_path: str):
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     product_id INTEGER NOT NULL,
                     seller_id INTEGER NOT NULL,
+                    bulk_edit_id INTEGER,
                     action VARCHAR(50) NOT NULL,
                     changed_fields TEXT,
                     snapshot_before TEXT,
@@ -103,6 +146,7 @@ def migrate_database(db_path: str):
                     user_comment TEXT,
                     FOREIGN KEY (product_id) REFERENCES products(id),
                     FOREIGN KEY (seller_id) REFERENCES sellers(id),
+                    FOREIGN KEY (bulk_edit_id) REFERENCES bulk_edit_history(id),
                     FOREIGN KEY (reverted_by_history_id) REFERENCES card_edit_history(id)
                 )
             """)
@@ -110,6 +154,7 @@ def migrate_database(db_path: str):
             # Создание индексов
             cursor.execute("CREATE INDEX idx_card_edit_history_product_id ON card_edit_history(product_id)")
             cursor.execute("CREATE INDEX idx_card_edit_history_seller_id ON card_edit_history(seller_id)")
+            cursor.execute("CREATE INDEX idx_card_edit_history_bulk_edit_id ON card_edit_history(bulk_edit_id)")
             cursor.execute("CREATE INDEX idx_card_edit_history_created_at ON card_edit_history(created_at)")
 
             conn.commit()
@@ -117,7 +162,19 @@ def migrate_database(db_path: str):
         else:
             print("  ✓ Таблица card_edit_history уже существует")
 
-        # === Миграция 4: Создание таблицы product_stocks ===
+            # Проверяем наличие колонки bulk_edit_id
+            cursor.execute("PRAGMA table_info(card_edit_history)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            if 'bulk_edit_id' not in columns:
+                print("  ➕ Добавление колонки bulk_edit_id")
+                cursor.execute("ALTER TABLE card_edit_history ADD COLUMN bulk_edit_id INTEGER")
+                cursor.execute("CREATE INDEX idx_card_edit_history_bulk_edit_id ON card_edit_history(bulk_edit_id)")
+                conn.commit()
+            else:
+                print("  ✓ Колонка bulk_edit_id уже существует")
+
+        # === Миграция 5: Создание таблицы product_stocks ===
         print("📝 Проверка таблицы product_stocks...")
         cursor.execute("""
             SELECT name FROM sqlite_master
@@ -155,7 +212,9 @@ def migrate_database(db_path: str):
         print("✅ Миграция успешно завершена!")
         print("\n📋 Добавлено:")
         print("  • Поля request_body и response_body в api_logs для полного логирования")
+        print("  • Таблица bulk_edit_history для отслеживания массовых операций")
         print("  • Таблица card_edit_history для отслеживания изменений с функцией отката")
+        print("  • Поле bulk_edit_id в card_edit_history для связи с массовыми операциями")
         print("  • Таблица product_stocks для остатков по складам")
         print("  • Поля characteristics_json, description, dimensions_json в products")
 
