@@ -2984,15 +2984,37 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         wb_client = WildberriesAPIClient(seller.wb_api_key)
 
         # Получаем список товаров
-        cards_response = wb_client.get_cards_list(limit=1000)
+        try:
+            cards_response = wb_client.get_cards_list(limit=1000)
+            app.logger.info(f"Cards response structure: {list(cards_response.keys()) if cards_response else 'None'}")
+        except Exception as e:
+            raise Exception(f'Failed to fetch products from WB API: {str(e)}')
 
-        if not cards_response or 'data' not in cards_response:
-            raise Exception('Failed to fetch products from WB API')
+        if not cards_response:
+            raise Exception('Empty response from WB API')
+
+        # Проверяем структуру ответа
+        if 'data' not in cards_response:
+            # Возможно API вернуло ошибку
+            if 'error' in cards_response:
+                error_msg = cards_response.get('error', 'Unknown error')
+                raise Exception(f'WB API error: {error_msg}')
+
+            # Или структура ответа отличается
+            app.logger.error(f"Unexpected WB API response structure: {cards_response}")
+            raise Exception(f'Unexpected response structure from WB API. Keys: {list(cards_response.keys())}')
 
         cards = cards_response.get('data', {}).get('cards', [])
 
+        if not isinstance(cards, list):
+            raise Exception(f'Expected cards to be a list, got {type(cards).__name__}')
+
+        app.logger.info(f"Found {len(cards)} cards from WB API for seller {seller.id}")
+
         changes_detected = 0
         suspicious_changes = 0
+        products_checked = 0
+        products_not_in_db = 0
 
         for card in cards:
             nm_id = card.get('nmID')
@@ -3002,7 +3024,10 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
             # Находим товар в БД
             product = Product.query.filter_by(seller_id=seller.id, nm_id=nm_id).first()
             if not product:
+                products_not_in_db += 1
                 continue
+
+            products_checked += 1
 
             # Получаем цены из API
             sizes = card.get('sizes', [])
@@ -3132,9 +3157,13 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         settings.last_sync_error = None
         db.session.commit()
 
+        app.logger.info(f"Sync completed: {products_checked} products checked, {changes_detected} changes detected, {suspicious_changes} suspicious")
+
         return {
             'status': 'success',
-            'products_checked': len(cards),
+            'total_cards_from_api': len(cards),
+            'products_checked': products_checked,
+            'products_not_in_db': products_not_in_db,
             'changes_detected': changes_detected,
             'suspicious_changes': suspicious_changes,
             'timestamp': datetime.utcnow().isoformat()
