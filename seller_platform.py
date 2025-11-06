@@ -2993,18 +2993,24 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         if not cards_response:
             raise Exception('Empty response from WB API')
 
-        # Проверяем структуру ответа
-        if 'data' not in cards_response:
-            # Возможно API вернуло ошибку
-            if 'error' in cards_response:
-                error_msg = cards_response.get('error', 'Unknown error')
-                raise Exception(f'WB API error: {error_msg}')
+        # Проверяем наличие ошибки в ответе
+        if 'error' in cards_response:
+            error_msg = cards_response.get('error', 'Unknown error')
+            raise Exception(f'WB API error: {error_msg}')
 
-            # Или структура ответа отличается
+        # WB API может возвращать разные структуры:
+        # Вариант 1 (v2): {'cards': [...], 'cursor': {...}}
+        # Вариант 2 (v1): {'data': {'cards': [...]}}
+        if 'cards' in cards_response:
+            # Прямая структура (v2)
+            cards = cards_response.get('cards', [])
+        elif 'data' in cards_response:
+            # Вложенная структура (v1)
+            cards = cards_response.get('data', {}).get('cards', [])
+        else:
+            # Неизвестная структура
             app.logger.error(f"Unexpected WB API response structure: {cards_response}")
             raise Exception(f'Unexpected response structure from WB API. Keys: {list(cards_response.keys())}')
-
-        cards = cards_response.get('data', {}).get('cards', [])
 
         if not isinstance(cards, list):
             raise Exception(f'Expected cards to be a list, got {type(cards).__name__}')
