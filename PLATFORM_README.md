@@ -39,18 +39,54 @@
 
 ## Установка и запуск
 
-### 1. Установка зависимостей
+### 1. Проверка Python
+
+На сервере используйте `python3` вместо `python`:
 
 ```bash
-pip install -r requirements.txt
+# Проверить версию Python
+python3 --version
+
+# Если python3 не установлен (Ubuntu/Debian)
+sudo apt update
+sudo apt install python3 python3-pip python3-venv
 ```
 
-### 2. Инициализация платформы
-
-Запустите скрипт инициализации для создания БД и первого администратора:
+### 2. Создание виртуального окружения (рекомендуется)
 
 ```bash
-python init_platform.py
+# Создать виртуальное окружение
+python3 -m venv .venv
+
+# Активировать виртуальное окружение
+source .venv/bin/activate
+
+# После активации можно использовать просто 'python'
+python --version
+```
+
+### 3. Установка зависимостей
+
+```bash
+# Если виртуальное окружение активировано
+pip install -r requirements.txt
+
+# Или напрямую через pip3
+pip3 install -r requirements.txt
+```
+
+### 4. Инициализация платформы
+
+**Быстрая инициализация с тестовыми данными:**
+
+```bash
+python3 test_init.py
+```
+
+**Или интерактивная инициализация:**
+
+```bash
+python3 init_platform.py
 ```
 
 Скрипт запросит:
@@ -58,19 +94,84 @@ python init_platform.py
 - Email
 - Пароль (минимум 6 символов)
 
-### 3. Запуск приложения
+### 5. Запуск приложения
+
+**Для разработки:**
 
 ```bash
-python seller_platform.py
+python3 seller_platform.py
 ```
 
-Или используя Flask CLI:
+**Для production (с gunicorn):**
 
 ```bash
-flask --app seller_platform run
+# Установить gunicorn (уже в requirements.txt)
+pip3 install gunicorn
+
+# Запустить с gunicorn
+gunicorn -w 4 -b 0.0.0.0:5001 seller_platform:app
+
+# Или в фоновом режиме
+nohup gunicorn -w 4 -b 0.0.0.0:5001 seller_platform:app > seller_platform.log 2>&1 &
 ```
 
-Приложение будет доступно по адресу: `http://localhost:5001`
+**С помощью systemd (рекомендуется для production):**
+
+Создайте файл `/etc/systemd/system/wb-seller-platform.service`:
+
+```ini
+[Unit]
+Description=WB Seller Platform
+After=network.target
+
+[Service]
+User=www-data
+WorkingDirectory=/path/to/super-octo-broccoli
+Environment="PATH=/path/to/super-octo-broccoli/.venv/bin"
+ExecStart=/path/to/super-octo-broccoli/.venv/bin/gunicorn -w 4 -b 0.0.0.0:5001 seller_platform:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Затем:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable wb-seller-platform
+sudo systemctl start wb-seller-platform
+sudo systemctl status wb-seller-platform
+```
+
+### 6. Настройка Nginx (опционально, для production)
+
+Создайте файл `/etc/nginx/sites-available/wb-seller-platform`:
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    location / {
+        proxy_pass http://localhost:5001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Активируйте конфигурацию:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/wb-seller-platform /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Приложение будет доступно по адресу: `http://localhost:5001` (или ваш домен)
 
 ## Структура проекта
 
@@ -215,12 +316,150 @@ new_field = db.Column(db.String(100))
 # Затем пересоздайте БД или используйте Alembic для миграций
 ```
 
-## Поддержка
+## Поддержка и решение проблем
+
+### Частые проблемы
+
+#### 1. `python: command not found`
+
+**Проблема:** На сервере команда `python` не найдена.
+
+**Решение:** Используйте `python3` вместо `python`:
+
+```bash
+# Вместо
+python seller_platform.py
+
+# Используйте
+python3 seller_platform.py
+```
+
+Или создайте алиас в `~/.bashrc`:
+
+```bash
+echo "alias python=python3" >> ~/.bashrc
+echo "alias pip=pip3" >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### 2. `No module named 'venv'`
+
+**Проблема:** Модуль venv не установлен.
+
+**Решение:** Установите python3-venv:
+
+```bash
+# Ubuntu/Debian
+sudo apt install python3-venv
+
+# CentOS/RHEL
+sudo yum install python3-venv
+```
+
+#### 3. `ModuleNotFoundError: No module named 'flask'`
+
+**Проблема:** Зависимости не установлены.
+
+**Решение:** Установите зависимости:
+
+```bash
+# С виртуальным окружением
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Без виртуального окружения
+pip3 install -r requirements.txt
+```
+
+#### 4. `sqlite3.OperationalError: no such table`
+
+**Проблема:** База данных не инициализирована.
+
+**Решение:** Запустите инициализацию:
+
+```bash
+python3 test_init.py
+```
+
+#### 5. Порт 5001 уже занят
+
+**Проблема:** Порт используется другим приложением.
+
+**Решение:** Измените порт в `seller_platform.py` или при запуске:
+
+```bash
+# В коде (seller_platform.py, последняя строка)
+app.run(debug=True, host='0.0.0.0', port=5002)
+
+# Или через переменную окружения
+export PORT=5002
+python3 seller_platform.py
+```
+
+#### 6. Приложение недоступно с других машин
+
+**Проблема:** Приложение слушает только localhost.
+
+**Решение:** Убедитесь, что host установлен как `0.0.0.0`:
+
+```bash
+# В seller_platform.py должно быть
+app.run(debug=True, host='0.0.0.0', port=5001)
+```
+
+И проверьте firewall:
+
+```bash
+# Ubuntu/Debian
+sudo ufw allow 5001
+
+# CentOS/RHEL
+sudo firewall-cmd --add-port=5001/tcp --permanent
+sudo firewall-cmd --reload
+```
+
+### Проверка установки
+
+Для проверки правильности установки выполните:
+
+```bash
+# 1. Проверка Python
+python3 --version
+
+# 2. Проверка зависимостей
+python3 -c "import flask; import flask_login; import flask_sqlalchemy; print('✓ All modules installed')"
+
+# 3. Проверка базы данных
+python3 -c "from seller_platform import app, db; from models import User; \
+with app.app_context(): \
+    users = User.query.all(); \
+    print(f'✓ Database OK, users: {len(users)}')"
+
+# 4. Проверка приложения
+python3 -c "from seller_platform import app; print('✓ Application loads successfully')"
+```
+
+### Логи и отладка
+
+Для просмотра ошибок:
+
+```bash
+# При запуске напрямую
+python3 seller_platform.py 2>&1 | tee app.log
+
+# При запуске с gunicorn
+tail -f seller_platform.log
+
+# Systemd логи
+sudo journalctl -u wb-seller-platform -f
+```
 
 При возникновении проблем проверьте:
 1. Установлены ли все зависимости из `requirements.txt`
-2. Инициализирована ли база данных (запустите `init_platform.py`)
+2. Инициализирована ли база данных (запустите `test_init.py`)
 3. Правильные ли учетные данные при входе
+4. Доступен ли порт 5001
+5. Активировано ли виртуальное окружение (если используется)
 
 ## Лицензия
 

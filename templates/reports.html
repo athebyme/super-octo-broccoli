@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Отчёты - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 space-y-3">
+        <h1 class="text-3xl font-bold text-gray-900">Отчёты по прибыли</h1>
+        <p class="text-sm text-gray-600">
+            Загрузите свежий отчёт Wildberries и прайс поставщика, выберите колонки и сформируйте Excel с расчётом прибыли.
+        </p>
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 text-xs text-gray-500">
+            <span>Статистика WB: {{ statistics_path | basename if statistics_ready else "не загружена" }}</span>
+            <span>Прайс Sexoptovik: {{ price_path | basename if price_ready else "не загружен" }}</span>
+            {% if latest_report %}
+            <span>Последний отчёт: {{ latest_report.processed_path | basename }} ({{ latest_report.created_at.strftime('%d.%m.%Y %H:%M') }})</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 lg:col-span-2">
+            <form action="{{ url_for('reports') }}" method="post" enctype="multipart/form-data" class="p-6 space-y-6">
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="statistics" class="block text-sm font-medium text-gray-700">Отчёт Wildberries (.xlsx)</label>
+                        <input type="file" name="statistics" id="statistics" accept=".xlsx,.xls"
+                               class="mt-1 block w-full text-sm text-gray-700 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        {% if statistics_path %}
+                        <p class="mt-1 text-xs text-gray-500">Текущий файл: {{ statistics_path | basename }}</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label for="prices" class="block text-sm font-medium text-gray-700">Прайс Sexoptovik (.csv)</label>
+                        <input type="file" name="prices" id="prices" accept=".csv"
+                               class="mt-1 block w-full text-sm text-gray-700 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        {% if price_path %}
+                        <p class="mt-1 text-xs text-gray-500">Текущий файл: {{ price_path | basename }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div>
+                    <label for="columns" class="block text-sm font-medium text-gray-700 mb-1">Колонки для предпросмотра</label>
+                    {% if available_columns %}
+                    <select name="columns" id="columns" multiple size="8"
+                            class="block w-full border border-gray-300 rounded-md text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        {% for column in available_columns %}
+                        <option value="{{ column }}" {% if column in selected_columns %}selected{% endif %}>{{ column }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">Удерживайте Ctrl или Command, чтобы выбрать несколько колонок.</p>
+                    {% else %}
+                    <p class="text-sm text-gray-500">Сначала загрузите отчёт Wildberries, чтобы выбрать колонки.</p>
+                    {% endif %}
+                </div>
+
+                <div class="flex flex-wrap items-center gap-3">
+                    <button type="submit"
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Сформировать отчёт
+                    </button>
+                    {% if latest_report %}
+                    <a href="{{ url_for('download_report', report_id=latest_report.id) }}"
+                       class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        Скачать последний файл
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 space-y-4">
+            <h2 class="text-lg font-semibold text-gray-900">Краткая сводка</h2>
+            {% if latest_report %}
+            {% set summary = latest_report.summary or {} %}
+            <dl class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <dt class="text-gray-500">Выручка, ₽</dt>
+                    <dd class="font-semibold text-gray-900">{{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-gray-500">Прибыль, ₽</dt>
+                    <dd class="font-semibold text-gray-900">{{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') }}</dd>
+                </div>
+                <div class="flex justify-between">
+                    <dt class="text-gray-500">Маржа, %</dt>
+                    <dd class="font-semibold text-gray-900">{{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') }}</dd>
+                </div>
+            </dl>
+            {% else %}
+            <p class="text-sm text-gray-500">Сформируйте первый отчёт, чтобы увидеть сводку.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if preview_rows %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Предпросмотр данных</h2>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        {% for column in selected_columns %}
+                        <th scope="col" class="px-4 py-2 text-left font-medium text-gray-600 uppercase tracking-wider">{{ column }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 bg-white">
+                    {% for row in preview_rows %}
+                    <tr>
+                        {% for column in selected_columns %}
+                        <td class="px-4 py-2 text-gray-700 whitespace-nowrap">{{ row.get(column, "") }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">История выгрузок</h2>
+            <span class="text-xs text-gray-500">Показываются последние 10 отчётов</span>
+        </div>
+        {% if reports %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-2 text-left font-medium text-gray-600 uppercase tracking-wider">Дата</th>
+                        <th class="px-4 py-2 text-left font-medium text-gray-600 uppercase tracking-wider">Выручка, ₽</th>
+                        <th class="px-4 py-2 text-left font-medium text-gray-600 uppercase tracking-wider">Прибыль, ₽</th>
+                        <th class="px-4 py-2 text-left font-medium text-gray-600 uppercase tracking-wider">Файл</th>
+                        <th class="px-4 py-2 text-left font-medium text-gray-600 uppercase tracking-wider"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 bg-white">
+                    {% for report in reports %}
+                    {% set summary = report.summary or {} %}
+                    <tr>
+                        <td class="px-4 py-2 text-gray-700 whitespace-nowrap">{{ report.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                        <td class="px-4 py-2 text-gray-700 whitespace-nowrap">{{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') }}</td>
+                        <td class="px-4 py-2 text-gray-700 whitespace-nowrap">{{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') }}</td>
+                        <td class="px-4 py-2 text-gray-700 whitespace-nowrap">{{ report.processed_path | basename }}</td>
+                        <td class="px-4 py-2 text-right">
+                            <a href="{{ url_for('download_report', report_id=report.id) }}"
+                               class="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                Скачать
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-500">Ещё нет сформированных отчётов.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

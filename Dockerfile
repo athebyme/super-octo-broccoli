@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    APP_MODULE=seller_platform:app \
+    PORT=5001
 
 WORKDIR /app
 
@@ -10,8 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV FLASK_APP=app.py \
-    PORT=5000
+RUN chmod +x /app/docker-entrypoint.sh
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 

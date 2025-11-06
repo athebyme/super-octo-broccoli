@@ -1,3 +1,31 @@
+# Deployment Quick Guide (EN)
+
+## Docker (recommended)
+1. Optional: create a `.env` and set `SECRET_KEY`, `DATABASE_URL`, `SELLER_PORT`, `CALCULATOR_PORT`, `APP_SECRET_KEY`.
+2. Build and start containers:
+   ```bash
+   docker compose up -d --build
+   ```
+3. Create the first admin user:
+   ```bash
+   docker compose exec seller-platform flask --app seller_platform create_admin
+   ```
+   Then open http://localhost:5001/login.
+4. Stop services with `docker compose down`. Rebuild with `docker compose build` when the source changes.
+
+## Local (without Docker)
+```bash
+python -m venv .venv
+.venv\\Scripts\\activate  # Windows
+# source .venv/bin/activate  # Linux/macOS
+pip install -r requirements.txt
+```
+- Calculator UI: `python app.py` (http://localhost:5000)
+- Seller platform: `python seller_platform.py` (http://localhost:5001)
+- Initialize DB / admin locally: `python init_platform.py` or `flask --app seller_platform create_admin`.
+
+----
+
 # Калькулятор прибыли Wildberries
 
 Веб-приложение рассчитывает прибыль по товарам Wildberries: загрузите отчет WB и прайс Sexoptovik, получите Excel с распределённой логистикой, расходами на упаковку, фактическими перечислениями и сводкой по марже.
