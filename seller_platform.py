@@ -1783,7 +1783,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1834,7 +1834,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1883,7 +1883,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1932,7 +1932,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -2000,7 +2000,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -2105,7 +2105,7 @@ def products_bulk_edit():
 
     return render_template(
         'products_bulk_edit.html',
-        products=products,
+        products=[p.to_dict() for p in products],
         edit_operations=edit_operations
     )
 
