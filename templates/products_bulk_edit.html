@@ -1,0 +1,514 @@
+{% extends "base.html" %}
+
+{% block title %}Массовое редактирование - {{ products|length }} товаров{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Хлебные крошки -->
+    <nav class="mb-6 text-sm">
+        <ol class="flex items-center space-x-2 text-gray-500">
+            <li><a href="{{ url_for('products_list') }}" class="hover:text-indigo-600">Товары</a></li>
+            <li>/</li>
+            <li class="text-gray-900">Массовое редактирование</li>
+        </ol>
+    </nav>
+
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Массовое редактирование</h1>
+        <p class="mt-2 text-sm text-gray-600">
+            Выбрано товаров: {{ products|length }}
+            {% if products and products[0].object_name %}
+            • Категория: <span class="font-semibold">{{ products[0].object_name }}</span>
+            {% else %}
+            • <span class="text-yellow-600 font-semibold">⚠️ Категория не определена - требуется синхронизация с WB</span>
+            {% endif %}
+        </p>
+    </div>
+
+    <!-- Выбранные товары -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Выбранные товары</h2>
+
+        <div class="space-y-2 max-h-64 overflow-y-auto">
+            {% for product in products %}
+            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <div class="flex items-center space-x-4">
+                    {% set photos = product.photos_json|from_json if product.photos_json else [] %}
+                    {% if photos %}
+                    <img src="{{ wb_photo_url(product.nm_id, photos[0], 'tm') }}"
+                         alt="{{ product.title }}"
+                         class="w-12 h-12 rounded object-cover">
+                    {% else %}
+                    <div class="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
+                        <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
+                    {% endif %}
+
+                    <div>
+                        <div class="font-medium text-gray-900">{{ product.vendor_code }}</div>
+                        <div class="text-sm text-gray-600">{{ product.title[:50] }}{% if product.title|length > 50 %}...{% endif %}</div>
+                        <div class="text-xs text-gray-500">NM ID: {{ product.nm_id }}</div>
+                    </div>
+                </div>
+                <div class="text-sm text-gray-500">
+                    {{ product.brand or '—' }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Форма массового редактирования -->
+    <form method="POST" x-data="{
+        operation: '{{ request.form.get('operation', '') }}',
+        productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+        characteristics: [],
+        selectedChar: null,
+        loading: false,
+        loadError: null,
+
+        async loadCharacteristics() {
+            if (!this.productCategory) {
+                console.log('No category for products');
+                return;
+            }
+
+            this.loading = true;
+            this.characteristics = [];
+            this.selectedChar = null;
+            this.loadError = null;
+
+            try {
+                console.log('Loading characteristics for category:', this.productCategory);
+                const response = await fetch(`/api/characteristics/${encodeURIComponent(this.productCategory)}`);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    // Показываем suggestion если есть
+                    if (errorData.suggestion) {
+                        throw new Error(errorData.error + ' ' + errorData.suggestion);
+                    }
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                this.characteristics = data.characteristics || [];
+                console.log('Characteristics loaded:', this.characteristics.length, 'items');
+
+                if (this.characteristics.length === 0) {
+                    this.loadError = 'WB API не вернул характеристики для этой категории. Возможно, категория не поддерживает характеристики через API.';
+                }
+            } catch (e) {
+                console.error('Failed to load characteristics:', e);
+                this.loadError = e.message;
+            } finally {
+                this.loading = false;
+            }
+        }
+    }">
+        <!-- Выбор операции -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
+            <h2 class="text-lg font-semibold text-gray-900 mb-6">Выберите операцию</h2>
+
+            <div class="space-y-4">
+                {% for op in edit_operations %}
+                <label class="flex items-start p-4 border-2 rounded-lg cursor-pointer transition"
+                       :class="operation === '{{ op.id }}' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300'">
+                    <input type="radio"
+                           name="operation"
+                           value="{{ op.id }}"
+                           x-model="operation"
+                           @change="if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
+                    <div class="ml-3">
+                        <div class="font-medium text-gray-900">{{ op.name }}</div>
+                        <div class="text-sm text-gray-600 mt-1">{{ op.description }}</div>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Параметры операции -->
+        <div x-show="operation" class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
+            <h2 class="text-lg font-semibold text-gray-900 mb-6">Параметры операции</h2>
+
+            <!-- Обновить бренд -->
+            <div x-show="operation === 'update_brand'">
+                <label for="value_brand" class="block text-sm font-medium text-gray-700 mb-2">
+                    Новый бренд
+                </label>
+                <input type="text"
+                       name="value"
+                       id="value_brand"
+                       placeholder="Введите название бренда"
+                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                <p class="mt-2 text-sm text-gray-600">
+                    Этот бренд будет установлен для всех {{ products|length }} выбранных товаров
+                </p>
+            </div>
+
+            <!-- Добавить к описанию -->
+            <div x-show="operation === 'append_description'">
+                <label for="value_append" class="block text-sm font-medium text-gray-700 mb-2">
+                    Текст для добавления
+                </label>
+                <textarea name="value"
+                          id="value_append"
+                          rows="4"
+                          placeholder="Введите текст, который будет добавлен в конец описания каждого товара"
+                          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                <p class="mt-2 text-sm text-gray-600">
+                    Текст будет добавлен в конец существующего описания всех выбранных товаров
+                </p>
+            </div>
+
+            <!-- Заменить описание -->
+            <div x-show="operation === 'replace_description'">
+                <label for="value_replace" class="block text-sm font-medium text-gray-700 mb-2">
+                    Новое описание
+                </label>
+                <textarea name="value"
+                          id="value_replace"
+                          rows="6"
+                          placeholder="Введите новое описание для всех товаров"
+                          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                <p class="mt-2 text-sm text-gray-600">
+                    Описание будет полностью заменено для всех выбранных товаров
+                </p>
+                <div class="mt-4 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                    <div class="flex items-start">
+                        <svg class="h-5 w-5 text-yellow-400 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                        </svg>
+                        <div class="ml-3">
+                            <p class="text-sm text-yellow-700">
+                                Внимание! Старое описание будет полностью удалено.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Обновить характеристику -->
+            <div x-show="operation === 'update_characteristic'">
+                <div class="space-y-4">
+                    <!-- Информация о категории -->
+                    <div x-show="productCategory" class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div class="flex items-center">
+                            <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <span class="text-sm text-blue-700">
+                                Категория выбранных товаров: <strong x-text="productCategory"></strong>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Предупреждение если категория не указана -->
+                    <div x-show="!productCategory" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                        <div class="flex items-start">
+                            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="ml-3">
+                                <h3 class="text-sm font-medium text-yellow-800">Категория товаров не определена</h3>
+                                <div class="mt-2 text-sm text-yellow-700">
+                                    <p>Для работы с характеристиками необходимо:</p>
+                                    <ol class="list-decimal ml-5 mt-2 space-y-1">
+                                        <li>Перейти в раздел <a href="{{ url_for('products_list') }}" class="underline font-medium">Товары</a></li>
+                                        <li>Нажать кнопку "Синхронизировать с WB"</li>
+                                        <li>Дождаться завершения синхронизации</li>
+                                    </ol>
+                                    <p class="mt-2">После синхронизации категории будут загружены из Wildberries API.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Выбор характеристики -->
+                    <div>
+                        <label for="char_select" class="block text-sm font-medium text-gray-700 mb-2">
+                            Характеристика
+                            <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
+                        </label>
+                        <select x-model="selectedChar"
+                                @change="if(selectedChar) { document.getElementById('char_id').value = selectedChar.id }"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                :disabled="loading || characteristics.length === 0">
+                            <option value="">-- Выберите характеристику --</option>
+                            <template x-for="char in characteristics" :key="char.id">
+                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                            </template>
+                        </select>
+                        <input type="hidden" name="char_id" id="char_id">
+
+                        <!-- Ошибка загрузки -->
+                        <div x-show="loadError" class="mt-2 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                            <div class="flex items-start">
+                                <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                </svg>
+                                <div class="ml-3">
+                                    <p class="text-sm text-yellow-700" x-text="loadError"></p>
+                                    <p class="mt-2 text-xs text-yellow-600">
+                                        Вы можете использовать другие операции массового редактирования (бренд, описание).
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ввод значения -->
+                    <div x-show="selectedChar">
+                        <label for="value_char" class="block text-sm font-medium text-gray-700 mb-2">
+                            Значение
+                            <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
+                            <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
+                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                            </span>
+                        </label>
+
+                        <!-- Если есть словарь значений - показываем выпадающий список -->
+                        <template x-if="selectedChar && selectedChar.values && selectedChar.values.length > 0">
+                            <div>
+                                <!-- Для множественных значений -->
+                                <template x-if="selectedChar && selectedChar.max_count && selectedChar.max_count > 1">
+                                    <div class="space-y-2">
+                                        <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
+                                            <template x-for="val in selectedChar.values" :key="val.id">
+                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                                                    <input type="checkbox"
+                                                           :value="val.value"
+                                                           @change="updateMultiValue()"
+                                                           class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                                    <span x-text="val.value" class="text-sm"></span>
+                                                </label>
+                                            </template>
+                                        </div>
+                                        <input type="hidden" name="value" id="value_char">
+                                    </div>
+                                </template>
+
+                                <!-- Для одиночных значений -->
+                                <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
+                                    <select name="value"
+                                            id="value_char"
+                                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                        <option value="">-- Выберите значение --</option>
+                                        <template x-for="val in selectedChar.values" :key="val.id">
+                                            <option :value="val.value" x-text="val.value"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Если нет словаря - свободный ввод -->
+                        <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
+                            <input type="text"
+                                   name="value"
+                                   id="value_char_manual"
+                                   placeholder="Введите значение характеристики"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                function updateMultiValue() {
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+                    const values = Array.from(checkboxes).map(cb => cb.value);
+                    document.getElementById('value_char').value = values.join(', ');
+                }
+            </script>
+
+            <!-- Добавить характеристику -->
+            <div x-show="operation === 'add_characteristic'">
+                <div class="space-y-4">
+                    <!-- Информация о категории -->
+                    <div x-show="productCategory" class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div class="flex items-center">
+                            <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <span class="text-sm text-blue-700">
+                                Категория выбранных товаров: <strong x-text="productCategory"></strong>
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Предупреждение если категория не указана -->
+                    <div x-show="!productCategory" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                        <div class="flex items-start">
+                            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="ml-3">
+                                <h3 class="text-sm font-medium text-yellow-800">Категория товаров не определена</h3>
+                                <div class="mt-2 text-sm text-yellow-700">
+                                    <p>Для работы с характеристиками необходимо:</p>
+                                    <ol class="list-decimal ml-5 mt-2 space-y-1">
+                                        <li>Перейти в раздел <a href="{{ url_for('products_list') }}" class="underline font-medium">Товары</a></li>
+                                        <li>Нажать кнопку "Синхронизировать с WB"</li>
+                                        <li>Дождаться завершения синхронизации</li>
+                                    </ol>
+                                    <p class="mt-2">После синхронизации категории будут загружены из Wildberries API.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Выбор характеристики -->
+                    <div>
+                        <label for="char_select_add" class="block text-sm font-medium text-gray-700 mb-2">
+                            Характеристика
+                            <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
+                        </label>
+                        <select x-model="selectedChar"
+                                @change="if(selectedChar) { document.getElementById('char_id_add').value = selectedChar.id }"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                :disabled="loading || characteristics.length === 0">
+                            <option value="">-- Выберите характеристику --</option>
+                            <template x-for="char in characteristics" :key="char.id">
+                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                            </template>
+                        </select>
+                        <input type="hidden" name="char_id" id="char_id_add">
+
+                        <!-- Ошибка загрузки -->
+                        <div x-show="loadError" class="mt-2 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                            <div class="flex items-start">
+                                <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                                </svg>
+                                <div class="ml-3">
+                                    <p class="text-sm text-yellow-700" x-text="loadError"></p>
+                                    <p class="mt-2 text-xs text-yellow-600">
+                                        Вы можете использовать другие операции массового редактирования (бренд, описание).
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ввод значения -->
+                    <div x-show="selectedChar">
+                        <label for="value_char_add" class="block text-sm font-medium text-gray-700 mb-2">
+                            Значение
+                            <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
+                            <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
+                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                            </span>
+                        </label>
+
+                        <!-- Если есть словарь значений - показываем выпадающий список -->
+                        <template x-if="selectedChar && selectedChar.values && selectedChar.values.length > 0">
+                            <div>
+                                <!-- Для множественных значений -->
+                                <template x-if="selectedChar && selectedChar.max_count && selectedChar.max_count > 1">
+                                    <div class="space-y-2">
+                                        <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
+                                            <template x-for="val in selectedChar.values" :key="val.id">
+                                                <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                                                    <input type="checkbox"
+                                                           :value="val.value"
+                                                           @change="updateMultiValueAdd()"
+                                                           class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                                    <span x-text="val.value" class="text-sm"></span>
+                                                </label>
+                                            </template>
+                                        </div>
+                                        <input type="hidden" name="value" id="value_char_add">
+                                    </div>
+                                </template>
+
+                                <!-- Для одиночных значений -->
+                                <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
+                                    <select name="value"
+                                            id="value_char_add_select"
+                                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                        <option value="">-- Выберите значение --</option>
+                                        <template x-for="val in selectedChar.values" :key="val.id">
+                                            <option :value="val.value" x-text="val.value"></option>
+                                        </template>
+                                    </select>
+                                </template>
+                            </div>
+                        </template>
+
+                        <!-- Если нет словаря - свободный ввод -->
+                        <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
+                            <input type="text"
+                                   name="value"
+                                   id="value_char_add_manual"
+                                   placeholder="Введите значение характеристики"
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        </template>
+                    </div>
+                </div>
+
+                <p class="mt-2 text-sm text-gray-600">
+                    Характеристика будет добавлена только к товарам, у которых её ещё нет
+                </p>
+            </div>
+
+            <script>
+                function updateMultiValueAdd() {
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+                    const values = Array.from(checkboxes).map(cb => cb.value);
+                    document.getElementById('value_char_add').value = values.join(', ');
+                }
+            </script>
+        </div>
+
+        <!-- Кнопки действий -->
+        <div x-show="operation" class="flex items-center justify-between pt-6 border-t border-gray-200">
+            <a href="{{ url_for('products_list') }}"
+               class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition">
+                Отмена
+            </a>
+
+            <button type="submit"
+                    class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                Применить к {{ products|length }} товарам
+            </button>
+        </div>
+
+        <!-- Скрытые поля с ID товаров -->
+        {% for product in products %}
+        <input type="hidden" name="product_ids" value="{{ product.id }}">
+        {% endfor %}
+    </form>
+
+    <!-- Предупреждение -->
+    <div class="mt-8 bg-yellow-50 rounded-lg border border-yellow-200 p-4">
+        <div class="flex items-start">
+            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+            </svg>
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-yellow-800">Важная информация</h3>
+                <div class="mt-2 text-sm text-yellow-700 space-y-2">
+                    <p>• Изменения будут отправлены в Wildberries API для каждого товара</p>
+                    <p>• Процесс может занять время в зависимости от количества товаров</p>
+                    <p>• Модерация изменений на стороне WB может занять от нескольких минут до нескольких часов</p>
+                    <p>• Некоторые товары могут не обновиться из-за ограничений API или категории</p>
+                    <p>• Рекомендуется начать с небольшого количества товаров для проверки</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    [x-cloak] { display: none !important; }
+</style>
+{% endblock %}

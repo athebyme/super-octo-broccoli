@@ -20,30 +20,55 @@
         <div class="mt-4 flex items-center gap-4">
             <a href="{{ url_for('reports') }}"
                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                ����� �����
+                Перейти к отчётам
             </a>
             {% if latest_filename %}
             <p class="text-xs text-gray-500">
-                ��������� ����: <span class="font-medium">{{ latest_filename }}</span>
+                Последний файл: <span class="font-medium">{{ latest_filename }}</span>
             </p>
             {% endif %}
         </div>
     </div>
 
-    <!-- Статистика (заглушка для будущего функционала) -->
+    <!-- Статус API -->
+    {% if current_user.seller %}
+    {% if not current_user.seller.has_valid_api_key() %}
+    <div class="mb-6 bg-yellow-50 border-l-4 border-yellow-400 p-4">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm text-yellow-700">
+                    <strong>API ключ не настроен.</strong> Настройте API ключ для автоматической синхронизации данных с Wildberries.
+                    <a href="{{ url_for('api_settings') }}" class="font-medium underline hover:text-yellow-600">
+                        Настроить сейчас →
+                    </a>
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Статистика отчетов -->
+    <div class="mb-4">
+        <h2 class="text-xl font-semibold text-gray-900">Отчеты и прибыль</h2>
+    </div>
     <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mb-8">
         <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
             <div class="p-6">
                 <div class="flex items-center">
                     <div class="flex-shrink-0 bg-indigo-500 rounded-md p-3">
                         <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                     </div>
                     <div class="ml-5 w-0 flex-1">
                         <dl>
                             <dt class="text-sm font-medium text-gray-500 truncate">
-                                Отчеты
+                                Начислено ВБ
                             </dt>
                             <dd class="text-lg font-semibold text-gray-900">
                                 {{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '-' }}
@@ -59,7 +84,7 @@
                 <div class="flex items-center">
                     <div class="flex-shrink-0 bg-green-500 rounded-md p-3">
                         <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
                         </svg>
                     </div>
                     <div class="ml-5 w-0 flex-1">
@@ -79,15 +104,15 @@
         <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
             <div class="p-6">
                 <div class="flex items-center">
-                    <div class="flex-shrink-0 bg-yellow-500 rounded-md p-3">
+                    <div class="flex-shrink-0 bg-blue-500 rounded-md p-3">
                         <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
                         </svg>
                     </div>
                     <div class="ml-5 w-0 flex-1">
                         <dl>
                             <dt class="text-sm font-medium text-gray-500 truncate">
-                                Товары
+                                Маржа
                             </dt>
                             <dd class="text-lg font-semibold text-gray-900">
                                 {{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '-' }}
@@ -99,37 +124,206 @@
         </div>
     </div>
 
-    <!-- Информационный блок -->
+    <!-- Статистика API -->
+    <div class="mb-4">
+        <h2 class="text-xl font-semibold text-gray-900">API Wildberries</h2>
+    </div>
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mb-8">
+        <a href="{{ url_for('products_list') }}" class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0 bg-indigo-500 rounded-md p-3">
+                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">
+                                Карточки товаров
+                            </dt>
+                            <dd class="text-lg font-semibold text-gray-900">
+                                {{ current_user.seller.products.count() }}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('api_logs') }}" class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0 bg-green-500 rounded-md p-3">
+                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">
+                                API запросов
+                            </dt>
+                            <dd class="text-lg font-semibold text-gray-900">
+                                {{ current_user.seller.api_logs.count() }}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('api_settings') }}" class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0 {% if current_user.seller.has_valid_api_key() %}bg-blue-500{% else %}bg-yellow-500{% endif %} rounded-md p-3">
+                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">
+                                Статус API
+                            </dt>
+                            <dd class="text-lg font-semibold text-gray-900">
+                                {% if current_user.seller.has_valid_api_key() %}
+                                    <span class="text-green-600">Настроен</span>
+                                {% else %}
+                                    <span class="text-yellow-600">Не настроен</span>
+                                {% endif %}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
+    {% endif %}
+
+    <!-- Быстрые действия -->
+    {% if current_user.seller %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">
+            Быстрые действия
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <a href="{{ url_for('products_list') }}"
+               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <div class="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-900">Карточки товаров</p>
+                    <p class="text-xs text-gray-500">Просмотр и управление</p>
+                </div>
+            </a>
+
+            <a href="{{ url_for('api_settings') }}"
+               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <div class="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-900">Настройки API</p>
+                    <p class="text-xs text-gray-500">Wildberries API ключ</p>
+                </div>
+            </a>
+
+            <a href="{{ url_for('api_logs') }}"
+               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <div class="flex-shrink-0 w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-900">Логи API</p>
+                    <p class="text-xs text-gray-500">История запросов</p>
+                </div>
+            </a>
+
+            <a href="{{ url_for('bulk_edit_history') }}"
+               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <div class="flex-shrink-0 w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <div class="ml-4">
+                    <p class="text-sm font-medium text-gray-900">История операций</p>
+                    <p class="text-xs text-gray-500">Массовые изменения</p>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <!-- Информация о компании -->
     <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
         <h2 class="text-lg font-semibold text-gray-900 mb-4">
-            Платформа в разработке
+            Информация о компании
         </h2>
-        <div class="prose max-w-none text-gray-600">
-            <p class="mb-3">
-                Здесь скоро появится функционал для:
-            </p>
-            <ul class="list-disc list-inside space-y-2 ml-4">
-                <li>Просмотра отчетов и аналитики</li>
-                <li>Анализа прибыли с точными ценами из накладных</li>
-                <li>Управления товарами</li>
-                <li>Работы с документами Wildberries</li>
-            </ul>
-
-            {% if current_user.seller %}
-            <div class="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <h3 class="font-semibold text-gray-900 mb-2">Ваша информация</h3>
-                <div class="space-y-1 text-sm">
-                    <p><span class="font-medium">Компания:</span> {{ current_user.seller.company_name }}</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+                <h3 class="text-sm font-medium text-gray-500 mb-2">Основные данные</h3>
+                <div class="space-y-2 text-sm">
+                    <p><span class="font-medium text-gray-700">Компания:</span> {{ current_user.seller.company_name }}</p>
                     {% if current_user.seller.wb_seller_id %}
-                    <p><span class="font-medium">WB ID:</span> {{ current_user.seller.wb_seller_id }}</p>
+                    <p><span class="font-medium text-gray-700">WB ID:</span> {{ current_user.seller.wb_seller_id }}</p>
                     {% endif %}
                     {% if current_user.seller.contact_phone %}
-                    <p><span class="font-medium">Телефон:</span> {{ current_user.seller.contact_phone }}</p>
+                    <p><span class="font-medium text-gray-700">Телефон:</span> {{ current_user.seller.contact_phone }}</p>
+                    {% endif %}
+                    <p><span class="font-medium text-gray-700">Email:</span> {{ current_user.email }}</p>
+                </div>
+            </div>
+            <div>
+                <h3 class="text-sm font-medium text-gray-500 mb-2">Синхронизация</h3>
+                <div class="space-y-2 text-sm">
+                    {% if current_user.seller.api_last_sync %}
+                    <p><span class="font-medium text-gray-700">Последняя синхронизация:</span>
+                       {{ current_user.seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}</p>
+                    {% else %}
+                    <p class="text-gray-500">Синхронизация еще не выполнялась</p>
+                    {% endif %}
+
+                    {% if current_user.seller.api_sync_status %}
+                    <p><span class="font-medium text-gray-700">Статус:</span>
+                        {% if current_user.seller.api_sync_status == 'success' %}
+                            <span class="text-green-600">✓ Успешно</span>
+                        {% elif current_user.seller.api_sync_status == 'syncing' %}
+                            <span class="text-blue-600">⟳ Выполняется...</span>
+                        {% elif current_user.seller.api_sync_status == 'error' %}
+                            <span class="text-red-600">✗ Ошибка</span>
+                        {% else %}
+                            <span class="text-gray-500">{{ current_user.seller.api_sync_status }}</span>
+                        {% endif %}
+                    </p>
                     {% endif %}
                 </div>
             </div>
-            {% endif %}
         </div>
     </div>
+    {% else %}
+    <!-- Для администраторов -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">
+            Административная панель
+        </h2>
+        <p class="text-gray-600 mb-4">
+            Вы вошли как администратор. Используйте админ-панель для управления продавцами.
+        </p>
+        <a href="{{ url_for('admin_panel') }}"
+           class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700">
+            Перейти в админ-панель
+        </a>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}

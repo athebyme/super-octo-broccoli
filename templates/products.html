@@ -1,0 +1,517 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Заголовок и кнопка синхронизации -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Карточки товаров</h1>
+            <p class="text-gray-600 dark:text-gray-400 mt-1">
+                Всего: {{ total_products }} | Активных: {{ active_products }}
+            </p>
+        </div>
+        <div class="flex gap-3">
+            {% if seller.has_valid_api_key() %}
+            <form action="{{ url_for('sync_products') }}" method="POST">
+                <button type="submit"
+                        class="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                        {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
+                    {% if seller.api_sync_status == 'syncing' %}
+                        <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Синхронизация...
+                    {% else %}
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                        Синхронизировать товары
+                    {% endif %}
+                </button>
+            </form>
+            <form action="{{ url_for('sync_warehouse_stocks') }}" method="POST">
+                <button type="submit"
+                        class="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                    </svg>
+                    Синхронизировать остатки
+                </button>
+            </form>
+            {% else %}
+            <a href="{{ url_for('api_settings') }}"
+               class="px-6 py-2.5 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+                Настроить API
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Статус последней синхронизации -->
+    {% if seller.api_last_sync %}
+    <div class="mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg flex items-center gap-3">
+        <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span class="text-sm text-gray-700 dark:text-gray-300">
+            Последняя синхронизация: {{ seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}
+        </span>
+    </div>
+    {% endif %}
+
+    <!-- Поиск и расширенные фильтры -->
+    <div class="mb-6 bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
+        <form method="GET" action="{{ url_for('products_list') }}" class="space-y-4">
+            <!-- Поиск -->
+            <div class="flex gap-4">
+                <div class="flex-1">
+                    <input type="text"
+                           name="search"
+                           value="{{ search }}"
+                           placeholder="Поиск по артикулу, названию, бренду..."
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+                <button type="submit"
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    Применить
+                </button>
+                {% if search or filter_brand or filter_category or filter_has_stock or active_only %}
+                <a href="{{ url_for('products_list') }}"
+                   class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                    Сбросить
+                </a>
+                {% endif %}
+            </div>
+
+            <!-- Расширенные фильтры -->
+            <details class="group" {% if filter_brand or filter_category or filter_has_stock or sort_by != 'updated_at' %}open{% endif %}>
+                <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                    <svg class="w-5 h-5 transform group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                    Расширенные фильтры и сортировка
+                </summary>
+                <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <!-- Фильтр по бренду -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Бренд
+                        </label>
+                        <select name="brand"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все бренды</option>
+                            {% for brand in brands %}
+                            <option value="{{ brand }}" {% if filter_brand == brand %}selected{% endif %}>
+                                {{ brand }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Фильтр по категории -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Категория
+                        </label>
+                        <select name="category"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все категории</option>
+                            {% for category in categories %}
+                            <option value="{{ category }}" {% if filter_category == category %}selected{% endif %}>
+                                {{ category }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Фильтр по наличию -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Наличие
+                        </label>
+                        <select name="has_stock"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все товары</option>
+                            <option value="yes" {% if filter_has_stock == 'yes' %}selected{% endif %}>В наличии</option>
+                            <option value="no" {% if filter_has_stock == 'no' %}selected{% endif %}>Нет в наличии</option>
+                        </select>
+                    </div>
+
+                    <!-- Сортировка -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Сортировка
+                        </label>
+                        <div class="flex gap-2">
+                            <select name="sort"
+                                    class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                <option value="updated_at" {% if sort_by == 'updated_at' %}selected{% endif %}>Дата обновления</option>
+                                <option value="created_at" {% if sort_by == 'created_at' %}selected{% endif %}>Дата создания</option>
+                                <option value="vendor_code" {% if sort_by == 'vendor_code' %}selected{% endif %}>Артикул</option>
+                                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Название</option>
+                                <option value="brand" {% if sort_by == 'brand' %}selected{% endif %}>Бренд</option>
+                                <option value="category" {% if sort_by == 'category' %}selected{% endif %}>Категория</option>
+                                <option value="nm_id" {% if sort_by == 'nm_id' %}selected{% endif %}>NM ID</option>
+                            </select>
+                            <select name="order"
+                                    class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>↓</option>
+                                <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>↑</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Активные товары -->
+                    <div class="flex items-center gap-2 pt-6">
+                        <input type="checkbox"
+                               name="active_only"
+                               id="active_only"
+                               value="1"
+                               {% if active_only %}checked{% endif %}
+                               class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        <label for="active_only" class="text-sm text-gray-700 dark:text-gray-300">
+                            Только активные
+                        </label>
+                    </div>
+                </div>
+            </details>
+        </form>
+    </div>
+
+    <!-- Панель массовых действий -->
+    <div id="bulkActionBar" class="hidden mb-4 bg-blue-50 dark:bg-blue-900 p-4 rounded-lg shadow">
+        <form method="POST" action="{{ url_for('bulk_products_action') }}" id="bulkActionForm" class="flex items-center gap-4">
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Выбрано: <span id="selectedCount">0</span> товаров
+            </span>
+            <select name="action" required
+                    class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                <option value="">Выберите действие...</option>
+                <option value="activate">Активировать</option>
+                <option value="deactivate">Деактивировать</option>
+                <option value="export">Экспорт в CSV</option>
+            </select>
+            <button type="submit"
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                Применить
+            </button>
+            <button type="button" onclick="bulkEdit()"
+                    class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                </svg>
+                Редактировать
+            </button>
+            <button type="button" onclick="clearSelection()"
+                    class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                Отменить выбор
+            </button>
+        </form>
+    </div>
+
+    <!-- Таблица товаров -->
+    {% if products %}
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <thead class="bg-gray-50 dark:bg-gray-900">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)"
+                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Фото
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Артикул / NM ID
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Название
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Бренд
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Тип
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Обновлено
+                        </th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Действия
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                    {% for product in products %}
+                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                        <td class="px-6 py-4">
+                            <input type="checkbox" class="product-checkbox" value="{{ product.id }}" onchange="updateSelection()"
+                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if product.photos_json %}
+                                {% set photo_indices = product.photos_json|safe|from_json %}
+                                {% if photo_indices and photo_indices|length > 0 %}
+                                <img src="{{ wb_photo_url(product.nm_id, photo_indices[0], 'c246x328') }}"
+                                     alt="{{ product.title }}"
+                                     onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2264%22 height=%2264%22%3E%3Crect width=%22100%25%22 height=%22100%25%22 fill=%22%23e5e7eb%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2216%22 fill=%22%239ca3af%22%3ENo photo%3C/text%3E%3C/svg%3E'"
+                                     class="w-16 h-16 object-cover rounded-lg">
+                                {% else %}
+                                <div class="w-16 h-16 bg-gray-200 dark:bg-gray-600 rounded-lg flex items-center justify-center">
+                                    <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                    </svg>
+                                </div>
+                                {% endif %}
+                            {% else %}
+                            <div class="w-16 h-16 bg-gray-200 dark:bg-gray-600 rounded-lg flex items-center justify-center">
+                                <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                </svg>
+                            </div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="text-sm font-medium text-gray-900 dark:text-white">
+                                {{ product.vendor_code }}
+                            </div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400">
+                                NM: {{ product.nm_id }}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="text-sm text-gray-900 dark:text-white max-w-xs truncate" title="{{ product.title }}">
+                                {{ product.title or '—' }}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
+                            {{ product.brand or '—' }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
+                            {{ product.object_name or '—' }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
+                            {% if product.last_sync %}
+                                {{ product.last_sync.strftime('%d.%m.%y %H:%M') }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-right text-sm font-medium">
+                            <a href="{{ url_for('product_detail', product_id=product.id) }}"
+                               class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">
+                                Подробнее
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Пагинация -->
+        {% if pagination.pages > 1 %}
+        <div class="bg-white dark:bg-gray-800 px-4 py-3 border-t border-gray-200 dark:border-gray-700 sm:px-6">
+            <div class="flex items-center justify-between">
+                <div class="flex-1 flex justify-between sm:hidden">
+                    {% if pagination.has_prev %}
+                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        Назад
+                    </a>
+                    {% endif %}
+                    {% if pagination.has_next %}
+                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                       class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        Вперед
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                    <div>
+                        <p class="text-sm text-gray-700 dark:text-gray-300">
+                            Показано с
+                            <span class="font-medium">{{ (pagination.page - 1) * pagination.per_page + 1 }}</span>
+                            по
+                            <span class="font-medium">{{ min(pagination.page * pagination.per_page, pagination.total) }}</span>
+                            из
+                            <span class="font-medium">{{ pagination.total }}</span>
+                            результатов
+                        </p>
+                    </div>
+                    <div>
+                        <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                            {% if pagination.has_prev %}
+                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                               class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
+                                ‹
+                            </a>
+                            {% endif %}
+
+                            {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                                {% if page_num %}
+                                    {% if page_num == pagination.page %}
+                                    <span class="relative inline-flex items-center px-4 py-2 border border-blue-500 bg-blue-50 dark:bg-blue-900 text-sm font-medium text-blue-600 dark:text-blue-200">
+                                        {{ page_num }}
+                                    </span>
+                                    {% else %}
+                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600">
+                                        {{ page_num }}
+                                    </a>
+                                    {% endif %}
+                                {% else %}
+                                <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300">
+                                    ...
+                                </span>
+                                {% endif %}
+                            {% endfor %}
+
+                            {% if pagination.has_next %}
+                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                               class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
+                                ›
+                            </a>
+                            {% endif %}
+                        </nav>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
+        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">Нет товаров</h3>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            {% if search %}
+                По вашему запросу ничего не найдено. Попробуйте изменить параметры поиска.
+            {% else %}
+                Синхронизируйте карточки товаров через API Wildberries.
+            {% endif %}
+        </p>
+        {% if not search and seller.has_valid_api_key() %}
+        <div class="mt-6">
+            <form action="{{ url_for('sync_products') }}" method="POST">
+                <button type="submit"
+                        class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
+                    Синхронизировать товары
+                </button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Фильтр JSON (для Jinja2) -->
+{% if not 'from_json' in filters %}
+<script>
+    // Полифилл для from_json фильтра через JavaScript
+</script>
+{% endif %}
+
+<script>
+// Автообновление при синхронизации
+{% if seller.api_sync_status == 'syncing' %}
+setTimeout(function() {
+    location.reload();
+}, 5000);
+{% endif %}
+
+// === Массовое редактирование ===
+
+function updateSelection() {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    const checked = Array.from(checkboxes).filter(cb => cb.checked);
+    const count = checked.length;
+
+    // Обновляем счетчик
+    document.getElementById('selectedCount').textContent = count;
+
+    // Показываем/скрываем панель действий
+    const bulkBar = document.getElementById('bulkActionBar');
+    if (count > 0) {
+        bulkBar.classList.remove('hidden');
+
+        // Обновляем hidden inputs в форме
+        const form = document.getElementById('bulkActionForm');
+
+        // Удаляем старые hidden inputs
+        form.querySelectorAll('input[name="product_ids"]').forEach(input => input.remove());
+
+        // Добавляем новые
+        checked.forEach(cb => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'product_ids';
+            input.value = cb.value;
+            form.appendChild(input);
+        });
+    } else {
+        bulkBar.classList.add('hidden');
+    }
+
+    // Обновляем состояние "Выбрать все"
+    const selectAll = document.getElementById('selectAll');
+    selectAll.checked = count === checkboxes.length && count > 0;
+    selectAll.indeterminate = count > 0 && count < checkboxes.length;
+}
+
+function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+    });
+    updateSelection();
+}
+
+function clearSelection() {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = false;
+    });
+    document.getElementById('selectAll').checked = false;
+    updateSelection();
+}
+
+function bulkEdit() {
+    const checkboxes = document.querySelectorAll('.product-checkbox:checked');
+    const ids = Array.from(checkboxes).map(cb => cb.value);
+
+    if (ids.length === 0) {
+        alert('Выберите хотя бы один товар для редактирования');
+        return;
+    }
+
+    // Перенаправляем на страницу массового редактирования с ID товаров
+    const url = '{{ url_for("products_bulk_edit") }}?' + ids.map(id => 'ids=' + id).join('&');
+    window.location.href = url;
+}
+
+// Подтверждение перед деактивацией/удалением
+document.getElementById('bulkActionForm').addEventListener('submit', function(e) {
+    const action = this.querySelector('select[name="action"]').value;
+    const count = document.querySelectorAll('.product-checkbox:checked').length;
+
+    if (action === 'deactivate') {
+        if (!confirm(`Вы уверены, что хотите деактивировать ${count} товаров?`)) {
+            e.preventDefault();
+        }
+    } else if (action === 'delete') {
+        if (!confirm(`Вы уверены, что хотите удалить ${count} товаров? Это действие нельзя отменить!`)) {
+            e.preventDefault();
+        }
+    }
+});
+</script>
+{% endblock %}

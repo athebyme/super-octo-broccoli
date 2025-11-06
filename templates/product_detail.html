@@ -1,0 +1,429 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Навигация назад -->
+    <div class="mb-6 flex items-center justify-between">
+        <a href="{{ url_for('products_list') }}"
+           class="inline-flex items-center text-blue-600 hover:text-blue-700 dark:text-blue-400">
+            <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            Назад к списку товаров
+        </a>
+
+        <div class="flex items-center space-x-3">
+            <a href="{{ url_for('product_edit_history', product_id=product.id) }}"
+               class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                История
+            </a>
+            <a href="{{ url_for('product_edit', product_id=product.id) }}"
+               class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                </svg>
+                Редактировать
+            </a>
+        </div>
+    </div>
+
+    <!-- Основная информация -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
+            <!-- Фотографии -->
+            <div>
+                {% if photos and photos|length > 0 %}
+                <div id="photoGallery" class="mb-4">
+                    <img id="mainPhoto"
+                         src="{{ wb_photo_url(product.nm_id, photos[0], 'big') }}"
+                         alt="{{ product.title }}"
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"
+                         class="w-full h-96 object-contain bg-gray-100 dark:bg-gray-700 rounded-lg">
+                    <!-- Fallback если фото не загрузилось -->
+                    <div class="w-full h-96 bg-gray-200 dark:bg-gray-700 rounded-lg items-center justify-center" style="display:none;">
+                        <div class="text-center text-gray-400">
+                            <svg class="w-24 h-24 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                            </svg>
+                            <p>Фото недоступно</p>
+                        </div>
+                    </div>
+                </div>
+                <!-- Миниатюры -->
+                {% if photos|length > 1 %}
+                <div class="grid grid-cols-4 gap-2">
+                    {% for photo_index in photos[:8] %}
+                    {% set photo_url = wb_photo_url(product.nm_id, photo_index, 'c246x328') %}
+                    <img src="{{ photo_url }}"
+                         alt="Фото {{ loop.index }}"
+                         onclick="changeMainPhoto('{{ wb_photo_url(product.nm_id, photo_index, 'big') }}')"
+                         onerror="this.style.opacity='0.3'"
+                         class="w-full h-20 object-cover rounded cursor-pointer hover:opacity-75 transition-opacity">
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="w-full h-96 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+                    <div class="text-center text-gray-400">
+                        <svg class="w-24 h-24 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                        </svg>
+                        <p>Нет фотографий</p>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if product.video_url %}
+                <div class="mt-4">
+                    <video controls class="w-full rounded-lg">
+                        <source src="{{ product.video_url }}" type="video/mp4">
+                        Ваш браузер не поддерживает видео.
+                    </video>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Информация о товаре -->
+            <div>
+                <div class="mb-6">
+                    <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-2">
+                        {{ product.title or 'Без названия' }}
+                    </h1>
+                    {% if product.brand %}
+                    <p class="text-lg text-gray-600 dark:text-gray-400">
+                        {{ product.brand }}
+                    </p>
+                    {% endif %}
+                </div>
+
+                <!-- Основные характеристики -->
+                <div class="space-y-4 mb-6">
+                    <div class="grid grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                        <div>
+                            <span class="text-sm text-gray-600 dark:text-gray-400">Артикул поставщика</span>
+                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.vendor_code }}</p>
+                        </div>
+                        <div>
+                            <span class="text-sm text-gray-600 dark:text-gray-400">Артикул WB</span>
+                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.nm_id }}</p>
+                        </div>
+                        {% if product.imt_id %}
+                        <div>
+                            <span class="text-sm text-gray-600 dark:text-gray-400">IMT ID</span>
+                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.imt_id }}</p>
+                        </div>
+                        {% endif %}
+                        {% if product.object_name %}
+                        <div>
+                            <span class="text-sm text-gray-600 dark:text-gray-400">Тип товара</span>
+                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.object_name }}</p>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Цены -->
+                    {% if product.price or product.discount_price %}
+                    <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg">
+                        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Цены</h3>
+                        <div class="flex items-center gap-4">
+                            {% if product.discount_price %}
+                            <div>
+                                <span class="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                                    {{ "{:,.2f}".format(product.discount_price) }} ₽
+                                </span>
+                                {% if product.price %}
+                                <span class="text-sm text-gray-500 line-through ml-2">
+                                    {{ "{:,.2f}".format(product.price) }} ₽
+                                </span>
+                                {% endif %}
+                            </div>
+                            {% elif product.price %}
+                            <div>
+                                <span class="text-2xl font-bold text-gray-900 dark:text-white">
+                                    {{ "{:,.2f}".format(product.price) }} ₽
+                                </span>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Остатки -->
+                    {% if product.quantity is not none %}
+                    <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Остатки</h3>
+                        <div class="flex items-center gap-2">
+                            {% if product.quantity > 0 %}
+                            <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-lg font-semibold text-gray-900 dark:text-white">
+                                {{ product.quantity }} шт.
+                            </span>
+                            {% else %}
+                            <svg class="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="text-lg font-semibold text-red-600 dark:text-red-400">
+                                Нет в наличии
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Статус -->
+                    <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Статус</h3>
+                        <div class="flex items-center gap-2">
+                            {% if product.is_active %}
+                            <span class="px-3 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-sm font-medium rounded-full">
+                                Активна
+                            </span>
+                            {% else %}
+                            <span class="px-3 py-1 bg-gray-100 dark:bg-gray-600 text-gray-800 dark:text-gray-200 text-sm font-medium rounded-full">
+                                Неактивна
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Метаданные -->
+                <div class="pt-4 border-t border-gray-200 dark:border-gray-600 text-sm text-gray-600 dark:text-gray-400">
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <span>Создано:</span>
+                            <span class="font-medium">{{ product.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        </div>
+                        <div>
+                            <span>Обновлено:</span>
+                            <span class="font-medium">{{ product.updated_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        </div>
+                        {% if product.last_sync %}
+                        <div class="col-span-2">
+                            <span>Последняя синхронизация:</span>
+                            <span class="font-medium">{{ product.last_sync.strftime('%d.%m.%Y %H:%M') }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Размеры и баркоды -->
+        {% if sizes %}
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Размеры и баркоды</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <thead class="bg-gray-50 dark:bg-gray-900">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Размер
+                            </th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Баркод
+                            </th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Артикул WB
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                        {% for size in sizes %}
+                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
+                            <td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
+                                {{ size.techSize or '—' }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
+                                {{ size.skus[0] if size.skus else '—' }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
+                                {{ size.chrtID or '—' }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Описание товара -->
+        {% if product.description %}
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Описание</h2>
+            <div class="prose dark:prose-invert max-w-none">
+                <p class="text-gray-700 dark:text-gray-300 whitespace-pre-line">{{ product.description }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Характеристики товара -->
+        {% if characteristics %}
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Характеристики</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {% for char in characteristics %}
+                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                        {{ (char.name or char.get('Наименование', '—')) | format_char_value }}
+                    </div>
+                    <div class="font-medium text-gray-900 dark:text-white">
+                        {{ (char.value or char.get('Значение', '—')) | format_char_value }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Габариты -->
+        {% if dimensions %}
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Габариты и вес</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {% if dimensions.length %}
+                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Длина</div>
+                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.length }} см</div>
+                </div>
+                {% endif %}
+                {% if dimensions.width %}
+                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Ширина</div>
+                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.width }} см</div>
+                </div>
+                {% endif %}
+                {% if dimensions.height %}
+                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Высота</div>
+                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.height }} см</div>
+                </div>
+                {% endif %}
+                {% if dimensions.weight %}
+                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Вес</div>
+                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.weight }} кг</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Остатки по складам -->
+        {% if warehouse_stocks %}
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Остатки по складам</h2>
+
+            <!-- Общие остатки -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div class="p-4 bg-green-50 dark:bg-green-900 rounded-lg">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Всего доступно</div>
+                    <div class="text-3xl font-bold text-green-600 dark:text-green-400">{{ total_quantity }} шт.</div>
+                </div>
+                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg">
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Полное количество</div>
+                    <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ total_quantity_full }} шт.</div>
+                </div>
+            </div>
+
+            <!-- Таблица остатков по складам -->
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <thead class="bg-gray-50 dark:bg-gray-900">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Склад
+                            </th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Доступно
+                            </th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Полное кол-во
+                            </th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                В пути к клиенту
+                            </th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                В пути от клиента
+                            </th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                                Обновлено
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                        {% for stock in warehouse_stocks %}
+                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
+                            <td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
+                                {{ stock.warehouse_name or 'Склад ' + stock.warehouse_id|string }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
+                                <span class="{% if stock.quantity > 0 %}text-green-600 dark:text-green-400 font-semibold{% else %}text-red-600 dark:text-red-400{% endif %}">
+                                    {{ stock.quantity }}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
+                                {{ stock.quantity_full }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
+                                {{ stock.in_way_to_client or 0 }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
+                                {{ stock.in_way_from_client or 0 }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
+                                {{ stock.updated_at.strftime('%d.%m.%Y %H:%M') if stock.updated_at else '—' }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% elif product %}
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
+            <div class="text-center py-8">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                </svg>
+                <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">Нет данных об остатках</h3>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    Синхронизируйте остатки через кнопку "Синхронизировать остатки" на странице списка товаров.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Действия -->
+        <div class="border-t border-gray-200 dark:border-gray-700 p-6 bg-gray-50 dark:bg-gray-900">
+            <div class="flex gap-4">
+                <a href="https://www.wildberries.ru/catalog/{{ product.nm_id }}/detail.aspx"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                    </svg>
+                    Открыть на WB
+                </a>
+                <a href="{{ url_for('products_list') }}"
+                   class="px-6 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">
+                    Вернуться к списку
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function changeMainPhoto(url) {
+    document.getElementById('mainPhoto').src = url;
+}
+</script>
+{% endblock %}

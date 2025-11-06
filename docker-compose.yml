@@ -8,7 +8,8 @@ services:
       - APP_MODULE=seller_platform:app
       - PORT=${SELLER_PORT:-5001}
       - SECRET_KEY=${SECRET_KEY:-wb-seller-platform-secret-key-change-in-production}
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///seller_platform.db}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/seller_platform.db}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
     ports:
       - "${SELLER_PORT:-5001}:5001"
     volumes:

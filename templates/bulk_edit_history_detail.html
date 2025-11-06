@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Навигация -->
+    <div class="mb-6">
+        <a href="{{ url_for('bulk_edit_history') }}"
+           class="inline-flex items-center text-blue-600 hover:text-blue-700 dark:text-blue-400">
+            <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+            </svg>
+            Назад к истории операций
+        </a>
+    </div>
+
+    <!-- Заголовок -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6 {% if bulk_operation.reverted %}opacity-75{% endif %}">
+        <div class="flex items-start justify-between mb-4">
+            <div class="flex-1">
+                <div class="flex items-center space-x-3 mb-2">
+                    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+                        {{ bulk_operation.description or 'Массовая операция #' + bulk_operation.id|string }}
+                    </h1>
+
+                    <!-- Статус -->
+                    {% if bulk_operation.reverted %}
+                    <span class="px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full">
+                        Откачено
+                    </span>
+                    {% elif bulk_operation.status == 'completed' %}
+                    <span class="px-3 py-1 text-sm bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded-full">
+                        Завершено
+                    </span>
+                    {% elif bulk_operation.status == 'in_progress' %}
+                    <span class="px-3 py-1 text-sm bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded-full">
+                        Выполняется
+                    </span>
+                    {% elif bulk_operation.status == 'failed' %}
+                    <span class="px-3 py-1 text-sm bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 rounded-full">
+                        Ошибка
+                    </span>
+                    {% endif %}
+                </div>
+
+                <p class="text-sm text-gray-600 dark:text-gray-400">
+                    Создано: {{ bulk_operation.created_at.strftime('%d.%m.%Y %H:%M:%S') }}
+                    {% if bulk_operation.completed_at %}
+                        | Завершено: {{ bulk_operation.completed_at.strftime('%d.%m.%Y %H:%M:%S') }}
+                    {% endif %}
+                    {% if bulk_operation.duration_seconds %}
+                        | Длительность: {{ "%.1f"|format(bulk_operation.duration_seconds) }} сек
+                    {% endif %}
+                </p>
+
+                {% if bulk_operation.reverted_at %}
+                <p class="text-sm text-orange-600 dark:text-orange-400 mt-2">
+                    ⚠️ Откачено: {{ bulk_operation.reverted_at.strftime('%d.%m.%Y %H:%M:%S') }}
+                </p>
+                {% endif %}
+            </div>
+
+            {% if bulk_operation.can_revert() %}
+            <form method="POST"
+                  action="{{ url_for('revert_bulk_edit', bulk_id=bulk_operation.id) }}"
+                  onsubmit="return confirm('Вы уверены, что хотите откатить всю операцию? Это откатит изменения для всех {{ bulk_operation.success_count }} товаров.');">
+                <button type="submit"
+                        class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition">
+                    <svg class="w-5 h-5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path>
+                    </svg>
+                    Откатить всю операцию
+                </button>
+            </form>
+            {% endif %}
+        </div>
+
+        <!-- Статистика -->
+        <div class="grid grid-cols-4 gap-4">
+            <div class="bg-gray-50 dark:bg-gray-700 p-4 rounded">
+                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Всего товаров</p>
+                <p class="text-3xl font-bold text-gray-900 dark:text-white">{{ bulk_operation.total_products }}</p>
+            </div>
+            <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded">
+                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Успешно</p>
+                <p class="text-3xl font-bold text-green-700 dark:text-green-300">{{ bulk_operation.success_count }}</p>
+            </div>
+            <div class="bg-red-50 dark:bg-red-900/20 p-4 rounded">
+                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Ошибок</p>
+                <p class="text-3xl font-bold text-red-700 dark:text-red-300">{{ bulk_operation.error_count }}</p>
+            </div>
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded">
+                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Успешность</p>
+                <p class="text-3xl font-bold text-blue-700 dark:text-blue-300">
+                    {% if bulk_operation.total_products > 0 %}
+                        {{ "%.0f"|format((bulk_operation.success_count / bulk_operation.total_products) * 100) }}%
+                    {% else %}
+                        0%
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        <!-- Параметры операции -->
+        {% if bulk_operation.operation_params %}
+        <div class="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded">
+            <h3 class="font-semibold text-gray-900 dark:text-white mb-2">Параметры операции:</h3>
+            <pre class="text-sm text-gray-700 dark:text-gray-300">{{ bulk_operation.operation_params | tojson(indent=2) }}</pre>
+        </div>
+        {% endif %}
+
+        <!-- Ошибки -->
+        {% if bulk_operation.errors_details %}
+        <details class="mt-4">
+            <summary class="cursor-pointer text-sm font-semibold text-red-700 dark:text-red-400 hover:text-red-800">
+                Показать ошибки ({{ bulk_operation.error_count }})
+            </summary>
+            <div class="mt-2 p-4 bg-red-50 dark:bg-red-900/20 rounded text-sm">
+                {% for error in bulk_operation.errors_details %}
+                <p class="text-red-800 dark:text-red-200">• {{ error }}</p>
+                {% endfor %}
+            </div>
+        </details>
+        {% endif %}
+    </div>
+
+    <!-- Список изменений товаров -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
+        <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">
+            Изменённые товары ({{ product_changes|length }})
+        </h2>
+
+        {% if product_changes %}
+        <div class="space-y-3">
+            {% for change in product_changes %}
+            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}">
+                <div class="flex items-start justify-between">
+                    <div class="flex-1">
+                        <div class="flex items-center space-x-2 mb-1">
+                            <h4 class="font-semibold text-gray-900 dark:text-white">
+                                {{ change.product.title if change.product else 'Товар #' + change.product_id|string }}
+                            </h4>
+                            {% if change.reverted %}
+                            <span class="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
+                                Откачено
+                            </span>
+                            {% endif %}
+                            {% if change.wb_synced %}
+                            <span class="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
+                                Синхронизировано
+                            </span>
+                            {% endif %}
+                        </div>
+
+                        <p class="text-sm text-gray-600 dark:text-gray-400">
+                            {% if change.product %}
+                                Артикул: {{ change.product.vendor_code }} | NM ID: {{ change.product.nm_id }}
+                            {% endif %}
+                        </p>
+
+                        <!-- Измененные поля -->
+                        {% if change.changed_fields %}
+                        <div class="mt-2 flex flex-wrap gap-2">
+                            {% for field in change.changed_fields %}
+                            <span class="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded">
+                                {% if field == 'vendor_code' %}Артикул
+                                {% elif field == 'title' %}Название
+                                {% elif field == 'description' %}Описание
+                                {% elif field == 'brand' %}Бренд
+                                {% elif field == 'characteristics' %}Характеристики
+                                {% else %}{{ field }}
+                                {% endif %}
+                            </span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <div class="flex items-center space-x-2">
+                        {% if change.product %}
+                        <a href="{{ url_for('product_edit_history', product_id=change.product_id) }}"
+                           class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 text-sm">
+                            История →
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-gray-600 dark:text-gray-400 text-center py-8">
+            Нет информации об изменённых товарах
+        </p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
