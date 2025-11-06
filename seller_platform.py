@@ -2469,6 +2469,9 @@ def api_characteristics_by_category(object_name):
     if not current_user.seller.has_valid_api_key():
         return {'error': 'WB API key not configured'}, 400
 
+    app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
+
+    # Сначала попробуем получить из WB API
     try:
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
             result = client.get_card_characteristics_config(object_name)
@@ -2495,6 +2498,8 @@ def api_characteristics_by_category(object_name):
 
                 characteristics.append(char)
 
+            app.logger.info(f"✅ Loaded {len(characteristics)} characteristics for '{object_name}'")
+
             return {
                 'object_name': object_name,
                 'characteristics': characteristics,
@@ -2502,10 +2507,19 @@ def api_characteristics_by_category(object_name):
             }
 
     except WBAPIException as e:
-        app.logger.error(f"WB API error getting characteristics for {object_name}: {e}")
+        app.logger.error(f"❌ WB API error getting characteristics for '{object_name}': {e}")
+
+        # Если endpoint не найден (404), предлагаем альтернативу
+        if '404' in str(e):
+            return {
+                'error': 'WB API endpoint для получения характеристик недоступен (404). Этот endpoint может не поддерживаться для данной категории товаров или был изменён в новой версии API.',
+                'suggestion': 'Вы можете редактировать товары по одному или использовать другие операции массового редактирования (бренд, описание).',
+                'category': object_name
+            }, 404
+
         return {'error': str(e)}, 400
     except Exception as e:
-        app.logger.exception(f"Error getting characteristics for {object_name}: {e}")
+        app.logger.exception(f"💥 Unexpected error getting characteristics for '{object_name}': {e}")
         return {'error': 'Internal server error'}, 500
 
 
