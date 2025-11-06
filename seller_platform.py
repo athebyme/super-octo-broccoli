@@ -1447,11 +1447,15 @@ def product_edit(product_id):
 
     if request.method == 'POST':
         try:
+            app.logger.info(f"📝 Starting edit for product {product.id} (nmID={product.nm_id}, vendor_code={product.vendor_code})")
+
             # Получаем данные из формы
             vendor_code = request.form.get('vendor_code', '').strip()
             title = request.form.get('title', '').strip()
             description = request.form.get('description', '').strip()
             brand = request.form.get('brand', '').strip()
+
+            app.logger.debug(f"Form data: vendor_code={vendor_code}, title={title[:50] if title else 'N/A'}, brand={brand}")
 
             # Собираем характеристики из формы
             updated_characteristics = []
@@ -1466,6 +1470,8 @@ def product_edit(product_id):
                             'name': char_name,
                             'value': new_value
                         })
+
+            app.logger.debug(f"Updated characteristics count: {len(updated_characteristics)}")
 
             # Обновляем карточку через WB API
             with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
@@ -1487,8 +1493,16 @@ def product_edit(product_id):
                     updates['characteristics'] = updated_characteristics
 
                 if updates:
+                    app.logger.info(f"🔧 Sending updates to WB API: {list(updates.keys())}")
+
                     # Отправляем обновление в WB
-                    result = client.update_card(product.nm_id, updates)
+                    try:
+                        result = client.update_card(product.nm_id, updates)
+                        app.logger.info(f"✅ WB API response: {result}")
+                    except Exception as api_error:
+                        app.logger.error(f"❌ WB API error for nmID={product.nm_id}: {str(api_error)}")
+                        app.logger.error(f"Request body: nmID={product.nm_id}, updates={updates}")
+                        raise
 
                     # Обновляем локальную БД
                     if vendor_code:
@@ -1505,18 +1519,22 @@ def product_edit(product_id):
                     product.last_sync = datetime.utcnow()
                     db.session.commit()
 
+                    app.logger.info(f"✅ Product {product.id} updated successfully in database")
                     flash('Карточка успешно обновлена на Wildberries', 'success')
                     return redirect(url_for('product_detail', product_id=product.id))
                 else:
+                    app.logger.info(f"ℹ️ No changes detected for product {product.id}")
                     flash('Нет изменений для сохранения', 'info')
 
         except WBAuthException as e:
-            flash(f'Ошибка авторизации: {str(e)}', 'danger')
+            app.logger.error(f"❌ Auth error: {str(e)}")
+            flash(f'Ошибка авторизации WB API: {str(e)}. Проверьте API ключ в настройках.', 'danger')
         except WBAPIException as e:
-            flash(f'Ошибка WB API: {str(e)}', 'danger')
+            app.logger.error(f"❌ WB API error: {str(e)}")
+            flash(f'Ошибка WB API: {str(e)}. Возможно, некоторые поля нельзя изменить через API или требуется полная карточка.', 'danger')
         except Exception as e:
-            app.logger.exception(f"Ошибка при обновлении карточки: {e}")
-            flash(f'Ошибка при обновлении: {str(e)}', 'danger')
+            app.logger.exception(f"❌ Unexpected error editing product {product.id}: {e}")
+            flash(f'Неожиданная ошибка при обновлении: {str(e)}. Проверьте логи для деталей.', 'danger')
 
     return render_template(
         'product_edit.html',

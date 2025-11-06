@@ -537,7 +537,7 @@ class WildberriesAPIClient:
             updates: Словарь с обновляемыми полями
                 Возможные поля:
                 - vendorCode: артикул продавца
-                - title: название товара
+                - title: название товара (subjectName)
                 - description: описание
                 - brand: бренд
                 - characteristics: список характеристик
@@ -545,17 +545,34 @@ class WildberriesAPIClient:
 
         Returns:
             Результат обновления
+
+        Note:
+            WB API v2 требует отправлять полную карточку, а не только изменения.
+            Поэтому этот метод может не работать для всех полей.
+            Для некоторых операций нужно использовать специальные эндпоинты.
         """
-        endpoint = "/content/v2/card/update"
+        # ВАЖНО: WB Content API v2 использует другие эндпоинты для редактирования
+        # /content/v2/cards/update - основной эндпоинт обновления
+        endpoint = "/content/v2/cards/update"
+
+        logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
+        logger.debug(f"Update data: {updates}")
 
         # Формируем тело запроса
-        body = {
+        # WB API требует массив карточек
+        body = [{
             "nmID": nm_id,
             **updates
-        }
+        }]
 
-        response = self._make_request('POST', 'content', endpoint, json=body)
-        return response.json()
+        try:
+            response = self._make_request('POST', 'content', endpoint, json=body)
+            result = response.json()
+            logger.info(f"✅ Card nmID={nm_id} update response: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to update card nmID={nm_id}: {str(e)}")
+            raise
 
     def update_card_characteristics(
         self,
@@ -596,6 +613,36 @@ class WildberriesAPIClient:
         response = self._make_request('POST', 'content', endpoint, json=body)
         return response.json()
 
+    def get_card_by_nm_id(
+        self,
+        nm_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Получить полную карточку товара по nmID
+
+        Args:
+            nm_id: Артикул WB (nmID)
+
+        Returns:
+            Полная карточка товара или None если не найдена
+        """
+        logger.info(f"🔍 Getting card by nmID={nm_id}")
+
+        try:
+            data = self.get_cards_list(limit=1, filter_nm_id=nm_id)
+            cards = data.get('cards', [])
+
+            if not cards:
+                logger.warning(f"⚠️ Card nmID={nm_id} not found in WB API")
+                return None
+
+            card = cards[0]
+            logger.info(f"✅ Card nmID={nm_id} found: {card.get('vendorCode', 'N/A')}")
+            return card
+        except Exception as e:
+            logger.error(f"❌ Failed to get card nmID={nm_id}: {str(e)}")
+            raise
+
     def get_card_characteristics_config(
         self,
         object_name: str
@@ -611,12 +658,20 @@ class WildberriesAPIClient:
         """
         endpoint = "/content/v2/object/charcs/list/filter"
 
+        logger.info(f"🔍 Getting characteristics config for object: {object_name}")
+
         body = {
             "name": object_name
         }
 
-        response = self._make_request('POST', 'content', endpoint, json=body)
-        return response.json()
+        try:
+            response = self._make_request('POST', 'content', endpoint, json=body)
+            result = response.json()
+            logger.info(f"✅ Characteristics config loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get characteristics config: {str(e)}")
+            raise
 
     # ==================== УТИЛИТЫ ====================
 
