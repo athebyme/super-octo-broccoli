@@ -61,6 +61,11 @@
         </div>
     </div>
 
+    <!-- Данные товаров для Alpine.js -->
+    <script type="application/json" id="products-data">
+        {{ products | tojson }}
+    </script>
+
     <!-- Форма массового редактирования -->
     <form method="POST" x-data="{
         operation: '{{ request.form.get('operation', '') }}',
@@ -71,7 +76,20 @@
         selectedValuesAdd: [],
         loading: false,
         loadError: null,
-        products: {{ products | tojson | safe }},
+        products: [],
+
+        init() {
+            // Загружаем данные товаров из JSON
+            const productsDataEl = document.getElementById('products-data');
+            if (productsDataEl) {
+                try {
+                    this.products = JSON.parse(productsDataEl.textContent);
+                } catch (e) {
+                    console.error('Failed to parse products data:', e);
+                    this.products = [];
+                }
+            }
+        },
 
         getCurrentValuesForChar(charId) {
             const values = [];
