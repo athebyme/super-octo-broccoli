@@ -304,7 +304,29 @@ class CardEditHistory(db.Model):
         for field in self.changed_fields:
             before = self.snapshot_before.get(field) if self.snapshot_before else None
             after = self.snapshot_after.get(field) if self.snapshot_after else None
-            summary[field] = {'before': before, 'after': after}
+
+            # Форматируем для отображения
+            if isinstance(before, list) and field == 'characteristics':
+                # Для характеристик показываем количество
+                before_display = f"{len(before)} характеристик" if before else None
+            elif isinstance(before, list):
+                before_display = str(before) if before else None
+            else:
+                before_display = before
+
+            if isinstance(after, list) and field == 'characteristics':
+                after_display = f"{len(after)} характеристик" if after else None
+            elif isinstance(after, list):
+                after_display = str(after) if after else None
+            else:
+                after_display = after
+
+            summary[field] = {
+                'before': before_display,
+                'after': after_display,
+                'before_raw': before,
+                'after_raw': after
+            }
 
         return summary
 

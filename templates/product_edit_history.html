@@ -153,40 +153,68 @@
                     <div class="mt-4 space-y-4">
                         {% if history.snapshot_before and history.snapshot_after %}
                             {% set changes = history.get_changes_summary() %}
-                            {% for field, values in changes.items() %}
-                            <div class="border-l-4 border-blue-500 pl-4">
-                                <h5 class="font-semibold text-gray-900 dark:text-white mb-2">
-                                    {% if field == 'vendor_code' %}
-                                        Артикул
-                                    {% elif field == 'title' %}
-                                        Название
-                                    {% elif field == 'description' %}
-                                        Описание
-                                    {% elif field == 'brand' %}
-                                        Бренд
-                                    {% else %}
-                                        {{ field }}
-                                    {% endif %}
-                                </h5>
-                                <div class="grid grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <p class="text-gray-600 dark:text-gray-400 mb-1">Было:</p>
-                                        <p class="bg-red-50 dark:bg-red-900/20 p-2 rounded text-gray-900 dark:text-gray-100">
-                                            {{ values.old if values.old else '(пусто)' }}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p class="text-gray-600 dark:text-gray-400 mb-1">Стало:</p>
-                                        <p class="bg-green-50 dark:bg-green-900/20 p-2 rounded text-gray-900 dark:text-gray-100">
-                                            {{ values.new if values.new else '(пусто)' }}
-                                        </p>
+                            {% if changes %}
+                                {% for field, values in changes.items() %}
+                                <div class="border-l-4 border-blue-500 pl-4">
+                                    <h5 class="font-semibold text-gray-900 dark:text-white mb-2">
+                                        {% if field == 'vendor_code' %}
+                                            Артикул
+                                        {% elif field == 'title' %}
+                                            Название
+                                        {% elif field == 'description' %}
+                                            Описание
+                                        {% elif field == 'brand' %}
+                                            Бренд
+                                        {% elif field == 'characteristics' %}
+                                            Характеристики
+                                        {% else %}
+                                            {{ field }}
+                                        {% endif %}
+                                    </h5>
+                                    <div class="grid grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <p class="text-gray-600 dark:text-gray-400 mb-1">Было:</p>
+                                            <div class="bg-red-50 dark:bg-red-900/20 p-2 rounded text-gray-900 dark:text-gray-100 break-words">
+                                                {% if values.before %}
+                                                    {{ values.before }}
+                                                {% else %}
+                                                    <span class="text-gray-400 italic">(пусто)</span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <p class="text-gray-600 dark:text-gray-400 mb-1">Стало:</p>
+                                            <div class="bg-green-50 dark:bg-green-900/20 p-2 rounded text-gray-900 dark:text-gray-100 break-words">
+                                                {% if values.after %}
+                                                    {{ values.after }}
+                                                {% else %}
+                                                    <span class="text-gray-400 italic">(пусто)</span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                            {% endfor %}
+                                {% endfor %}
+                            {% else %}
+                                <p class="text-gray-600 dark:text-gray-400 text-sm">Нет данных об изменениях</p>
+                            {% endif %}
                         {% else %}
-                            <p class="text-gray-600 dark:text-gray-400 text-sm">Детали недоступны</p>
+                            <p class="text-gray-600 dark:text-gray-400 text-sm">Детали недоступны (снимки не сохранены)</p>
                         {% endif %}
+                    </div>
+                </details>
+
+                <!-- Debug: Сырые данные (скрыто по умолчанию) -->
+                <details class="cursor-pointer mt-4">
+                    <summary class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300">
+                        [Debug] Показать сырые данные
+                    </summary>
+                    <div class="mt-2 p-3 bg-gray-100 dark:bg-gray-900 rounded text-xs font-mono overflow-auto max-h-60">
+                        <p><strong>changed_fields:</strong> {{ history.changed_fields }}</p>
+                        <p class="mt-2"><strong>snapshot_before:</strong></p>
+                        <pre class="whitespace-pre-wrap">{{ history.snapshot_before | tojson(indent=2) }}</pre>
+                        <p class="mt-2"><strong>snapshot_after:</strong></p>
+                        <pre class="whitespace-pre-wrap">{{ history.snapshot_after | tojson(indent=2) }}</pre>
                     </div>
                 </details>
 
