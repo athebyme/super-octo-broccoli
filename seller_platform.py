@@ -2653,6 +2653,53 @@ def create_admin():
     print(f'Администратор {username} успешно создан')
 
 
+@app.cli.command()
+def apply_migrations():
+    """Применить миграции базы данных"""
+    import sqlite3
+    from pathlib import Path
+
+    print("🔄 Применение миграций...")
+
+    # Получаем путь к БД из конфигурации
+    db_url = app.config['SQLALCHEMY_DATABASE_URI']
+    if db_url.startswith('sqlite:///'):
+        db_path = db_url.replace('sqlite:///', '')
+    else:
+        print(f"❌ Неподдерживаемый тип БД: {db_url}")
+        return
+
+    if not Path(db_path).exists():
+        print(f"❌ База данных не найдена: {db_path}")
+        return
+
+    print(f"📂 База данных: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        # Проверяем существование subject_id
+        cursor.execute("PRAGMA table_info(products)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if 'subject_id' in columns:
+            print("  ✓ Колонка subject_id уже существует")
+        else:
+            print("  ➕ Добавление колонки subject_id...")
+            cursor.execute("ALTER TABLE products ADD COLUMN subject_id INTEGER")
+            conn.commit()
+            print("  ✅ Колонка subject_id добавлена")
+
+        print("\n✅ Миграции успешно применены!")
+
+    except Exception as e:
+        print(f"❌ Ошибка при применении миграций: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

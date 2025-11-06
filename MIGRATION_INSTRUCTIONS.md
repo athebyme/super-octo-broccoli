@@ -11,7 +11,24 @@ sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such column: prod
 
 ## Решение
 
-### Вариант 1: Автоматическое применение миграции (рекомендуется)
+### Вариант 1: Flask CLI команда (рекомендуется для Docker)
+
+Самый простой способ - использовать Flask CLI команду:
+
+```bash
+# Внутри Docker контейнера
+docker exec -it seller-platform flask apply-migrations
+
+# Или локально
+flask --app seller_platform apply-migrations
+```
+
+Эта команда автоматически:
+- Определит путь к базе данных из конфигурации приложения
+- Проверит существует ли колонка `subject_id`
+- Добавит колонку если её нет
+
+### Вариант 2: Автоматический скрипт (локальная разработка)
 
 ```bash
 python3 apply_migrations.py
@@ -22,20 +39,17 @@ python3 apply_migrations.py
 - Проверит существует ли колонка `subject_id`
 - Добавит колонку если её нет
 
-### Вариант 2: Применение миграции в Docker контейнере
+### Вариант 3: Прямой скрипт миграции
 
 ```bash
 # Запустить миграцию внутри контейнера
-docker exec -it seller-platform python3 /app/apply_migrations.py
-```
+docker exec -it seller-platform python3 /app/migrate_add_subject_id.py /app/data/seller_platform.db
 
-### Вариант 3: Ручное применение миграции
-
-```bash
+# Или локально
 python3 migrate_add_subject_id.py data/seller_platform.db
 ```
 
-### Вариант 4: Пересоздание базы данных (удаляет все данные!)
+### Вариант 5: Пересоздание базы данных (удаляет все данные!)
 
 **⚠️ ВНИМАНИЕ: Это удалит все данные в базе!**
 
