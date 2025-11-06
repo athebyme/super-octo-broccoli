@@ -59,26 +59,14 @@
     <!-- Форма массового редактирования -->
     <form method="POST" x-data="{
         operation: '{{ request.form.get('operation', '') }}',
-        categories: [],
-        selectedCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+        productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
         characteristics: [],
         selectedChar: null,
         loading: false,
 
-        async loadCategories() {
-            try {
-                const response = await fetch('/api/characteristics/categories');
-                const data = await response.json();
-                this.categories = data.categories || [];
-                console.log('Categories loaded:', this.categories);
-            } catch (e) {
-                console.error('Failed to load categories:', e);
-            }
-        },
-
         async loadCharacteristics() {
-            if (!this.selectedCategory) {
-                console.log('No category selected');
+            if (!this.productCategory) {
+                console.log('No category for products');
                 return;
             }
 
@@ -87,17 +75,18 @@
             this.selectedChar = null;
 
             try {
-                const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
+                console.log('Loading characteristics for category:', this.productCategory);
+                const response = await fetch(`/api/characteristics/${encodeURIComponent(this.productCategory)}`);
                 const data = await response.json();
                 this.characteristics = data.characteristics || [];
-                console.log('Characteristics loaded:', this.characteristics);
+                console.log('Characteristics loaded:', this.characteristics.length, 'items');
             } catch (e) {
                 console.error('Failed to load characteristics:', e);
             } finally {
                 this.loading = false;
             }
         }
-    }" x-init="loadCategories()" @operation-changed.window="if (selectedCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }">
+    }">
         <!-- Выбор операции -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
             <h2 class="text-lg font-semibold text-gray-900 mb-6">Выберите операцию</h2>
@@ -110,7 +99,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
-                           @change="if (selectedCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           @change="if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
@@ -183,29 +172,22 @@
             </div>
 
             <!-- Обновить характеристику -->
-            <div x-show="operation === 'update_characteristic'"
-                 @show.window="if (operation === 'update_characteristic' && selectedCategory) loadCharacteristics()">
+            <div x-show="operation === 'update_characteristic'">
                 <div class="space-y-4">
-                    <!-- Выбор категории -->
-                    <div>
-                        <label for="category_select" class="block text-sm font-medium text-gray-700 mb-2">
-                            Категория товара
-                        </label>
-                        <select x-model="selectedCategory"
-                                @change="loadCharacteristics()"
-                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                            <option value="">-- Выберите категорию --</option>
-                            <template x-for="cat in categories" :key="cat">
-                                <option :value="cat" x-text="cat"></option>
-                            </template>
-                        </select>
-                        <p class="mt-1 text-sm text-gray-500">
-                            Выбрана первая категория из ваших товаров
-                        </p>
+                    <!-- Информация о категории -->
+                    <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div class="flex items-center">
+                            <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <span class="text-sm text-blue-700">
+                                Категория выбранных товаров: <strong x-text="productCategory || 'не указана'"></strong>
+                            </span>
+                        </div>
                     </div>
 
                     <!-- Выбор характеристики -->
-                    <div x-show="selectedCategory">
+                    <div>
                         <label for="char_select" class="block text-sm font-medium text-gray-700 mb-2">
                             Характеристика
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
@@ -291,26 +273,22 @@
             </script>
 
             <!-- Добавить характеристику -->
-            <div x-show="operation === 'add_characteristic'"
-                 @show.window="if (operation === 'add_characteristic' && selectedCategory) loadCharacteristics()">
+            <div x-show="operation === 'add_characteristic'">
                 <div class="space-y-4">
-                    <!-- Выбор категории -->
-                    <div>
-                        <label for="category_select_add" class="block text-sm font-medium text-gray-700 mb-2">
-                            Категория товара
-                        </label>
-                        <select x-model="selectedCategory"
-                                @change="loadCharacteristics()"
-                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                            <option value="">-- Выберите категорию --</option>
-                            <template x-for="cat in categories" :key="cat">
-                                <option :value="cat" x-text="cat"></option>
-                            </template>
-                        </select>
+                    <!-- Информация о категории -->
+                    <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <div class="flex items-center">
+                            <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                            <span class="text-sm text-blue-700">
+                                Категория выбранных товаров: <strong x-text="productCategory || 'не указана'"></strong>
+                            </span>
+                        </div>
                     </div>
 
                     <!-- Выбор характеристики -->
-                    <div x-show="selectedCategory">
+                    <div>
                         <label for="char_select_add" class="block text-sm font-medium text-gray-700 mb-2">
                             Характеристика
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
