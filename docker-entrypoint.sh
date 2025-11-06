@@ -15,6 +15,7 @@ echo "🚀 Инициализация seller-platform..."
 echo "📦 Применение миграций базы данных..."
 python migrate_db.py --db-path data/seller_platform.db
 python migrate_add_characteristics.py data/seller_platform.db
+python migrate_add_history_and_logging.py --db-path data/seller_platform.db
 
 # Дополнительная инициализация через Flask
 python - <<'PYCODE'

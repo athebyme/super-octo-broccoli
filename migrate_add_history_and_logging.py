@@ -21,41 +21,59 @@ def migrate_database(db_path: str):
         # === Миграция 1: Добавление полей в api_logs для полного логирования ===
         print("📝 Проверка таблицы api_logs...")
 
-        cursor.execute("PRAGMA table_info(api_logs)")
-        api_logs_columns = {row[1] for row in cursor.fetchall()}
+        # Проверяем, существует ли таблица api_logs
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='api_logs'
+        """)
 
-        new_api_logs_columns = {
-            'request_body': 'TEXT',
-            'response_body': 'TEXT',
-        }
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(api_logs)")
+            api_logs_columns = {row[1] for row in cursor.fetchall()}
 
-        for column_name, column_type in new_api_logs_columns.items():
-            if column_name not in api_logs_columns:
-                print(f"  ➕ Добавление колонки api_logs.{column_name}")
-                cursor.execute(f"ALTER TABLE api_logs ADD COLUMN {column_name} {column_type}")
-                conn.commit()
-            else:
-                print(f"  ✓ Колонка api_logs.{column_name} уже существует")
+            new_api_logs_columns = {
+                'request_body': 'TEXT',
+                'response_body': 'TEXT',
+            }
+
+            for column_name, column_type in new_api_logs_columns.items():
+                if column_name not in api_logs_columns:
+                    print(f"  ➕ Добавление колонки api_logs.{column_name}")
+                    cursor.execute(f"ALTER TABLE api_logs ADD COLUMN {column_name} {column_type}")
+                    conn.commit()
+                else:
+                    print(f"  ✓ Колонка api_logs.{column_name} уже существует")
+        else:
+            print("  ⚠️  Таблица api_logs не существует (будет создана при первом запуске приложения)")
 
         # === Миграция 2: Добавление полей в products ===
         print("📝 Проверка таблицы products...")
 
-        cursor.execute("PRAGMA table_info(products)")
-        products_columns = {row[1] for row in cursor.fetchall()}
+        # Проверяем, существует ли таблица products
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='products'
+        """)
 
-        new_products_columns = {
-            'characteristics_json': 'TEXT',
-            'description': 'TEXT',
-            'dimensions_json': 'TEXT',
-        }
+        if cursor.fetchone():
+            cursor.execute("PRAGMA table_info(products)")
+            products_columns = {row[1] for row in cursor.fetchall()}
 
-        for column_name, column_type in new_products_columns.items():
-            if column_name not in products_columns:
-                print(f"  ➕ Добавление колонки products.{column_name}")
-                cursor.execute(f"ALTER TABLE products ADD COLUMN {column_name} {column_type}")
-                conn.commit()
-            else:
-                print(f"  ✓ Колонка products.{column_name} уже существует")
+            new_products_columns = {
+                'characteristics_json': 'TEXT',
+                'description': 'TEXT',
+                'dimensions_json': 'TEXT',
+            }
+
+            for column_name, column_type in new_products_columns.items():
+                if column_name not in products_columns:
+                    print(f"  ➕ Добавление колонки products.{column_name}")
+                    cursor.execute(f"ALTER TABLE products ADD COLUMN {column_name} {column_type}")
+                    conn.commit()
+                else:
+                    print(f"  ✓ Колонка products.{column_name} уже существует")
+        else:
+            print("  ⚠️  Таблица products не существует (будет создана при первом запуске приложения)")
 
         # === Миграция 3: Создание таблицы card_edit_history ===
         print("📝 Проверка таблицы card_edit_history...")
