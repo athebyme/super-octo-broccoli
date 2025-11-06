@@ -148,6 +148,7 @@ class Product(db.Model):
     # Характеристики
     brand = db.Column(db.String(200))  # Бренд
     object_name = db.Column(db.String(200))  # Тип товара (футболка, платье и т.д.)
+    subject_id = db.Column(db.Integer)  # ID предмета (для получения характеристик из API)
     supplier_vendor_code = db.Column(db.String(100))  # Внутренний артикул поставщика
 
     # Цены и остатки (из последней синхронизации)
@@ -192,6 +193,7 @@ class Product(db.Model):
             'title': self.title,
             'brand': self.brand,
             'object_name': self.object_name,
+            'subject_id': self.subject_id,
             'price': float(self.price) if self.price else None,
             'discount_price': float(self.discount_price) if self.discount_price else None,
             'quantity': self.quantity,

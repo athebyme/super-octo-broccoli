@@ -1122,6 +1122,9 @@ def sync_products():
                     ''
                 )
 
+                # ID предмета для получения характеристик
+                subject_id = card_data.get('subjectID')
+
                 description = card_data.get('description', '')
 
                 # Характеристики
@@ -1177,6 +1180,7 @@ def sync_products():
                     product.title = title
                     product.brand = brand
                     product.object_name = object_name
+                    product.subject_id = subject_id
                     product.description = description
                     product.characteristics_json = characteristics_json
                     product.dimensions_json = dimensions_json
@@ -1196,6 +1200,7 @@ def sync_products():
                         title=title,
                         brand=brand,
                         object_name=object_name,
+                        subject_id=subject_id,
                         description=description,
                         supplier_vendor_code=card_data.get('supplierVendorCode', ''),
                         characteristics_json=characteristics_json,
@@ -1537,9 +1542,15 @@ def product_edit(product_id):
     # Получаем конфигурацию доступных характеристик для категории товара
     characteristics_config = []
     try:
-        if product.object_name:
+        if product.subject_id:
+            # Если есть subject_id, используем его напрямую
             with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-                config_data = client.get_card_characteristics_config(product.object_name)
+                config_data = client.get_card_characteristics_config(product.subject_id)
+                characteristics_config = config_data.get('data', [])
+        elif product.object_name:
+            # Если нет subject_id, получаем характеристики по object_name
+            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+                config_data = client.get_card_characteristics_by_object_name(product.object_name)
                 characteristics_config = config_data.get('data', [])
     except Exception as e:
         app.logger.warning(f"Не удалось загрузить конфигурацию характеристик: {e}")
@@ -2537,7 +2548,7 @@ def api_characteristics_by_category(object_name):
     # Сначала попробуем получить из WB API
     try:
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            result = client.get_card_characteristics_config(object_name)
+            result = client.get_card_characteristics_by_object_name(object_name)
 
             # Преобразуем результат в более удобный формат
             characteristics = []
