@@ -253,6 +253,80 @@ class APILog(db.Model):
         return log
 
 
+class BulkEditHistory(db.Model):
+    """История массовых изменений карточек"""
+    __tablename__ = 'bulk_edit_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Параметры операции
+    operation_type = db.Column(db.String(50), nullable=False)  # 'update_brand', 'update_characteristic', 'add_characteristic', etc.
+    operation_params = db.Column(db.JSON)  # Параметры операции (например, {field: 'brand', value: 'Nike'})
+
+    # Описание операции
+    description = db.Column(db.Text)  # Человекочитаемое описание
+
+    # Статистика
+    total_products = db.Column(db.Integer, default=0)  # Всего товаров в операции
+    success_count = db.Column(db.Integer, default=0)  # Успешно обработано
+    error_count = db.Column(db.Integer, default=0)  # Ошибок
+    errors_details = db.Column(db.JSON)  # Детали ошибок
+
+    # Статус выполнения
+    status = db.Column(db.String(50), default='pending')  # 'pending', 'in_progress', 'completed', 'failed'
+    wb_synced = db.Column(db.Boolean, default=False)  # Синхронизировано ли с WB
+
+    # Откат
+    reverted = db.Column(db.Boolean, default=False)  # Было ли отменено
+    reverted_at = db.Column(db.DateTime)  # Когда отменено
+    reverted_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто откатил
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at = db.Column(db.DateTime)  # Когда завершено
+    duration_seconds = db.Column(db.Float)  # Длительность выполнения
+
+    # Связи
+    product_changes = db.relationship('CardEditHistory', backref='bulk_operation', lazy='dynamic')
+
+    def __repr__(self) -> str:
+        return f'<BulkEditHistory {self.operation_type} ({self.success_count}/{self.total_products})>'
+
+    def can_revert(self) -> bool:
+        """Можно ли откатить эту операцию"""
+        return (
+            not self.reverted and
+            self.status == 'completed' and
+            self.success_count > 0 and
+            self.wb_synced
+        )
+
+    def get_progress_percent(self) -> float:
+        """Получить процент выполнения"""
+        if self.total_products == 0:
+            return 0.0
+        processed = self.success_count + self.error_count
+        return (processed / self.total_products) * 100
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'operation_type': self.operation_type,
+            'description': self.description,
+            'total_products': self.total_products,
+            'success_count': self.success_count,
+            'error_count': self.error_count,
+            'status': self.status,
+            'reverted': self.reverted,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'duration_seconds': self.duration_seconds,
+            'progress_percent': self.get_progress_percent()
+        }
+
+
 class CardEditHistory(db.Model):
     """История изменений карточек товаров"""
     __tablename__ = 'card_edit_history'
@@ -260,6 +334,9 @@ class CardEditHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False, index=True)
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Связь с bulk операцией (если это часть массового изменения)
+    bulk_edit_id = db.Column(db.Integer, db.ForeignKey('bulk_edit_history.id'), index=True)
 
     # Что изменилось
     action = db.Column(db.String(50), nullable=False)  # 'update', 'create', 'delete'

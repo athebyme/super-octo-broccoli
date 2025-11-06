@@ -20,7 +20,7 @@ from app import (
     read_statistics,
     save_processed_report,
 )
-from models import db, User, Seller, SellerReport, Product, APILog, ProductStock, CardEditHistory
+from models import db, User, Seller, SellerReport, Product, APILog, ProductStock, CardEditHistory, BulkEditHistory
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
@@ -1925,6 +1925,188 @@ def revert_product_edit(product_id, history_id):
         flash(f'Ошибка при откате: {str(e)}', 'danger')
 
     return redirect(url_for('product_edit_history', product_id=product.id))
+
+
+# ============= ИСТОРИЯ МАССОВЫХ ИЗМЕНЕНИЙ =============
+
+@app.route('/bulk-history')
+@login_required
+def bulk_edit_history():
+    """Просмотр истории массовых изменений"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+
+    # История для текущего продавца
+    pagination = BulkEditHistory.query.filter_by(
+        seller_id=current_user.seller.id
+    ).order_by(BulkEditHistory.created_at.desc()).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False
+    )
+
+    return render_template(
+        'bulk_edit_history.html',
+        history_records=pagination.items,
+        pagination=pagination
+    )
+
+
+@app.route('/bulk-history/<int:bulk_id>')
+@login_required
+def bulk_edit_history_detail(bulk_id):
+    """Детальная информация о массовой операции"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    bulk_operation = BulkEditHistory.query.get_or_404(bulk_id)
+
+    # Проверка доступа
+    if bulk_operation.seller_id != current_user.seller.id:
+        flash('У вас нет доступа к этой операции', 'danger')
+        return redirect(url_for('bulk_edit_history'))
+
+    # Получаем все изменения в рамках этой операции
+    product_changes = CardEditHistory.query.filter_by(
+        bulk_edit_id=bulk_id
+    ).order_by(CardEditHistory.created_at.asc()).all()
+
+    return render_template(
+        'bulk_edit_history_detail.html',
+        bulk_operation=bulk_operation,
+        product_changes=product_changes
+    )
+
+
+@app.route('/bulk-history/<int:bulk_id>/revert', methods=['POST'])
+@login_required
+def revert_bulk_edit(bulk_id):
+    """Откатить массовую операцию"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    bulk_operation = BulkEditHistory.query.get_or_404(bulk_id)
+
+    # Проверка доступа
+    if bulk_operation.seller_id != current_user.seller.id:
+        flash('У вас нет доступа к этой операции', 'danger')
+        return redirect(url_for('bulk_edit_history'))
+
+    if not current_user.seller.has_valid_api_key():
+        flash('API ключ Wildberries не настроен.', 'warning')
+        return redirect(url_for('api_settings'))
+
+    # Проверка что можно откатить
+    if not bulk_operation.can_revert():
+        flash('Эту операцию нельзя откатить', 'warning')
+        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_id))
+
+    try:
+        app.logger.info(f"🔄 Reverting bulk operation {bulk_id}")
+
+        # Получаем все изменения в рамках операции
+        product_changes = CardEditHistory.query.filter_by(
+            bulk_edit_id=bulk_id,
+            reverted=False
+        ).all()
+
+        success_count = 0
+        error_count = 0
+        errors = []
+
+        with WildberriesAPIClient(
+            current_user.seller.wb_api_key,
+            db_logger_callback=APILog.log_request
+        ) as client:
+            for change in product_changes:
+                try:
+                    if not change.can_revert():
+                        continue
+
+                    product = Product.query.get(change.product_id)
+                    if not product:
+                        continue
+
+                    # Подготавливаем данные для отката
+                    snapshot_to_restore = change.snapshot_before
+                    updates = {}
+                    reverted_fields = []
+
+                    for field in change.changed_fields:
+                        if field in snapshot_to_restore:
+                            if field == 'vendor_code':
+                                updates['vendorCode'] = snapshot_to_restore[field]
+                            elif field in ['title', 'description', 'brand', 'characteristics']:
+                                updates[field] = snapshot_to_restore[field]
+                            reverted_fields.append(field)
+
+                    if not updates:
+                        continue
+
+                    # Откатываем через WB API
+                    result = client.update_card(
+                        product.nm_id,
+                        updates,
+                        log_to_db=True,
+                        seller_id=current_user.seller.id
+                    )
+
+                    # Обновляем локальную БД
+                    for field in reverted_fields:
+                        if field == 'vendor_code':
+                            product.vendor_code = snapshot_to_restore[field]
+                        elif field == 'title':
+                            product.title = snapshot_to_restore[field]
+                        elif field == 'description':
+                            product.description = snapshot_to_restore[field]
+                        elif field == 'brand':
+                            product.brand = snapshot_to_restore[field]
+                        elif field == 'characteristics':
+                            product.characteristics_json = json.dumps(
+                                snapshot_to_restore[field],
+                                ensure_ascii=False
+                            )
+
+                    product.last_sync = datetime.utcnow()
+
+                    # Помечаем изменение как откаченное
+                    change.reverted = True
+                    change.reverted_at = datetime.utcnow()
+
+                    success_count += 1
+
+                except Exception as e:
+                    error_count += 1
+                    errors.append(f"Товар {product.vendor_code if product else change.product_id}: {str(e)}")
+                    app.logger.error(f"Error reverting product {change.product_id}: {e}")
+
+        # Помечаем bulk операцию как откаченную
+        bulk_operation.reverted = True
+        bulk_operation.reverted_at = datetime.utcnow()
+        bulk_operation.reverted_by_user_id = current_user.id
+
+        db.session.commit()
+
+        app.logger.info(f"✅ Bulk operation {bulk_id} reverted: {success_count} success, {error_count} errors")
+
+        if success_count > 0:
+            flash(f'Откачено изменений: {success_count}', 'success')
+        if error_count > 0:
+            flash(f'Ошибок при откате: {error_count}', 'warning')
+            for error in errors[:5]:
+                flash(error, 'danger')
+
+    except Exception as e:
+        app.logger.exception(f"❌ Unexpected error during bulk revert: {e}")
+        flash(f'Ошибка при откате: {str(e)}', 'danger')
+
+    return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_id))
 
 
 # ============= API ЛОГИ =============
