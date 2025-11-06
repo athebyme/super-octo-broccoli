@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки мониторинга цен - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="md:flex md:items-center md:justify-between mb-6">
+        <div class="flex-1 min-w-0">
+            <h1 class="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+                Мониторинг цен и остатков
+            </h1>
+            <p class="mt-2 text-sm text-gray-500">
+                Настройте автоматический мониторинг изменений цен и остатков ваших товаров
+            </p>
+        </div>
+    </div>
+
+    {% if settings.last_sync_at %}
+    <div class="mb-6 bg-white shadow overflow-hidden sm:rounded-lg">
+        <div class="px-4 py-5 sm:px-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        Последняя синхронизация
+                    </h3>
+                    <p class="mt-1 text-sm text-gray-500">
+                        {{ settings.last_sync_at.strftime('%d.%m.%Y %H:%M') if settings.last_sync_at else 'Никогда' }}
+                    </p>
+                </div>
+                <div>
+                    {% if settings.last_sync_status == 'success' %}
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                        ✓ Успешно
+                    </span>
+                    {% elif settings.last_sync_status == 'running' %}
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                        ⟳ Выполняется
+                    </span>
+                    {% elif settings.last_sync_status == 'failed' %}
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                        ✕ Ошибка
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            {% if settings.last_sync_error %}
+            <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
+                <p class="text-sm text-red-800">{{ settings.last_sync_error }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+        <form method="POST" action="{{ url_for('price_monitor_settings') }}">
+            <div class="px-4 py-5 sm:p-6 space-y-6">
+                <!-- Включить/выключить мониторинг -->
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input id="is_enabled" name="is_enabled" type="checkbox"
+                               {% if settings.is_enabled %}checked{% endif %}
+                               class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="is_enabled" class="font-medium text-gray-700">Включить мониторинг</label>
+                        <p class="text-gray-500">Автоматически отслеживать изменения цен и остатков</p>
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-200 pt-6">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">Что мониторить</h3>
+
+                    <!-- Мониторить цены -->
+                    <div class="flex items-start mb-4">
+                        <div class="flex items-center h-5">
+                            <input id="monitor_prices" name="monitor_prices" type="checkbox"
+                                   {% if settings.monitor_prices %}checked{% endif %}
+                                   class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                        </div>
+                        <div class="ml-3 text-sm">
+                            <label for="monitor_prices" class="font-medium text-gray-700">Мониторить цены</label>
+                            <p class="text-gray-500">Отслеживать изменения цен товаров</p>
+                        </div>
+                    </div>
+
+                    <!-- Мониторить остатки -->
+                    <div class="flex items-start">
+                        <div class="flex items-center h-5">
+                            <input id="monitor_stocks" name="monitor_stocks" type="checkbox"
+                                   {% if settings.monitor_stocks %}checked{% endif %}
+                                   class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                        </div>
+                        <div class="ml-3 text-sm">
+                            <label for="monitor_stocks" class="font-medium text-gray-700">Мониторить остатки</label>
+                            <p class="text-gray-500">Отслеживать изменения остатков на складах</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-200 pt-6">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">Параметры мониторинга</h3>
+
+                    <!-- Частота синхронизации -->
+                    <div class="mb-4">
+                        <label for="sync_interval_minutes" class="block text-sm font-medium text-gray-700 mb-2">
+                            Частота синхронизации (минуты)
+                        </label>
+                        <input type="number" id="sync_interval_minutes" name="sync_interval_minutes"
+                               value="{{ settings.sync_interval_minutes }}" min="5" max="1440"
+                               class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <p class="mt-1 text-sm text-gray-500">Как часто проверять изменения (от 5 минут до 24 часов)</p>
+                    </div>
+
+                    <!-- Порог изменения цены -->
+                    <div class="mb-4">
+                        <label for="price_change_threshold_percent" class="block text-sm font-medium text-gray-700 mb-2">
+                            Порог изменения цены (%)
+                        </label>
+                        <input type="number" id="price_change_threshold_percent" name="price_change_threshold_percent"
+                               value="{{ settings.price_change_threshold_percent }}" min="0" max="100" step="0.1"
+                               class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <p class="mt-1 text-sm text-gray-500">
+                            Если изменение цены превысит этот процент, товар будет отмечен как подозрительный
+                        </p>
+                    </div>
+
+                    <!-- Порог изменения остатков -->
+                    <div>
+                        <label for="stock_change_threshold_percent" class="block text-sm font-medium text-gray-700 mb-2">
+                            Порог изменения остатков (%)
+                        </label>
+                        <input type="number" id="stock_change_threshold_percent" name="stock_change_threshold_percent"
+                               value="{{ settings.stock_change_threshold_percent }}" min="0" max="100" step="0.1"
+                               class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <p class="mt-1 text-sm text-gray-500">
+                            Если изменение остатков превысит этот процент, товар будет отмечен как подозрительный
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-4 py-3 bg-gray-50 text-right sm:px-6 flex justify-between items-center">
+                <a href="{{ url_for('suspicious_price_changes') }}"
+                   class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Подозрительные изменения
+                </a>
+                <div class="space-x-3">
+                    <button type="button"
+                            onclick="manualSync()"
+                            id="syncButton"
+                            class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        <span id="syncButtonText">Запустить синхронизацию</span>
+                    </button>
+                    <button type="submit"
+                            class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Сохранить настройки
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+async function manualSync() {
+    const button = document.getElementById('syncButton');
+    const buttonText = document.getElementById('syncButtonText');
+
+    button.disabled = true;
+    buttonText.textContent = 'Синхронизация...';
+
+    try {
+        const response = await fetch('/api/price-monitor/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            alert(`Синхронизация завершена!\n\nПроверено товаров: ${data.products_checked}\nОбнаружено изменений: ${data.changes_detected}\nПодозрительных изменений: ${data.suspicious_changes}`);
+            location.reload();
+        } else {
+            alert(`Ошибка: ${data.error}`);
+        }
+    } catch (error) {
+        alert(`Ошибка синхронизации: ${error.message}`);
+    } finally {
+        button.disabled = false;
+        buttonText.textContent = 'Запустить синхронизацию';
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,359 @@
+{% extends "base.html" %}
+
+{% block title %}Подозрительные изменения цен - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangesApp()">
+    <div class="md:flex md:items-center md:justify-between mb-6">
+        <div class="flex-1 min-w-0">
+            <h1 class="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+                Подозрительные изменения цен
+            </h1>
+            <p class="mt-2 text-sm text-gray-500">
+                Товары с резкими изменениями цен или остатков, превышающими установленные пороги
+            </p>
+        </div>
+        <div class="mt-4 flex md:mt-0 md:ml-4">
+            <a href="{{ url_for('price_monitor_settings') }}"
+               class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                ⚙️ Настройки
+            </a>
+        </div>
+    </div>
+
+    <!-- Статистика -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 mb-6">
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <span class="text-2xl">📊</span>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">
+                                Всего подозрительных изменений
+                            </dt>
+                            <dd class="text-lg font-medium text-gray-900">
+                                {{ total_changes }}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <span class="text-2xl">⚠️</span>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">
+                                Непросмотренных
+                            </dt>
+                            <dd class="text-lg font-medium text-gray-900">
+                                {{ unreviewed_changes }}
+                            </dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Фильтры -->
+    <div class="bg-white shadow rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <form method="GET" action="{{ url_for('suspicious_price_changes') }}" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <!-- Тип изменения -->
+                <div>
+                    <label for="change_type" class="block text-sm font-medium text-gray-700 mb-1">
+                        Тип изменения
+                    </label>
+                    <select id="change_type" name="change_type"
+                            class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                        <option value="">Все</option>
+                        <option value="price" {% if change_type == 'price' %}selected{% endif %}>Цена</option>
+                        <option value="discount_price" {% if change_type == 'discount_price' %}selected{% endif %}>Цена со скидкой</option>
+                        <option value="quantity" {% if change_type == 'quantity' %}selected{% endif %}>Остатки</option>
+                    </select>
+                </div>
+
+                <!-- Статус просмотра -->
+                <div>
+                    <label for="is_reviewed" class="block text-sm font-medium text-gray-700 mb-1">
+                        Статус
+                    </label>
+                    <select id="is_reviewed" name="is_reviewed"
+                            class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                        <option value="">Все</option>
+                        <option value="false" {% if is_reviewed == 'false' %}selected{% endif %}>Не просмотрено</option>
+                        <option value="true" {% if is_reviewed == 'true' %}selected{% endif %}>Просмотрено</option>
+                    </select>
+                </div>
+
+                <!-- Дата от -->
+                <div>
+                    <label for="date_from" class="block text-sm font-medium text-gray-700 mb-1">
+                        Дата от
+                    </label>
+                    <input type="date" id="date_from" name="date_from" value="{{ date_from }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+
+                <!-- Дата до -->
+                <div>
+                    <label for="date_to" class="block text-sm font-medium text-gray-700 mb-1">
+                        Дата до
+                    </label>
+                    <input type="date" id="date_to" name="date_to" value="{{ date_to }}"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+
+                <!-- Поиск -->
+                <div class="sm:col-span-2">
+                    <label for="search" class="block text-sm font-medium text-gray-700 mb-1">
+                        Поиск по товару
+                    </label>
+                    <input type="text" id="search" name="search" value="{{ search }}"
+                           placeholder="Артикул, название, бренд..."
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+
+                <!-- Кнопки -->
+                <div class="sm:col-span-2 flex justify-end space-x-3">
+                    <a href="{{ url_for('suspicious_price_changes') }}"
+                       class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Сбросить
+                    </a>
+                    <button type="submit"
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Применить фильтры
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Таблица изменений -->
+    <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Дата
+                            <a href="?sort_by=created_at&sort_order={% if sort_by == 'created_at' and sort_order == 'desc' %}asc{% else %}desc{% endif %}{{ '&change_type=' + change_type if change_type }}{{ '&is_reviewed=' + is_reviewed if is_reviewed }}{{ '&date_from=' + date_from if date_from }}{{ '&date_to=' + date_to if date_to }}{{ '&search=' + search if search }}"
+                               class="ml-1 text-gray-400 hover:text-gray-600">
+                                {% if sort_by == 'created_at' %}
+                                    {% if sort_order == 'desc' %}↓{% else %}↑{% endif %}
+                                {% else %}⇅{% endif %}
+                            </a>
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Товар
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Тип изменения
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Было → Стало
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Изменение
+                            <a href="?sort_by=change_percent&sort_order={% if sort_by == 'change_percent' and sort_order == 'desc' %}asc{% else %}desc{% endif %}{{ '&change_type=' + change_type if change_type }}{{ '&is_reviewed=' + is_reviewed if is_reviewed }}{{ '&date_from=' + date_from if date_from }}{{ '&date_to=' + date_to if date_to }}{{ '&search=' + search if search }}"
+                               class="ml-1 text-gray-400 hover:text-gray-600">
+                                {% if sort_by == 'change_percent' %}
+                                    {% if sort_order == 'desc' %}↓{% else %}↑{% endif %}
+                                {% else %}⇅{% endif %}
+                            </a>
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Статус
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Действия
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% if changes %}
+                        {% for change in changes %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                {{ change.created_at.strftime('%d.%m.%Y %H:%M') }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <div class="text-sm font-medium text-gray-900">
+                                    {{ change.product.vendor_code if change.product else 'N/A' }}
+                                </div>
+                                <div class="text-sm text-gray-500">
+                                    {{ change.product.title[:50] if change.product and change.product.title else 'N/A' }}{% if change.product and change.product.title and change.product.title|length > 50 %}...{% endif %}
+                                </div>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if change.change_type == 'price' %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    Цена
+                                </span>
+                                {% elif change.change_type == 'discount_price' %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                    Цена со скидкой
+                                </span>
+                                {% elif change.change_type == 'quantity' %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    Остатки
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {{ change.old_value|round(2) if change.old_value else '0' }}
+                                →
+                                {{ change.new_value|round(2) if change.new_value else '0' }}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if change.change_percent > 0 %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                    +{{ change.change_percent|round(2) }}%
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    {{ change.change_percent|round(2) }}%
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if change.is_reviewed %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                    ✓ Просмотрено
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                    ⚠ Не просмотрено
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                {% if not change.is_reviewed %}
+                                <button @click="markAsReviewed({{ change.id }})"
+                                        class="text-indigo-600 hover:text-indigo-900 mr-3">
+                                    Отметить просмотренным
+                                </button>
+                                {% endif %}
+                                {% if change.product %}
+                                <a href="{{ url_for('product_detail', product_id=change.product_id) }}"
+                                   class="text-gray-600 hover:text-gray-900">
+                                    Просмотр товара
+                                </a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="7" class="px-6 py-8 text-center text-sm text-gray-500">
+                                {% if search or change_type or is_reviewed or date_from or date_to %}
+                                    По заданным фильтрам ничего не найдено
+                                {% else %}
+                                    Подозрительных изменений пока нет
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Пагинация -->
+        {% if pagination.pages > 1 %}
+        <div class="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+            <div class="flex-1 flex justify-between sm:hidden">
+                {% if pagination.has_prev %}
+                <a href="{{ url_for('suspicious_price_changes', page=pagination.prev_num, change_type=change_type, is_reviewed=is_reviewed, date_from=date_from, date_to=date_to, search=search, sort_by=sort_by, sort_order=sort_order) }}"
+                   class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Назад
+                </a>
+                {% endif %}
+                {% if pagination.has_next %}
+                <a href="{{ url_for('suspicious_price_changes', page=pagination.next_num, change_type=change_type, is_reviewed=is_reviewed, date_from=date_from, date_to=date_to, search=search, sort_by=sort_by, sort_order=sort_order) }}"
+                   class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Вперед
+                </a>
+                {% endif %}
+            </div>
+            <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Показано с
+                        <span class="font-medium">{{ ((pagination.page - 1) * pagination.per_page) + 1 }}</span>
+                        по
+                        <span class="font-medium">{{ min(pagination.page * pagination.per_page, pagination.total) }}</span>
+                        из
+                        <span class="font-medium">{{ pagination.total }}</span>
+                        результатов
+                    </p>
+                </div>
+                <div>
+                    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                        {% if pagination.has_prev %}
+                        <a href="{{ url_for('suspicious_price_changes', page=pagination.prev_num, change_type=change_type, is_reviewed=is_reviewed, date_from=date_from, date_to=date_to, search=search, sort_by=sort_by, sort_order=sort_order) }}"
+                           class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            ←
+                        </a>
+                        {% endif %}
+
+                        {% for p in range(max(1, pagination.page - 2), min(pagination.pages, pagination.page + 2) + 1) %}
+                        <a href="{{ url_for('suspicious_price_changes', page=p, change_type=change_type, is_reviewed=is_reviewed, date_from=date_from, date_to=date_to, search=search, sort_by=sort_by, sort_order=sort_order) }}"
+                           class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium {% if p == pagination.page %}bg-indigo-50 text-indigo-600 z-10{% else %}bg-white text-gray-700 hover:bg-gray-50{% endif %}">
+                            {{ p }}
+                        </a>
+                        {% endfor %}
+
+                        {% if pagination.has_next %}
+                        <a href="{{ url_for('suspicious_price_changes', page=pagination.next_num, change_type=change_type, is_reviewed=is_reviewed, date_from=date_from, date_to=date_to, search=search, sort_by=sort_by, sort_order=sort_order) }}"
+                           class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            →
+                        </a>
+                        {% endif %}
+                    </nav>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function priceChangesApp() {
+    return {
+        async markAsReviewed(changeId) {
+            if (!confirm('Отметить это изменение как просмотренное?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/price-monitor/suspicious-changes/${changeId}/review`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({})
+                });
+
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    const data = await response.json();
+                    alert(`Ошибка: ${data.error}`);
+                }
+            } catch (error) {
+                alert(`Ошибка: ${error.message}`);
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

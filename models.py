@@ -471,3 +471,187 @@ class ProductStock(db.Model):
             'in_way_from_client': self.in_way_from_client,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+
+class PriceMonitorSettings(db.Model):
+    """Настройки мониторинга цен для продавца"""
+    __tablename__ = 'price_monitor_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Настройки мониторинга
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включен ли мониторинг
+    monitor_prices = db.Column(db.Boolean, default=True, nullable=False)  # Мониторить цены
+    monitor_stocks = db.Column(db.Boolean, default=False, nullable=False)  # Мониторить остатки
+
+    # Частота синхронизации (в минутах)
+    sync_interval_minutes = db.Column(db.Integer, default=60, nullable=False)  # По умолчанию раз в час
+
+    # Процент допустимого скачка цены
+    price_change_threshold_percent = db.Column(db.Float, default=10.0, nullable=False)  # По умолчанию 10%
+
+    # Процент допустимого скачка остатков
+    stock_change_threshold_percent = db.Column(db.Float, default=50.0, nullable=False)  # По умолчанию 50%
+
+    # Последняя синхронизация
+    last_sync_at = db.Column(db.DateTime)  # Когда была последняя синхронизация
+    last_sync_status = db.Column(db.String(50))  # Статус последней синхронизации ('success', 'failed', 'running')
+    last_sync_error = db.Column(db.Text)  # Ошибка последней синхронизации
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('price_monitor_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<PriceMonitorSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'monitor_prices': self.monitor_prices,
+            'monitor_stocks': self.monitor_stocks,
+            'sync_interval_minutes': self.sync_interval_minutes,
+            'price_change_threshold_percent': self.price_change_threshold_percent,
+            'stock_change_threshold_percent': self.stock_change_threshold_percent,
+            'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
+            'last_sync_status': self.last_sync_status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class PriceHistory(db.Model):
+    """История изменений цен и остатков товаров"""
+    __tablename__ = 'price_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Предыдущие значения
+    old_price = db.Column(db.Numeric(10, 2))  # Старая цена
+    old_discount_price = db.Column(db.Numeric(10, 2))  # Старая цена со скидкой
+    old_quantity = db.Column(db.Integer)  # Старый остаток
+
+    # Новые значения
+    new_price = db.Column(db.Numeric(10, 2))  # Новая цена
+    new_discount_price = db.Column(db.Numeric(10, 2))  # Новая цена со скидкой
+    new_quantity = db.Column(db.Integer)  # Новый остаток
+
+    # Изменения в процентах
+    price_change_percent = db.Column(db.Float)  # Изменение цены в %
+    discount_price_change_percent = db.Column(db.Float)  # Изменение цены со скидкой в %
+    quantity_change_percent = db.Column(db.Float)  # Изменение остатка в %
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связь с товаром
+    product = db.relationship('Product', backref=db.backref('price_history', lazy='dynamic', order_by='PriceHistory.created_at.desc()'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_price_history_product_created', 'product_id', 'created_at'),
+        db.Index('idx_price_history_seller_created', 'seller_id', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<PriceHistory product_id={self.product_id} price={self.old_price}->{self.new_price}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'product_id': self.product_id,
+            'old_price': float(self.old_price) if self.old_price else None,
+            'old_discount_price': float(self.old_discount_price) if self.old_discount_price else None,
+            'old_quantity': self.old_quantity,
+            'new_price': float(self.new_price) if self.new_price else None,
+            'new_discount_price': float(self.new_discount_price) if self.new_discount_price else None,
+            'new_quantity': self.new_quantity,
+            'price_change_percent': self.price_change_percent,
+            'discount_price_change_percent': self.discount_price_change_percent,
+            'quantity_change_percent': self.quantity_change_percent,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class SuspiciousPriceChange(db.Model):
+    """Подозрительные изменения цен (скачки больше допустимого порога)"""
+    __tablename__ = 'suspicious_price_changes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    price_history_id = db.Column(db.Integer, db.ForeignKey('price_history.id', ondelete='CASCADE'), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Тип изменения ('price', 'discount_price', 'quantity')
+    change_type = db.Column(db.String(50), nullable=False, index=True)
+
+    # Значения
+    old_value = db.Column(db.Numeric(10, 2))
+    new_value = db.Column(db.Numeric(10, 2))
+    change_percent = db.Column(db.Float, nullable=False)  # Изменение в процентах
+
+    # Порог, который был превышен
+    threshold_percent = db.Column(db.Float, nullable=False)
+
+    # Статус обработки
+    is_reviewed = db.Column(db.Boolean, default=False, nullable=False, index=True)  # Просмотрено ли
+    reviewed_at = db.Column(db.DateTime)  # Когда просмотрено
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто просмотрел
+    notes = db.Column(db.Text)  # Заметки
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    price_history = db.relationship('PriceHistory', backref=db.backref('suspicious_changes', lazy='dynamic'))
+    product = db.relationship('Product', backref=db.backref('suspicious_price_changes', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_suspicious_seller_created', 'seller_id', 'created_at'),
+        db.Index('idx_suspicious_seller_reviewed', 'seller_id', 'is_reviewed'),
+        db.Index('idx_suspicious_product_created', 'product_id', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<SuspiciousPriceChange product_id={self.product_id} {self.change_type} {self.change_percent}%>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        result = {
+            'id': self.id,
+            'product_id': self.product_id,
+            'change_type': self.change_type,
+            'old_value': float(self.old_value) if self.old_value else None,
+            'new_value': float(self.new_value) if self.new_value else None,
+            'change_percent': self.change_percent,
+            'threshold_percent': self.threshold_percent,
+            'is_reviewed': self.is_reviewed,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+        # Добавляем информацию о товаре, если она есть
+        if self.product:
+            result['product'] = {
+                'nm_id': self.product.nm_id,
+                'vendor_code': self.product.vendor_code,
+                'title': self.product.title,
+                'brand': self.product.brand,
+                'current_price': float(self.product.price) if self.product.price else None,
+                'current_discount_price': float(self.product.discount_price) if self.product.discount_price else None,
+                'current_quantity': self.product.quantity
+            }
+
+        return result

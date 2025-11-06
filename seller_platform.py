@@ -20,7 +20,11 @@ from app import (
     read_statistics,
     save_processed_report,
 )
-from models import db, User, Seller, SellerReport, Product, APILog, ProductStock, CardEditHistory, BulkEditHistory
+from models import (
+    db, User, Seller, SellerReport, Product, APILog, ProductStock,
+    CardEditHistory, BulkEditHistory, PriceMonitorSettings,
+    PriceHistory, SuspiciousPriceChange
+)
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
@@ -2617,6 +2621,535 @@ def api_product_characteristics(product_id):
         'object_name': product.object_name,
         'characteristics': product.get_characteristics()
     }
+
+
+# ============= МОНИТОРИНГ ЦЕН =============
+
+@app.route('/price-monitor/settings', methods=['GET', 'POST'])
+@login_required
+def price_monitor_settings():
+    """Настройки мониторинга цен"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'warning')
+        return redirect(url_for('dashboard'))
+
+    seller = current_user.seller
+
+    # Получаем или создаем настройки
+    settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+    if not settings:
+        settings = PriceMonitorSettings(seller_id=seller.id)
+        db.session.add(settings)
+        db.session.commit()
+
+    if request.method == 'POST':
+        try:
+            settings.is_enabled = request.form.get('is_enabled') == 'on'
+            settings.monitor_prices = request.form.get('monitor_prices') == 'on'
+            settings.monitor_stocks = request.form.get('monitor_stocks') == 'on'
+            settings.sync_interval_minutes = int(request.form.get('sync_interval_minutes', 60))
+            settings.price_change_threshold_percent = float(request.form.get('price_change_threshold_percent', 10.0))
+            settings.stock_change_threshold_percent = float(request.form.get('stock_change_threshold_percent', 50.0))
+
+            db.session.commit()
+            flash('Настройки мониторинга сохранены', 'success')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Ошибка сохранения настроек: {e}', 'danger')
+
+        return redirect(url_for('price_monitor_settings'))
+
+    return render_template('price_monitor_settings.html', settings=settings)
+
+
+@app.route('/price-monitor/suspicious', methods=['GET'])
+@login_required
+def suspicious_price_changes():
+    """Страница подозрительных изменений цен"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'warning')
+        return redirect(url_for('dashboard'))
+
+    seller = current_user.seller
+
+    # Фильтры
+    change_type = request.args.get('change_type', '')
+    is_reviewed = request.args.get('is_reviewed', '')
+    date_from = request.args.get('date_from', '')
+    date_to = request.args.get('date_to', '')
+    search = request.args.get('search', '')
+
+    # Сортировка
+    sort_by = request.args.get('sort_by', 'created_at')
+    sort_order = request.args.get('sort_order', 'desc')
+
+    # Пагинация
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+
+    # Базовый запрос
+    query = SuspiciousPriceChange.query.filter_by(seller_id=seller.id)
+
+    # Применяем фильтры
+    if change_type:
+        query = query.filter(SuspiciousPriceChange.change_type == change_type)
+
+    if is_reviewed == 'true':
+        query = query.filter(SuspiciousPriceChange.is_reviewed == True)
+    elif is_reviewed == 'false':
+        query = query.filter(SuspiciousPriceChange.is_reviewed == False)
+
+    if date_from:
+        try:
+            date_from_obj = datetime.strptime(date_from, '%Y-%m-%d')
+            query = query.filter(SuspiciousPriceChange.created_at >= date_from_obj)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            date_to_obj = datetime.strptime(date_to, '%Y-%m-%d')
+            # Добавляем 1 день чтобы включить весь день
+            from datetime import timedelta
+            date_to_obj = date_to_obj + timedelta(days=1)
+            query = query.filter(SuspiciousPriceChange.created_at < date_to_obj)
+        except ValueError:
+            pass
+
+    if search:
+        # Поиск по товару
+        query = query.join(Product).filter(
+            or_(
+                Product.vendor_code.ilike(f'%{search}%'),
+                Product.title.ilike(f'%{search}%'),
+                Product.brand.ilike(f'%{search}%')
+            )
+        )
+
+    # Применяем сортировку
+    if sort_by == 'created_at':
+        if sort_order == 'desc':
+            query = query.order_by(SuspiciousPriceChange.created_at.desc())
+        else:
+            query = query.order_by(SuspiciousPriceChange.created_at.asc())
+    elif sort_by == 'change_percent':
+        if sort_order == 'desc':
+            query = query.order_by(SuspiciousPriceChange.change_percent.desc())
+        else:
+            query = query.order_by(SuspiciousPriceChange.change_percent.asc())
+
+    # Пагинация
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    changes = pagination.items
+
+    # Получаем статистику
+    total_changes = SuspiciousPriceChange.query.filter_by(seller_id=seller.id).count()
+    unreviewed_changes = SuspiciousPriceChange.query.filter_by(seller_id=seller.id, is_reviewed=False).count()
+
+    return render_template(
+        'suspicious_price_changes.html',
+        changes=changes,
+        pagination=pagination,
+        total_changes=total_changes,
+        unreviewed_changes=unreviewed_changes,
+        # Фильтры для формы
+        change_type=change_type,
+        is_reviewed=is_reviewed,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
+
+
+@app.route('/api/price-monitor/settings', methods=['GET', 'POST'])
+@login_required
+def api_price_monitor_settings():
+    """API для получения/обновления настроек мониторинга"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    if request.method == 'GET':
+        settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+        if not settings:
+            settings = PriceMonitorSettings(seller_id=seller.id)
+            db.session.add(settings)
+            db.session.commit()
+
+        return settings.to_dict()
+
+    # POST - обновление настроек
+    try:
+        data = request.get_json()
+        settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+        if not settings:
+            settings = PriceMonitorSettings(seller_id=seller.id)
+            db.session.add(settings)
+
+        if 'is_enabled' in data:
+            settings.is_enabled = bool(data['is_enabled'])
+        if 'monitor_prices' in data:
+            settings.monitor_prices = bool(data['monitor_prices'])
+        if 'monitor_stocks' in data:
+            settings.monitor_stocks = bool(data['monitor_stocks'])
+        if 'sync_interval_minutes' in data:
+            settings.sync_interval_minutes = int(data['sync_interval_minutes'])
+        if 'price_change_threshold_percent' in data:
+            settings.price_change_threshold_percent = float(data['price_change_threshold_percent'])
+        if 'stock_change_threshold_percent' in data:
+            settings.stock_change_threshold_percent = float(data['stock_change_threshold_percent'])
+
+        db.session.commit()
+        return settings.to_dict()
+
+    except Exception as e:
+        db.session.rollback()
+        return {'error': str(e)}, 400
+
+
+@app.route('/api/price-monitor/suspicious-changes', methods=['GET'])
+@login_required
+def api_suspicious_price_changes():
+    """API для получения списка подозрительных изменений"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    # Фильтры из query параметров
+    change_type = request.args.get('change_type')
+    is_reviewed = request.args.get('is_reviewed')
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+
+    # Пагинация
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+
+    # Базовый запрос
+    query = SuspiciousPriceChange.query.filter_by(seller_id=seller.id)
+
+    # Применяем фильтры
+    if change_type:
+        query = query.filter(SuspiciousPriceChange.change_type == change_type)
+
+    if is_reviewed is not None:
+        query = query.filter(SuspiciousPriceChange.is_reviewed == (is_reviewed.lower() == 'true'))
+
+    if date_from:
+        try:
+            date_from_obj = datetime.strptime(date_from, '%Y-%m-%d')
+            query = query.filter(SuspiciousPriceChange.created_at >= date_from_obj)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            date_to_obj = datetime.strptime(date_to, '%Y-%m-%d')
+            from datetime import timedelta
+            date_to_obj = date_to_obj + timedelta(days=1)
+            query = query.filter(SuspiciousPriceChange.created_at < date_to_obj)
+        except ValueError:
+            pass
+
+    # Сортировка
+    query = query.order_by(SuspiciousPriceChange.created_at.desc())
+
+    # Пагинация
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return {
+        'items': [change.to_dict() for change in pagination.items],
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }
+
+
+@app.route('/api/price-monitor/suspicious-changes/<int:change_id>/review', methods=['POST'])
+@login_required
+def api_mark_change_reviewed(change_id):
+    """API для пометки изменения как просмотренного"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    change = SuspiciousPriceChange.query.get_or_404(change_id)
+
+    # Проверка доступа
+    if change.seller_id != current_user.seller.id:
+        return {'error': 'Access denied'}, 403
+
+    try:
+        data = request.get_json() or {}
+        change.is_reviewed = True
+        change.reviewed_at = datetime.utcnow()
+        change.reviewed_by_user_id = current_user.id
+        if 'notes' in data:
+            change.notes = data['notes']
+
+        db.session.commit()
+        return change.to_dict()
+
+    except Exception as e:
+        db.session.rollback()
+        return {'error': str(e)}, 400
+
+
+@app.route('/api/price-monitor/sync', methods=['POST'])
+@login_required
+def api_manual_price_sync():
+    """API для ручного запуска синхронизации цен"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    # Проверяем настройки
+    settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+    if not settings:
+        return {'error': 'Price monitoring settings not found'}, 404
+
+    if not settings.is_enabled:
+        return {'error': 'Price monitoring is disabled'}, 400
+
+    # Проверяем наличие API ключа
+    if not seller.has_valid_api_key():
+        return {'error': 'WB API key not configured'}, 400
+
+    try:
+        # Выполняем синхронизацию
+        result = perform_price_monitoring_sync(seller, settings)
+        return result
+
+    except Exception as e:
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/price-monitor/history/<int:product_id>', methods=['GET'])
+@login_required
+def api_price_history(product_id):
+    """API для получения истории изменений цен товара"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        return {'error': 'Access denied'}, 403
+
+    # Получаем историю
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 100, type=int)
+
+    query = PriceHistory.query.filter_by(product_id=product_id).order_by(PriceHistory.created_at.desc())
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return {
+        'product': product.to_dict(),
+        'history': [h.to_dict() for h in pagination.items],
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }
+
+
+def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings) -> dict:
+    """
+    Выполняет синхронизацию цен и остатков для мониторинга
+
+    Args:
+        seller: Продавец
+        settings: Настройки мониторинга
+
+    Returns:
+        dict: Результат синхронизации
+    """
+    # Обновляем статус
+    settings.last_sync_status = 'running'
+    settings.last_sync_at = datetime.utcnow()
+    db.session.commit()
+
+    try:
+        # Создаем клиент API
+        wb_client = WildberriesAPIClient(seller.wb_api_key)
+
+        # Получаем список товаров
+        cards_response = wb_client.get_cards_list(limit=1000)
+
+        if not cards_response or 'data' not in cards_response:
+            raise Exception('Failed to fetch products from WB API')
+
+        cards = cards_response.get('data', {}).get('cards', [])
+
+        changes_detected = 0
+        suspicious_changes = 0
+
+        for card in cards:
+            nm_id = card.get('nmID')
+            if not nm_id:
+                continue
+
+            # Находим товар в БД
+            product = Product.query.filter_by(seller_id=seller.id, nm_id=nm_id).first()
+            if not product:
+                continue
+
+            # Получаем цены из API
+            sizes = card.get('sizes', [])
+            if not sizes:
+                continue
+
+            # Берем первый размер для получения цены
+            size = sizes[0]
+            new_price = size.get('price')
+            new_discount_price = size.get('discountedPrice', new_price)
+
+            # Получаем остатки если нужно
+            new_quantity = None
+            if settings.monitor_stocks:
+                stocks = card.get('stocks', [])
+                new_quantity = sum(stock.get('qty', 0) for stock in stocks)
+
+            # Сохраняем старые значения
+            old_price = float(product.price) if product.price else None
+            old_discount_price = float(product.discount_price) if product.discount_price else None
+            old_quantity = product.quantity
+
+            # Проверяем изменения
+            price_changed = False
+            quantity_changed = False
+
+            if settings.monitor_prices and new_price is not None and old_price is not None and old_price > 0:
+                if new_price != old_price or (new_discount_price and new_discount_price != old_discount_price):
+                    price_changed = True
+
+            if settings.monitor_stocks and new_quantity is not None and old_quantity is not None and old_quantity > 0:
+                if new_quantity != old_quantity:
+                    quantity_changed = True
+
+            # Если есть изменения, создаем запись в истории
+            if price_changed or quantity_changed:
+                changes_detected += 1
+
+                # Вычисляем процент изменения
+                price_change_percent = None
+                discount_price_change_percent = None
+                quantity_change_percent = None
+
+                if price_changed and old_price and old_price > 0:
+                    price_change_percent = ((new_price - old_price) / old_price) * 100
+
+                if new_discount_price and old_discount_price and old_discount_price > 0:
+                    discount_price_change_percent = ((new_discount_price - old_discount_price) / old_discount_price) * 100
+
+                if quantity_changed and old_quantity and old_quantity > 0:
+                    quantity_change_percent = ((new_quantity - old_quantity) / old_quantity) * 100
+
+                # Создаем запись в истории
+                history = PriceHistory(
+                    product_id=product.id,
+                    seller_id=seller.id,
+                    old_price=old_price,
+                    old_discount_price=old_discount_price,
+                    old_quantity=old_quantity,
+                    new_price=new_price,
+                    new_discount_price=new_discount_price,
+                    new_quantity=new_quantity,
+                    price_change_percent=price_change_percent,
+                    discount_price_change_percent=discount_price_change_percent,
+                    quantity_change_percent=quantity_change_percent
+                )
+                db.session.add(history)
+                db.session.flush()  # Чтобы получить ID истории
+
+                # Проверяем, есть ли подозрительные скачки
+                if price_change_percent and abs(price_change_percent) > settings.price_change_threshold_percent:
+                    suspicious = SuspiciousPriceChange(
+                        price_history_id=history.id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                        change_type='price',
+                        old_value=old_price,
+                        new_value=new_price,
+                        change_percent=price_change_percent,
+                        threshold_percent=settings.price_change_threshold_percent
+                    )
+                    db.session.add(suspicious)
+                    suspicious_changes += 1
+
+                if discount_price_change_percent and abs(discount_price_change_percent) > settings.price_change_threshold_percent:
+                    suspicious = SuspiciousPriceChange(
+                        price_history_id=history.id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                        change_type='discount_price',
+                        old_value=old_discount_price,
+                        new_value=new_discount_price,
+                        change_percent=discount_price_change_percent,
+                        threshold_percent=settings.price_change_threshold_percent
+                    )
+                    db.session.add(suspicious)
+                    suspicious_changes += 1
+
+                if quantity_change_percent and abs(quantity_change_percent) > settings.stock_change_threshold_percent:
+                    suspicious = SuspiciousPriceChange(
+                        price_history_id=history.id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                        change_type='quantity',
+                        old_value=old_quantity,
+                        new_value=new_quantity,
+                        change_percent=quantity_change_percent,
+                        threshold_percent=settings.stock_change_threshold_percent
+                    )
+                    db.session.add(suspicious)
+                    suspicious_changes += 1
+
+                # Обновляем товар
+                if new_price is not None:
+                    product.price = new_price
+                if new_discount_price is not None:
+                    product.discount_price = new_discount_price
+                if new_quantity is not None:
+                    product.quantity = new_quantity
+                product.last_sync = datetime.utcnow()
+
+        # Сохраняем все изменения
+        db.session.commit()
+
+        # Обновляем статус синхронизации
+        settings.last_sync_status = 'success'
+        settings.last_sync_error = None
+        db.session.commit()
+
+        return {
+            'status': 'success',
+            'products_checked': len(cards),
+            'changes_detected': changes_detected,
+            'suspicious_changes': suspicious_changes,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+    except Exception as e:
+        # Откатываем транзакцию
+        db.session.rollback()
+
+        # Сохраняем ошибку
+        settings.last_sync_status = 'failed'
+        settings.last_sync_error = str(e)
+        db.session.commit()
+
+        raise
 
 
 # ============= ИНИЦИАЛИЗАЦИЯ БД =============
