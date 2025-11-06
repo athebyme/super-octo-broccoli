@@ -190,15 +190,36 @@
 
             <div class="flex space-x-4">
                 <button type="submit"
+                        id="saveButton"
                         class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg id="saveIcon" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                     </svg>
-                    Сохранить изменения
+                    <svg id="loadingIcon" class="w-5 h-5 mr-2 animate-spin hidden" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span id="saveText">Сохранить изменения</span>
                 </button>
             </div>
         </div>
     </form>
+
+    <!-- Индикатор процесса -->
+    <div id="processIndicator" class="mt-6 bg-blue-50 rounded-lg border border-blue-200 p-4 hidden">
+        <div class="flex items-start">
+            <svg class="w-5 h-5 text-blue-400 mt-0.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <div class="ml-3">
+                <h3 class="text-sm font-medium text-blue-800">Обновление карточки...</h3>
+                <p class="mt-1 text-sm text-blue-700" id="processStatus">
+                    Получение полной карточки из WB API...
+                </p>
+            </div>
+        </div>
+    </div>
 
     <!-- Предупреждение -->
     <div class="mt-6 bg-yellow-50 rounded-lg border border-yellow-200 p-4">
@@ -223,4 +244,30 @@
         </div>
     </div>
 </div>
+
+<script>
+// Обработка отправки формы
+document.querySelector('form').addEventListener('submit', function(e) {
+    const saveButton = document.getElementById('saveButton');
+    const saveIcon = document.getElementById('saveIcon');
+    const loadingIcon = document.getElementById('loadingIcon');
+    const saveText = document.getElementById('saveText');
+    const processIndicator = document.getElementById('processIndicator');
+
+    // Показываем индикатор загрузки
+    saveIcon.classList.add('hidden');
+    loadingIcon.classList.remove('hidden');
+    saveText.textContent = 'Сохранение...';
+    saveButton.disabled = true;
+    saveButton.classList.add('opacity-75', 'cursor-not-allowed');
+
+    // Показываем индикатор процесса
+    processIndicator.classList.remove('hidden');
+
+    // Плавная прокрутка к индикатору
+    setTimeout(() => {
+        processIndicator.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+});
+</script>
 {% endblock %}

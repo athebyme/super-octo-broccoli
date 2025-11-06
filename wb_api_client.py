@@ -527,7 +527,8 @@ class WildberriesAPIClient:
     def update_card(
         self,
         nm_id: int,
-        updates: Dict[str, Any]
+        updates: Dict[str, Any],
+        merge_with_existing: bool = True
     ) -> Dict[str, Any]:
         """
         Обновить карточку товара (Content API v2)
@@ -537,41 +538,59 @@ class WildberriesAPIClient:
             updates: Словарь с обновляемыми полями
                 Возможные поля:
                 - vendorCode: артикул продавца
-                - title: название товара (subjectName)
+                - title: название товара
                 - description: описание
                 - brand: бренд
                 - characteristics: список характеристик
                   [{"id": 123, "value": "значение"}]
+            merge_with_existing: Если True, сначала получит полную карточку и объединит с изменениями
 
         Returns:
             Результат обновления
 
         Note:
-            WB API v2 требует отправлять полную карточку, а не только изменения.
-            Поэтому этот метод может не работать для всех полей.
-            Для некоторых операций нужно использовать специальные эндпоинты.
+            WB API v2 требует отправлять ПОЛНУЮ карточку товара.
+            Метод автоматически получает текущую карточку и объединяет с изменениями.
         """
-        # ВАЖНО: WB Content API v2 использует другие эндпоинты для редактирования
-        # /content/v2/cards/update - основной эндпоинт обновления
-        endpoint = "/content/v2/cards/update"
-
         logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
         logger.debug(f"Update data: {updates}")
 
-        # Формируем тело запроса
-        # WB API требует массив карточек
-        body = [{
-            "nmID": nm_id,
-            **updates
-        }]
+        # WB API требует полную карточку - получаем её сначала
+        if merge_with_existing:
+            logger.info(f"📥 Fetching full card for nmID={nm_id} to merge changes")
+            try:
+                full_card = self.get_card_by_nm_id(nm_id)
+                if not full_card:
+                    raise WBAPIException(f"Card nmID={nm_id} not found in WB API")
+
+                # Объединяем полную карточку с изменениями
+                logger.debug(f"Merging updates into full card")
+                full_card.update(updates)
+                card_to_send = full_card
+            except Exception as e:
+                logger.error(f"❌ Failed to fetch full card for merging: {str(e)}")
+                logger.warning("⚠️ Trying to update with partial data (may fail)")
+                card_to_send = {"nmID": nm_id, **updates}
+        else:
+            card_to_send = {"nmID": nm_id, **updates}
+
+        # WB Content API v2 эндпоинт для обновления
+        endpoint = "/content/v2/cards/update"
+
+        logger.info(f"📤 Sending update request for nmID={nm_id}")
+        logger.debug(f"Card to send keys: {list(card_to_send.keys())}")
 
         try:
-            response = self._make_request('POST', 'content', endpoint, json=body)
+            response = self._make_request('POST', 'content', endpoint, json=[card_to_send])
             result = response.json()
             logger.info(f"✅ Card nmID={nm_id} update response: {result}")
             return result
+        except WBAPIException as e:
+            logger.error(f"❌ WB API error updating card nmID={nm_id}: {str(e)}")
+            logger.error(f"Sent data structure: {list(card_to_send.keys())}")
+            raise
         except Exception as e:
-            logger.error(f"❌ Failed to update card nmID={nm_id}: {str(e)}")
+            logger.error(f"❌ Unexpected error updating card nmID={nm_id}: {str(e)}")
             raise
 
     def update_card_characteristics(
