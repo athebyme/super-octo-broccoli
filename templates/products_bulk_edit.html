@@ -18,6 +18,11 @@
         <h1 class="text-3xl font-bold text-gray-900">Массовое редактирование</h1>
         <p class="mt-2 text-sm text-gray-600">
             Выбрано товаров: {{ products|length }}
+            {% if products and products[0].object_name %}
+            • Категория: <span class="font-semibold">{{ products[0].object_name }}</span>
+            {% else %}
+            • <span class="text-yellow-600 font-semibold">⚠️ Категория не определена - требуется синхронизация с WB</span>
+            {% endif %}
         </p>
     </div>
 
@@ -175,14 +180,35 @@
             <div x-show="operation === 'update_characteristic'">
                 <div class="space-y-4">
                     <!-- Информация о категории -->
-                    <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <div x-show="productCategory" class="p-3 bg-blue-50 rounded-lg border border-blue-200">
                         <div class="flex items-center">
                             <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
                                 <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
                             </svg>
                             <span class="text-sm text-blue-700">
-                                Категория выбранных товаров: <strong x-text="productCategory || 'не указана'"></strong>
+                                Категория выбранных товаров: <strong x-text="productCategory"></strong>
                             </span>
+                        </div>
+                    </div>
+
+                    <!-- Предупреждение если категория не указана -->
+                    <div x-show="!productCategory" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                        <div class="flex items-start">
+                            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="ml-3">
+                                <h3 class="text-sm font-medium text-yellow-800">Категория товаров не определена</h3>
+                                <div class="mt-2 text-sm text-yellow-700">
+                                    <p>Для работы с характеристиками необходимо:</p>
+                                    <ol class="list-decimal ml-5 mt-2 space-y-1">
+                                        <li>Перейти в раздел <a href="{{ url_for('products_list') }}" class="underline font-medium">Товары</a></li>
+                                        <li>Нажать кнопку "Синхронизировать с WB"</li>
+                                        <li>Дождаться завершения синхронизации</li>
+                                    </ol>
+                                    <p class="mt-2">После синхронизации категории будут загружены из Wildberries API.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -276,14 +302,35 @@
             <div x-show="operation === 'add_characteristic'">
                 <div class="space-y-4">
                     <!-- Информация о категории -->
-                    <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <div x-show="productCategory" class="p-3 bg-blue-50 rounded-lg border border-blue-200">
                         <div class="flex items-center">
                             <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
                                 <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
                             </svg>
                             <span class="text-sm text-blue-700">
-                                Категория выбранных товаров: <strong x-text="productCategory || 'не указана'"></strong>
+                                Категория выбранных товаров: <strong x-text="productCategory"></strong>
                             </span>
+                        </div>
+                    </div>
+
+                    <!-- Предупреждение если категория не указана -->
+                    <div x-show="!productCategory" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                        <div class="flex items-start">
+                            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                            </svg>
+                            <div class="ml-3">
+                                <h3 class="text-sm font-medium text-yellow-800">Категория товаров не определена</h3>
+                                <div class="mt-2 text-sm text-yellow-700">
+                                    <p>Для работы с характеристиками необходимо:</p>
+                                    <ol class="list-decimal ml-5 mt-2 space-y-1">
+                                        <li>Перейти в раздел <a href="{{ url_for('products_list') }}" class="underline font-medium">Товары</a></li>
+                                        <li>Нажать кнопку "Синхронизировать с WB"</li>
+                                        <li>Дождаться завершения синхронизации</li>
+                                    </ol>
+                                    <p class="mt-2">После синхронизации категории будут загружены из Wildberries API.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
