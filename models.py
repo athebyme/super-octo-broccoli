@@ -527,6 +527,64 @@ class PriceMonitorSettings(db.Model):
         }
 
 
+class ProductSyncSettings(db.Model):
+    """Настройки автоматической синхронизации товаров"""
+    __tablename__ = 'product_sync_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Настройки автосинхронизации
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включена ли автосинхронизация
+    sync_interval_minutes = db.Column(db.Integer, default=60, nullable=False)  # Частота синхронизации (по умолчанию раз в час)
+
+    # Типы синхронизации
+    sync_products = db.Column(db.Boolean, default=True, nullable=False)  # Синхронизировать карточки товаров
+    sync_stocks = db.Column(db.Boolean, default=True, nullable=False)  # Синхронизировать остатки
+
+    # Последняя синхронизация
+    last_sync_at = db.Column(db.DateTime)  # Когда была последняя синхронизация
+    next_sync_at = db.Column(db.DateTime)  # Когда запланирована следующая синхронизация
+    last_sync_status = db.Column(db.String(50))  # Статус ('success', 'failed', 'running')
+    last_sync_error = db.Column(db.Text)  # Текст ошибки если была
+    last_sync_duration = db.Column(db.Float)  # Длительность последней синхронизации в секундах
+
+    # Статистика
+    products_synced = db.Column(db.Integer, default=0)  # Количество синхронизированных товаров
+    products_added = db.Column(db.Integer, default=0)  # Количество добавленных товаров
+    products_updated = db.Column(db.Integer, default=0)  # Количество обновленных товаров
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('product_sync_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<ProductSyncSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'sync_interval_minutes': self.sync_interval_minutes,
+            'sync_products': self.sync_products,
+            'sync_stocks': self.sync_stocks,
+            'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
+            'next_sync_at': self.next_sync_at.isoformat() if self.next_sync_at else None,
+            'last_sync_status': self.last_sync_status,
+            'last_sync_duration': self.last_sync_duration,
+            'products_synced': self.products_synced,
+            'products_added': self.products_added,
+            'products_updated': self.products_updated,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
 class PriceHistory(db.Model):
     """История изменений цен и остатков товаров"""
     __tablename__ = 'price_history'

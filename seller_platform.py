@@ -23,11 +23,12 @@ from app import (
 from models import (
     db, User, Seller, SellerReport, Product, APILog, ProductStock,
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
-    PriceHistory, SuspiciousPriceChange
+    PriceHistory, SuspiciousPriceChange, ProductSyncSettings
 )
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
+import threading
 from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 
 # Настройка приложения
@@ -1075,10 +1076,182 @@ def bulk_products_action():
     return redirect(url_for('products_list'))
 
 
+def _perform_product_sync_task(seller_id: int, flask_app):
+    """
+    Фоновая задача синхронизации товаров
+
+    Args:
+        seller_id: ID продавца
+        flask_app: Экземпляр Flask приложения для контекста
+    """
+    with flask_app.app_context():
+        try:
+            # Получаем продавца из БД
+            seller = Seller.query.get(seller_id)
+            if not seller:
+                app.logger.error(f"Seller {seller_id} not found for background sync")
+                return
+
+            seller.api_sync_status = 'syncing'
+            db.session.commit()
+
+            start_time = time.time()
+
+            with WildberriesAPIClient(seller.wb_api_key) as client:
+                # Получаем все карточки
+                app.logger.info(f"🔄 Background sync: fetching cards for seller_id={seller_id}")
+                all_cards = client.get_all_cards(batch_size=100)
+                app.logger.info(f"✅ Background sync: got {len(all_cards)} cards from WB API")
+
+                # Статистика
+                created_count = 0
+                updated_count = 0
+
+                for card_data in all_cards:
+                    nm_id = card_data.get('nmID')
+                    if not nm_id:
+                        continue
+
+                    # Ищем существующую карточку
+                    product = Product.query.filter_by(
+                        seller_id=seller.id,
+                        nm_id=nm_id
+                    ).first()
+
+                    # Извлекаем данные из API
+                    vendor_code = card_data.get('vendorCode', '')
+                    title = card_data.get('title', '')
+                    brand = card_data.get('brand', '')
+                    object_name = (
+                        card_data.get('subjectName') or
+                        card_data.get('objectName') or
+                        card_data.get('object') or
+                        ''
+                    )
+                    subject_id = card_data.get('subjectID')
+                    description = card_data.get('description', '')
+
+                    # Характеристики
+                    characteristics = card_data.get('characteristics', [])
+                    characteristics_json = json.dumps(characteristics, ensure_ascii=False) if characteristics else None
+
+                    # Габариты
+                    dimensions = card_data.get('dimensions', {})
+                    dimensions_json = json.dumps(dimensions, ensure_ascii=False) if dimensions else None
+
+                    # Медиа
+                    media = card_data.get('mediaFiles', [])
+                    photo_count_v1 = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
+                    photo_count_v2 = len([m for m in media if m.get('mediaType') != 'video'])
+                    photos_field = card_data.get('photos', [])
+                    photo_count_v3 = len(photos_field) if photos_field else 0
+                    photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
+                    if photo_count == 0 and card_data.get('mediaFiles'):
+                        photo_count = len(media) if media else 0
+                    photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
+                    photos_json = json.dumps(photo_indices) if photo_indices else None
+
+                    # Видео
+                    video_media = next((m for m in media if m.get('mediaType') == 'video'), None)
+                    video = video_media.get('big') if video_media else None
+
+                    # Размеры
+                    sizes = card_data.get('sizes', [])
+                    sizes_json = json.dumps(sizes, ensure_ascii=False) if sizes else None
+
+                    if product:
+                        # Обновление существующей карточки
+                        product.vendor_code = vendor_code
+                        product.title = title
+                        product.brand = brand
+                        product.object_name = object_name
+                        product.subject_id = subject_id
+                        product.description = description
+                        product.characteristics_json = characteristics_json
+                        product.dimensions_json = dimensions_json
+                        product.photos_json = photos_json
+                        product.video_url = video
+                        product.sizes_json = sizes_json
+                        product.last_sync = datetime.utcnow()
+                        product.is_active = True
+                        updated_count += 1
+                    else:
+                        # Создание новой карточки
+                        product = Product(
+                            seller_id=seller.id,
+                            nm_id=nm_id,
+                            imt_id=card_data.get('imtID'),
+                            vendor_code=vendor_code,
+                            title=title,
+                            brand=brand,
+                            object_name=object_name,
+                            subject_id=subject_id,
+                            description=description,
+                            supplier_vendor_code=card_data.get('supplierVendorCode', ''),
+                            characteristics_json=characteristics_json,
+                            dimensions_json=dimensions_json,
+                            photos_json=photos_json,
+                            video_url=video,
+                            sizes_json=sizes_json,
+                            last_sync=datetime.utcnow(),
+                            is_active=True
+                        )
+                        db.session.add(product)
+                        created_count += 1
+
+                # Сохраняем все изменения
+                db.session.commit()
+
+                app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
+
+                # Обновляем статус синхронизации
+                seller.api_last_sync = datetime.utcnow()
+                seller.api_sync_status = 'success'
+                db.session.commit()
+
+                elapsed = time.time() - start_time
+
+                # Логируем успешный запрос
+                APILog.log_request(
+                    seller_id=seller.id,
+                    endpoint='/content/v2/get/cards/list',
+                    method='POST',
+                    status_code=200,
+                    response_time=elapsed,
+                    success=True
+                )
+
+                app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
+
+        except WBAuthException as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    seller.api_sync_status = 'auth_error'
+                    db.session.commit()
+                app.logger.error(f"❌ Background sync auth error: {str(e)}")
+
+        except WBAPIException as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    seller.api_sync_status = 'error'
+                    db.session.commit()
+                app.logger.error(f"❌ Background sync API error: {str(e)}")
+
+        except Exception as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    seller.api_sync_status = 'error'
+                    db.session.commit()
+                app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
+
+
 @app.route('/products/sync', methods=['POST'])
 @login_required
 def sync_products():
-    """Синхронизация карточек товаров через API WB"""
+    """Запуск синхронизации карточек товаров в фоновом режиме"""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
@@ -1087,225 +1260,30 @@ def sync_products():
         flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
         return redirect(url_for('api_settings'))
 
+    # Проверяем что синхронизация не запущена уже
+    if current_user.seller.api_sync_status == 'syncing':
+        flash('Синхронизация уже выполняется. Пожалуйста, подождите...', 'warning')
+        return redirect(url_for('products_list'))
+
     try:
+        # Устанавливаем статус syncing
         current_user.seller.api_sync_status = 'syncing'
         db.session.commit()
 
-        start_time = time.time()
-
-        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            # Получаем все карточки
-            app.logger.info(f"🔄 Начинаем загрузку карточек для seller_id={current_user.seller.id}")
-            all_cards = client.get_all_cards(batch_size=100)
-            app.logger.info(f"✅ Получено {len(all_cards)} карточек из WB API")
-
-            # Логируем структуру первой карточки для отладки
-            if all_cards:
-                first_card = all_cards[0]
-                app.logger.info(f"📦 Первая карточка: nmID={first_card.get('nmID')}")
-                app.logger.info(f"📦 Все ключи: {list(first_card.keys())}")
-                app.logger.info(f"📷 mediaFiles в первой карточке: {len(first_card.get('mediaFiles', []))}")
-                app.logger.info(f"📷 photos в первой карточке: {len(first_card.get('photos', []))}")
-                app.logger.info(f"🏷️ object field: '{first_card.get('object')}'")
-                app.logger.info(f"🏷️ objectName field: '{first_card.get('objectName')}'")
-                app.logger.info(f"🏷️ subjectName field: '{first_card.get('subjectName')}'")
-                app.logger.info(f"🏷️ subjectID field: '{first_card.get('subjectID')}'")
-            else:
-                app.logger.warning("⚠️ API вернул пустой список карточек!")
-
-            # Статистика
-            created_count = 0
-            updated_count = 0
-
-            for card_data in all_cards:
-                nm_id = card_data.get('nmID')
-                if not nm_id:
-                    continue
-
-                # Ищем существующую карточку
-                product = Product.query.filter_by(
-                    seller_id=current_user.seller.id,
-                    nm_id=nm_id
-                ).first()
-
-                # Извлекаем данные из API
-                vendor_code = card_data.get('vendorCode', '')
-                title = card_data.get('title', '')
-                brand = card_data.get('brand', '')
-
-                # Категория товара - WB API может возвращать разные поля
-                object_name = (
-                    card_data.get('subjectName') or  # Предпочтительное поле в WB API v2
-                    card_data.get('objectName') or
-                    card_data.get('object') or
-                    ''
-                )
-
-                # ID предмета для получения характеристик
-                subject_id = card_data.get('subjectID')
-
-                description = card_data.get('description', '')
-
-                # Характеристики
-                characteristics = card_data.get('characteristics', [])
-                characteristics_json = json.dumps(characteristics, ensure_ascii=False) if characteristics else None
-
-                # Габариты
-                dimensions = card_data.get('dimensions', {})
-                dimensions_json = json.dumps(dimensions, ensure_ascii=False) if dimensions else None
-
-                # Медиа - подсчитываем количество фотографий
-                # WB хранит фото на CDN, генерируем URL динамически в шаблонах
-                media = card_data.get('mediaFiles', [])
-
-                # Пробуем несколько способов подсчета фотографий
-                # Вариант 1: по полю big в mediaFiles (старый формат)
-                photo_count_v1 = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
-
-                # Вариант 2: просто все медиафайлы кроме видео
-                photo_count_v2 = len([m for m in media if m.get('mediaType') != 'video'])
-
-                # Вариант 3: photos field может содержать количество
-                photos_field = card_data.get('photos', [])
-                photo_count_v3 = len(photos_field) if photos_field else 0
-
-                # Используем максимальное значение
-                photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
-
-                # Если фоток нет, пробуем альтернативный подход - просто предполагаем что есть до 10 фото
-                if photo_count == 0 and card_data.get('mediaFiles'):
-                    # Предполагаем что есть хотя бы несколько фото
-                    photo_count = len(media) if media else 0
-
-                # Логируем для первых 3 товаров для отладки
-                if created_count + updated_count < 3:
-                    app.logger.info(f"Product {nm_id}: mediaFiles={len(media)}, photos_field={len(photos_field) if photos_field else 0}, photo_count={photo_count}")
-
-                # Сохраняем список индексов фотографий [1, 2, 3, ...]
-                photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
-                photos_json = json.dumps(photo_indices) if photo_indices else None
-
-                # Видео обрабатываем отдельно
-                video_media = next((m for m in media if m.get('mediaType') == 'video'), None)
-                video = video_media.get('big') if video_media else None
-
-                # Размеры
-                sizes = card_data.get('sizes', [])
-                sizes_json = json.dumps(sizes, ensure_ascii=False) if sizes else None
-
-                if product:
-                    # Обновление существующей карточки
-                    product.vendor_code = vendor_code
-                    product.title = title
-                    product.brand = brand
-                    product.object_name = object_name
-                    product.subject_id = subject_id
-                    product.description = description
-                    product.characteristics_json = characteristics_json
-                    product.dimensions_json = dimensions_json
-                    product.photos_json = photos_json
-                    product.video_url = video
-                    product.sizes_json = sizes_json
-                    product.last_sync = datetime.utcnow()
-                    product.is_active = True
-                    updated_count += 1
-                else:
-                    # Создание новой карточки
-                    product = Product(
-                        seller_id=current_user.seller.id,
-                        nm_id=nm_id,
-                        imt_id=card_data.get('imtID'),
-                        vendor_code=vendor_code,
-                        title=title,
-                        brand=brand,
-                        object_name=object_name,
-                        subject_id=subject_id,
-                        description=description,
-                        supplier_vendor_code=card_data.get('supplierVendorCode', ''),
-                        characteristics_json=characteristics_json,
-                        dimensions_json=dimensions_json,
-                        photos_json=photos_json,
-                        video_url=video,
-                        sizes_json=sizes_json,
-                        last_sync=datetime.utcnow(),
-                        is_active=True
-                    )
-                    db.session.add(product)
-                    created_count += 1
-
-            # Сохраняем все изменения
-            db.session.commit()
-
-            app.logger.info(f"💾 Сохранено в БД: {created_count} новых, {updated_count} обновлено")
-
-            # Обновляем статус синхронизации
-            current_user.seller.api_last_sync = datetime.utcnow()
-            current_user.seller.api_sync_status = 'success'
-            db.session.commit()
-
-            elapsed = time.time() - start_time
-
-            # Логируем успешный запрос
-            APILog.log_request(
-                seller_id=current_user.seller.id,
-                endpoint='/content/v2/get/cards/list',
-                method='POST',  # Исправлено на POST
-                status_code=200,
-                response_time=elapsed,
-                success=True
-            )
-
-            app.logger.info(f"✅ Синхронизация завершена успешно за {elapsed:.1f}с")
-
-            flash(
-                f'Синхронизация завершена за {elapsed:.1f}с: '
-                f'{created_count} новых, {updated_count} обновлено',
-                'success'
-            )
-
-    except WBAuthException as e:
-        current_user.seller.api_sync_status = 'auth_error'
-        db.session.commit()
-
-        app.logger.error(f"❌ Ошибка авторизации: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/content/v2/get/cards/list',
-            method='POST',
-            status_code=401,
-            response_time=0,
-            success=False,
-            error_message=f'Authentication failed: {str(e)}'
+        # Запускаем синхронизацию в фоновом потоке
+        thread = threading.Thread(
+            target=_perform_product_sync_task,
+            args=(current_user.seller.id, app._get_current_object()),
+            daemon=True
         )
+        thread.start()
 
-        flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
-
-    except WBAPIException as e:
-        current_user.seller.api_sync_status = 'error'
-        db.session.commit()
-
-        app.logger.error(f"❌ Ошибка WB API: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/content/v2/get/cards/list',
-            method='POST',
-            status_code=500,
-            response_time=0,
-            success=False,
-            error_message=str(e)
-        )
-
-        flash(f'Ошибка API WB: {str(e)}', 'danger')
+        flash('Синхронизация товаров запущена в фоновом режиме. Обновите страницу через минуту чтобы увидеть результаты.', 'info')
+        app.logger.info(f"✅ Background product sync started for seller_id={current_user.seller.id}")
 
     except Exception as e:
-        current_user.seller.api_sync_status = 'error'
-        db.session.commit()
-
-        app.logger.exception(f"❌ Неожиданная ошибка синхронизации: {str(e)}")
-
-        flash(f'Ошибка синхронизации: {str(e)}', 'danger')
+        app.logger.exception(f"❌ Failed to start background sync: {str(e)}")
+        flash(f'Ошибка запуска синхронизации: {str(e)}', 'danger')
 
     return redirect(url_for('products_list'))
 
