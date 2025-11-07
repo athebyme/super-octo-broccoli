@@ -1,0 +1,605 @@
+openapi: 3.0.1
+info:
+  title: Мониторинг цен
+  version: 1.0.0
+  description: |
+    # Мониторинг цен и остатков
+
+    API для автоматического мониторинга изменений цен и остатков товаров.
+
+    ## Возможности:
+    - Настройка автоматического мониторинга цен и остатков
+    - Определение порогов допустимых изменений
+    - Просмотр истории изменений цен
+    - Получение списка подозрительных изменений (превышающих установленные пороги)
+    - Пометка изменений как просмотренных
+
+    ## Как это работает:
+    1. Включите мониторинг в настройках
+    2. Установите частоту синхронизации и пороги допустимых изменений
+    3. Система автоматически проверяет цены и остатки с заданной периодичностью
+    4. При обнаружении скачка цены > установленного порога, товар попадает в список подозрительных
+    5. Просматривайте подозрительные изменения и отслеживайте динамику цен
+
+security:
+  - SessionAuth: []
+
+tags:
+  - name: Настройки мониторинга
+    description: Управление настройками автоматического мониторинга
+  - name: Подозрительные изменения
+    description: Просмотр и управление подозрительными изменениями цен
+  - name: История изменений
+    description: История изменений цен и остатков товаров
+  - name: Синхронизация
+    description: Ручной запуск синхронизации
+
+paths:
+  /api/price-monitor/settings:
+    get:
+      tags:
+        - Настройки мониторинга
+      summary: Получить настройки мониторинга
+      description: Возвращает текущие настройки мониторинга цен для продавца
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: Настройки мониторинга
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceMonitorSettings'
+              example:
+                id: 1
+                seller_id: 1
+                is_enabled: true
+                monitor_prices: true
+                monitor_stocks: false
+                sync_interval_minutes: 60
+                price_change_threshold_percent: 10.0
+                stock_change_threshold_percent: 50.0
+                last_sync_at: "2025-11-06T12:00:00"
+                last_sync_status: "success"
+                created_at: "2025-11-01T10:00:00"
+                updated_at: "2025-11-06T12:00:00"
+        '404':
+          description: Профиль продавца не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Seller profile not found"
+
+    post:
+      tags:
+        - Настройки мониторинга
+      summary: Обновить настройки мониторинга
+      description: Обновляет настройки автоматического мониторинга цен
+      security:
+        - SessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PriceMonitorSettingsUpdate'
+            example:
+              is_enabled: true
+              monitor_prices: true
+              monitor_stocks: true
+              sync_interval_minutes: 120
+              price_change_threshold_percent: 15.0
+              stock_change_threshold_percent: 30.0
+      responses:
+        '200':
+          description: Настройки успешно обновлены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceMonitorSettings'
+        '400':
+          description: Ошибка валидации данных
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Профиль продавца не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/price-monitor/suspicious-changes:
+    get:
+      tags:
+        - Подозрительные изменения
+      summary: Получить список подозрительных изменений
+      description: |
+        Возвращает список изменений цен и остатков, которые превысили установленные пороги.
+        Поддерживает фильтрацию и пагинацию.
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: change_type
+          in: query
+          description: Тип изменения
+          schema:
+            type: string
+            enum: [price, discount_price, quantity]
+        - name: is_reviewed
+          in: query
+          description: Фильтр по статусу просмотра
+          schema:
+            type: string
+            enum: [true, false]
+        - name: date_from
+          in: query
+          description: Дата начала периода (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          description: Дата окончания периода (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          description: Номер страницы
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          description: Количество элементов на странице
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        '200':
+          description: Список подозрительных изменений
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SuspiciousPriceChange'
+                  total:
+                    type: integer
+                    description: Общее количество элементов
+                  pages:
+                    type: integer
+                    description: Общее количество страниц
+                  page:
+                    type: integer
+                    description: Текущая страница
+                  per_page:
+                    type: integer
+                    description: Элементов на странице
+                  has_next:
+                    type: boolean
+                    description: Есть ли следующая страница
+                  has_prev:
+                    type: boolean
+                    description: Есть ли предыдущая страница
+              example:
+                items:
+                  - id: 1
+                    product_id: 123
+                    change_type: "price"
+                    old_value: 1000.00
+                    new_value: 1500.00
+                    change_percent: 50.0
+                    threshold_percent: 10.0
+                    is_reviewed: false
+                    created_at: "2025-11-06T12:30:00"
+                    product:
+                      nm_id: 123456789
+                      vendor_code: "ART-001"
+                      title: "Футболка мужская"
+                      brand: "Nike"
+                      current_price: 1500.00
+                total: 1
+                pages: 1
+                page: 1
+                per_page: 50
+                has_next: false
+                has_prev: false
+        '404':
+          description: Профиль продавца не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/price-monitor/suspicious-changes/{change_id}/review:
+    post:
+      tags:
+        - Подозрительные изменения
+      summary: Отметить изменение как просмотренное
+      description: Помечает подозрительное изменение как просмотренное пользователем
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: change_id
+          in: path
+          required: true
+          description: ID изменения
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  description: Заметки о просмотре
+            example:
+              notes: "Изменение цены согласовано с менеджером"
+      responses:
+        '200':
+          description: Изменение отмечено как просмотренное
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuspiciousPriceChange'
+        '403':
+          description: Доступ запрещен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Изменение не найдено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/price-monitor/history/{product_id}:
+    get:
+      tags:
+        - История изменений
+      summary: Получить историю изменений цен товара
+      description: Возвращает полную историю изменений цен и остатков для конкретного товара
+      security:
+        - SessionAuth: []
+      parameters:
+        - name: product_id
+          in: path
+          required: true
+          description: ID товара
+          schema:
+            type: integer
+        - name: page
+          in: query
+          description: Номер страницы
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          description: Количество элементов на странице
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+      responses:
+        '200':
+          description: История изменений товара
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  product:
+                    $ref: '#/components/schemas/ProductInfo'
+                  history:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PriceHistoryEntry'
+                  total:
+                    type: integer
+                  pages:
+                    type: integer
+                  page:
+                    type: integer
+                  per_page:
+                    type: integer
+                  has_next:
+                    type: boolean
+                  has_prev:
+                    type: boolean
+        '403':
+          description: Доступ запрещен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/price-monitor/sync:
+    post:
+      tags:
+        - Синхронизация
+      summary: Запустить ручную синхронизацию
+      description: |
+        Запускает немедленную синхронизацию цен и остатков для всех товаров.
+        Синхронизация выполняется асинхронно.
+      security:
+        - SessionAuth: []
+      responses:
+        '200':
+          description: Синхронизация завершена успешно
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                  products_checked:
+                    type: integer
+                    description: Количество проверенных товаров
+                  changes_detected:
+                    type: integer
+                    description: Количество обнаруженных изменений
+                  suspicious_changes:
+                    type: integer
+                    description: Количество подозрительных изменений
+                  timestamp:
+                    type: string
+                    format: date-time
+              example:
+                status: "success"
+                products_checked: 150
+                changes_detected: 12
+                suspicious_changes: 3
+                timestamp: "2025-11-06T12:45:00"
+        '400':
+          description: Мониторинг выключен или неверные настройки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Настройки мониторинга не найдены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Ошибка синхронизации
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    SessionAuth:
+      type: apiKey
+      in: cookie
+      name: session
+
+  schemas:
+    PriceMonitorSettings:
+      type: object
+      properties:
+        id:
+          type: integer
+        seller_id:
+          type: integer
+        is_enabled:
+          type: boolean
+          description: Включен ли мониторинг
+        monitor_prices:
+          type: boolean
+          description: Мониторить изменения цен
+        monitor_stocks:
+          type: boolean
+          description: Мониторить изменения остатков
+        sync_interval_minutes:
+          type: integer
+          description: Частота синхронизации в минутах
+          minimum: 5
+          maximum: 1440
+        price_change_threshold_percent:
+          type: number
+          format: float
+          description: Порог изменения цены в процентах
+          minimum: 0
+          maximum: 100
+        stock_change_threshold_percent:
+          type: number
+          format: float
+          description: Порог изменения остатков в процентах
+          minimum: 0
+          maximum: 100
+        last_sync_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Время последней синхронизации
+        last_sync_status:
+          type: string
+          enum: [success, failed, running]
+          nullable: true
+          description: Статус последней синхронизации
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PriceMonitorSettingsUpdate:
+      type: object
+      properties:
+        is_enabled:
+          type: boolean
+        monitor_prices:
+          type: boolean
+        monitor_stocks:
+          type: boolean
+        sync_interval_minutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+        price_change_threshold_percent:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+        stock_change_threshold_percent:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 100
+
+    SuspiciousPriceChange:
+      type: object
+      properties:
+        id:
+          type: integer
+        product_id:
+          type: integer
+        change_type:
+          type: string
+          enum: [price, discount_price, quantity]
+          description: Тип изменения
+        old_value:
+          type: number
+          format: float
+          nullable: true
+          description: Старое значение
+        new_value:
+          type: number
+          format: float
+          nullable: true
+          description: Новое значение
+        change_percent:
+          type: number
+          format: float
+          description: Изменение в процентах
+        threshold_percent:
+          type: number
+          format: float
+          description: Порог, который был превышен
+        is_reviewed:
+          type: boolean
+          description: Просмотрено ли изменение
+        reviewed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда просмотрено
+        notes:
+          type: string
+          nullable: true
+          description: Заметки
+        created_at:
+          type: string
+          format: date-time
+        product:
+          $ref: '#/components/schemas/ProductInfo'
+
+    PriceHistoryEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        product_id:
+          type: integer
+        old_price:
+          type: number
+          format: float
+          nullable: true
+        old_discount_price:
+          type: number
+          format: float
+          nullable: true
+        old_quantity:
+          type: integer
+          nullable: true
+        new_price:
+          type: number
+          format: float
+          nullable: true
+        new_discount_price:
+          type: number
+          format: float
+          nullable: true
+        new_quantity:
+          type: integer
+          nullable: true
+        price_change_percent:
+          type: number
+          format: float
+          nullable: true
+        discount_price_change_percent:
+          type: number
+          format: float
+          nullable: true
+        quantity_change_percent:
+          type: number
+          format: float
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ProductInfo:
+      type: object
+      properties:
+        id:
+          type: integer
+        nm_id:
+          type: integer
+          description: Артикул WB
+        vendor_code:
+          type: string
+          description: Артикул продавца
+        title:
+          type: string
+          description: Название товара
+        brand:
+          type: string
+          description: Бренд
+        current_price:
+          type: number
+          format: float
+          nullable: true
+          description: Текущая цена
+        current_discount_price:
+          type: number
+          format: float
+          nullable: true
+          description: Текущая цена со скидкой
+        current_quantity:
+          type: integer
+          nullable: true
+          description: Текущий остаток
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Описание ошибки

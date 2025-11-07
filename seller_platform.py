@@ -20,10 +20,15 @@ from app import (
     read_statistics,
     save_processed_report,
 )
-from models import db, User, Seller, SellerReport, Product, APILog, ProductStock, CardEditHistory, BulkEditHistory
+from models import (
+    db, User, Seller, SellerReport, Product, APILog, ProductStock,
+    CardEditHistory, BulkEditHistory, PriceMonitorSettings,
+    PriceHistory, SuspiciousPriceChange, ProductSyncSettings
+)
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
+import threading
 from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 
 # Настройка приложения
@@ -130,6 +135,10 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
+
+# Инициализация планировщика автоматической синхронизации
+from product_sync_scheduler import init_scheduler
+init_scheduler(app)
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_ROOT = BASE_DIR / 'uploads'
@@ -266,26 +275,8 @@ def get_latest_report(seller_id: int) -> Optional[SellerReport]:
     )
 
 
-def summarise_card(card: Dict[str, Any]) -> Dict[str, Any]:
-    """Подготовить ключевые поля карточки для отображения."""
-    sizes = card.get('sizes') or []
-    media_files = card.get('mediaFiles') or card.get('photos') or []
-    barcode_count = 0
-    for size in sizes:
-        if isinstance(size, dict):
-            barcode_count += len(size.get('skus') or [])
-
-    return {
-        'vendor_code': card.get('vendorCode') or card.get('supplierVendorCode'),
-        'nm_id': card.get('nmID') or card.get('nmId'),
-        'title': card.get('title') or card.get('subjectName') or card.get('name'),
-        'brand': card.get('brand'),
-        'subject': card.get('subjectName') or card.get('subjectID'),
-        'updated_at': card.get('updatedAt') or card.get('updateAt') or card.get('modifiedAt'),
-        'photo_count': len(media_files) if isinstance(media_files, list) else 0,
-        'barcode_count': barcode_count,
-        'card': card,
-    }
+# УДАЛЕНО: Функция summarise_card использовалась только в старом роуте /cards
+# который был заменен на /products с новой функциональностью
 
 
 @login_manager.user_loader
@@ -484,81 +475,8 @@ def reports():
 
 
 
-@app.route('/cards', methods=['GET'])
-@login_required
-def cards():
-    seller: Optional[Seller] = None
-    seller_options: List[Seller] = []
-    selected_seller_id: Optional[int] = None
-
-    if current_user.is_admin:
-        seller_options = (
-            Seller.query.join(User)
-            .order_by(Seller.company_name.asc())
-            .all()
-        )
-        selected_seller_id = request.args.get('seller_id', type=int)
-        if selected_seller_id:
-            seller = Seller.query.get(selected_seller_id)
-            if not seller:
-                flash('Продавец с указанным ID не найден.', 'warning')
-    else:
-        seller = current_user.seller
-        if not seller:
-            flash('Учетная запись продавца не привязана к текущему пользователю.', 'warning')
-            return redirect(url_for('dashboard'))
-
-    search = request.args.get('search', '').strip()
-    updated_at = request.args.get('updated_at', '').strip() or None
-    limit = request.args.get('limit', type=int) or 50
-    limit = max(1, min(limit, 1_000))
-
-    cards_payload: List[Dict[str, Any]] = []
-    prepared_cards: List[Dict[str, Any]] = []
-    cursor: Dict[str, Any] = {}
-    api_error: Optional[str] = None
-    additional_errors: List[str] = []
-
-    if seller:
-        if not seller.wb_api_key:
-            api_error = 'Для выбранного продавца не указан API токен Wildberries.'
-        else:
-            try:
-                response = list_cards(
-                    seller.wb_api_key,
-                    limit=limit,
-                    search=search or None,
-                    updated_at=updated_at,
-                )
-                cards_payload = response.get('cards') or []
-                cursor = response.get('cursor') or {}
-                prepared_cards = [summarise_card(card) for card in cards_payload]
-
-                error_text = (response.get('errorText') or '').strip()
-                if error_text:
-                    additional_errors.append(error_text)
-                for extra in response.get('additionalErrors') or []:
-                    text_message = str(extra).strip()
-                    if text_message:
-                        additional_errors.append(text_message)
-            except WildberriesAPIError as exc:
-                api_error = str(exc)
-
-    return render_template(
-        'cards.html',
-        seller=seller,
-        seller_options=seller_options,
-        selected_seller_id=selected_seller_id,
-        cards=prepared_cards,
-        raw_cards=cards_payload,
-        cursor=cursor,
-        api_error=api_error,
-        additional_errors=additional_errors,
-        search=search,
-        limit=limit,
-        updated_at=updated_at,
-    )
-
+# УДАЛЕНО: Старый роут /cards заменен на /products (products_list)
+# Новая функциональность находится в products_list() с улучшенными фильтрами и пагинацией
 
 @app.route('/reports/<int:report_id>/download')
 @login_required
@@ -823,6 +741,20 @@ def products_list():
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
 
+    # Проверяем не застрял ли статус синхронизации
+    if current_user.seller.api_sync_status == 'syncing' and current_user.seller.api_last_sync:
+        from datetime import timedelta
+        time_since_sync = datetime.utcnow() - current_user.seller.api_last_sync
+        # Если синхронизация висит больше 15 минут - сбрасываем статус
+        if time_since_sync > timedelta(minutes=15):
+            app.logger.warning(f"Resetting stuck sync status for seller {current_user.seller.id} (stuck for {time_since_sync})")
+            current_user.seller.api_sync_status = 'error'
+            # Обновляем настройки синхронизации
+            if current_user.seller.product_sync_settings:
+                current_user.seller.product_sync_settings.last_sync_status = 'error'
+                current_user.seller.product_sync_settings.last_sync_error = f'Sync timeout after {time_since_sync}'
+            db.session.commit()
+
     try:
         # Параметры пагинации
         page = request.args.get('page', 1, type=int)
@@ -831,7 +763,8 @@ def products_list():
 
         # Базовые фильтры
         search = request.args.get('search', '').strip()
-        active_only = request.args.get('active_only', type=bool)
+        # Исправлено: чекбокс отправляет '1', нужна правильная обработка
+        active_only = request.args.get('active_only', '').strip() in ['1', 'true', 'True', 'on']
 
         # Расширенные фильтры
         filter_brand = request.args.get('brand', '').strip()
@@ -866,14 +799,28 @@ def products_list():
         if filter_category:
             query = query.filter(Product.object_name.ilike(f'%{filter_category}%'))
 
-        # Фильтр по наличию остатков
+        # Фильтр по наличию остатков (исправлен JOIN для избежания дубликатов)
         if filter_has_stock == 'yes':
             # Товары у которых есть хотя бы один остаток > 0
-            query = query.join(ProductStock).filter(ProductStock.quantity > 0)
+            # Используем EXISTS вместо JOIN чтобы избежать дубликатов строк
+            query = query.filter(
+                db.exists().where(
+                    db.and_(
+                        ProductStock.product_id == Product.id,
+                        ProductStock.quantity > 0
+                    )
+                )
+            )
         elif filter_has_stock == 'no':
             # Товары без остатков или с нулевыми остатками
-            query = query.outerjoin(ProductStock).group_by(Product.id).having(
-                db.func.coalesce(db.func.sum(ProductStock.quantity), 0) == 0
+            # Используем NOT EXISTS для чистого запроса без группировки
+            query = query.filter(
+                ~db.exists().where(
+                    db.and_(
+                        ProductStock.product_id == Product.id,
+                        ProductStock.quantity > 0
+                    )
+                )
             )
 
         # Сортировка
@@ -900,7 +847,11 @@ def products_list():
         )
 
         products = pagination.items
-        total_products = current_user.seller.products.count()
+
+        # Показываем количество товаров С УЧЕТОМ фильтров
+        total_products = pagination.total  # Количество товаров после применения всех фильтров
+
+        # Для активных товаров - всегда показываем общее количество активных (без фильтров)
         active_products = current_user.seller.products.filter_by(is_active=True).count()
 
         # Получаем уникальные бренды и категории для фильтров
@@ -1056,10 +1007,235 @@ def bulk_products_action():
     return redirect(url_for('products_list'))
 
 
+def _perform_product_sync_task(seller_id: int, flask_app):
+    """
+    Фоновая задача синхронизации товаров
+
+    Args:
+        seller_id: ID продавца
+        flask_app: Экземпляр Flask приложения для контекста
+    """
+    with flask_app.app_context():
+        try:
+            # Получаем продавца из БД
+            seller = Seller.query.get(seller_id)
+            if not seller:
+                app.logger.error(f"Seller {seller_id} not found for background sync")
+                return
+
+            seller.api_sync_status = 'syncing'
+            db.session.commit()
+
+            start_time = time.time()
+
+            with WildberriesAPIClient(seller.wb_api_key) as client:
+                # Получаем все карточки
+                app.logger.info(f"🔄 Background sync: fetching cards for seller_id={seller_id}")
+                all_cards = client.get_all_cards(batch_size=100)
+                app.logger.info(f"✅ Background sync: got {len(all_cards)} cards from WB API")
+
+                # Статистика
+                created_count = 0
+                updated_count = 0
+
+                for card_data in all_cards:
+                    nm_id = card_data.get('nmID')
+                    if not nm_id:
+                        continue
+
+                    # Ищем существующую карточку
+                    product = Product.query.filter_by(
+                        seller_id=seller.id,
+                        nm_id=nm_id
+                    ).first()
+
+                    # Извлекаем данные из API
+                    vendor_code = card_data.get('vendorCode', '')
+                    title = card_data.get('title', '')
+                    brand = card_data.get('brand', '')
+                    object_name = (
+                        card_data.get('subjectName') or
+                        card_data.get('objectName') or
+                        card_data.get('object') or
+                        ''
+                    )
+                    subject_id = card_data.get('subjectID')
+                    description = card_data.get('description', '')
+
+                    # Характеристики
+                    characteristics = card_data.get('characteristics', [])
+                    characteristics_json = json.dumps(characteristics, ensure_ascii=False) if characteristics else None
+
+                    # Габариты
+                    dimensions = card_data.get('dimensions', {})
+                    dimensions_json = json.dumps(dimensions, ensure_ascii=False) if dimensions else None
+
+                    # Медиа
+                    media = card_data.get('mediaFiles', [])
+                    photo_count_v1 = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
+                    photo_count_v2 = len([m for m in media if m.get('mediaType') != 'video'])
+                    photos_field = card_data.get('photos', [])
+                    photo_count_v3 = len(photos_field) if photos_field else 0
+                    photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
+                    if photo_count == 0 and card_data.get('mediaFiles'):
+                        photo_count = len(media) if media else 0
+                    # Если photo_count все еще 0, но есть nmID - предполагаем что есть хотя бы 1 фото
+                    # WB обычно требует минимум 1 фото для товара
+                    if photo_count == 0 and nm_id:
+                        photo_count = 5  # Предполагаем стандартное количество фото
+                    photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
+                    photos_json = json.dumps(photo_indices) if photo_indices else None
+
+                    # Видео
+                    video_media = next((m for m in media if m.get('mediaType') == 'video'), None)
+                    video = video_media.get('big') if video_media else None
+
+                    # Размеры
+                    sizes = card_data.get('sizes', [])
+                    sizes_json = json.dumps(sizes, ensure_ascii=False) if sizes else None
+
+                    if product:
+                        # Обновление существующей карточки
+                        product.vendor_code = vendor_code
+                        product.title = title
+                        product.brand = brand
+                        product.object_name = object_name
+                        product.subject_id = subject_id
+                        product.description = description
+                        product.characteristics_json = characteristics_json
+                        product.dimensions_json = dimensions_json
+                        product.photos_json = photos_json
+                        product.video_url = video
+                        product.sizes_json = sizes_json
+                        product.last_sync = datetime.utcnow()
+                        product.is_active = True
+                        updated_count += 1
+                    else:
+                        # Создание новой карточки
+                        product = Product(
+                            seller_id=seller.id,
+                            nm_id=nm_id,
+                            imt_id=card_data.get('imtID'),
+                            vendor_code=vendor_code,
+                            title=title,
+                            brand=brand,
+                            object_name=object_name,
+                            subject_id=subject_id,
+                            description=description,
+                            supplier_vendor_code=card_data.get('supplierVendorCode', ''),
+                            characteristics_json=characteristics_json,
+                            dimensions_json=dimensions_json,
+                            photos_json=photos_json,
+                            video_url=video,
+                            sizes_json=sizes_json,
+                            last_sync=datetime.utcnow(),
+                            is_active=True
+                        )
+                        db.session.add(product)
+                        created_count += 1
+
+                # Сохраняем все изменения
+                db.session.commit()
+
+                app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
+
+                # Обновляем статус синхронизации
+                seller.api_last_sync = datetime.utcnow()
+                seller.api_sync_status = 'success'
+
+                elapsed = time.time() - start_time
+
+                # Обновляем статистику в ProductSyncSettings
+                sync_settings = seller.product_sync_settings
+                if sync_settings:
+                    sync_settings.last_sync_at = datetime.utcnow()
+                    sync_settings.last_sync_status = 'success'
+                    sync_settings.last_sync_duration = elapsed
+                    sync_settings.products_synced = len(all_cards)
+                    sync_settings.products_added = created_count
+                    sync_settings.products_updated = updated_count
+                    sync_settings.last_sync_error = None
+
+                db.session.commit()
+
+                # Логируем успешный запрос
+                APILog.log_request(
+                    seller_id=seller.id,
+                    endpoint='/content/v2/get/cards/list',
+                    method='POST',
+                    status_code=200,
+                    response_time=elapsed,
+                    success=True
+                )
+
+                app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
+
+        except WBAuthException as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    seller.api_sync_status = 'auth_error'
+                    # Обновляем статистику ошибки
+                    sync_settings = seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = 'auth_error'
+                        sync_settings.last_sync_error = str(e)
+                    db.session.commit()
+                app.logger.error(f"❌ Background sync auth error: {str(e)}")
+
+        except WBAPIException as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    seller.api_sync_status = 'error'
+                    # Обновляем статистику ошибки
+                    sync_settings = seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = 'error'
+                        sync_settings.last_sync_error = str(e)
+                    db.session.commit()
+                app.logger.error(f"❌ Background sync API error: {str(e)}")
+
+        except Exception as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    seller.api_sync_status = 'error'
+                    # Обновляем статистику ошибки
+                    sync_settings = seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = 'error'
+                        sync_settings.last_sync_error = str(e)
+                    db.session.commit()
+                app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
+
+
+@app.route('/products/sync-status', methods=['GET'])
+@login_required
+def product_sync_status_page():
+    """Страница статуса синхронизации и настроек автосинхронизации"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    # Получаем или создаем настройки синхронизации
+    sync_settings = current_user.seller.product_sync_settings
+    if not sync_settings:
+        sync_settings = ProductSyncSettings(seller_id=current_user.seller.id)
+        db.session.add(sync_settings)
+        db.session.commit()
+
+    return render_template(
+        'product_sync_status.html',
+        seller=current_user.seller,
+        sync_settings=sync_settings
+    )
+
+
 @app.route('/products/sync', methods=['POST'])
 @login_required
 def sync_products():
-    """Синхронизация карточек товаров через API WB"""
+    """Запуск синхронизации карточек товаров в фоновом режиме"""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
@@ -1068,220 +1244,30 @@ def sync_products():
         flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
         return redirect(url_for('api_settings'))
 
+    # Проверяем что синхронизация не запущена уже
+    if current_user.seller.api_sync_status == 'syncing':
+        flash('Синхронизация уже выполняется. Пожалуйста, подождите...', 'warning')
+        return redirect(url_for('products_list'))
+
     try:
+        # Устанавливаем статус syncing
         current_user.seller.api_sync_status = 'syncing'
         db.session.commit()
 
-        start_time = time.time()
-
-        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            # Получаем все карточки
-            app.logger.info(f"🔄 Начинаем загрузку карточек для seller_id={current_user.seller.id}")
-            all_cards = client.get_all_cards(batch_size=100)
-            app.logger.info(f"✅ Получено {len(all_cards)} карточек из WB API")
-
-            # Логируем структуру первой карточки для отладки
-            if all_cards:
-                first_card = all_cards[0]
-                app.logger.info(f"📦 Первая карточка: nmID={first_card.get('nmID')}")
-                app.logger.info(f"📦 Все ключи: {list(first_card.keys())}")
-                app.logger.info(f"📷 mediaFiles в первой карточке: {len(first_card.get('mediaFiles', []))}")
-                app.logger.info(f"📷 photos в первой карточке: {len(first_card.get('photos', []))}")
-                app.logger.info(f"🏷️ object field: '{first_card.get('object')}'")
-                app.logger.info(f"🏷️ objectName field: '{first_card.get('objectName')}'")
-                app.logger.info(f"🏷️ subjectName field: '{first_card.get('subjectName')}'")
-                app.logger.info(f"🏷️ subjectID field: '{first_card.get('subjectID')}'")
-            else:
-                app.logger.warning("⚠️ API вернул пустой список карточек!")
-
-            # Статистика
-            created_count = 0
-            updated_count = 0
-
-            for card_data in all_cards:
-                nm_id = card_data.get('nmID')
-                if not nm_id:
-                    continue
-
-                # Ищем существующую карточку
-                product = Product.query.filter_by(
-                    seller_id=current_user.seller.id,
-                    nm_id=nm_id
-                ).first()
-
-                # Извлекаем данные из API
-                vendor_code = card_data.get('vendorCode', '')
-                title = card_data.get('title', '')
-                brand = card_data.get('brand', '')
-
-                # Категория товара - WB API может возвращать разные поля
-                object_name = (
-                    card_data.get('subjectName') or  # Предпочтительное поле в WB API v2
-                    card_data.get('objectName') or
-                    card_data.get('object') or
-                    ''
-                )
-
-                description = card_data.get('description', '')
-
-                # Характеристики
-                characteristics = card_data.get('characteristics', [])
-                characteristics_json = json.dumps(characteristics, ensure_ascii=False) if characteristics else None
-
-                # Габариты
-                dimensions = card_data.get('dimensions', {})
-                dimensions_json = json.dumps(dimensions, ensure_ascii=False) if dimensions else None
-
-                # Медиа - подсчитываем количество фотографий
-                # WB хранит фото на CDN, генерируем URL динамически в шаблонах
-                media = card_data.get('mediaFiles', [])
-
-                # Пробуем несколько способов подсчета фотографий
-                # Вариант 1: по полю big в mediaFiles (старый формат)
-                photo_count_v1 = len([m for m in media if m.get('big') and m.get('mediaType') != 'video'])
-
-                # Вариант 2: просто все медиафайлы кроме видео
-                photo_count_v2 = len([m for m in media if m.get('mediaType') != 'video'])
-
-                # Вариант 3: photos field может содержать количество
-                photos_field = card_data.get('photos', [])
-                photo_count_v3 = len(photos_field) if photos_field else 0
-
-                # Используем максимальное значение
-                photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
-
-                # Если фоток нет, пробуем альтернативный подход - просто предполагаем что есть до 10 фото
-                if photo_count == 0 and card_data.get('mediaFiles'):
-                    # Предполагаем что есть хотя бы несколько фото
-                    photo_count = len(media) if media else 0
-
-                # Логируем для первых 3 товаров для отладки
-                if created_count + updated_count < 3:
-                    app.logger.info(f"Product {nm_id}: mediaFiles={len(media)}, photos_field={len(photos_field) if photos_field else 0}, photo_count={photo_count}")
-
-                # Сохраняем список индексов фотографий [1, 2, 3, ...]
-                photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
-                photos_json = json.dumps(photo_indices) if photo_indices else None
-
-                # Видео обрабатываем отдельно
-                video_media = next((m for m in media if m.get('mediaType') == 'video'), None)
-                video = video_media.get('big') if video_media else None
-
-                # Размеры
-                sizes = card_data.get('sizes', [])
-                sizes_json = json.dumps(sizes, ensure_ascii=False) if sizes else None
-
-                if product:
-                    # Обновление существующей карточки
-                    product.vendor_code = vendor_code
-                    product.title = title
-                    product.brand = brand
-                    product.object_name = object_name
-                    product.description = description
-                    product.characteristics_json = characteristics_json
-                    product.dimensions_json = dimensions_json
-                    product.photos_json = photos_json
-                    product.video_url = video
-                    product.sizes_json = sizes_json
-                    product.last_sync = datetime.utcnow()
-                    product.is_active = True
-                    updated_count += 1
-                else:
-                    # Создание новой карточки
-                    product = Product(
-                        seller_id=current_user.seller.id,
-                        nm_id=nm_id,
-                        imt_id=card_data.get('imtID'),
-                        vendor_code=vendor_code,
-                        title=title,
-                        brand=brand,
-                        object_name=object_name,
-                        description=description,
-                        supplier_vendor_code=card_data.get('supplierVendorCode', ''),
-                        characteristics_json=characteristics_json,
-                        dimensions_json=dimensions_json,
-                        photos_json=photos_json,
-                        video_url=video,
-                        sizes_json=sizes_json,
-                        last_sync=datetime.utcnow(),
-                        is_active=True
-                    )
-                    db.session.add(product)
-                    created_count += 1
-
-            # Сохраняем все изменения
-            db.session.commit()
-
-            app.logger.info(f"💾 Сохранено в БД: {created_count} новых, {updated_count} обновлено")
-
-            # Обновляем статус синхронизации
-            current_user.seller.api_last_sync = datetime.utcnow()
-            current_user.seller.api_sync_status = 'success'
-            db.session.commit()
-
-            elapsed = time.time() - start_time
-
-            # Логируем успешный запрос
-            APILog.log_request(
-                seller_id=current_user.seller.id,
-                endpoint='/content/v2/get/cards/list',
-                method='POST',  # Исправлено на POST
-                status_code=200,
-                response_time=elapsed,
-                success=True
-            )
-
-            app.logger.info(f"✅ Синхронизация завершена успешно за {elapsed:.1f}с")
-
-            flash(
-                f'Синхронизация завершена за {elapsed:.1f}с: '
-                f'{created_count} новых, {updated_count} обновлено',
-                'success'
-            )
-
-    except WBAuthException as e:
-        current_user.seller.api_sync_status = 'auth_error'
-        db.session.commit()
-
-        app.logger.error(f"❌ Ошибка авторизации: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/content/v2/get/cards/list',
-            method='POST',
-            status_code=401,
-            response_time=0,
-            success=False,
-            error_message=f'Authentication failed: {str(e)}'
+        # Запускаем синхронизацию в фоновом потоке
+        thread = threading.Thread(
+            target=_perform_product_sync_task,
+            args=(current_user.seller.id, app),
+            daemon=True
         )
+        thread.start()
 
-        flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
-
-    except WBAPIException as e:
-        current_user.seller.api_sync_status = 'error'
-        db.session.commit()
-
-        app.logger.error(f"❌ Ошибка WB API: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/content/v2/get/cards/list',
-            method='POST',
-            status_code=500,
-            response_time=0,
-            success=False,
-            error_message=str(e)
-        )
-
-        flash(f'Ошибка API WB: {str(e)}', 'danger')
+        flash('Синхронизация товаров запущена в фоновом режиме. Обновите страницу через минуту чтобы увидеть результаты.', 'info')
+        app.logger.info(f"✅ Background product sync started for seller_id={current_user.seller.id}")
 
     except Exception as e:
-        current_user.seller.api_sync_status = 'error'
-        db.session.commit()
-
-        app.logger.exception(f"❌ Неожиданная ошибка синхронизации: {str(e)}")
-
-        flash(f'Ошибка синхронизации: {str(e)}', 'danger')
+        app.logger.exception(f"❌ Failed to start background sync: {str(e)}")
+        flash(f'Ошибка запуска синхронизации: {str(e)}', 'danger')
 
     return redirect(url_for('products_list'))
 
@@ -1537,9 +1523,15 @@ def product_edit(product_id):
     # Получаем конфигурацию доступных характеристик для категории товара
     characteristics_config = []
     try:
-        if product.object_name:
+        if product.subject_id:
+            # Если есть subject_id, используем его напрямую
             with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-                config_data = client.get_card_characteristics_config(product.object_name)
+                config_data = client.get_card_characteristics_config(product.subject_id)
+                characteristics_config = config_data.get('data', [])
+        elif product.object_name:
+            # Если нет subject_id, получаем характеристики по object_name
+            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+                config_data = client.get_card_characteristics_by_object_name(product.object_name)
                 characteristics_config = config_data.get('data', [])
     except Exception as e:
         app.logger.warning(f"Не удалось загрузить конфигурацию характеристик: {e}")
@@ -1768,7 +1760,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1819,7 +1811,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1868,7 +1860,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1917,7 +1909,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -1985,7 +1977,7 @@ def products_bulk_edit():
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
                         return render_template('products_bulk_edit.html',
-                                             products=products,
+                                             products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
                     for product in products:
@@ -2090,7 +2082,7 @@ def products_bulk_edit():
 
     return render_template(
         'products_bulk_edit.html',
-        products=products,
+        products=[p.to_dict() for p in products],
         edit_operations=edit_operations
     )
 
@@ -2537,7 +2529,7 @@ def api_characteristics_by_category(object_name):
     # Сначала попробуем получить из WB API
     try:
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            result = client.get_card_characteristics_config(object_name)
+            result = client.get_card_characteristics_by_object_name(object_name)
 
             # Преобразуем результат в более удобный формат
             characteristics = []
@@ -2608,6 +2600,794 @@ def api_product_characteristics(product_id):
     }
 
 
+# ============= МОНИТОРИНГ ЦЕН =============
+
+@app.route('/price-monitor/settings', methods=['GET', 'POST'])
+@login_required
+def price_monitor_settings():
+    """Настройки мониторинга цен"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'warning')
+        return redirect(url_for('dashboard'))
+
+    seller = current_user.seller
+
+    # Получаем или создаем настройки
+    settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+    if not settings:
+        settings = PriceMonitorSettings(seller_id=seller.id)
+        db.session.add(settings)
+        db.session.commit()
+
+    if request.method == 'POST':
+        try:
+            settings.is_enabled = request.form.get('is_enabled') == 'on'
+            settings.monitor_prices = request.form.get('monitor_prices') == 'on'
+            settings.monitor_stocks = request.form.get('monitor_stocks') == 'on'
+            settings.sync_interval_minutes = int(request.form.get('sync_interval_minutes', 60))
+            settings.price_change_threshold_percent = float(request.form.get('price_change_threshold_percent', 10.0))
+            settings.stock_change_threshold_percent = float(request.form.get('stock_change_threshold_percent', 50.0))
+
+            db.session.commit()
+            flash('Настройки мониторинга сохранены', 'success')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Ошибка сохранения настроек: {e}', 'danger')
+
+        return redirect(url_for('price_monitor_settings'))
+
+    return render_template('price_monitor_settings.html', settings=settings)
+
+
+@app.route('/price-monitor/suspicious', methods=['GET'])
+@login_required
+def suspicious_price_changes():
+    """Страница подозрительных изменений цен"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'warning')
+        return redirect(url_for('dashboard'))
+
+    seller = current_user.seller
+
+    # Фильтры
+    change_type = request.args.get('change_type', '')
+    is_reviewed = request.args.get('is_reviewed', '')
+    date_from = request.args.get('date_from', '')
+    date_to = request.args.get('date_to', '')
+    search = request.args.get('search', '')
+
+    # Сортировка
+    sort_by = request.args.get('sort_by', 'created_at')
+    sort_order = request.args.get('sort_order', 'desc')
+
+    # Пагинация
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+
+    # Базовый запрос
+    query = SuspiciousPriceChange.query.filter_by(seller_id=seller.id)
+
+    # Применяем фильтры
+    if change_type:
+        query = query.filter(SuspiciousPriceChange.change_type == change_type)
+
+    if is_reviewed == 'true':
+        query = query.filter(SuspiciousPriceChange.is_reviewed == True)
+    elif is_reviewed == 'false':
+        query = query.filter(SuspiciousPriceChange.is_reviewed == False)
+
+    if date_from:
+        try:
+            date_from_obj = datetime.strptime(date_from, '%Y-%m-%d')
+            query = query.filter(SuspiciousPriceChange.created_at >= date_from_obj)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            date_to_obj = datetime.strptime(date_to, '%Y-%m-%d')
+            # Добавляем 1 день чтобы включить весь день
+            from datetime import timedelta
+            date_to_obj = date_to_obj + timedelta(days=1)
+            query = query.filter(SuspiciousPriceChange.created_at < date_to_obj)
+        except ValueError:
+            pass
+
+    if search:
+        # Поиск по товару
+        query = query.join(Product).filter(
+            or_(
+                Product.vendor_code.ilike(f'%{search}%'),
+                Product.title.ilike(f'%{search}%'),
+                Product.brand.ilike(f'%{search}%')
+            )
+        )
+
+    # Применяем сортировку
+    if sort_by == 'created_at':
+        if sort_order == 'desc':
+            query = query.order_by(SuspiciousPriceChange.created_at.desc())
+        else:
+            query = query.order_by(SuspiciousPriceChange.created_at.asc())
+    elif sort_by == 'change_percent':
+        if sort_order == 'desc':
+            query = query.order_by(SuspiciousPriceChange.change_percent.desc())
+        else:
+            query = query.order_by(SuspiciousPriceChange.change_percent.asc())
+
+    # Пагинация
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    changes = pagination.items
+
+    # Получаем статистику
+    total_changes = SuspiciousPriceChange.query.filter_by(seller_id=seller.id).count()
+    unreviewed_changes = SuspiciousPriceChange.query.filter_by(seller_id=seller.id, is_reviewed=False).count()
+
+    return render_template(
+        'suspicious_price_changes.html',
+        changes=changes,
+        pagination=pagination,
+        total_changes=total_changes,
+        unreviewed_changes=unreviewed_changes,
+        # Фильтры для формы
+        change_type=change_type,
+        is_reviewed=is_reviewed,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
+
+
+@app.route('/api/price-monitor/settings', methods=['GET', 'POST'])
+@login_required
+def api_price_monitor_settings():
+    """API для получения/обновления настроек мониторинга"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    if request.method == 'GET':
+        settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+        if not settings:
+            settings = PriceMonitorSettings(seller_id=seller.id)
+            db.session.add(settings)
+            db.session.commit()
+
+        return settings.to_dict()
+
+    # POST - обновление настроек
+    try:
+        data = request.get_json()
+        settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+        if not settings:
+            settings = PriceMonitorSettings(seller_id=seller.id)
+            db.session.add(settings)
+
+        if 'is_enabled' in data:
+            settings.is_enabled = bool(data['is_enabled'])
+        if 'monitor_prices' in data:
+            settings.monitor_prices = bool(data['monitor_prices'])
+        if 'monitor_stocks' in data:
+            settings.monitor_stocks = bool(data['monitor_stocks'])
+        if 'sync_interval_minutes' in data:
+            settings.sync_interval_minutes = int(data['sync_interval_minutes'])
+        if 'price_change_threshold_percent' in data:
+            settings.price_change_threshold_percent = float(data['price_change_threshold_percent'])
+        if 'stock_change_threshold_percent' in data:
+            settings.stock_change_threshold_percent = float(data['stock_change_threshold_percent'])
+
+        db.session.commit()
+        return settings.to_dict()
+
+    except Exception as e:
+        db.session.rollback()
+        return {'error': str(e)}, 400
+
+
+@app.route('/api/price-monitor/suspicious-changes', methods=['GET'])
+@login_required
+def api_suspicious_price_changes():
+    """API для получения списка подозрительных изменений"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    # Фильтры из query параметров
+    change_type = request.args.get('change_type')
+    is_reviewed = request.args.get('is_reviewed')
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+
+    # Пагинация
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+
+    # Базовый запрос
+    query = SuspiciousPriceChange.query.filter_by(seller_id=seller.id)
+
+    # Применяем фильтры
+    if change_type:
+        query = query.filter(SuspiciousPriceChange.change_type == change_type)
+
+    if is_reviewed is not None:
+        query = query.filter(SuspiciousPriceChange.is_reviewed == (is_reviewed.lower() == 'true'))
+
+    if date_from:
+        try:
+            date_from_obj = datetime.strptime(date_from, '%Y-%m-%d')
+            query = query.filter(SuspiciousPriceChange.created_at >= date_from_obj)
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            date_to_obj = datetime.strptime(date_to, '%Y-%m-%d')
+            from datetime import timedelta
+            date_to_obj = date_to_obj + timedelta(days=1)
+            query = query.filter(SuspiciousPriceChange.created_at < date_to_obj)
+        except ValueError:
+            pass
+
+    # Сортировка
+    query = query.order_by(SuspiciousPriceChange.created_at.desc())
+
+    # Пагинация
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return {
+        'items': [change.to_dict() for change in pagination.items],
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }
+
+
+@app.route('/api/price-monitor/suspicious-changes/<int:change_id>/review', methods=['POST'])
+@login_required
+def api_mark_change_reviewed(change_id):
+    """API для пометки изменения как просмотренного"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    change = SuspiciousPriceChange.query.get_or_404(change_id)
+
+    # Проверка доступа
+    if change.seller_id != current_user.seller.id:
+        return {'error': 'Access denied'}, 403
+
+    try:
+        data = request.get_json() or {}
+        change.is_reviewed = True
+        change.reviewed_at = datetime.utcnow()
+        change.reviewed_by_user_id = current_user.id
+        if 'notes' in data:
+            change.notes = data['notes']
+
+        db.session.commit()
+        return change.to_dict()
+
+    except Exception as e:
+        db.session.rollback()
+        return {'error': str(e)}, 400
+
+
+@app.route('/api/price-monitor/sync', methods=['POST'])
+@login_required
+def api_manual_price_sync():
+    """API для ручного запуска синхронизации цен"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    # Проверяем настройки
+    settings = PriceMonitorSettings.query.filter_by(seller_id=seller.id).first()
+    if not settings:
+        return {'error': 'Price monitoring settings not found'}, 404
+
+    if not settings.is_enabled:
+        return {'error': 'Price monitoring is disabled'}, 400
+
+    # Проверяем наличие API ключа
+    if not seller.has_valid_api_key():
+        return {'error': 'WB API key not configured'}, 400
+
+    try:
+        # Выполняем синхронизацию
+        result = perform_price_monitoring_sync(seller, settings)
+        return result
+
+    except Exception as e:
+        return {'error': str(e)}, 500
+
+
+@app.route('/api/price-monitor/history/<int:product_id>', methods=['GET'])
+@login_required
+def api_price_history(product_id):
+    """API для получения истории изменений цен товара"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    product = Product.query.get_or_404(product_id)
+
+    # Проверка доступа
+    if product.seller_id != current_user.seller.id:
+        return {'error': 'Access denied'}, 403
+
+    # Получаем историю
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 100, type=int)
+
+    query = PriceHistory.query.filter_by(product_id=product_id).order_by(PriceHistory.created_at.desc())
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return {
+        'product': product.to_dict(),
+        'history': [h.to_dict() for h in pagination.items],
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'has_next': pagination.has_next,
+        'has_prev': pagination.has_prev
+    }
+
+
+# ============= API: СТАТУС СИНХРОНИЗАЦИИ ТОВАРОВ =============
+
+@app.route('/api/products/sync-status', methods=['GET'])
+@login_required
+def api_product_sync_status():
+    """API для получения статуса синхронизации товаров"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    # Получаем или создаем настройки синхронизации
+    sync_settings = seller.product_sync_settings
+    if not sync_settings:
+        sync_settings = ProductSyncSettings(seller_id=seller.id)
+        db.session.add(sync_settings)
+        db.session.commit()
+
+    # Базовая информация о статусе
+    status_info = {
+        'is_syncing': seller.api_sync_status == 'syncing',
+        'last_sync_status': seller.api_sync_status,
+        'last_sync_at': seller.api_last_sync.isoformat() if seller.api_last_sync else None,
+
+        # Настройки автосинхронизации
+        'auto_sync_enabled': sync_settings.is_enabled,
+        'sync_interval_minutes': sync_settings.sync_interval_minutes,
+        'next_sync_at': sync_settings.next_sync_at.isoformat() if sync_settings.next_sync_at else None,
+
+        # Статистика последней синхронизации
+        'last_sync_duration': sync_settings.last_sync_duration,
+        'products_synced': sync_settings.products_synced,
+        'products_added': sync_settings.products_added,
+        'products_updated': sync_settings.products_updated,
+        'last_sync_error': sync_settings.last_sync_error,
+
+        # Общая статистика
+        'total_products': Product.query.filter_by(seller_id=seller.id).count(),
+        'active_products': Product.query.filter_by(seller_id=seller.id, is_active=True).count(),
+    }
+
+    # Вычисляем прогресс если синхронизация идет
+    if seller.api_sync_status == 'syncing':
+        status_info['status_message'] = 'Синхронизация выполняется...'
+        status_info['can_start_sync'] = False
+    elif seller.api_sync_status == 'success':
+        status_info['status_message'] = 'Последняя синхронизация завершена успешно'
+        status_info['can_start_sync'] = True
+    elif seller.api_sync_status == 'error' or seller.api_sync_status == 'auth_error':
+        status_info['status_message'] = 'Ошибка при последней синхронизации'
+        status_info['can_start_sync'] = True
+    else:
+        status_info['status_message'] = 'Синхронизация не запускалась'
+        status_info['can_start_sync'] = True
+
+    return status_info
+
+
+@app.route('/api/products/sync-settings', methods=['GET', 'POST'])
+@login_required
+def api_product_sync_settings():
+    """API для управления настройками автосинхронизации"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    # Получаем или создаем настройки
+    sync_settings = current_user.seller.product_sync_settings
+    if not sync_settings:
+        sync_settings = ProductSyncSettings(seller_id=current_user.seller.id)
+        db.session.add(sync_settings)
+        db.session.commit()
+
+    if request.method == 'GET':
+        return sync_settings.to_dict()
+
+    # POST - обновление настроек
+    try:
+        data = request.get_json() or request.form.to_dict()
+
+        # Обновляем настройки
+        if 'is_enabled' in data:
+            is_enabled = str(data['is_enabled']).lower() in ['true', '1', 'on']
+            sync_settings.is_enabled = is_enabled
+
+            # Если включили - устанавливаем время следующей синхронизации
+            if is_enabled and not sync_settings.next_sync_at:
+                from datetime import timedelta
+                sync_settings.next_sync_at = datetime.utcnow() + timedelta(minutes=sync_settings.sync_interval_minutes)
+
+        if 'sync_interval_minutes' in data:
+            interval = int(data['sync_interval_minutes'])
+            # Ограничиваем интервал от 5 минут до 24 часов
+            interval = max(5, min(interval, 1440))
+            sync_settings.sync_interval_minutes = interval
+
+            # Пересчитываем время следующей синхронизации
+            if sync_settings.is_enabled:
+                from datetime import timedelta
+                sync_settings.next_sync_at = datetime.utcnow() + timedelta(minutes=interval)
+
+        if 'sync_products' in data:
+            sync_settings.sync_products = str(data['sync_products']).lower() in ['true', '1', 'on']
+
+        if 'sync_stocks' in data:
+            sync_settings.sync_stocks = str(data['sync_stocks']).lower() in ['true', '1', 'on']
+
+        db.session.commit()
+
+        return {
+            'success': True,
+            'message': 'Настройки обновлены',
+            'settings': sync_settings.to_dict()
+        }
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.exception(f"Error updating sync settings: {e}")
+        return {'error': str(e)}, 400
+
+
+def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings) -> dict:
+    """
+    Выполняет синхронизацию цен и остатков для мониторинга
+
+    Args:
+        seller: Продавец
+        settings: Настройки мониторинга
+
+    Returns:
+        dict: Результат синхронизации
+    """
+    # Обновляем статус
+    settings.last_sync_status = 'running'
+    settings.last_sync_at = datetime.utcnow()
+    db.session.commit()
+
+    try:
+        # Создаем клиент API
+        wb_client = WildberriesAPIClient(seller.wb_api_key)
+
+        # Получаем ВСЕ товары через cursor-based пагинацию с детальным логированием
+        app.logger.info(f"Starting to fetch all products for seller {seller.id} using cursor-based pagination...")
+
+        all_cards = []
+        cursor_updated_at = None
+        cursor_nm_id = None
+        page_num = 0
+
+        while True:
+            page_num += 1
+            msg = f"📄 Fetching page {page_num} (cursor: updatedAt={cursor_updated_at}, nmID={cursor_nm_id})..."
+            app.logger.info(msg)
+            print(msg, flush=True)  # Явный вывод в stdout для Docker
+
+            try:
+                # Получаем одну страницу
+                data = wb_client.get_cards_list(
+                    limit=100,
+                    cursor_updated_at=cursor_updated_at,
+                    cursor_nm_id=cursor_nm_id
+                )
+            except Exception as e:
+                err_msg = f"❌ Failed to fetch page {page_num}: {str(e)}"
+                app.logger.error(err_msg)
+                print(err_msg, flush=True)
+                raise Exception(f'Failed to fetch products from WB API on page {page_num}: {str(e)}')
+
+            # Получаем карточки из ответа
+            page_cards = data.get('cards', [])
+
+            if not page_cards:
+                msg = f"⏹ No more cards on page {page_num}. Pagination complete."
+                app.logger.info(msg)
+                print(msg, flush=True)
+                break
+
+            all_cards.extend(page_cards)
+            msg = f"✓ Page {page_num}: loaded {len(page_cards)} cards. Total so far: {len(all_cards)}"
+            app.logger.info(msg)
+            print(msg, flush=True)
+
+            # Получаем cursor для следующей страницы
+            cursor = data.get('cursor')
+            if not cursor:
+                msg = f"⏹ No cursor in response on page {page_num}. This is the last page."
+                app.logger.info(msg)
+                print(msg, flush=True)
+                break
+
+            # Логируем total если он есть (но НЕ используем для остановки пагинации)
+            # Причина: WB API v2 может возвращать total=limit (100) вместо реального количества товаров
+            total = cursor.get('total', 0)
+            if total > 0:
+                msg = f"📊 Cursor contains total field: {total} (current loaded: {len(all_cards)}) - continuing pagination..."
+                app.logger.info(msg)
+                print(msg, flush=True)
+
+            # Получаем данные для следующего cursor
+            next_updated_at = cursor.get('updatedAt')
+            next_nm_id = cursor.get('nmID')
+
+            if not next_updated_at or not next_nm_id:
+                msg = f"⏹ No cursor data (updatedAt={next_updated_at}, nmID={next_nm_id}). Last page reached."
+                app.logger.info(msg)
+                print(msg, flush=True)
+                break
+
+            # Проверка на зацикливание
+            if cursor_updated_at == next_updated_at and cursor_nm_id == next_nm_id:
+                msg = f"⚠️  Cursor not changing! Breaking to avoid infinite loop."
+                app.logger.warning(msg)
+                print(msg, flush=True)
+                break
+
+            cursor_updated_at = next_updated_at
+            cursor_nm_id = next_nm_id
+
+            # Ограничение на количество страниц для безопасности
+            if page_num >= 1000:
+                msg = f"⚠️  Reached max pages limit (1000). Stopping."
+                app.logger.warning(msg)
+                print(msg, flush=True)
+                break
+
+        cards = all_cards
+        msg = f"✅ Pagination complete! Fetched {len(cards)} cards in {page_num} pages for seller {seller.id}"
+        app.logger.info(msg)
+        print(msg, flush=True)
+
+        if not cards:
+            app.logger.warning(f"No cards returned from WB API for seller {seller.id}")
+
+        if not isinstance(cards, list):
+            raise Exception(f'Expected cards to be a list, got {type(cards).__name__}')
+
+        changes_detected = 0
+        suspicious_changes = 0
+        products_checked = 0
+        products_not_in_db = 0
+        products_added = 0
+
+        for card in cards:
+            nm_id = card.get('nmID')
+            if not nm_id:
+                continue
+
+            # Находим товар в БД
+            product = Product.query.filter_by(seller_id=seller.id, nm_id=nm_id).first()
+
+            # Если товара нет в БД - создаем его
+            if not product:
+                try:
+                    # Создаем новый товар из данных WB API
+                    product = Product(
+                        seller_id=seller.id,
+                        nm_id=nm_id,
+                        imt_id=card.get('imtID'),
+                        vendor_code=card.get('vendorCode'),
+                        title=card.get('title'),
+                        brand=card.get('brand'),
+                        object_name=card.get('object'),
+                        is_active=True,
+                        created_at=datetime.utcnow(),
+                        last_sync=datetime.utcnow()
+                    )
+
+                    # Устанавливаем цену и остатки
+                    sizes = card.get('sizes', [])
+                    if sizes:
+                        size = sizes[0]
+                        product.price = size.get('price')
+                        product.discount_price = size.get('discountedPrice', product.price)
+
+                    # Остатки
+                    stocks = card.get('stocks', [])
+                    if stocks:
+                        product.quantity = sum(stock.get('qty', 0) for stock in stocks)
+
+                    db.session.add(product)
+                    db.session.flush()  # Чтобы получить ID
+                    products_added += 1
+                    products_not_in_db += 1
+
+                    app.logger.info(f"Added new product: {nm_id} - {product.vendor_code}")
+
+                    # Для нового товара не создаем историю изменений
+                    continue
+
+                except Exception as e:
+                    app.logger.error(f"Failed to add product {nm_id}: {e}")
+                    products_not_in_db += 1
+                    continue
+
+            products_checked += 1
+
+            # Получаем цены из API
+            sizes = card.get('sizes', [])
+            if not sizes:
+                continue
+
+            # Берем первый размер для получения цены
+            size = sizes[0]
+            new_price = size.get('price')
+            new_discount_price = size.get('discountedPrice', new_price)
+
+            # Получаем остатки если нужно
+            new_quantity = None
+            if settings.monitor_stocks:
+                stocks = card.get('stocks', [])
+                new_quantity = sum(stock.get('qty', 0) for stock in stocks)
+
+            # Сохраняем старые значения
+            old_price = float(product.price) if product.price else None
+            old_discount_price = float(product.discount_price) if product.discount_price else None
+            old_quantity = product.quantity
+
+            # Проверяем изменения
+            price_changed = False
+            quantity_changed = False
+
+            if settings.monitor_prices and new_price is not None and old_price is not None and old_price > 0:
+                if new_price != old_price or (new_discount_price and new_discount_price != old_discount_price):
+                    price_changed = True
+
+            if settings.monitor_stocks and new_quantity is not None and old_quantity is not None and old_quantity > 0:
+                if new_quantity != old_quantity:
+                    quantity_changed = True
+
+            # Если есть изменения, создаем запись в истории
+            if price_changed or quantity_changed:
+                changes_detected += 1
+
+                # Вычисляем процент изменения
+                price_change_percent = None
+                discount_price_change_percent = None
+                quantity_change_percent = None
+
+                if price_changed and old_price and old_price > 0:
+                    price_change_percent = ((new_price - old_price) / old_price) * 100
+
+                if new_discount_price and old_discount_price and old_discount_price > 0:
+                    discount_price_change_percent = ((new_discount_price - old_discount_price) / old_discount_price) * 100
+
+                if quantity_changed and old_quantity and old_quantity > 0:
+                    quantity_change_percent = ((new_quantity - old_quantity) / old_quantity) * 100
+
+                # Создаем запись в истории
+                history = PriceHistory(
+                    product_id=product.id,
+                    seller_id=seller.id,
+                    old_price=old_price,
+                    old_discount_price=old_discount_price,
+                    old_quantity=old_quantity,
+                    new_price=new_price,
+                    new_discount_price=new_discount_price,
+                    new_quantity=new_quantity,
+                    price_change_percent=price_change_percent,
+                    discount_price_change_percent=discount_price_change_percent,
+                    quantity_change_percent=quantity_change_percent
+                )
+                db.session.add(history)
+                db.session.flush()  # Чтобы получить ID истории
+
+                # Проверяем, есть ли подозрительные скачки
+                if price_change_percent and abs(price_change_percent) > settings.price_change_threshold_percent:
+                    suspicious = SuspiciousPriceChange(
+                        price_history_id=history.id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                        change_type='price',
+                        old_value=old_price,
+                        new_value=new_price,
+                        change_percent=price_change_percent,
+                        threshold_percent=settings.price_change_threshold_percent
+                    )
+                    db.session.add(suspicious)
+                    suspicious_changes += 1
+
+                if discount_price_change_percent and abs(discount_price_change_percent) > settings.price_change_threshold_percent:
+                    suspicious = SuspiciousPriceChange(
+                        price_history_id=history.id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                        change_type='discount_price',
+                        old_value=old_discount_price,
+                        new_value=new_discount_price,
+                        change_percent=discount_price_change_percent,
+                        threshold_percent=settings.price_change_threshold_percent
+                    )
+                    db.session.add(suspicious)
+                    suspicious_changes += 1
+
+                if quantity_change_percent and abs(quantity_change_percent) > settings.stock_change_threshold_percent:
+                    suspicious = SuspiciousPriceChange(
+                        price_history_id=history.id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                        change_type='quantity',
+                        old_value=old_quantity,
+                        new_value=new_quantity,
+                        change_percent=quantity_change_percent,
+                        threshold_percent=settings.stock_change_threshold_percent
+                    )
+                    db.session.add(suspicious)
+                    suspicious_changes += 1
+
+                # Обновляем товар
+                if new_price is not None:
+                    product.price = new_price
+                if new_discount_price is not None:
+                    product.discount_price = new_discount_price
+                if new_quantity is not None:
+                    product.quantity = new_quantity
+                product.last_sync = datetime.utcnow()
+
+        # Сохраняем все изменения
+        db.session.commit()
+
+        # Обновляем статус синхронизации
+        settings.last_sync_status = 'success'
+        settings.last_sync_error = None
+        db.session.commit()
+
+        app.logger.info(f"Sync completed: {products_added} added, {products_checked} checked, {changes_detected} changes, {suspicious_changes} suspicious")
+
+        return {
+            'status': 'success',
+            'total_cards_from_api': len(cards),
+            'products_added': products_added,
+            'products_checked': products_checked,
+            'products_not_in_db': products_not_in_db - products_added,  # Не добавленные (были пропущены)
+            'changes_detected': changes_detected,
+            'suspicious_changes': suspicious_changes,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+    except Exception as e:
+        # Откатываем транзакцию
+        db.session.rollback()
+
+        # Сохраняем ошибку
+        settings.last_sync_status = 'failed'
+        settings.last_sync_error = str(e)
+        db.session.commit()
+
+        raise
+
+
 # ============= ИНИЦИАЛИЗАЦИЯ БД =============
 
 @app.cli.command()
@@ -2640,6 +3420,53 @@ def create_admin():
     db.session.commit()
 
     print(f'Администратор {username} успешно создан')
+
+
+@app.cli.command()
+def apply_migrations():
+    """Применить миграции базы данных"""
+    import sqlite3
+    from pathlib import Path
+
+    print("🔄 Применение миграций...")
+
+    # Получаем путь к БД из конфигурации
+    db_url = app.config['SQLALCHEMY_DATABASE_URI']
+    if db_url.startswith('sqlite:///'):
+        db_path = db_url.replace('sqlite:///', '')
+    else:
+        print(f"❌ Неподдерживаемый тип БД: {db_url}")
+        return
+
+    if not Path(db_path).exists():
+        print(f"❌ База данных не найдена: {db_path}")
+        return
+
+    print(f"📂 База данных: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        # Проверяем существование subject_id
+        cursor.execute("PRAGMA table_info(products)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if 'subject_id' in columns:
+            print("  ✓ Колонка subject_id уже существует")
+        else:
+            print("  ➕ Добавление колонки subject_id...")
+            cursor.execute("ALTER TABLE products ADD COLUMN subject_id INTEGER")
+            conn.commit()
+            print("  ✅ Колонка subject_id добавлена")
+
+        print("\n✅ Миграции успешно применены!")
+
+    except Exception as e:
+        print(f"❌ Ошибка при применении миграций: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':

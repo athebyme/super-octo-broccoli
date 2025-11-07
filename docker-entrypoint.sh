@@ -16,6 +16,10 @@ echo "📦 Применение миграций базы данных..."
 python migrate_db.py --db-path data/seller_platform.db
 python migrate_add_characteristics.py data/seller_platform.db
 python migrate_add_history_and_logging.py --db-path data/seller_platform.db
+python migrate_add_subject_id.py data/seller_platform.db
+python migrate_add_price_monitoring.py || echo "⚠️ Price monitoring migration skipped (already applied or error)"
+python migrate_add_product_sync_settings.py || echo "⚠️ Product sync settings migration skipped (already applied or error)"
+python migrate_add_admin_features.py || echo "⚠️ Admin features migration skipped (already applied or error)"
 
 # Дополнительная инициализация через Flask
 python - <<'PYCODE'
@@ -38,4 +42,12 @@ PYCODE
 fi
 
 echo "🌐 Запуск gunicorn на порту ${PORT}..."
-exec gunicorn --bind 0.0.0.0:${PORT} ${APP_MODULE}
+exec gunicorn \
+  --bind 0.0.0.0:${PORT} \
+  --timeout 600 \
+  --workers 2 \
+  --threads 2 \
+  --worker-class gthread \
+  --access-logfile - \
+  --error-logfile - \
+  ${APP_MODULE}

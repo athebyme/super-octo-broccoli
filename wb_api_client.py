@@ -403,6 +403,10 @@ class WildberriesAPIClient:
         cursor_nm_id = None
 
         while True:
+            # Сохраняем текущий cursor перед запросом для проверки на зацикливание
+            prev_cursor_updated_at = cursor_updated_at
+            prev_cursor_nm_id = cursor_nm_id
+
             # Запрос с cursor для пагинации
             data = self.get_cards_list(
                 limit=batch_size,
@@ -434,10 +438,11 @@ class WildberriesAPIClient:
                 logger.info(f"Pagination complete. Total cards: {len(all_cards)}")
                 break
 
-            # Если total указывает что мы получили все
-            total = cursor.get('total', 0)
-            if total > 0 and len(all_cards) >= total:
-                logger.info(f"All {total} cards loaded")
+            # Проверка на зацикливание - новый cursor не должен совпадать с предыдущим
+            if (prev_cursor_updated_at is not None and
+                prev_cursor_updated_at == cursor_updated_at and
+                prev_cursor_nm_id == cursor_nm_id):
+                logger.warning(f"Cursor not changing, stopping to avoid infinite loop. Total: {len(all_cards)}")
                 break
 
         logger.info(f"Total cards loaded: {len(all_cards)}")
@@ -592,7 +597,8 @@ class WildberriesAPIClient:
         updates: Dict[str, Any],
         merge_with_existing: bool = True,
         log_to_db: bool = False,
-        seller_id: int = None
+        seller_id: int = None,
+        validate: bool = True
     ) -> Dict[str, Any]:
         """
         Обновить карточку товара (Content API v2)
@@ -602,14 +608,17 @@ class WildberriesAPIClient:
             updates: Словарь с обновляемыми полями
                 Возможные поля:
                 - vendorCode: артикул продавца
-                - title: название товара
-                - description: описание
+                - title: название товара (макс 60 символов)
+                - description: описание (1000-5000 символов)
                 - brand: бренд
+                - dimensions: габариты (см и кг)
                 - characteristics: список характеристик
                   [{"id": 123, "value": "значение"}]
+                - sizes: массив размеров (обязательно)
             merge_with_existing: Если True, сначала получит полную карточку и объединит с изменениями
             log_to_db: Логировать запрос в БД
             seller_id: ID продавца для логирования
+            validate: Валидировать данные перед отправкой
 
         Returns:
             Результат обновления
@@ -618,6 +627,8 @@ class WildberriesAPIClient:
             WB API v2 требует отправлять ПОЛНУЮ карточку товара.
             Метод автоматически получает текущую карточку и объединяет с изменениями.
         """
+        from wb_validators import prepare_card_for_update, validate_and_log_errors, clean_characteristics_for_update
+
         logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
         logger.debug(f"Update data: {updates}")
 
@@ -633,16 +644,24 @@ class WildberriesAPIClient:
                 if not full_card:
                     raise WBAPIException(f"Card nmID={nm_id} not found in WB API")
 
-                # Объединяем полную карточку с изменениями
-                logger.debug(f"Merging updates into full card")
-                full_card.update(updates)
-                card_to_send = full_card
+                # Очищаем и валидируем характеристики если они есть в обновлениях
+                if 'characteristics' in updates and updates['characteristics']:
+                    updates['characteristics'] = clean_characteristics_for_update(updates['characteristics'])
+
+                # Подготавливаем карточку для обновления (удаляем нередактируемые поля)
+                card_to_send = prepare_card_for_update(full_card, updates)
+
             except Exception as e:
                 logger.error(f"❌ Failed to fetch full card for merging: {str(e)}")
                 logger.warning("⚠️ Trying to update with partial data (may fail)")
                 card_to_send = {"nmID": nm_id, **updates}
         else:
             card_to_send = {"nmID": nm_id, **updates}
+
+        # Валидация данных перед отправкой
+        if validate:
+            if not validate_and_log_errors(card_to_send, operation="update"):
+                raise WBAPIException(f"Validation failed for card nmID={nm_id}")
 
         # WB Content API v2 эндпоинт для обновления
         endpoint = "/content/v2/cards/update"
@@ -746,35 +765,135 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get card nmID={nm_id}: {str(e)}")
             raise
 
+    def get_subjects_list(
+        self,
+        name: Optional[str] = None,
+        limit: int = 1000,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Получить список предметов (subjects) из WB API
+
+        Args:
+            name: Поиск по названию предмета (опционально)
+            limit: Количество предметов (максимум 1000)
+            offset: Сколько элементов пропустить
+
+        Returns:
+            Список предметов с их ID и названиями
+        """
+        endpoint = "/content/v2/object/all"
+
+        params = {
+            'limit': min(limit, 1000),
+            'offset': offset
+        }
+
+        if name:
+            params['name'] = name
+
+        logger.info(f"🔍 Getting subjects list (name={name}, limit={limit})")
+
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ Subjects list loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get subjects list: {str(e)}")
+            raise
+
+    def get_subject_id_by_name(self, object_name: str) -> Optional[int]:
+        """
+        Получить subject_id по названию предмета
+
+        Args:
+            object_name: Название предмета (например, "Футболки")
+
+        Returns:
+            subject_id или None если не найден
+        """
+        logger.info(f"🔍 Looking for subject_id for: {object_name}")
+
+        try:
+            result = self.get_subjects_list(name=object_name, limit=100)
+            subjects = result.get('data', [])
+
+            # Ищем точное совпадение по имени
+            for subject in subjects:
+                if subject.get('subjectName', '').lower() == object_name.lower():
+                    subject_id = subject.get('subjectID')
+                    logger.info(f"✅ Found exact match: {object_name} -> subjectID={subject_id}")
+                    return subject_id
+
+            # Если точного совпадения нет, берём первый результат
+            if subjects:
+                subject = subjects[0]
+                subject_id = subject.get('subjectID')
+                subject_name = subject.get('subjectName')
+                logger.warning(f"⚠️ No exact match, using first result: {subject_name} -> subjectID={subject_id}")
+                return subject_id
+
+            logger.warning(f"⚠️ No subject found for: {object_name}")
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get subject_id for {object_name}: {str(e)}")
+            return None
+
     def get_card_characteristics_config(
+        self,
+        subject_id: int
+    ) -> Dict[str, Any]:
+        """
+        Получить конфигурацию характеристик для предмета по его ID
+
+        Args:
+            subject_id: ID предмета (subjectID из WB API)
+
+        Returns:
+            Конфигурация характеристик с возможными значениями
+        """
+        endpoint = f"/content/v2/object/charcs/{subject_id}"
+
+        logger.info(f"🔍 Getting characteristics config for subjectID: {subject_id}")
+
+        try:
+            response = self._make_request('GET', 'content', endpoint)
+            result = response.json()
+            logger.info(f"✅ Characteristics config loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get characteristics config for subjectID={subject_id}: {str(e)}")
+            raise
+
+    def get_card_characteristics_by_object_name(
         self,
         object_name: str
     ) -> Dict[str, Any]:
         """
-        Получить конфигурацию характеристик для типа товара
+        Получить конфигурацию характеристик для типа товара по названию
 
         Args:
             object_name: Название типа товара (например, "Футболки")
 
         Returns:
             Конфигурация характеристик с возможными значениями
+
+        Note:
+            Этот метод сначала получает subject_id по названию,
+            а затем запрашивает характеристики
         """
-        endpoint = "/content/v2/object/charcs/list/filter"
+        logger.info(f"🔍 Getting characteristics for object: {object_name}")
 
-        logger.info(f"🔍 Getting characteristics config for object: {object_name}")
+        # Получаем subject_id по названию
+        subject_id = self.get_subject_id_by_name(object_name)
 
-        body = {
-            "name": object_name
-        }
+        if not subject_id:
+            raise WBAPIException(f"Subject не найден для: {object_name}")
 
-        try:
-            response = self._make_request('POST', 'content', endpoint, json=body)
-            result = response.json()
-            logger.info(f"✅ Characteristics config loaded: {len(result.get('data', []))} items")
-            return result
-        except Exception as e:
-            logger.error(f"❌ Failed to get characteristics config: {str(e)}")
-            raise
+        # Получаем характеристики по subject_id
+        return self.get_card_characteristics_config(subject_id)
 
     # ==================== УТИЛИТЫ ====================
 

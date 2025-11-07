@@ -25,8 +25,16 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     last_login = db.Column(db.DateTime)
 
+    # Дополнительные поля для админки
+    blocked_at = db.Column(db.DateTime)  # Когда заблокирован
+    blocked_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто заблокировал
+    notes = db.Column(db.Text)  # Заметки администратора о пользователе
+
     # Связь с продавцом (если это продавец)
     seller = db.relationship('Seller', backref='user', uselist=False, cascade='all, delete-orphan')
+
+    # Связь для блокировки (кто заблокировал этого пользователя)
+    blocked_by = db.relationship('User', remote_side=[id], backref='blocked_users', foreign_keys=[blocked_by_user_id])
 
     def set_password(self, password: str) -> None:
         """Установить хеш пароля"""
@@ -35,6 +43,29 @@ class User(UserMixin, db.Model):
     def check_password(self, password: str) -> bool:
         """Проверить пароль"""
         return check_password_hash(self.password_hash, password)
+
+    def is_blocked(self) -> bool:
+        """Проверить заблокирован ли пользователь"""
+        return self.blocked_at is not None
+
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """Конвертировать в словарь для JSON"""
+        data = {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email if include_sensitive else f"{self.email[:3]}***@{self.email.split('@')[1] if '@' in self.email else '***'}",
+            'is_admin': self.is_admin,
+            'is_active': self.is_active,
+            'is_blocked': self.is_blocked(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'blocked_at': self.blocked_at.isoformat() if self.blocked_at else None,
+            'blocked_by_username': self.blocked_by.username if self.blocked_by else None,
+            'notes': self.notes if include_sensitive else None,
+            'has_seller': self.seller is not None,
+            'seller_company': self.seller.company_name if self.seller else None
+        }
+        return data
 
     def __repr__(self) -> str:
         return f'<User {self.username}>'
@@ -148,6 +179,7 @@ class Product(db.Model):
     # Характеристики
     brand = db.Column(db.String(200))  # Бренд
     object_name = db.Column(db.String(200))  # Тип товара (футболка, платье и т.д.)
+    subject_id = db.Column(db.Integer)  # ID предмета (для получения характеристик из API)
     supplier_vendor_code = db.Column(db.String(100))  # Внутренний артикул поставщика
 
     # Цены и остатки (из последней синхронизации)
@@ -192,6 +224,7 @@ class Product(db.Model):
             'title': self.title,
             'brand': self.brand,
             'object_name': self.object_name,
+            'subject_id': self.subject_id,
             'price': float(self.price) if self.price else None,
             'discount_price': float(self.discount_price) if self.discount_price else None,
             'quantity': self.quantity,
@@ -469,3 +502,437 @@ class ProductStock(db.Model):
             'in_way_from_client': self.in_way_from_client,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+
+class PriceMonitorSettings(db.Model):
+    """Настройки мониторинга цен для продавца"""
+    __tablename__ = 'price_monitor_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Настройки мониторинга
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включен ли мониторинг
+    monitor_prices = db.Column(db.Boolean, default=True, nullable=False)  # Мониторить цены
+    monitor_stocks = db.Column(db.Boolean, default=False, nullable=False)  # Мониторить остатки
+
+    # Частота синхронизации (в минутах)
+    sync_interval_minutes = db.Column(db.Integer, default=60, nullable=False)  # По умолчанию раз в час
+
+    # Процент допустимого скачка цены
+    price_change_threshold_percent = db.Column(db.Float, default=10.0, nullable=False)  # По умолчанию 10%
+
+    # Процент допустимого скачка остатков
+    stock_change_threshold_percent = db.Column(db.Float, default=50.0, nullable=False)  # По умолчанию 50%
+
+    # Последняя синхронизация
+    last_sync_at = db.Column(db.DateTime)  # Когда была последняя синхронизация
+    last_sync_status = db.Column(db.String(50))  # Статус последней синхронизации ('success', 'failed', 'running')
+    last_sync_error = db.Column(db.Text)  # Ошибка последней синхронизации
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('price_monitor_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<PriceMonitorSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'monitor_prices': self.monitor_prices,
+            'monitor_stocks': self.monitor_stocks,
+            'sync_interval_minutes': self.sync_interval_minutes,
+            'price_change_threshold_percent': self.price_change_threshold_percent,
+            'stock_change_threshold_percent': self.stock_change_threshold_percent,
+            'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
+            'last_sync_status': self.last_sync_status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class ProductSyncSettings(db.Model):
+    """Настройки автоматической синхронизации товаров"""
+    __tablename__ = 'product_sync_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Настройки автосинхронизации
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включена ли автосинхронизация
+    sync_interval_minutes = db.Column(db.Integer, default=60, nullable=False)  # Частота синхронизации (по умолчанию раз в час)
+
+    # Типы синхронизации
+    sync_products = db.Column(db.Boolean, default=True, nullable=False)  # Синхронизировать карточки товаров
+    sync_stocks = db.Column(db.Boolean, default=True, nullable=False)  # Синхронизировать остатки
+
+    # Последняя синхронизация
+    last_sync_at = db.Column(db.DateTime)  # Когда была последняя синхронизация
+    next_sync_at = db.Column(db.DateTime)  # Когда запланирована следующая синхронизация
+    last_sync_status = db.Column(db.String(50))  # Статус ('success', 'failed', 'running')
+    last_sync_error = db.Column(db.Text)  # Текст ошибки если была
+    last_sync_duration = db.Column(db.Float)  # Длительность последней синхронизации в секундах
+
+    # Статистика
+    products_synced = db.Column(db.Integer, default=0)  # Количество синхронизированных товаров
+    products_added = db.Column(db.Integer, default=0)  # Количество добавленных товаров
+    products_updated = db.Column(db.Integer, default=0)  # Количество обновленных товаров
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('product_sync_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<ProductSyncSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'sync_interval_minutes': self.sync_interval_minutes,
+            'sync_products': self.sync_products,
+            'sync_stocks': self.sync_stocks,
+            'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
+            'next_sync_at': self.next_sync_at.isoformat() if self.next_sync_at else None,
+            'last_sync_status': self.last_sync_status,
+            'last_sync_duration': self.last_sync_duration,
+            'products_synced': self.products_synced,
+            'products_added': self.products_added,
+            'products_updated': self.products_updated,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class PriceHistory(db.Model):
+    """История изменений цен и остатков товаров"""
+    __tablename__ = 'price_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Предыдущие значения
+    old_price = db.Column(db.Numeric(10, 2))  # Старая цена
+    old_discount_price = db.Column(db.Numeric(10, 2))  # Старая цена со скидкой
+    old_quantity = db.Column(db.Integer)  # Старый остаток
+
+    # Новые значения
+    new_price = db.Column(db.Numeric(10, 2))  # Новая цена
+    new_discount_price = db.Column(db.Numeric(10, 2))  # Новая цена со скидкой
+    new_quantity = db.Column(db.Integer)  # Новый остаток
+
+    # Изменения в процентах
+    price_change_percent = db.Column(db.Float)  # Изменение цены в %
+    discount_price_change_percent = db.Column(db.Float)  # Изменение цены со скидкой в %
+    quantity_change_percent = db.Column(db.Float)  # Изменение остатка в %
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связь с товаром
+    product = db.relationship('Product', backref=db.backref('price_history', lazy='dynamic', order_by='PriceHistory.created_at.desc()'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_price_history_product_created', 'product_id', 'created_at'),
+        db.Index('idx_price_history_seller_created', 'seller_id', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<PriceHistory product_id={self.product_id} price={self.old_price}->{self.new_price}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'product_id': self.product_id,
+            'old_price': float(self.old_price) if self.old_price else None,
+            'old_discount_price': float(self.old_discount_price) if self.old_discount_price else None,
+            'old_quantity': self.old_quantity,
+            'new_price': float(self.new_price) if self.new_price else None,
+            'new_discount_price': float(self.new_discount_price) if self.new_discount_price else None,
+            'new_quantity': self.new_quantity,
+            'price_change_percent': self.price_change_percent,
+            'discount_price_change_percent': self.discount_price_change_percent,
+            'quantity_change_percent': self.quantity_change_percent,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class SuspiciousPriceChange(db.Model):
+    """Подозрительные изменения цен (скачки больше допустимого порога)"""
+    __tablename__ = 'suspicious_price_changes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    price_history_id = db.Column(db.Integer, db.ForeignKey('price_history.id', ondelete='CASCADE'), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Тип изменения ('price', 'discount_price', 'quantity')
+    change_type = db.Column(db.String(50), nullable=False, index=True)
+
+    # Значения
+    old_value = db.Column(db.Numeric(10, 2))
+    new_value = db.Column(db.Numeric(10, 2))
+    change_percent = db.Column(db.Float, nullable=False)  # Изменение в процентах
+
+    # Порог, который был превышен
+    threshold_percent = db.Column(db.Float, nullable=False)
+
+    # Статус обработки
+    is_reviewed = db.Column(db.Boolean, default=False, nullable=False, index=True)  # Просмотрено ли
+    reviewed_at = db.Column(db.DateTime)  # Когда просмотрено
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто просмотрел
+    notes = db.Column(db.Text)  # Заметки
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    price_history = db.relationship('PriceHistory', backref=db.backref('suspicious_changes', lazy='dynamic'))
+    product = db.relationship('Product', backref=db.backref('suspicious_price_changes', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_suspicious_seller_created', 'seller_id', 'created_at'),
+        db.Index('idx_suspicious_seller_reviewed', 'seller_id', 'is_reviewed'),
+        db.Index('idx_suspicious_product_created', 'product_id', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<SuspiciousPriceChange product_id={self.product_id} {self.change_type} {self.change_percent}%>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        result = {
+            'id': self.id,
+            'product_id': self.product_id,
+            'change_type': self.change_type,
+            'old_value': float(self.old_value) if self.old_value else None,
+            'new_value': float(self.new_value) if self.new_value else None,
+            'change_percent': self.change_percent,
+            'threshold_percent': self.threshold_percent,
+            'is_reviewed': self.is_reviewed,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+            'notes': self.notes,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+        # Добавляем информацию о товаре, если она есть
+        if self.product:
+            result['product'] = {
+                'nm_id': self.product.nm_id,
+                'vendor_code': self.product.vendor_code,
+                'title': self.product.title,
+                'brand': self.product.brand,
+                'current_price': float(self.product.price) if self.product.price else None,
+                'current_discount_price': float(self.product.discount_price) if self.product.discount_price else None,
+                'current_quantity': self.product.quantity
+            }
+
+        return result
+
+
+# ============= ADMIN PANEL MODELS =============
+
+class UserActivity(db.Model):
+    """Логирование активности пользователей"""
+    __tablename__ = 'user_activity'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    action = db.Column(db.String(100), nullable=False, index=True)  # login, logout, view_page, etc.
+    details = db.Column(db.Text)  # Дополнительная информация в JSON
+    ip_address = db.Column(db.String(45))  # IPv4 или IPv6
+    user_agent = db.Column(db.String(500))  # Browser user agent
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    user = db.relationship('User', backref=db.backref('activities', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_activity_user_created', 'user_id', 'created_at'),
+        db.Index('idx_activity_action_created', 'action', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<UserActivity user_id={self.user_id} action={self.action}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'action': self.action,
+            'details': self.details,
+            'ip_address': self.ip_address,
+            'user_agent': self.user_agent,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class AdminAuditLog(db.Model):
+    """Логирование действий администраторов"""
+    __tablename__ = 'admin_audit_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    admin_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    action = db.Column(db.String(100), nullable=False, index=True)  # create_user, delete_seller, etc.
+    target_type = db.Column(db.String(50))  # user, seller, product, etc.
+    target_id = db.Column(db.Integer)  # ID целевого объекта
+    details = db.Column(db.Text)  # Подробности в JSON (что изменилось)
+    ip_address = db.Column(db.String(45))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    admin_user = db.relationship('User', backref=db.backref('admin_actions', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_audit_admin_created', 'admin_user_id', 'created_at'),
+        db.Index('idx_audit_action_created', 'action', 'created_at'),
+        db.Index('idx_audit_target', 'target_type', 'target_id'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<AdminAuditLog admin={self.admin_user_id} action={self.action}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'admin_user_id': self.admin_user_id,
+            'admin_username': self.admin_user.username if self.admin_user else None,
+            'action': self.action,
+            'target_type': self.target_type,
+            'target_id': self.target_id,
+            'details': self.details,
+            'ip_address': self.ip_address,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class SystemSettings(db.Model):
+    """Глобальные настройки системы"""
+    __tablename__ = 'system_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(100), unique=True, nullable=False, index=True)
+    value = db.Column(db.Text)  # Значение в JSON
+    value_type = db.Column(db.String(20), nullable=False)  # string, int, bool, json
+    description = db.Column(db.Text)  # Описание настройки
+    updated_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    # Связи
+    updated_by = db.relationship('User', backref=db.backref('system_settings_updates', lazy='dynamic'))
+
+    def __repr__(self) -> str:
+        return f'<SystemSettings key={self.key}>'
+
+    def get_value(self):
+        """Получить значение с правильным типом"""
+        if not self.value:
+            return None
+
+        if self.value_type == 'bool':
+            return self.value.lower() in ['true', '1', 'yes']
+        elif self.value_type == 'int':
+            return int(self.value)
+        elif self.value_type == 'json':
+            import json
+            return json.loads(self.value)
+        else:
+            return self.value
+
+    def set_value(self, value):
+        """Установить значение с правильным типом"""
+        if self.value_type == 'json':
+            import json
+            self.value = json.dumps(value, ensure_ascii=False)
+        else:
+            self.value = str(value)
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'key': self.key,
+            'value': self.get_value(),
+            'value_type': self.value_type,
+            'description': self.description,
+            'updated_by_user_id': self.updated_by_user_id,
+            'updated_by_username': self.updated_by.username if self.updated_by else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============= HELPER FUNCTIONS FOR LOGGING =============
+
+def log_user_activity(user_id: int, action: str, details: str = None, request=None):
+    """
+    Логировать активность пользователя
+
+    Args:
+        user_id: ID пользователя
+        action: Действие (например, 'login', 'logout', 'view_products')
+        details: Дополнительные детали в виде строки или JSON
+        request: Flask request object для получения IP и user agent
+    """
+    import json
+
+    activity = UserActivity(
+        user_id=user_id,
+        action=action,
+        details=details if isinstance(details, str) else json.dumps(details, ensure_ascii=False) if details else None,
+        ip_address=request.remote_addr if request else None,
+        user_agent=request.user_agent.string if request and request.user_agent else None
+    )
+    db.session.add(activity)
+    db.session.commit()
+    return activity
+
+
+def log_admin_action(admin_user_id: int, action: str, target_type: str = None,
+                     target_id: int = None, details: dict = None, request=None):
+    """
+    Логировать действие администратора
+
+    Args:
+        admin_user_id: ID администратора
+        action: Действие (например, 'create_user', 'delete_seller')
+        target_type: Тип целевого объекта ('user', 'seller', 'product')
+        target_id: ID целевого объекта
+        details: Детали действия (dict)
+        request: Flask request object для получения IP
+    """
+    import json
+
+    audit_log = AdminAuditLog(
+        admin_user_id=admin_user_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        details=json.dumps(details, ensure_ascii=False) if details else None,
+        ip_address=request.remote_addr if request else None
+    )
+    db.session.add(audit_log)
+    db.session.commit()
+    return audit_log
