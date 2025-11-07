@@ -136,6 +136,10 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
 
+# Инициализация планировщика автоматической синхронизации
+from product_sync_scheduler import init_scheduler
+init_scheduler(app)
+
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_ROOT = BASE_DIR / 'uploads'
 PROCESSED_ROOT = BASE_DIR / 'processed'
@@ -1116,9 +1120,21 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 # Обновляем статус синхронизации
                 seller.api_last_sync = datetime.utcnow()
                 seller.api_sync_status = 'success'
-                db.session.commit()
 
                 elapsed = time.time() - start_time
+
+                # Обновляем статистику в ProductSyncSettings
+                sync_settings = seller.product_sync_settings
+                if sync_settings:
+                    sync_settings.last_sync_at = datetime.utcnow()
+                    sync_settings.last_sync_status = 'success'
+                    sync_settings.last_sync_duration = elapsed
+                    sync_settings.products_synced = len(all_cards)
+                    sync_settings.products_added = created_count
+                    sync_settings.products_updated = updated_count
+                    sync_settings.last_sync_error = None
+
+                db.session.commit()
 
                 # Логируем успешный запрос
                 APILog.log_request(
@@ -1137,6 +1153,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 seller = Seller.query.get(seller_id)
                 if seller:
                     seller.api_sync_status = 'auth_error'
+                    # Обновляем статистику ошибки
+                    sync_settings = seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = 'auth_error'
+                        sync_settings.last_sync_error = str(e)
                     db.session.commit()
                 app.logger.error(f"❌ Background sync auth error: {str(e)}")
 
@@ -1145,6 +1166,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 seller = Seller.query.get(seller_id)
                 if seller:
                     seller.api_sync_status = 'error'
+                    # Обновляем статистику ошибки
+                    sync_settings = seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = 'error'
+                        sync_settings.last_sync_error = str(e)
                     db.session.commit()
                 app.logger.error(f"❌ Background sync API error: {str(e)}")
 
@@ -1153,6 +1179,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 seller = Seller.query.get(seller_id)
                 if seller:
                     seller.api_sync_status = 'error'
+                    # Обновляем статистику ошибки
+                    sync_settings = seller.product_sync_settings
+                    if sync_settings:
+                        sync_settings.last_sync_status = 'error'
+                        sync_settings.last_sync_error = str(e)
                     db.session.commit()
                 app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
 
@@ -2863,6 +2894,64 @@ def api_price_history(product_id):
         'has_next': pagination.has_next,
         'has_prev': pagination.has_prev
     }
+
+
+# ============= API: СТАТУС СИНХРОНИЗАЦИИ ТОВАРОВ =============
+
+@app.route('/api/products/sync-status', methods=['GET'])
+@login_required
+def api_product_sync_status():
+    """API для получения статуса синхронизации товаров"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    seller = current_user.seller
+
+    # Получаем или создаем настройки синхронизации
+    sync_settings = seller.product_sync_settings
+    if not sync_settings:
+        sync_settings = ProductSyncSettings(seller_id=seller.id)
+        db.session.add(sync_settings)
+        db.session.commit()
+
+    # Базовая информация о статусе
+    status_info = {
+        'is_syncing': seller.api_sync_status == 'syncing',
+        'last_sync_status': seller.api_sync_status,
+        'last_sync_at': seller.api_last_sync.isoformat() if seller.api_last_sync else None,
+
+        # Настройки автосинхронизации
+        'auto_sync_enabled': sync_settings.is_enabled,
+        'sync_interval_minutes': sync_settings.sync_interval_minutes,
+        'next_sync_at': sync_settings.next_sync_at.isoformat() if sync_settings.next_sync_at else None,
+
+        # Статистика последней синхронизации
+        'last_sync_duration': sync_settings.last_sync_duration,
+        'products_synced': sync_settings.products_synced,
+        'products_added': sync_settings.products_added,
+        'products_updated': sync_settings.products_updated,
+        'last_sync_error': sync_settings.last_sync_error,
+
+        # Общая статистика
+        'total_products': Product.query.filter_by(seller_id=seller.id).count(),
+        'active_products': Product.query.filter_by(seller_id=seller.id, is_active=True).count(),
+    }
+
+    # Вычисляем прогресс если синхронизация идет
+    if seller.api_sync_status == 'syncing':
+        status_info['status_message'] = 'Синхронизация выполняется...'
+        status_info['can_start_sync'] = False
+    elif seller.api_sync_status == 'success':
+        status_info['status_message'] = 'Последняя синхронизация завершена успешно'
+        status_info['can_start_sync'] = True
+    elif seller.api_sync_status == 'error' or seller.api_sync_status == 'auth_error':
+        status_info['status_message'] = 'Ошибка при последней синхронизации'
+        status_info['can_start_sync'] = True
+    else:
+        status_info['status_message'] = 'Синхронизация не запускалась'
+        status_info['can_start_sync'] = True
+
+    return status_info
 
 
 def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings) -> dict:
