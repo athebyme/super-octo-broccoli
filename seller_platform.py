@@ -2201,6 +2201,19 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    # Определяем тип значения: ID из справочника или текст
+                    # Если значение состоит только из цифр - это ID из справочника
+                    try:
+                        # Попытаемся преобразовать в int - если получилось, это ID
+                        value_id = int(new_value)
+                        # Для характеристик со справочником WB требует массив ID, а не текст
+                        formatted_value = [value_id]
+                        app.logger.info(f"Using dictionary value ID: {value_id}")
+                    except ValueError:
+                        # Это текстовое значение для свободного ввода
+                        formatted_value = new_value
+                        app.logger.info(f"Using text value: {new_value}")
+
                     for product in products:
                         try:
                             snapshot_before = _create_product_snapshot(product)
@@ -2212,7 +2225,7 @@ def products_bulk_edit():
                             char_found = False
                             for char in current_characteristics:
                                 if str(char.get('id')) == characteristic_id:
-                                    char['value'] = new_value
+                                    char['value'] = formatted_value
                                     char_found = True
                                     break
 
@@ -2220,7 +2233,7 @@ def products_bulk_edit():
                                 # Добавляем новую характеристику если не нашли
                                 current_characteristics.append({
                                     'id': int(characteristic_id),
-                                    'value': new_value
+                                    'value': formatted_value
                                 })
 
                             # Обновляем через API
@@ -2269,6 +2282,15 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    # Определяем тип значения: ID из справочника или текст
+                    try:
+                        value_id = int(new_value)
+                        formatted_value = [value_id]
+                        app.logger.info(f"Adding dictionary value ID: {value_id}")
+                    except ValueError:
+                        formatted_value = new_value
+                        app.logger.info(f"Adding text value: {new_value}")
+
                     for product in products:
                         try:
                             snapshot_before = _create_product_snapshot(product)
@@ -2283,7 +2305,7 @@ def products_bulk_edit():
                                 # Добавляем новую характеристику
                                 current_characteristics.append({
                                     'id': int(characteristic_id),
-                                    'value': new_value
+                                    'value': formatted_value
                                 })
 
                                 # Обновляем через API
