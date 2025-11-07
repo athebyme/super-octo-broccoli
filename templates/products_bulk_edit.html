@@ -157,6 +157,24 @@
             return maxCount === 0 || arr.length < maxCount;
         },
 
+        clearFields() {
+            // Очищаем все поля при смене операции
+            this.selectedChar = null;
+            this.selectedValues = [];
+            this.selectedValuesAdd = [];
+            this.characteristics = [];
+
+            // Очищаем скрытые поля
+            const charIdField = document.getElementById('char_id_common');
+            if (charIdField) charIdField.value = '';
+
+            const valueCharField = document.getElementById('value_char');
+            if (valueCharField) valueCharField.value = '';
+
+            const valueCharAddField = document.getElementById('value_char_add');
+            if (valueCharAddField) valueCharAddField.value = '';
+        },
+
         async loadCharacteristics() {
             if (!this.productCategory) {
                 console.log('No category for products');
@@ -208,7 +226,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
-                           @change="if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           @change="clearFields(); if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
@@ -323,7 +341,7 @@
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
                         <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id').value = selectedChar.id }"
+                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
@@ -331,7 +349,6 @@
                                 <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
-                        <input type="hidden" name="char_id" id="char_id">
 
                         <!-- Ошибка загрузки -->
                         <div x-show="loadError" class="mt-2 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
@@ -493,7 +510,7 @@
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
                         <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id_add').value = selectedChar.id }"
+                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
@@ -501,7 +518,6 @@
                                 <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
-                        <input type="hidden" name="char_id" id="char_id_add">
 
                         <!-- Ошибка загрузки -->
                         <div x-show="loadError" class="mt-2 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
@@ -639,6 +655,9 @@
                 Применить к {{ products|length }} товарам
             </button>
         </div>
+
+        <!-- Общие скрытые поля для характеристик (используются обеими операциями) -->
+        <input type="hidden" name="char_id" id="char_id_common">
 
         <!-- Скрытые поля с ID товаров -->
         {% for product in products %}
