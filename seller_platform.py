@@ -31,6 +31,8 @@ from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
 import threading
+import logging
+from logging.handlers import RotatingFileHandler
 from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 
 # Настройка приложения
@@ -43,6 +45,19 @@ DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 default_db_uri = os.environ.get('DATABASE_URL') or f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
 app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Настройка логирования
+if not app.debug:
+    log_file = BASE_DIR / 'seller_platform.log'
+    file_handler = RotatingFileHandler(log_file, maxBytes=10240000, backupCount=10)
+    file_handler.setFormatter(logging.Formatter(
+        '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+    ))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Seller Platform startup')
+
 app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else ''
 
 # Helper функции для работы с WB фотографиями
