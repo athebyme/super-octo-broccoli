@@ -74,7 +74,7 @@
     </script>
 
     <!-- Форма массового редактирования -->
-    <form method="POST" x-data="{
+    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="{
         operation: '{{ request.form.get('operation', '') }}',
         productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
         characteristics: [],
@@ -96,6 +96,47 @@
                     this.products = [];
                 }
             }
+        },
+
+        validateForm() {
+            // Проверяем что выбрана операция
+            if (!this.operation) {
+                alert('Выберите операцию');
+                return false;
+            }
+
+            // Для характеристик проверяем заполненность полей
+            if (this.operation === 'update_characteristic' || this.operation === 'add_characteristic') {
+                const charId = document.getElementById('char_id_common').value;
+                if (!charId) {
+                    alert('Выберите характеристику');
+                    return false;
+                }
+
+                // Проверяем значение
+                let valueField = null;
+                if (this.operation === 'update_characteristic') {
+                    valueField = document.getElementById('value_char') || document.getElementById('value_char_manual');
+                } else {
+                    valueField = document.getElementById('value_char_add') || document.getElementById('value_char_add_select') || document.getElementById('value_char_add_manual');
+                }
+
+                if (valueField && !valueField.value) {
+                    alert('Выберите или введите значение характеристики');
+                    return false;
+                }
+            }
+
+            // Для других операций проверяем поле value
+            if (this.operation === 'update_brand' || this.operation === 'append_description' || this.operation === 'replace_description') {
+                const valueField = document.querySelector('[name=\"value\"]');
+                if (!valueField || !valueField.value.trim()) {
+                    alert('Заполните значение для операции');
+                    return false;
+                }
+            }
+
+            return true;
         },
 
         getCurrentValuesForChar(charId) {
@@ -444,7 +485,6 @@
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
                                     <select name="value"
                                             id="value_char"
-                                            required
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -460,7 +500,6 @@
                             <input type="text"
                                    name="value"
                                    id="value_char_manual"
-                                   required
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
@@ -615,7 +654,6 @@
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
                                     <select name="value"
                                             id="value_char_add_select"
-                                            required
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -631,7 +669,6 @@
                             <input type="text"
                                    name="value"
                                    id="value_char_add_manual"
-                                   required
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
