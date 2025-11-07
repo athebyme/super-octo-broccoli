@@ -209,6 +209,26 @@ def prepare_card_for_update(
         if field not in prepared or prepared[field] is None:
             logger.error(f"Отсутствует обязательное поле: {field}")
 
+    # Исправляем некорректные габариты
+    if 'dimensions' in prepared and prepared['dimensions']:
+        dims = prepared['dimensions']
+
+        # Проверяем вес - если <= 0, удаляем или ставим дефолт
+        if 'weightBrutto' in dims:
+            try:
+                weight = float(dims['weightBrutto'])
+                if weight <= 0:
+                    logger.warning(f"Invalid weight {weight}, removing from dimensions")
+                    dims.pop('weightBrutto', None)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid weight value {dims.get('weightBrutto')}, removing")
+                dims.pop('weightBrutto', None)
+
+        # Если dimensions пустой после очистки - удаляем его
+        if not dims or all(v is None or v == '' for v in dims.values()):
+            prepared.pop('dimensions', None)
+            logger.info("Removed empty dimensions")
+
     return prepared
 
 
