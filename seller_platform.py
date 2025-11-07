@@ -2202,13 +2202,21 @@ def products_bulk_edit():
                                              edit_operations=edit_operations)
 
                     # Определяем тип значения: ID из справочника или текст
-                    # Если значение состоит только из цифр - это ID из справочника
+                    # Для множественных значений может быть список ID через запятую
+                    app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
+
                     try:
                         # Попытаемся преобразовать в int - если получилось, это ID
-                        value_id = int(new_value)
-                        # Для характеристик со справочником WB требует массив ID, а не текст
-                        formatted_value = [value_id]
-                        app.logger.info(f"Using dictionary value ID: {value_id}")
+                        if ',' in str(new_value):
+                            # Множественные значения через запятую
+                            value_ids = [int(v.strip()) for v in str(new_value).split(',')]
+                            formatted_value = value_ids
+                            app.logger.info(f"Using multiple dictionary value IDs: {value_ids}")
+                        else:
+                            value_id = int(new_value)
+                            # Для характеристик со справочником WB требует массив ID, а не текст
+                            formatted_value = [value_id]
+                            app.logger.info(f"Using single dictionary value ID: {value_id}")
                     except ValueError:
                         # Это текстовое значение для свободного ввода
                         formatted_value = new_value
@@ -2235,6 +2243,12 @@ def products_bulk_edit():
                                     'id': int(characteristic_id),
                                     'value': formatted_value
                                 })
+
+                            # Логируем характеристики перед отправкой
+                            app.logger.info(f"Updating nmID={product.nm_id} with {len(current_characteristics)} characteristics")
+                            target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
+                            if target_char:
+                                app.logger.info(f"Target characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
 
                             # Обновляем через API
                             client.update_card(
@@ -2283,10 +2297,19 @@ def products_bulk_edit():
                                              edit_operations=edit_operations)
 
                     # Определяем тип значения: ID из справочника или текст
+                    # Для множественных значений может быть список ID через запятую
+                    app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
+
                     try:
-                        value_id = int(new_value)
-                        formatted_value = [value_id]
-                        app.logger.info(f"Adding dictionary value ID: {value_id}")
+                        if ',' in str(new_value):
+                            # Множественные значения через запятую
+                            value_ids = [int(v.strip()) for v in str(new_value).split(',')]
+                            formatted_value = value_ids
+                            app.logger.info(f"Adding multiple dictionary value IDs: {value_ids}")
+                        else:
+                            value_id = int(new_value)
+                            formatted_value = [value_id]
+                            app.logger.info(f"Adding single dictionary value ID: {value_id}")
                     except ValueError:
                         formatted_value = new_value
                         app.logger.info(f"Adding text value: {new_value}")
@@ -2307,6 +2330,12 @@ def products_bulk_edit():
                                     'id': int(characteristic_id),
                                     'value': formatted_value
                                 })
+
+                                # Логируем характеристики перед отправкой
+                                app.logger.info(f"Adding to nmID={product.nm_id}, total {len(current_characteristics)} characteristics")
+                                target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
+                                if target_char:
+                                    app.logger.info(f"Added characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
 
                                 # Обновляем через API
                                 client.update_card(

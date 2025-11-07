@@ -570,11 +570,11 @@
                                         <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
                                             <template x-for="val in selectedChar.values" :key="val.id">
                                                 <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer"
-                                                       :class="!canSelectMore('add') && !isValueSelected(val.value, 'add') ? 'opacity-50 cursor-not-allowed' : ''">
+                                                       :class="!canSelectMore('add') && !isValueSelected(val.id, 'add') ? 'opacity-50 cursor-not-allowed' : ''">
                                                     <input type="checkbox"
-                                                           :checked="isValueSelected(val.value, 'add')"
-                                                           @change="toggleValue(val.value, 'add')"
-                                                           :disabled="!canSelectMore('add') && !isValueSelected(val.value, 'add')"
+                                                           :checked="isValueSelected(val.id, 'add')"
+                                                           @change="toggleValue(val.id, 'add')"
+                                                           :disabled="!canSelectMore('add') && !isValueSelected(val.id, 'add')"
                                                            class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                                     <span x-text="val.value" class="text-sm"></span>
                                                 </label>
@@ -600,7 +600,7 @@
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
-                                            <option :value="val.value" x-text="val.value"></option>
+                                            <option :value="val.id" x-text="val.value"></option>
                                         </template>
                                     </select>
                                 </template>
