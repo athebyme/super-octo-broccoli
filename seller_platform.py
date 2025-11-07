@@ -271,26 +271,8 @@ def get_latest_report(seller_id: int) -> Optional[SellerReport]:
     )
 
 
-def summarise_card(card: Dict[str, Any]) -> Dict[str, Any]:
-    """Подготовить ключевые поля карточки для отображения."""
-    sizes = card.get('sizes') or []
-    media_files = card.get('mediaFiles') or card.get('photos') or []
-    barcode_count = 0
-    for size in sizes:
-        if isinstance(size, dict):
-            barcode_count += len(size.get('skus') or [])
-
-    return {
-        'vendor_code': card.get('vendorCode') or card.get('supplierVendorCode'),
-        'nm_id': card.get('nmID') or card.get('nmId'),
-        'title': card.get('title') or card.get('subjectName') or card.get('name'),
-        'brand': card.get('brand'),
-        'subject': card.get('subjectName') or card.get('subjectID'),
-        'updated_at': card.get('updatedAt') or card.get('updateAt') or card.get('modifiedAt'),
-        'photo_count': len(media_files) if isinstance(media_files, list) else 0,
-        'barcode_count': barcode_count,
-        'card': card,
-    }
+# УДАЛЕНО: Функция summarise_card использовалась только в старом роуте /cards
+# который был заменен на /products с новой функциональностью
 
 
 @login_manager.user_loader
@@ -489,81 +471,8 @@ def reports():
 
 
 
-@app.route('/cards', methods=['GET'])
-@login_required
-def cards():
-    seller: Optional[Seller] = None
-    seller_options: List[Seller] = []
-    selected_seller_id: Optional[int] = None
-
-    if current_user.is_admin:
-        seller_options = (
-            Seller.query.join(User)
-            .order_by(Seller.company_name.asc())
-            .all()
-        )
-        selected_seller_id = request.args.get('seller_id', type=int)
-        if selected_seller_id:
-            seller = Seller.query.get(selected_seller_id)
-            if not seller:
-                flash('Продавец с указанным ID не найден.', 'warning')
-    else:
-        seller = current_user.seller
-        if not seller:
-            flash('Учетная запись продавца не привязана к текущему пользователю.', 'warning')
-            return redirect(url_for('dashboard'))
-
-    search = request.args.get('search', '').strip()
-    updated_at = request.args.get('updated_at', '').strip() or None
-    limit = request.args.get('limit', type=int) or 50
-    limit = max(1, min(limit, 1_000))
-
-    cards_payload: List[Dict[str, Any]] = []
-    prepared_cards: List[Dict[str, Any]] = []
-    cursor: Dict[str, Any] = {}
-    api_error: Optional[str] = None
-    additional_errors: List[str] = []
-
-    if seller:
-        if not seller.wb_api_key:
-            api_error = 'Для выбранного продавца не указан API токен Wildberries.'
-        else:
-            try:
-                response = list_cards(
-                    seller.wb_api_key,
-                    limit=limit,
-                    search=search or None,
-                    updated_at=updated_at,
-                )
-                cards_payload = response.get('cards') or []
-                cursor = response.get('cursor') or {}
-                prepared_cards = [summarise_card(card) for card in cards_payload]
-
-                error_text = (response.get('errorText') or '').strip()
-                if error_text:
-                    additional_errors.append(error_text)
-                for extra in response.get('additionalErrors') or []:
-                    text_message = str(extra).strip()
-                    if text_message:
-                        additional_errors.append(text_message)
-            except WildberriesAPIError as exc:
-                api_error = str(exc)
-
-    return render_template(
-        'cards.html',
-        seller=seller,
-        seller_options=seller_options,
-        selected_seller_id=selected_seller_id,
-        cards=prepared_cards,
-        raw_cards=cards_payload,
-        cursor=cursor,
-        api_error=api_error,
-        additional_errors=additional_errors,
-        search=search,
-        limit=limit,
-        updated_at=updated_at,
-    )
-
+# УДАЛЕНО: Старый роут /cards заменен на /products (products_list)
+# Новая функциональность находится в products_list() с улучшенными фильтрами и пагинацией
 
 @app.route('/reports/<int:report_id>/download')
 @login_required
