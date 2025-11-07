@@ -25,8 +25,16 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     last_login = db.Column(db.DateTime)
 
+    # Дополнительные поля для админки
+    blocked_at = db.Column(db.DateTime)  # Когда заблокирован
+    blocked_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто заблокировал
+    notes = db.Column(db.Text)  # Заметки администратора о пользователе
+
     # Связь с продавцом (если это продавец)
     seller = db.relationship('Seller', backref='user', uselist=False, cascade='all, delete-orphan')
+
+    # Связь для блокировки (кто заблокировал этого пользователя)
+    blocked_by = db.relationship('User', remote_side=[id], backref='blocked_users', foreign_keys=[blocked_by_user_id])
 
     def set_password(self, password: str) -> None:
         """Установить хеш пароля"""
@@ -35,6 +43,29 @@ class User(UserMixin, db.Model):
     def check_password(self, password: str) -> bool:
         """Проверить пароль"""
         return check_password_hash(self.password_hash, password)
+
+    def is_blocked(self) -> bool:
+        """Проверить заблокирован ли пользователь"""
+        return self.blocked_at is not None
+
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """Конвертировать в словарь для JSON"""
+        data = {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email if include_sensitive else f"{self.email[:3]}***@{self.email.split('@')[1] if '@' in self.email else '***'}",
+            'is_admin': self.is_admin,
+            'is_active': self.is_active,
+            'is_blocked': self.is_blocked(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+            'blocked_at': self.blocked_at.isoformat() if self.blocked_at else None,
+            'blocked_by_username': self.blocked_by.username if self.blocked_by else None,
+            'notes': self.notes if include_sensitive else None,
+            'has_seller': self.seller is not None,
+            'seller_company': self.seller.company_name if self.seller else None
+        }
+        return data
 
     def __repr__(self) -> str:
         return f'<User {self.username}>'
@@ -713,3 +744,195 @@ class SuspiciousPriceChange(db.Model):
             }
 
         return result
+
+
+# ============= ADMIN PANEL MODELS =============
+
+class UserActivity(db.Model):
+    """Логирование активности пользователей"""
+    __tablename__ = 'user_activity'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    action = db.Column(db.String(100), nullable=False, index=True)  # login, logout, view_page, etc.
+    details = db.Column(db.Text)  # Дополнительная информация в JSON
+    ip_address = db.Column(db.String(45))  # IPv4 или IPv6
+    user_agent = db.Column(db.String(500))  # Browser user agent
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    user = db.relationship('User', backref=db.backref('activities', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_activity_user_created', 'user_id', 'created_at'),
+        db.Index('idx_activity_action_created', 'action', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<UserActivity user_id={self.user_id} action={self.action}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'username': self.user.username if self.user else None,
+            'action': self.action,
+            'details': self.details,
+            'ip_address': self.ip_address,
+            'user_agent': self.user_agent,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class AdminAuditLog(db.Model):
+    """Логирование действий администраторов"""
+    __tablename__ = 'admin_audit_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    admin_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    action = db.Column(db.String(100), nullable=False, index=True)  # create_user, delete_seller, etc.
+    target_type = db.Column(db.String(50))  # user, seller, product, etc.
+    target_id = db.Column(db.Integer)  # ID целевого объекта
+    details = db.Column(db.Text)  # Подробности в JSON (что изменилось)
+    ip_address = db.Column(db.String(45))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    admin_user = db.relationship('User', backref=db.backref('admin_actions', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_audit_admin_created', 'admin_user_id', 'created_at'),
+        db.Index('idx_audit_action_created', 'action', 'created_at'),
+        db.Index('idx_audit_target', 'target_type', 'target_id'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<AdminAuditLog admin={self.admin_user_id} action={self.action}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'admin_user_id': self.admin_user_id,
+            'admin_username': self.admin_user.username if self.admin_user else None,
+            'action': self.action,
+            'target_type': self.target_type,
+            'target_id': self.target_id,
+            'details': self.details,
+            'ip_address': self.ip_address,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class SystemSettings(db.Model):
+    """Глобальные настройки системы"""
+    __tablename__ = 'system_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(100), unique=True, nullable=False, index=True)
+    value = db.Column(db.Text)  # Значение в JSON
+    value_type = db.Column(db.String(20), nullable=False)  # string, int, bool, json
+    description = db.Column(db.Text)  # Описание настройки
+    updated_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    # Связи
+    updated_by = db.relationship('User', backref=db.backref('system_settings_updates', lazy='dynamic'))
+
+    def __repr__(self) -> str:
+        return f'<SystemSettings key={self.key}>'
+
+    def get_value(self):
+        """Получить значение с правильным типом"""
+        if not self.value:
+            return None
+
+        if self.value_type == 'bool':
+            return self.value.lower() in ['true', '1', 'yes']
+        elif self.value_type == 'int':
+            return int(self.value)
+        elif self.value_type == 'json':
+            import json
+            return json.loads(self.value)
+        else:
+            return self.value
+
+    def set_value(self, value):
+        """Установить значение с правильным типом"""
+        if self.value_type == 'json':
+            import json
+            self.value = json.dumps(value, ensure_ascii=False)
+        else:
+            self.value = str(value)
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'key': self.key,
+            'value': self.get_value(),
+            'value_type': self.value_type,
+            'description': self.description,
+            'updated_by_user_id': self.updated_by_user_id,
+            'updated_by_username': self.updated_by.username if self.updated_by else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ============= HELPER FUNCTIONS FOR LOGGING =============
+
+def log_user_activity(user_id: int, action: str, details: str = None, request=None):
+    """
+    Логировать активность пользователя
+
+    Args:
+        user_id: ID пользователя
+        action: Действие (например, 'login', 'logout', 'view_products')
+        details: Дополнительные детали в виде строки или JSON
+        request: Flask request object для получения IP и user agent
+    """
+    import json
+
+    activity = UserActivity(
+        user_id=user_id,
+        action=action,
+        details=details if isinstance(details, str) else json.dumps(details, ensure_ascii=False) if details else None,
+        ip_address=request.remote_addr if request else None,
+        user_agent=request.user_agent.string if request and request.user_agent else None
+    )
+    db.session.add(activity)
+    db.session.commit()
+    return activity
+
+
+def log_admin_action(admin_user_id: int, action: str, target_type: str = None,
+                     target_id: int = None, details: dict = None, request=None):
+    """
+    Логировать действие администратора
+
+    Args:
+        admin_user_id: ID администратора
+        action: Действие (например, 'create_user', 'delete_seller')
+        target_type: Тип целевого объекта ('user', 'seller', 'product')
+        target_id: ID целевого объекта
+        details: Детали действия (dict)
+        request: Flask request object для получения IP
+    """
+    import json
+
+    audit_log = AdminAuditLog(
+        admin_user_id=admin_user_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        details=json.dumps(details, ensure_ascii=False) if details else None,
+        ip_address=request.remote_addr if request else None
+    )
+    db.session.add(audit_log)
+    db.session.commit()
+    return audit_log
