@@ -2032,6 +2032,16 @@ def products_bulk_edit():
 
         app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
 
+        # Логируем все данные формы для отладки
+        app.logger.info(f"📋 Form data: operation={operation}")
+        app.logger.info(f"📋 Form value field: '{operation_value}'")
+        app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
+        app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
+        if len(request.form) < 20:  # Показываем все поля если их немного
+            for key, value in request.form.items():
+                if key != 'product_ids':
+                    app.logger.debug(f"   {key} = '{value}'")
+
         try:
             with WildberriesAPIClient(
                 current_user.seller.wb_api_key,

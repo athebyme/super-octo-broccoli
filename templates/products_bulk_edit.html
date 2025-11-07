@@ -444,6 +444,7 @@
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
                                     <select name="value"
                                             id="value_char"
+                                            required
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -459,6 +460,7 @@
                             <input type="text"
                                    name="value"
                                    id="value_char_manual"
+                                   required
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
@@ -613,6 +615,7 @@
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
                                     <select name="value"
                                             id="value_char_add_select"
+                                            required
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -628,6 +631,7 @@
                             <input type="text"
                                    name="value"
                                    id="value_char_add_manual"
+                                   required
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
