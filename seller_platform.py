@@ -2993,7 +2993,9 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
 
         while True:
             page_num += 1
-            app.logger.info(f"📄 Fetching page {page_num} (cursor: updatedAt={cursor_updated_at}, nmID={cursor_nm_id})...")
+            msg = f"📄 Fetching page {page_num} (cursor: updatedAt={cursor_updated_at}, nmID={cursor_nm_id})..."
+            app.logger.info(msg)
+            print(msg, flush=True)  # Явный вывод в stdout для Docker
 
             try:
                 # Получаем одну страницу
@@ -3003,44 +3005,56 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
                     cursor_nm_id=cursor_nm_id
                 )
             except Exception as e:
-                app.logger.error(f"❌ Failed to fetch page {page_num}: {str(e)}")
+                err_msg = f"❌ Failed to fetch page {page_num}: {str(e)}"
+                app.logger.error(err_msg)
+                print(err_msg, flush=True)
                 raise Exception(f'Failed to fetch products from WB API on page {page_num}: {str(e)}')
 
             # Получаем карточки из ответа
             page_cards = data.get('cards', [])
 
             if not page_cards:
-                app.logger.info(f"⏹ No more cards on page {page_num}. Pagination complete.")
+                msg = f"⏹ No more cards on page {page_num}. Pagination complete."
+                app.logger.info(msg)
+                print(msg, flush=True)
                 break
 
             all_cards.extend(page_cards)
-            app.logger.info(f"✓ Page {page_num}: loaded {len(page_cards)} cards. Total so far: {len(all_cards)}")
+            msg = f"✓ Page {page_num}: loaded {len(page_cards)} cards. Total so far: {len(all_cards)}"
+            app.logger.info(msg)
+            print(msg, flush=True)
 
             # Получаем cursor для следующей страницы
             cursor = data.get('cursor')
             if not cursor:
-                app.logger.info(f"⏹ No cursor in response on page {page_num}. This is the last page.")
+                msg = f"⏹ No cursor in response on page {page_num}. This is the last page."
+                app.logger.info(msg)
+                print(msg, flush=True)
                 break
 
-            # Проверяем есть ли total
+            # Логируем total если он есть (но НЕ используем для остановки пагинации)
+            # Причина: WB API v2 может возвращать total=limit (100) вместо реального количества товаров
             total = cursor.get('total', 0)
             if total > 0:
-                app.logger.info(f"📊 Total products according to cursor: {total}")
-                if len(all_cards) >= total:
-                    app.logger.info(f"✓ Loaded all {total} cards. Stopping pagination.")
-                    break
+                msg = f"📊 Cursor contains total field: {total} (current loaded: {len(all_cards)}) - continuing pagination..."
+                app.logger.info(msg)
+                print(msg, flush=True)
 
             # Получаем данные для следующего cursor
             next_updated_at = cursor.get('updatedAt')
             next_nm_id = cursor.get('nmID')
 
             if not next_updated_at or not next_nm_id:
-                app.logger.info(f"⏹ No cursor data (updatedAt={next_updated_at}, nmID={next_nm_id}). Last page reached.")
+                msg = f"⏹ No cursor data (updatedAt={next_updated_at}, nmID={next_nm_id}). Last page reached."
+                app.logger.info(msg)
+                print(msg, flush=True)
                 break
 
             # Проверка на зацикливание
             if cursor_updated_at == next_updated_at and cursor_nm_id == next_nm_id:
-                app.logger.warning(f"⚠️  Cursor not changing! Breaking to avoid infinite loop.")
+                msg = f"⚠️  Cursor not changing! Breaking to avoid infinite loop."
+                app.logger.warning(msg)
+                print(msg, flush=True)
                 break
 
             cursor_updated_at = next_updated_at
@@ -3048,11 +3062,15 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
 
             # Ограничение на количество страниц для безопасности
             if page_num >= 1000:
-                app.logger.warning(f"⚠️  Reached max pages limit (1000). Stopping.")
+                msg = f"⚠️  Reached max pages limit (1000). Stopping."
+                app.logger.warning(msg)
+                print(msg, flush=True)
                 break
 
         cards = all_cards
-        app.logger.info(f"✅ Pagination complete! Fetched {len(cards)} cards in {page_num} pages for seller {seller.id}")
+        msg = f"✅ Pagination complete! Fetched {len(cards)} cards in {page_num} pages for seller {seller.id}"
+        app.logger.info(msg)
+        print(msg, flush=True)
 
         if not cards:
             app.logger.warning(f"No cards returned from WB API for seller {seller.id}")
