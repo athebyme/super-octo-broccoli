@@ -15,7 +15,9 @@
             <div class="flex justify-between h-16">
                 <div class="flex">
                     <div class="flex-shrink-0 flex items-center">
-                        <span class="text-xl font-bold text-indigo-600">WB Seller Platform</span>
+                        <a href="{{ url_for('dashboard') }}" class="text-xl font-bold text-indigo-600 hover:text-indigo-700 transition-colors">
+                            WB Seller Platform
+                        </a>
                     </div>
                     <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
                         <a href="{{ url_for('dashboard') }}"
@@ -26,9 +28,15 @@
                            class="{% if request.endpoint in ['reports', 'download_report'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Отчёты
                         </a>
+                        {% if current_user.seller %}
+                        <a href="{{ url_for('products_list') }}"
+                           class="{% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'products_bulk_edit'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Карточки товаров
+                        </a>
+                        {% endif %}
                         <a href="{{ url_for('cards') }}"
                            class="{% if request.endpoint == 'cards' %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Карточки
+                            Карточки (старое)
                         </a>
                         {% if current_user.seller %}
                         <a href="{{ url_for('price_monitor_settings') }}"
