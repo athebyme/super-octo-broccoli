@@ -32,7 +32,63 @@
         </a>
     </div>
 
-    <form method="POST" class="space-y-8">
+    <form method="POST" class="space-y-8" x-data="{
+        descLength: {{ product.description|length if product.description else 0 }},
+        validationErrors: [],
+
+        validateForm(e) {
+            this.validationErrors = [];
+
+            // Валидация описания
+            const desc = document.getElementById('description').value;
+            this.descLength = desc.length;
+            if (desc && desc.length < 1000) {
+                this.validationErrors.push('Описание слишком короткое (' + desc.length + ' символов, минимум 1000)');
+            }
+            if (desc && desc.length > 5000) {
+                this.validationErrors.push('Описание слишком длинное (' + desc.length + ' символов, максимум 5000)');
+            }
+
+            // Валидация названия
+            const title = document.getElementById('title').value;
+            if (title && title.length > 60) {
+                this.validationErrors.push('Название слишком длинное (' + title.length + ' символов, максимум 60)');
+            }
+
+            // Если есть ошибки - отменяем отправку
+            if (this.validationErrors.length > 0) {
+                e.preventDefault();
+                // Скроллим к блоку ошибок
+                setTimeout(() => {
+                    document.getElementById('validation-errors').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 100);
+                return false;
+            }
+
+            return true;
+        }
+    }" @submit="validateForm($event)">
+        <!-- Ошибки валидации -->
+        <div x-show="validationErrors.length > 0"
+             id="validation-errors"
+             class="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div class="flex items-start">
+                <svg class="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                </svg>
+                <div class="ml-3 flex-1">
+                    <h3 class="text-sm font-medium text-red-800">Ошибки валидации</h3>
+                    <div class="mt-2 text-sm text-red-700">
+                        <ul class="list-disc list-inside space-y-1">
+                            <template x-for="error in validationErrors" :key="error">
+                                <li x-text="error"></li>
+                            </template>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Основная информация -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <h2 class="text-lg font-semibold text-gray-900 mb-6">Основная информация</h2>
@@ -55,12 +111,17 @@
                 <div>
                     <label for="title" class="block text-sm font-medium text-gray-700 mb-2">
                         Название товара
+                        <span class="text-xs text-gray-500 font-normal">(максимум 60 символов)</span>
                     </label>
                     <input type="text"
                            name="title"
                            id="title"
                            value="{{ product.title }}"
+                           maxlength="60"
                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                    <p class="mt-1 text-xs text-gray-500">
+                        Символов: <span x-text="document.getElementById('title')?.value.length || 0"></span> / 60
+                    </p>
                 </div>
 
                 <!-- Бренд -->
@@ -79,60 +140,99 @@
                 <div>
                     <label for="description" class="block text-sm font-medium text-gray-700 mb-2">
                         Описание
+                        <span class="text-xs text-gray-500 font-normal">(1000-5000 символов)</span>
                     </label>
                     <textarea name="description"
                               id="description"
                               rows="6"
-                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">{{ product.description }}</textarea>
-                    <p class="mt-1 text-xs text-gray-500">Подробное описание товара для покупателей</p>
+                              @input="descLength = $event.target.value.length"
+                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                              :class="{
+                                  'border-red-300': descLength > 0 && descLength < 1000,
+                                  'border-green-300': descLength >= 1000 && descLength <= 5000,
+                                  'border-red-300': descLength > 5000
+                              }">{{ product.description }}</textarea>
+                    <div class="mt-1 flex items-center justify-between text-xs">
+                        <span class="text-gray-500">Подробное описание товара для покупателей</span>
+                        <span :class="{
+                            'text-red-600': descLength < 1000 || descLength > 5000,
+                            'text-green-600': descLength >= 1000 && descLength <= 5000,
+                            'text-gray-500': descLength === 0
+                        }">
+                            Символов: <strong x-text="descLength"></strong> / 1000-5000
+                        </span>
+                    </div>
+                    <div x-show="descLength > 0 && descLength < 1000" class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                        ⚠️ Описание слишком короткое. WB требует минимум 1000 символов.
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Характеристики -->
-        {% if characteristics %}
+        {% if characteristics or characteristics_config %}
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <h2 class="text-lg font-semibold text-gray-900 mb-6">Характеристики</h2>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {% for char in characteristics %}
+                {% set char_value = char.value|format_char_value if char.value else '' %}
+                {% set char_config = characteristics_config|selectattr('id', 'equalto', char.id)|first if characteristics_config else none %}
+
                 <div>
                     <label for="char_{{ char.id }}" class="block text-sm font-medium text-gray-700 mb-2">
                         {{ char.name or char.name_en }}
-                        {% if char.required %}<span class="text-red-500">*</span>{% endif %}
+                        {% if char_config and char_config.required %}<span class="text-red-500">*</span>{% endif %}
                     </label>
-
-                    {% set char_value = char.value|format_char_value if char.value else '' %}
 
                     <!-- Текущее значение -->
                     {% if char_value %}
                     <div class="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
                         <div class="flex items-start justify-between">
                             <div class="flex-1">
-                                <span class="text-xs font-medium text-gray-500 uppercase">Текущее значение:</span>
+                                <span class="text-xs font-medium text-gray-500 uppercase">Текущее:</span>
                                 <p class="mt-1 text-sm text-gray-900 break-words">{{ char_value }}</p>
                             </div>
                         </div>
                     </div>
                     {% endif %}
 
-                    {% if char_value|length > 100 %}
-                    <textarea name="char_{{ char.id }}"
-                              id="char_{{ char.id }}"
-                              rows="3"
-                              placeholder="Введите новое значение..."
-                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">{{ char_value }}</textarea>
-                    {% else %}
-                    <input type="text"
-                           name="char_{{ char.id }}"
-                           id="char_{{ char.id }}"
-                           value="{{ char_value }}"
-                           placeholder="Введите новое значение..."
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                    {% endif %}
+                    <!-- Если есть справочник значений - показываем select -->
+                    {% if char_config and char_config.dictionary %}
+                    <select name="char_{{ char.id }}"
+                            id="char_{{ char.id }}"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="">-- Выберите значение --</option>
+                        {% for dict_val in char_config.dictionary %}
+                        <option value="{{ dict_val.id }}" {% if char_value and dict_val.value in char_value %}selected{% endif %}>
+                            {{ dict_val.value }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">
+                        💡 Выберите из справочника WB ({{ char_config.dictionary|length }} вариантов)
+                    </p>
 
-                    {% if char.unit_name %}
-                    <p class="mt-1 text-xs text-gray-500">Единица измерения: {{ char.unit_name }}</p>
+                    <!-- Иначе - текстовое поле -->
+                    {% else %}
+                        {% if char_value|length > 100 %}
+                        <textarea name="char_{{ char.id }}"
+                                  id="char_{{ char.id }}"
+                                  rows="3"
+                                  placeholder="Введите новое значение..."
+                                  class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">{{ char_value }}</textarea>
+                        {% else %}
+                        <input type="text"
+                               name="char_{{ char.id }}"
+                               id="char_{{ char.id }}"
+                               value="{{ char_value }}"
+                               placeholder="Введите новое значение..."
+                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                        {% endif %}
+
+                        {% if char_config and char_config.unit_name %}
+                        <p class="mt-1 text-xs text-gray-500">Единица: {{ char_config.unit_name }}</p>
+                        {% endif %}
                     {% endif %}
                 </div>
                 {% endfor %}
