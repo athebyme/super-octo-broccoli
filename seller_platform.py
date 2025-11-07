@@ -847,7 +847,11 @@ def products_list():
         )
 
         products = pagination.items
-        total_products = current_user.seller.products.count()
+
+        # Показываем количество товаров С УЧЕТОМ фильтров
+        total_products = pagination.total  # Количество товаров после применения всех фильтров
+
+        # Для активных товаров - всегда показываем общее количество активных (без фильтров)
         active_products = current_user.seller.products.filter_by(is_active=True).count()
 
         # Получаем уникальные бренды и категории для фильтров
@@ -1253,7 +1257,7 @@ def sync_products():
         # Запускаем синхронизацию в фоновом потоке
         thread = threading.Thread(
             target=_perform_product_sync_task,
-            args=(current_user.seller.id, app._get_current_object()),
+            args=(current_user.seller.id, app),
             daemon=True
         )
         thread.start()

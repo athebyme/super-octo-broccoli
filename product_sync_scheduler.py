@@ -101,7 +101,7 @@ def check_and_sync_all_sellers(flask_app):
                     # Запускаем синхронизацию
                     thread = threading.Thread(
                         target=_perform_product_sync_task,
-                        args=(seller.id, flask_app._get_current_object()),
+                        args=(seller.id, flask_app),
                         daemon=True,
                         name=f"sync-seller-{seller.id}"
                     )
