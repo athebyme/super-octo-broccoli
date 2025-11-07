@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Статус синхронизации товаров{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8" x-data="syncStatusApp()">
+    <!-- Заголовок -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Синхронизация товаров</h1>
+            <p class="text-gray-600 dark:text-gray-400 mt-1">
+                Управление синхронизацией карточек товаров с WB
+            </p>
+        </div>
+        <a href="{{ url_for('products_list') }}"
+           class="px-6 py-2.5 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors">
+            ← К списку товаров
+        </a>
+    </div>
+
+    <!-- Статус синхронизации -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <!-- Текущий статус -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Текущий статус</h2>
+
+            <!-- Статус-индикатор -->
+            <div class="flex items-center gap-3 mb-4">
+                <div :class="{
+                    'w-3 h-3 rounded-full': true,
+                    'bg-green-500 animate-pulse': status.is_syncing,
+                    'bg-green-500': !status.is_syncing && status.last_sync_status === 'success',
+                    'bg-red-500': !status.is_syncing && (status.last_sync_status === 'error' || status.last_sync_status === 'auth_error'),
+                    'bg-gray-400': !status.is_syncing && !status.last_sync_status
+                }"></div>
+                <span class="text-lg font-medium text-gray-900 dark:text-white" x-text="status.status_message"></span>
+            </div>
+
+            <!-- Информация о последней синхронизации -->
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-600 dark:text-gray-400">Последняя синхронизация:</span>
+                    <span class="font-medium text-gray-900 dark:text-white" x-text="formatDateTime(status.last_sync_at)"></span>
+                </div>
+                <div class="flex justify-between" x-show="status.last_sync_duration">
+                    <span class="text-gray-600 dark:text-gray-400">Длительность:</span>
+                    <span class="font-medium text-gray-900 dark:text-white" x-text="formatDuration(status.last_sync_duration)"></span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600 dark:text-gray-400">Всего товаров:</span>
+                    <span class="font-medium text-gray-900 dark:text-white" x-text="status.total_products || 0"></span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-600 dark:text-gray-400">Активных:</span>
+                    <span class="font-medium text-gray-900 dark:text-white" x-text="status.active_products || 0"></span>
+                </div>
+            </div>
+
+            <!-- Ошибка если есть -->
+            <div x-show="status.last_sync_error" class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p class="text-sm text-red-800 font-medium">Ошибка:</p>
+                <p class="text-xs text-red-600 mt-1" x-text="status.last_sync_error"></p>
+            </div>
+
+            <!-- Кнопка ручной синхронизации -->
+            <form action="{{ url_for('sync_products') }}" method="POST" class="mt-4">
+                <button type="submit"
+                        :disabled="status.is_syncing"
+                        :class="{
+                            'w-full px-6 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2': true,
+                            'bg-blue-600 text-white hover:bg-blue-700': !status.is_syncing,
+                            'bg-gray-400 text-white cursor-not-allowed': status.is_syncing
+                        }">
+                    <svg x-show="status.is_syncing" class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span x-text="status.is_syncing ? 'Синхронизация...' : 'Запустить синхронизацию'"></span>
+                </button>
+            </form>
+        </div>
+
+        <!-- Статистика последней синхронизации -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Статистика последней синхронизации</h2>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div class="text-center">
+                    <div class="text-3xl font-bold text-blue-600" x-text="status.products_synced || 0"></div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Получено</div>
+                </div>
+                <div class="text-center">
+                    <div class="text-3xl font-bold text-green-600" x-text="status.products_added || 0"></div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Добавлено</div>
+                </div>
+                <div class="text-center">
+                    <div class="text-3xl font-bold text-yellow-600" x-text="status.products_updated || 0"></div>
+                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Обновлено</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Настройки автосинхронизации -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Автоматическая синхронизация</h2>
+
+        <div class="space-y-4">
+            <!-- Включить/выключить автосинхронизацию -->
+            <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <div>
+                    <h3 class="font-medium text-gray-900 dark:text-white">Включить автосинхронизацию</h3>
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        Автоматическая синхронизация по расписанию
+                    </p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox"
+                           x-model="settings.is_enabled"
+                           @change="updateSettings()"
+                           class="sr-only peer">
+                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                </label>
+            </div>
+
+            <!-- Интервал синхронизации -->
+            <div x-show="settings.is_enabled" class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <label class="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+                    Интервал синхронизации (минуты)
+                </label>
+                <div class="flex items-center gap-4">
+                    <input type="range"
+                           x-model.number="settings.sync_interval_minutes"
+                           @change="updateSettings()"
+                           min="5"
+                           max="1440"
+                           step="5"
+                           class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-600">
+                    <span class="text-lg font-semibold text-gray-900 dark:text-white w-20 text-right"
+                          x-text="formatInterval(settings.sync_interval_minutes)"></span>
+                </div>
+                <div class="flex justify-between text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    <span>5 мин</span>
+                    <span>1 час</span>
+                    <span>4 часа</span>
+                    <span>12 часов</span>
+                    <span>24 часа</span>
+                </div>
+            </div>
+
+            <!-- Время следующей синхронизации -->
+            <div x-show="settings.is_enabled && status.next_sync_at" class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <span class="text-sm text-blue-800 dark:text-blue-200">
+                        Следующая синхронизация: <strong x-text="formatDateTime(status.next_sync_at)"></strong>
+                    </span>
+                </div>
+            </div>
+
+            <!-- Сообщение об успешном сохранении -->
+            <div x-show="saveMessage"
+                 x-transition
+                 class="p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                <span x-text="saveMessage"></span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function syncStatusApp() {
+    return {
+        status: {},
+        settings: {{ sync_settings.to_dict() | tojson | safe }},
+        saveMessage: '',
+
+        init() {
+            this.loadStatus();
+            // Обновляем статус каждые 5 секунд
+            setInterval(() => this.loadStatus(), 5000);
+        },
+
+        async loadStatus() {
+            try {
+                const response = await fetch('/api/products/sync-status');
+                if (response.ok) {
+                    this.status = await response.json();
+                }
+            } catch (error) {
+                console.error('Error loading sync status:', error);
+            }
+        },
+
+        async updateSettings() {
+            try {
+                const response = await fetch('/api/products/sync-settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(this.settings)
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    this.settings = data.settings;
+                    this.saveMessage = data.message;
+
+                    // Обновляем статус
+                    this.loadStatus();
+
+                    // Скрываем сообщение через 3 секунды
+                    setTimeout(() => {
+                        this.saveMessage = '';
+                    }, 3000);
+                }
+            } catch (error) {
+                console.error('Error updating settings:', error);
+            }
+        },
+
+        formatDateTime(isoString) {
+            if (!isoString) return '—';
+            const date = new Date(isoString);
+            return date.toLocaleString('ru-RU', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        },
+
+        formatDuration(seconds) {
+            if (!seconds) return '—';
+            if (seconds < 60) return `${seconds.toFixed(1)}с`;
+            const minutes = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${minutes}м ${secs}с`;
+        },
+
+        formatInterval(minutes) {
+            if (minutes < 60) return `${minutes} мин`;
+            if (minutes === 60) return '1 час';
+            if (minutes < 1440) {
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                return mins > 0 ? `${hours}ч ${mins}м` : `${hours} часов`;
+            }
+            return '24 часа';
+        }
+    }
+}
+</script>
+{% endblock %}

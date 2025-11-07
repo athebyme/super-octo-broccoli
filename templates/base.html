@@ -33,6 +33,10 @@
                            class="{% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'products_bulk_edit'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Карточки товаров
                         </a>
+                        <a href="{{ url_for('product_sync_status_page') }}"
+                           class="{% if request.endpoint == 'product_sync_status_page' %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Синхронизация
+                        </a>
                         {% endif %}
                         {% if current_user.seller %}
                         <a href="{{ url_for('price_monitor_settings') }}"

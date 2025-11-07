@@ -1188,6 +1188,28 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
 
 
+@app.route('/products/sync-status', methods=['GET'])
+@login_required
+def product_sync_status_page():
+    """Страница статуса синхронизации и настроек автосинхронизации"""
+    if not current_user.seller:
+        flash('У вас нет профиля продавца', 'danger')
+        return redirect(url_for('dashboard'))
+
+    # Получаем или создаем настройки синхронизации
+    sync_settings = current_user.seller.product_sync_settings
+    if not sync_settings:
+        sync_settings = ProductSyncSettings(seller_id=current_user.seller.id)
+        db.session.add(sync_settings)
+        db.session.commit()
+
+    return render_template(
+        'product_sync_status.html',
+        seller=current_user.seller,
+        sync_settings=sync_settings
+    )
+
+
 @app.route('/products/sync', methods=['POST'])
 @login_required
 def sync_products():
@@ -2952,6 +2974,68 @@ def api_product_sync_status():
         status_info['can_start_sync'] = True
 
     return status_info
+
+
+@app.route('/api/products/sync-settings', methods=['GET', 'POST'])
+@login_required
+def api_product_sync_settings():
+    """API для управления настройками автосинхронизации"""
+    if not current_user.seller:
+        return {'error': 'Seller profile not found'}, 404
+
+    # Получаем или создаем настройки
+    sync_settings = current_user.seller.product_sync_settings
+    if not sync_settings:
+        sync_settings = ProductSyncSettings(seller_id=current_user.seller.id)
+        db.session.add(sync_settings)
+        db.session.commit()
+
+    if request.method == 'GET':
+        return sync_settings.to_dict()
+
+    # POST - обновление настроек
+    try:
+        data = request.get_json() or request.form.to_dict()
+
+        # Обновляем настройки
+        if 'is_enabled' in data:
+            is_enabled = str(data['is_enabled']).lower() in ['true', '1', 'on']
+            sync_settings.is_enabled = is_enabled
+
+            # Если включили - устанавливаем время следующей синхронизации
+            if is_enabled and not sync_settings.next_sync_at:
+                from datetime import timedelta
+                sync_settings.next_sync_at = datetime.utcnow() + timedelta(minutes=sync_settings.sync_interval_minutes)
+
+        if 'sync_interval_minutes' in data:
+            interval = int(data['sync_interval_minutes'])
+            # Ограничиваем интервал от 5 минут до 24 часов
+            interval = max(5, min(interval, 1440))
+            sync_settings.sync_interval_minutes = interval
+
+            # Пересчитываем время следующей синхронизации
+            if sync_settings.is_enabled:
+                from datetime import timedelta
+                sync_settings.next_sync_at = datetime.utcnow() + timedelta(minutes=interval)
+
+        if 'sync_products' in data:
+            sync_settings.sync_products = str(data['sync_products']).lower() in ['true', '1', 'on']
+
+        if 'sync_stocks' in data:
+            sync_settings.sync_stocks = str(data['sync_stocks']).lower() in ['true', '1', 'on']
+
+        db.session.commit()
+
+        return {
+            'success': True,
+            'message': 'Настройки обновлены',
+            'settings': sync_settings.to_dict()
+        }
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.exception(f"Error updating sync settings: {e}")
+        return {'error': str(e)}, 400
 
 
 def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings) -> dict:
