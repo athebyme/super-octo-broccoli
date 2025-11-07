@@ -226,23 +226,32 @@ def clean_characteristics_for_update(
     """
     cleaned = []
 
-    for char in characteristics:
+    logger.info(f"🧹 Cleaning {len(characteristics)} characteristics for update")
+
+    for i, char in enumerate(characteristics):
         # Оставляем только необходимые поля
         cleaned_char = {
             'id': char.get('id'),
             'value': char.get('value')
         }
 
+        logger.debug(f"  Char #{i+1}: id={cleaned_char['id']}, value={cleaned_char['value']} (type: {type(cleaned_char['value']).__name__})")
+
         # Пропускаем характеристики без значения
         if cleaned_char['value'] is None or cleaned_char['value'] == '':
+            logger.debug(f"  Char #{i+1}: Skipping (empty value)")
             continue
 
         # Если value - строка, оборачиваем в массив для типа 1
         if isinstance(cleaned_char['value'], str):
+            logger.debug(f"  Char #{i+1}: Wrapping string '{cleaned_char['value']}' in array")
             cleaned_char['value'] = [cleaned_char['value']]
+        elif isinstance(cleaned_char['value'], list):
+            logger.debug(f"  Char #{i+1}: Already a list with {len(cleaned_char['value'])} items")
 
         cleaned.append(cleaned_char)
 
+    logger.info(f"✅ Cleaned {len(cleaned)} characteristics (skipped {len(characteristics) - len(cleaned)})")
     return cleaned
 
 

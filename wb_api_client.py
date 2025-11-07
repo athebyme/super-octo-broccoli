@@ -669,6 +669,14 @@ class WildberriesAPIClient:
         logger.info(f"📤 Sending update request for nmID={nm_id}")
         logger.debug(f"Card to send keys: {list(card_to_send.keys())}")
 
+        # Логируем характеристики если они есть
+        if 'characteristics' in card_to_send:
+            logger.info(f"📋 Sending {len(card_to_send['characteristics'])} characteristics:")
+            for i, char in enumerate(card_to_send['characteristics'][:5]):  # Первые 5
+                logger.info(f"   Char #{i+1}: id={char.get('id')}, value={char.get('value')} (type: {type(char.get('value')).__name__})")
+            if len(card_to_send['characteristics']) > 5:
+                logger.info(f"   ... and {len(card_to_send['characteristics']) - 5} more")
+
         try:
             response = self._make_request(
                 'POST', 'content', endpoint,

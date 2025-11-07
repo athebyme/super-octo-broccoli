@@ -2202,25 +2202,14 @@ def products_bulk_edit():
                                              edit_operations=edit_operations)
 
                     # Определяем тип значения: ID из справочника или текст
-                    # Для множественных значений может быть список ID через запятую
+                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
                     app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    try:
-                        # Попытаемся преобразовать в int - если получилось, это ID
-                        if ',' in str(new_value):
-                            # Множественные значения через запятую
-                            value_ids = [int(v.strip()) for v in str(new_value).split(',')]
-                            formatted_value = value_ids
-                            app.logger.info(f"Using multiple dictionary value IDs: {value_ids}")
-                        else:
-                            value_id = int(new_value)
-                            # Для характеристик со справочником WB требует массив ID, а не текст
-                            formatted_value = [value_id]
-                            app.logger.info(f"Using single dictionary value ID: {value_id}")
-                    except ValueError:
-                        # Это текстовое значение для свободного ввода
-                        formatted_value = new_value
-                        app.logger.info(f"Using text value: {new_value}")
+                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
+                    # Для ID из справочника: "123" -> ["123"]
+                    # Для текста: "Россия" -> ["Россия"]
+                    formatted_value = str(new_value).strip()
+                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
 
                     for product in products:
                         try:
@@ -2297,22 +2286,14 @@ def products_bulk_edit():
                                              edit_operations=edit_operations)
 
                     # Определяем тип значения: ID из справочника или текст
-                    # Для множественных значений может быть список ID через запятую
+                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
                     app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    try:
-                        if ',' in str(new_value):
-                            # Множественные значения через запятую
-                            value_ids = [int(v.strip()) for v in str(new_value).split(',')]
-                            formatted_value = value_ids
-                            app.logger.info(f"Adding multiple dictionary value IDs: {value_ids}")
-                        else:
-                            value_id = int(new_value)
-                            formatted_value = [value_id]
-                            app.logger.info(f"Adding single dictionary value ID: {value_id}")
-                    except ValueError:
-                        formatted_value = new_value
-                        app.logger.info(f"Adding text value: {new_value}")
+                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
+                    # Для ID из справочника: "123" -> ["123"]
+                    # Для текста: "Россия" -> ["Россия"]
+                    formatted_value = str(new_value).strip()
+                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
 
                     for product in products:
                         try:
