@@ -403,6 +403,10 @@ class WildberriesAPIClient:
         cursor_nm_id = None
 
         while True:
+            # Сохраняем текущий cursor перед запросом для проверки на зацикливание
+            prev_cursor_updated_at = cursor_updated_at
+            prev_cursor_nm_id = cursor_nm_id
+
             # Запрос с cursor для пагинации
             data = self.get_cards_list(
                 limit=batch_size,
@@ -434,10 +438,11 @@ class WildberriesAPIClient:
                 logger.info(f"Pagination complete. Total cards: {len(all_cards)}")
                 break
 
-            # Если total указывает что мы получили все
-            total = cursor.get('total', 0)
-            if total > 0 and len(all_cards) >= total:
-                logger.info(f"All {total} cards loaded")
+            # Проверка на зацикливание - новый cursor не должен совпадать с предыдущим
+            if (prev_cursor_updated_at is not None and
+                prev_cursor_updated_at == cursor_updated_at and
+                prev_cursor_nm_id == cursor_nm_id):
+                logger.warning(f"Cursor not changing, stopping to avoid infinite loop. Total: {len(all_cards)}")
                 break
 
         logger.info(f"Total cards loaded: {len(all_cards)}")

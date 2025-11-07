@@ -835,7 +835,8 @@ def products_list():
 
         # Базовые фильтры
         search = request.args.get('search', '').strip()
-        active_only = request.args.get('active_only', type=bool)
+        # Исправлено: чекбокс отправляет '1', нужна правильная обработка
+        active_only = request.args.get('active_only', '').strip() in ['1', 'true', 'True', 'on']
 
         # Расширенные фильтры
         filter_brand = request.args.get('brand', '').strip()
@@ -870,14 +871,28 @@ def products_list():
         if filter_category:
             query = query.filter(Product.object_name.ilike(f'%{filter_category}%'))
 
-        # Фильтр по наличию остатков
+        # Фильтр по наличию остатков (исправлен JOIN для избежания дубликатов)
         if filter_has_stock == 'yes':
             # Товары у которых есть хотя бы один остаток > 0
-            query = query.join(ProductStock).filter(ProductStock.quantity > 0)
+            # Используем EXISTS вместо JOIN чтобы избежать дубликатов строк
+            query = query.filter(
+                db.exists().where(
+                    db.and_(
+                        ProductStock.product_id == Product.id,
+                        ProductStock.quantity > 0
+                    )
+                )
+            )
         elif filter_has_stock == 'no':
             # Товары без остатков или с нулевыми остатками
-            query = query.outerjoin(ProductStock).group_by(Product.id).having(
-                db.func.coalesce(db.func.sum(ProductStock.quantity), 0) == 0
+            # Используем NOT EXISTS для чистого запроса без группировки
+            query = query.filter(
+                ~db.exists().where(
+                    db.and_(
+                        ProductStock.product_id == Product.id,
+                        ProductStock.quantity > 0
+                    )
+                )
             )
 
         # Сортировка
