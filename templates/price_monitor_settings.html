@@ -16,7 +16,7 @@
     </div>
 
     {% if settings.last_sync_at %}
-    <div class="mb-6 bg-white shadow overflow-hidden sm:rounded-lg">
+    <a href="{{ url_for('product_sync_status_page') }}" class="block mb-6 bg-white shadow overflow-hidden sm:rounded-lg hover:shadow-md transition-shadow cursor-pointer">
         <div class="px-4 py-5 sm:px-6">
             <div class="flex items-center justify-between">
                 <div>
@@ -27,7 +27,7 @@
                         {{ settings.last_sync_at.strftime('%d.%m.%Y %H:%M') if settings.last_sync_at else 'Никогда' }}
                     </p>
                 </div>
-                <div>
+                <div class="flex items-center gap-2">
                     {% if settings.last_sync_status == 'success' %}
                     <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
                         ✓ Успешно
@@ -41,6 +41,9 @@
                         ✕ Ошибка
                     </span>
                     {% endif %}
+                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
                 </div>
             </div>
             {% if settings.last_sync_error %}
@@ -49,7 +52,7 @@
             </div>
             {% endif %}
         </div>
-    </div>
+    </a>
     {% endif %}
 
     <div class="bg-white shadow overflow-hidden sm:rounded-lg">

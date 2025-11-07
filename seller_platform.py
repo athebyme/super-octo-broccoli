@@ -741,6 +741,20 @@ def products_list():
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
 
+    # Проверяем не застрял ли статус синхронизации
+    if current_user.seller.api_sync_status == 'syncing' and current_user.seller.api_last_sync:
+        from datetime import timedelta
+        time_since_sync = datetime.utcnow() - current_user.seller.api_last_sync
+        # Если синхронизация висит больше 15 минут - сбрасываем статус
+        if time_since_sync > timedelta(minutes=15):
+            app.logger.warning(f"Resetting stuck sync status for seller {current_user.seller.id} (stuck for {time_since_sync})")
+            current_user.seller.api_sync_status = 'error'
+            # Обновляем настройки синхронизации
+            if current_user.seller.product_sync_settings:
+                current_user.seller.product_sync_settings.last_sync_status = 'error'
+                current_user.seller.product_sync_settings.last_sync_error = f'Sync timeout after {time_since_sync}'
+            db.session.commit()
+
     try:
         # Параметры пагинации
         page = request.args.get('page', 1, type=int)
@@ -1061,6 +1075,10 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
                     if photo_count == 0 and card_data.get('mediaFiles'):
                         photo_count = len(media) if media else 0
+                    # Если photo_count все еще 0, но есть nmID - предполагаем что есть хотя бы 1 фото
+                    # WB обычно требует минимум 1 фото для товара
+                    if photo_count == 0 and nm_id:
+                        photo_count = 5  # Предполагаем стандартное количество фото
                     photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
                     photos_json = json.dumps(photo_indices) if photo_indices else None
 
