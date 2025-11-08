@@ -54,17 +54,42 @@ class WBProductImporter:
 
             # Извлекаем простые размеры из структуры парсера
             # sizes_data - это словарь с полями: raw, dimensions, simple_sizes
+            # Определяем, есть ли у товара реальные размеры (S/M/L, 42/44 и т.д.)
+            has_real_sizes = False
+            sizes_list = []
+
             if isinstance(sizes_data, dict):
                 # Если есть simple_sizes (например, "46-48" -> ["46", "48"])
+                # это реальные размеры одежды/белья
                 sizes_list = sizes_data.get('simple_sizes', [])
-                # Если нет simple_sizes, но есть raw - используем raw
-                if not sizes_list and sizes_data.get('raw'):
-                    sizes_list = [sizes_data['raw']]
+                if sizes_list:
+                    has_real_sizes = True
+                # Если нет simple_sizes, проверяем dimensions
+                # Для интим-товаров (длина, диаметр) - это НЕ размеры в понимании WB
+                # Это характеристики товара
+                elif sizes_data.get('dimensions'):
+                    # У товара есть габариты (длина, диаметр), но нет размеров
+                    has_real_sizes = False
+                    sizes_list = []
+                # Если есть только raw без dimensions и simple_sizes
+                elif sizes_data.get('raw'):
+                    # Пытаемся определить, это размер или габарит
+                    raw = sizes_data['raw']
+                    # Если содержит "см", "мм", "длина", "диаметр" - это габарит, не размер
+                    if any(word in raw.lower() for word in ['см', 'мм', 'длина', 'диаметр', 'ширина', 'вес', 'объем']):
+                        has_real_sizes = False
+                        sizes_list = []
+                    else:
+                        # Возможно, это размер (S, M, 42 и т.д.)
+                        has_real_sizes = True
+                        sizes_list = [raw]
             elif isinstance(sizes_data, list):
                 # Старый формат - список размеров
                 sizes_list = sizes_data
+                has_real_sizes = len(sizes_list) > 0
             else:
                 sizes_list = []
+                has_real_sizes = False
 
             # Формируем артикул
             from auto_import_manager import AutoImportManager
@@ -77,14 +102,13 @@ class WBProductImporter:
                 vendor_code = imported_product.external_vendor_code
 
             # Формируем sizes для WB API v2
-            # Sizes - это массив [{techSize, wbSize, price, skus}]
-            # techSize - размер для продавца, wbSize - размер для покупателя
-            # price - цена (будет 0, потом можно обновить)
-            # skus - массив баркодов
+            # Два формата:
+            # 1. Для товаров С размерами (одежда, обувь): [{techSize, wbSize, price, skus}]
+            # 2. Для товаров БЕЗ размеров (интим-товары, аксессуары): [{skus}] - БЕЗ techSize/wbSize!
             wb_sizes = []
 
-            # Если есть размеры из товара
-            if sizes_list:
+            if has_real_sizes and sizes_list:
+                # Товар С размерами (одежда, обувь)
                 for idx, size_val in enumerate(sizes_list):
                     size_str = str(size_val)
 
@@ -97,14 +121,28 @@ class WBProductImporter:
                         'price': 0,  # Цена будет установлена позже
                         'skus': [barcode] if barcode else []
                     })
+            else:
+                # Товар БЕЗ размеров (интим-товары, электроника и т.д.)
+                # Согласно Swagger примеру creatingGroupOfIndividualCards (строки 6380-6382)
+                # для товаров без размеров НЕ указываем techSize и wbSize!
+                # Только баркод в skus
+                if barcodes:
+                    # Если несколько баркодов - создаем несколько записей
+                    # ВАЖНО: каждый баркод = отдельная запись!
+                    for barcode in barcodes:
+                        wb_sizes.append({
+                            'skus': [barcode]
+                        })
+                else:
+                    # Если нет баркодов, WB сгенерирует автоматически
+                    wb_sizes.append({
+                        'skus': []
+                    })
 
-            # Если нет размеров, создаем один дефолтный
+            # Проверка: не должно быть пустого массива sizes
             if not wb_sizes:
                 wb_sizes.append({
-                    'techSize': 'One Size',
-                    'wbSize': 'One Size',
-                    'price': 0,
-                    'skus': [barcodes[0]] if barcodes else []
+                    'skus': []
                 })
 
             # Формируем характеристики для WB API v2
@@ -144,18 +182,32 @@ class WBProductImporter:
                 'weightBrutto': 0.1  # кг
             }
 
+            # Формируем бренд - используем безопасный fallback
+            # Некоторые бренды могут не существовать на WB
+            # В таком случае WB вернет ошибку: "Бренда «XXX» пока нет на WB"
+            # Используем бренд из товара, но если он пустой - используем общий
+            product_brand = imported_product.brand if imported_product.brand else 'NoName'
+
+            # Логируем бренд для отладки
+            logger.info(f"Товар {imported_product.external_id}: бренд = {product_brand}")
+
             # Формируем variant для WB API v2
             variant = {
                 'vendorCode': vendor_code,
                 'title': imported_product.title[:60] if imported_product.title else 'Товар',  # Макс 60 символов
                 'description': imported_product.description or imported_product.title or 'Описание товара',
-                'brand': imported_product.brand or 'NoName',
+                'brand': product_brand,
                 'dimensions': dimensions,
                 'sizes': wb_sizes,
                 'characteristics': characteristics
             }
 
             logger.info(f"Создание карточки WB для товара {imported_product.external_id}")
+            logger.info(f"  - Артикул: {vendor_code}")
+            logger.info(f"  - Бренд: {product_brand}")
+            logger.info(f"  - Категория WB (subject_id): {imported_product.wb_subject_id}")
+            logger.info(f"  - Размеры (has_real_sizes={has_real_sizes}): {wb_sizes}")
+            logger.info(f"  - Баркоды: {barcodes}")
             logger.debug(f"Данные варианта: {variant}")
 
             # Вызов API WB для создания карточки
@@ -187,9 +239,20 @@ class WBProductImporter:
                     nm_id = None
 
             except Exception as e:
-                error_msg = f"Ошибка создания карточки WB: {str(e)}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
+                error_msg = str(e)
+
+                # Обрабатываем известные ошибки WB
+                if 'Бренда' in error_msg and 'пока нет на WB' in error_msg:
+                    error_msg = f"Бренд '{product_brand}' не зарегистрирован на Wildberries. Необходимо сначала добавить бренд в личном кабинете WB или использовать существующий бренд."
+                elif 'повторяющиеся Баркоды' in error_msg:
+                    error_msg = f"Баркод уже используется в другой карточке или дублируется в текущей. Баркоды: {barcodes}"
+                elif 'Артикул продавца' in error_msg:
+                    error_msg = f"Проблема с артикулом продавца '{vendor_code}'. Возможно, он уже используется или имеет неверный формат."
+
+                full_error = f"Ошибка создания карточки WB: {error_msg}"
+                logger.error(full_error)
+                logger.error(f"Данные которые отправлялись: variant={variant}")
+                raise Exception(full_error)
 
             # Создаем запись Product в БД
             product = Product(
