@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}Audit-логи - Admin{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="mb-6">
+        <div class="flex justify-between items-center">
+            <h1 class="text-3xl font-bold text-gray-900">Audit-логи администраторов</h1>
+            <a href="{{ url_for('admin_panel') }}" class="text-indigo-600 hover:text-indigo-900">← Назад в админку</a>
+        </div>
+    </div>
+
+    <!-- Фильтры -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-4 mb-6">
+        <form method="GET" action="{{ url_for('admin_audit_logs') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+                <label for="admin_id" class="block text-sm font-medium text-gray-700">Администратор</label>
+                <select name="admin_id" id="admin_id" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                    <option value="">Все администраторы</option>
+                    {% for admin in admins %}
+                    <option value="{{ admin.id }}" {% if current_admin_filter == admin.id %}selected{% endif %}>
+                        {{ admin.username }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label for="action" class="block text-sm font-medium text-gray-700">Действие</label>
+                <select name="action" id="action" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                    <option value="">Все действия</option>
+                    {% for act in unique_actions %}
+                    <option value="{{ act }}" {% if current_action_filter == act %}selected{% endif %}>{{ act }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label for="target_type" class="block text-sm font-medium text-gray-700">Тип объекта</label>
+                <select name="target_type" id="target_type" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                    <option value="">Все типы</option>
+                    {% for target in unique_targets %}
+                    <option value="{{ target }}" {% if current_target_filter == target %}selected{% endif %}>{{ target }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="flex items-end">
+                <button type="submit" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                    Применить
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Таблица логов -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+        {% if logs.items %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Дата/Время</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Администратор</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Действие</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Объект</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP адрес</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Детали</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for log in logs.items %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {{ log.admin_user.username }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
+                                {% if 'create' in log.action %}bg-green-100 text-green-800
+                                {% elif 'delete' in log.action %}bg-red-100 text-red-800
+                                {% elif 'update' in log.action or 'block' in log.action %}bg-yellow-100 text-yellow-800
+                                {% else %}bg-blue-100 text-blue-800{% endif %}">
+                                {{ log.action }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {% if log.target_type %}
+                            <div>{{ log.target_type }} #{{ log.target_id }}</div>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ log.ip_address or '-' }}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500">
+                            <div class="max-w-md truncate" title="{{ log.details }}">
+                                {{ log.details or '-' }}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Пагинация -->
+        {% if logs.pages > 1 %}
+        <div class="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+            <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Показано <span class="font-medium">{{ ((logs.page - 1) * logs.per_page + 1) }}</span>
+                        - <span class="font-medium">{{ min(logs.page * logs.per_page, logs.total) }}</span>
+                        из <span class="font-medium">{{ logs.total }}</span> записей
+                    </p>
+                </div>
+                <div>
+                    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+                        {% if logs.has_prev %}
+                        <a href="{{ url_for('admin_audit_logs', page=logs.prev_num, admin_id=current_admin_filter, action=current_action_filter, target_type=current_target_filter) }}"
+                           class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">←</a>
+                        {% endif %}
+                        <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">
+                            {{ logs.page }} / {{ logs.pages }}
+                        </span>
+                        {% if logs.has_next %}
+                        <a href="{{ url_for('admin_audit_logs', page=logs.next_num, admin_id=current_admin_filter, action=current_action_filter, target_type=current_target_filter) }}"
+                           class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">→</a>
+                        {% endif %}
+                    </nav>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="px-6 py-12 text-center">
+            <p class="text-gray-500">Нет audit-логов</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

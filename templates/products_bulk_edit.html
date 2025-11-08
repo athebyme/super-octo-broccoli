@@ -35,10 +35,17 @@
             <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <div class="flex items-center space-x-4">
                     {% set photos = product.photos_json|from_json if product.photos_json else [] %}
-                    {% if photos %}
-                    <img src="{{ wb_photo_url(product.nm_id, photos[0], 'tm') }}"
+                    {% if photos or product.nm_id %}
+                    {# Используем первое фото из списка или пытаемся загрузить фото 1 по умолчанию #}
+                    <img src="{{ wb_photo_url(product.nm_id, photos[0] if photos else 1, 'tm') }}"
                          alt="{{ product.title }}"
-                         class="w-12 h-12 rounded object-cover">
+                         class="w-12 h-12 rounded object-cover"
+                         onerror="this.onerror=null; this.src=''; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    <div class="w-12 h-12 bg-gray-200 rounded items-center justify-center" style="display: none;">
+                        <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                    </div>
                     {% else %}
                     <div class="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
                         <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -67,7 +74,7 @@
     </script>
 
     <!-- Форма массового редактирования -->
-    <form method="POST" x-data="{
+    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="{
         operation: '{{ request.form.get('operation', '') }}',
         productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
         characteristics: [],
@@ -89,6 +96,43 @@
                     this.products = [];
                 }
             }
+        },
+
+        validateForm() {
+            // Проверяем что выбрана операция
+            if (!this.operation) {
+                alert('Выберите операцию');
+                return false;
+            }
+
+            // Для характеристик проверяем заполненность полей
+            if (this.operation === 'update_characteristic' || this.operation === 'add_characteristic') {
+                const charId = document.getElementById('char_id_common').value;
+                if (!charId) {
+                    alert('Выберите характеристику');
+                    return false;
+                }
+
+                // Проверяем значение в скрытом поле
+                const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
+                const valueField = document.getElementById(valueFieldId);
+
+                if (!valueField || !valueField.value || !valueField.value.trim()) {
+                    alert('Выберите или введите значение характеристики');
+                    return false;
+                }
+            }
+
+            // Для других операций проверяем поле value
+            if (this.operation === 'update_brand' || this.operation === 'append_description' || this.operation === 'replace_description') {
+                const valueField = document.querySelector('[name=\"value\"]');
+                if (!valueField || !valueField.value.trim()) {
+                    alert('Заполните значение для операции');
+                    return false;
+                }
+            }
+
+            return true;
         },
 
         getCurrentValuesForChar(charId) {
@@ -131,10 +175,10 @@
             // Обновляем hidden поле
             if (operation === 'add') {
                 this.selectedValuesAdd = [...arr];
-                document.getElementById('value_char_add').value = arr.join(', ');
+                document.getElementById('value_input_add').value = arr.join(', ');
             } else {
                 this.selectedValues = [...arr];
-                document.getElementById('value_char').value = arr.join(', ');
+                document.getElementById('value_input').value = arr.join(', ');
             }
             return true;
         },
@@ -148,6 +192,24 @@
             const arr = operation === 'add' ? this.selectedValuesAdd : this.selectedValues;
             const maxCount = this.selectedChar?.max_count || 0;
             return maxCount === 0 || arr.length < maxCount;
+        },
+
+        clearFields() {
+            // Очищаем все поля при смене операции
+            this.selectedChar = null;
+            this.selectedValues = [];
+            this.selectedValuesAdd = [];
+            this.characteristics = [];
+
+            // Очищаем скрытые поля
+            const charIdField = document.getElementById('char_id_common');
+            if (charIdField) charIdField.value = '';
+
+            const valueInputField = document.getElementById('value_input');
+            if (valueInputField) valueInputField.value = '';
+
+            const valueInputAddField = document.getElementById('value_input_add');
+            if (valueInputAddField) valueInputAddField.value = '';
         },
 
         async loadCharacteristics() {
@@ -201,7 +263,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
-                           @change="if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           @change="clearFields(); if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
@@ -316,7 +378,7 @@
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
                         <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id').value = selectedChar.id }"
+                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
@@ -324,7 +386,6 @@
                                 <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
-                        <input type="hidden" name="char_id" id="char_id">
 
                         <!-- Ошибка загрузки -->
                         <div x-show="loadError" class="mt-2 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
@@ -393,11 +454,11 @@
                                         <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
                                             <template x-for="val in selectedChar.values" :key="val.id">
                                                 <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer"
-                                                       :class="!canSelectMore() && !isValueSelected(val.value) ? 'opacity-50 cursor-not-allowed' : ''">
+                                                       :class="!canSelectMore() && !isValueSelected(val.id) ? 'opacity-50 cursor-not-allowed' : ''">
                                                     <input type="checkbox"
-                                                           :checked="isValueSelected(val.value)"
-                                                           @change="toggleValue(val.value)"
-                                                           :disabled="!canSelectMore() && !isValueSelected(val.value)"
+                                                           :checked="isValueSelected(val.id)"
+                                                           @change="toggleValue(val.id)"
+                                                           :disabled="!canSelectMore() && !isValueSelected(val.id)"
                                                            class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                                     <span x-text="val.value" class="text-sm"></span>
                                                 </label>
@@ -406,24 +467,22 @@
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
                                             <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
                                             <button type="button"
-                                                    @click="selectedValues = []; document.getElementById('value_char').value = ''"
+                                                    @click="selectedValues = []; document.getElementById('value_input').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
                                                     x-show="selectedValues.length > 0">
                                                 Сбросить
                                             </button>
                                         </div>
-                                        <input type="hidden" name="value" id="value_char">
                                     </div>
                                 </template>
 
                                 <!-- Для одиночных значений -->
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
-                                    <select name="value"
-                                            id="value_char"
+                                    <select @change="document.getElementById('value_input').value = $event.target.value"
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
-                                            <option :value="val.value" x-text="val.value"></option>
+                                            <option :value="val.id" x-text="val.value"></option>
                                         </template>
                                     </select>
                                 </template>
@@ -433,11 +492,13 @@
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
                             <input type="text"
-                                   name="value"
-                                   id="value_char_manual"
+                                   @input="document.getElementById('value_input').value = $event.target.value"
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
+
+                        <!-- Скрытое поле для отправки значения -->
+                        <input type="hidden" name="value" id="value_input">
                     </div>
                 </div>
             </div>
@@ -486,7 +547,7 @@
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
                         <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id_add').value = selectedChar.id }"
+                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
@@ -494,7 +555,6 @@
                                 <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
-                        <input type="hidden" name="char_id" id="char_id_add">
 
                         <!-- Ошибка загрузки -->
                         <div x-show="loadError" class="mt-2 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
@@ -563,11 +623,11 @@
                                         <div class="max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-2 space-y-1">
                                             <template x-for="val in selectedChar.values" :key="val.id">
                                                 <label class="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer"
-                                                       :class="!canSelectMore('add') && !isValueSelected(val.value, 'add') ? 'opacity-50 cursor-not-allowed' : ''">
+                                                       :class="!canSelectMore('add') && !isValueSelected(val.id, 'add') ? 'opacity-50 cursor-not-allowed' : ''">
                                                     <input type="checkbox"
-                                                           :checked="isValueSelected(val.value, 'add')"
-                                                           @change="toggleValue(val.value, 'add')"
-                                                           :disabled="!canSelectMore('add') && !isValueSelected(val.value, 'add')"
+                                                           :checked="isValueSelected(val.id, 'add')"
+                                                           @change="toggleValue(val.id, 'add')"
+                                                           :disabled="!canSelectMore('add') && !isValueSelected(val.id, 'add')"
                                                            class="mr-2 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
                                                     <span x-text="val.value" class="text-sm"></span>
                                                 </label>
@@ -576,24 +636,22 @@
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
                                             <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
                                             <button type="button"
-                                                    @click="selectedValuesAdd = []; document.getElementById('value_char_add').value = ''"
+                                                    @click="selectedValuesAdd = []; document.getElementById('value_input_add').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
                                                     x-show="selectedValuesAdd.length > 0">
                                                 Сбросить
                                             </button>
                                         </div>
-                                        <input type="hidden" name="value" id="value_char_add">
                                     </div>
                                 </template>
 
                                 <!-- Для одиночных значений -->
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
-                                    <select name="value"
-                                            id="value_char_add_select"
+                                    <select @change="document.getElementById('value_input_add').value = $event.target.value"
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
-                                            <option :value="val.value" x-text="val.value"></option>
+                                            <option :value="val.id" x-text="val.value"></option>
                                         </template>
                                     </select>
                                 </template>
@@ -603,11 +661,13 @@
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
                             <input type="text"
-                                   name="value"
-                                   id="value_char_add_manual"
+                                   @input="document.getElementById('value_input_add').value = $event.target.value"
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
+
+                        <!-- Скрытое поле для отправки значения -->
+                        <input type="hidden" name="value" id="value_input_add">
                     </div>
                 </div>
 
@@ -632,6 +692,9 @@
                 Применить к {{ products|length }} товарам
             </button>
         </div>
+
+        <!-- Общие скрытые поля для характеристик (используются обеими операциями) -->
+        <input type="hidden" name="char_id" id="char_id_common">
 
         <!-- Скрытые поля с ID товаров -->
         {% for product in products %}

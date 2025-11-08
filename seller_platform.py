@@ -23,12 +23,16 @@ from app import (
 from models import (
     db, User, Seller, SellerReport, Product, APILog, ProductStock,
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
-    PriceHistory, SuspiciousPriceChange, ProductSyncSettings
+    PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
+    UserActivity, AdminAuditLog, SystemSettings,
+    log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
 import threading
+import logging
+from logging.handlers import RotatingFileHandler
 from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 
 # Настройка приложения
@@ -41,6 +45,19 @@ DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 default_db_uri = os.environ.get('DATABASE_URL') or f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
 app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Настройка логирования
+if not app.debug:
+    log_file = BASE_DIR / 'seller_platform.log'
+    file_handler = RotatingFileHandler(log_file, maxBytes=10240000, backupCount=10)
+    file_handler.setFormatter(logging.Formatter(
+        '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+    ))
+    file_handler.setLevel(logging.INFO)
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Seller Platform startup')
+
 app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else ''
 
 # Helper функции для работы с WB фотографиями
@@ -316,12 +333,34 @@ def login():
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
+            # Проверка на блокировку
+            if user.is_blocked():
+                blocked_by_name = user.blocked_by.username if user.blocked_by else 'администратором'
+                flash(f'Ваш аккаунт заблокирован {blocked_by_name}. Обратитесь к администратору.', 'danger')
+                # Логируем попытку входа заблокированного пользователя
+                log_user_activity(
+                    user_id=user.id,
+                    action='blocked_login_attempt',
+                    details='Попытка входа в заблокированный аккаунт',
+                    request=request
+                )
+                return render_template('login.html')
+
             if not user.is_active:
                 flash('Ваш аккаунт деактивирован. Обратитесь к администратору.', 'danger')
                 return render_template('login.html')
 
             # Обновляем время последнего входа
             user.last_login = datetime.utcnow()
+
+            # Логируем успешный вход
+            log_user_activity(
+                user_id=user.id,
+                action='login',
+                details='Успешный вход в систему',
+                request=request
+            )
+
             db.session.commit()
 
             login_user(user, remember=remember)
@@ -342,6 +381,13 @@ def login():
 @login_required
 def logout():
     """Выход из системы"""
+    # Логируем выход
+    log_user_activity(
+        user_id=current_user.id,
+        action='logout',
+        details='Выход из системы',
+        request=request
+    )
     logout_user()
     flash('Вы вышли из системы', 'info')
     return redirect(url_for('login'))
@@ -565,6 +611,23 @@ def add_seller():
                 notes=notes
             )
             db.session.add(seller)
+            db.session.flush()  # Получаем ID продавца
+
+            # Логируем действие
+            log_admin_action(
+                admin_user_id=current_user.id,
+                action='create_seller',
+                target_type='seller',
+                target_id=seller.id,
+                details={
+                    'company_name': company_name,
+                    'username': username,
+                    'email': email,
+                    'wb_seller_id': wb_seller_id
+                },
+                request=request
+            )
+
             db.session.commit()
 
             flash(f'Продавец "{company_name}" успешно добавлен', 'success')
@@ -606,6 +669,23 @@ def edit_seller(seller_id):
             return render_template('edit_seller.html', seller=seller)
 
         try:
+            # Собираем изменения для логирования
+            changes = {}
+            if seller.user.email != email:
+                changes['email'] = {'old': seller.user.email, 'new': email}
+            if seller.user.is_active != is_active:
+                changes['is_active'] = {'old': seller.user.is_active, 'new': is_active}
+            if new_password:
+                changes['password'] = 'changed'
+            if seller.company_name != company_name:
+                changes['company_name'] = {'old': seller.company_name, 'new': company_name}
+            if seller.contact_phone != contact_phone:
+                changes['contact_phone'] = {'old': seller.contact_phone, 'new': contact_phone}
+            if seller.wb_seller_id != wb_seller_id:
+                changes['wb_seller_id'] = {'old': seller.wb_seller_id, 'new': wb_seller_id}
+            if seller.notes != notes:
+                changes['notes'] = 'updated'
+
             # Обновляем данные пользователя
             seller.user.email = email
             seller.user.is_active = is_active
@@ -619,6 +699,16 @@ def edit_seller(seller_id):
             seller.wb_seller_id = wb_seller_id
             seller.wb_api_key = wb_api_key or None
             seller.notes = notes
+
+            # Логируем действие
+            log_admin_action(
+                admin_user_id=current_user.id,
+                action='update_seller',
+                target_type='seller',
+                target_id=seller_id,
+                details={'company_name': company_name, 'changes': changes},
+                request=request
+            )
 
             db.session.commit()
             flash(f'Продавец "{company_name}" успешно обновлен', 'success')
@@ -638,8 +728,19 @@ def delete_seller(seller_id):
     """Удаление продавца"""
     seller = Seller.query.get_or_404(seller_id)
     company_name = seller.company_name
+    user_id = seller.user_id
 
     try:
+        # Логируем действие перед удалением
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='delete_seller',
+            target_type='seller',
+            target_id=seller_id,
+            details={'company_name': company_name, 'user_id': user_id},
+            request=request
+        )
+
         # Удаляем пользователя (продавец удалится автоматически через cascade)
         db.session.delete(seller.user)
         db.session.commit()
@@ -649,6 +750,209 @@ def delete_seller(seller_id):
         flash(f'Ошибка при удалении: {str(e)}', 'danger')
 
     return redirect(url_for('admin_panel'))
+
+
+@app.route('/admin/sellers/<int:seller_id>/block', methods=['POST'])
+@login_required
+@admin_required
+def block_seller(seller_id):
+    """Блокировка продавца"""
+    seller = Seller.query.get_or_404(seller_id)
+    notes = request.form.get('notes', '').strip()
+
+    try:
+        # Блокируем пользователя
+        seller.user.blocked_at = datetime.utcnow()
+        seller.user.blocked_by_user_id = current_user.id
+        seller.user.is_active = False
+
+        if notes:
+            # Добавляем заметку к существующим
+            if seller.user.notes:
+                seller.user.notes += f"\n\n[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] Блокировка: {notes}"
+            else:
+                seller.user.notes = f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] Блокировка: {notes}"
+
+        # Логируем действие
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='block_seller',
+            target_type='seller',
+            target_id=seller_id,
+            details={'company_name': seller.company_name, 'notes': notes},
+            request=request
+        )
+
+        db.session.commit()
+        flash(f'Продавец "{seller.company_name}" заблокирован', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Ошибка при блокировке: {str(e)}', 'danger')
+
+    return redirect(url_for('admin_panel'))
+
+
+@app.route('/admin/sellers/<int:seller_id>/unblock', methods=['POST'])
+@login_required
+@admin_required
+def unblock_seller(seller_id):
+    """Разблокировка продавца"""
+    seller = Seller.query.get_or_404(seller_id)
+
+    try:
+        # Разблокируем пользователя
+        seller.user.blocked_at = None
+        seller.user.blocked_by_user_id = None
+        seller.user.is_active = True
+
+        # Добавляем заметку о разблокировке
+        if seller.user.notes:
+            seller.user.notes += f"\n\n[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] Разблокирован администратором {current_user.username}"
+        else:
+            seller.user.notes = f"[{datetime.utcnow().strftime('%Y-%m-%d %H:%M')}] Разблокирован администратором {current_user.username}"
+
+        # Логируем действие
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='unblock_seller',
+            target_type='seller',
+            target_id=seller_id,
+            details={'company_name': seller.company_name},
+            request=request
+        )
+
+        db.session.commit()
+        flash(f'Продавец "{seller.company_name}" разблокирован', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Ошибка при разблокировке: {str(e)}', 'danger')
+
+    return redirect(url_for('admin_panel'))
+
+
+@app.route('/admin/activity-logs')
+@login_required
+@admin_required
+def admin_activity_logs():
+    """Просмотр логов активности пользователей"""
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+    user_id = request.args.get('user_id', type=int)
+    action = request.args.get('action', '')
+
+    # Базовый запрос
+    query = UserActivity.query
+
+    # Фильтры
+    if user_id:
+        query = query.filter_by(user_id=user_id)
+    if action:
+        query = query.filter(UserActivity.action.like(f'%{action}%'))
+
+    # Сортировка и пагинация
+    activities = query.order_by(UserActivity.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    # Получить всех пользователей для фильтра
+    users = User.query.order_by(User.username).all()
+
+    # Уникальные действия для фильтра
+    unique_actions = db.session.query(UserActivity.action.distinct()).all()
+    unique_actions = [a[0] for a in unique_actions]
+
+    return render_template('admin_activity_logs.html',
+                         activities=activities,
+                         users=users,
+                         unique_actions=unique_actions,
+                         current_user_filter=user_id,
+                         current_action_filter=action)
+
+
+@app.route('/admin/audit-logs')
+@login_required
+@admin_required
+def admin_audit_logs():
+    """Просмотр audit-логов администраторов"""
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+    admin_id = request.args.get('admin_id', type=int)
+    action = request.args.get('action', '')
+    target_type = request.args.get('target_type', '')
+
+    # Базовый запрос
+    query = AdminAuditLog.query
+
+    # Фильтры
+    if admin_id:
+        query = query.filter_by(admin_user_id=admin_id)
+    if action:
+        query = query.filter(AdminAuditLog.action.like(f'%{action}%'))
+    if target_type:
+        query = query.filter_by(target_type=target_type)
+
+    # Сортировка и пагинация
+    logs = query.order_by(AdminAuditLog.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    # Получить всех админов для фильтра
+    admins = User.query.filter_by(is_admin=True).order_by(User.username).all()
+
+    # Уникальные действия для фильтра
+    unique_actions = db.session.query(AdminAuditLog.action.distinct()).all()
+    unique_actions = [a[0] for a in unique_actions]
+
+    # Уникальные типы целей
+    unique_targets = db.session.query(AdminAuditLog.target_type.distinct()).all()
+    unique_targets = [t[0] for t in unique_targets if t[0]]
+
+    return render_template('admin_audit_logs.html',
+                         logs=logs,
+                         admins=admins,
+                         unique_actions=unique_actions,
+                         unique_targets=unique_targets,
+                         current_admin_filter=admin_id,
+                         current_action_filter=action,
+                         current_target_filter=target_type)
+
+
+@app.route('/admin/system-settings', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_system_settings():
+    """Управление системными настройками"""
+    if request.method == 'POST':
+        # Обновление настроек
+        for key in request.form:
+            if key.startswith('setting_'):
+                setting_key = key.replace('setting_', '')
+                value = request.form.get(key)
+
+                setting = SystemSettings.query.filter_by(key=setting_key).first()
+                if setting:
+                    old_value = setting.get_value()
+                    setting.set_value(value)
+                    setting.updated_by_user_id = current_user.id
+
+                    # Логируем изменение
+                    log_admin_action(
+                        admin_user_id=current_user.id,
+                        action='update_system_setting',
+                        target_type='system_setting',
+                        target_id=setting.id,
+                        details={'key': setting_key, 'old_value': old_value, 'new_value': value},
+                        request=request
+                    )
+
+        db.session.commit()
+        flash('Настройки успешно обновлены', 'success')
+        return redirect(url_for('admin_system_settings'))
+
+    # Получаем все настройки
+    settings = SystemSettings.query.order_by(SystemSettings.key).all()
+
+    return render_template('admin_system_settings.html', settings=settings)
 
 
 # ============= НАСТРОЙКИ API =============
@@ -1743,6 +2047,16 @@ def products_bulk_edit():
 
         app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
 
+        # Логируем все данные формы для отладки
+        app.logger.info(f"📋 Form data: operation={operation}")
+        app.logger.info(f"📋 Form value field: '{operation_value}'")
+        app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
+        app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
+        if len(request.form) < 20:  # Показываем все поля если их немного
+            for key, value in request.form.items():
+                if key != 'product_ids':
+                    app.logger.debug(f"   {key} = '{value}'")
+
         try:
             with WildberriesAPIClient(
                 current_user.seller.wb_api_key,
@@ -1912,6 +2226,16 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    # Определяем тип значения: ID из справочника или текст
+                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
+                    app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
+
+                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
+                    # Для ID из справочника: "123" -> ["123"]
+                    # Для текста: "Россия" -> ["Россия"]
+                    formatted_value = str(new_value).strip()
+                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
+
                     for product in products:
                         try:
                             snapshot_before = _create_product_snapshot(product)
@@ -1923,7 +2247,7 @@ def products_bulk_edit():
                             char_found = False
                             for char in current_characteristics:
                                 if str(char.get('id')) == characteristic_id:
-                                    char['value'] = new_value
+                                    char['value'] = formatted_value
                                     char_found = True
                                     break
 
@@ -1931,8 +2255,14 @@ def products_bulk_edit():
                                 # Добавляем новую характеристику если не нашли
                                 current_characteristics.append({
                                     'id': int(characteristic_id),
-                                    'value': new_value
+                                    'value': formatted_value
                                 })
+
+                            # Логируем характеристики перед отправкой
+                            app.logger.info(f"Updating nmID={product.nm_id} with {len(current_characteristics)} characteristics")
+                            target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
+                            if target_char:
+                                app.logger.info(f"Target characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
 
                             # Обновляем через API
                             client.update_card(
@@ -1980,6 +2310,16 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    # Определяем тип значения: ID из справочника или текст
+                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
+                    app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
+
+                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
+                    # Для ID из справочника: "123" -> ["123"]
+                    # Для текста: "Россия" -> ["Россия"]
+                    formatted_value = str(new_value).strip()
+                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
+
                     for product in products:
                         try:
                             snapshot_before = _create_product_snapshot(product)
@@ -1994,8 +2334,14 @@ def products_bulk_edit():
                                 # Добавляем новую характеристику
                                 current_characteristics.append({
                                     'id': int(characteristic_id),
-                                    'value': new_value
+                                    'value': formatted_value
                                 })
+
+                                # Логируем характеристики перед отправкой
+                                app.logger.info(f"Adding to nmID={product.nm_id}, total {len(current_characteristics)} characteristics")
+                                target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
+                                if target_char:
+                                    app.logger.info(f"Added characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
 
                                 # Обновляем через API
                                 client.update_card(

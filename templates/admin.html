@@ -90,6 +90,70 @@
         </div>
     </div>
 
+    <!-- Быстрые ссылки -->
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mb-8">
+        <a href="{{ url_for('admin_activity_logs') }}" class="block bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0 bg-blue-500 rounded-md p-3">
+                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <div class="text-sm font-medium text-gray-500">
+                            Логи активности
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">
+                            Просмотр действий пользователей
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('admin_audit_logs') }}" class="block bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0 bg-purple-500 rounded-md p-3">
+                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <div class="text-sm font-medium text-gray-500">
+                            Audit-логи
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">
+                            Действия администраторов
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('admin_system_settings') }}" class="block bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0 bg-gray-500 rounded-md p-3">
+                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <div class="text-sm font-medium text-gray-500">
+                            Системные настройки
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">
+                            Глобальные параметры
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </a>
+    </div>
+
     <!-- Таблица продавцов -->
     <div class="bg-white shadow-sm rounded-lg border border-gray-200">
         <div class="px-6 py-4 border-b border-gray-200">
@@ -120,6 +184,9 @@
                             Статус
                         </th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Блокировка
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Действия
                         </th>
                     </tr>
@@ -145,11 +212,11 @@
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% if seller.wb_api_key %}
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">
-                                ����
+                                Есть
                             </span>
                             {% else %}
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-                                ���
+                                Нет
                             </span>
                             {% endif %}
                         </td>
@@ -164,14 +231,41 @@
                             </span>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                            <a href="{{ url_for('edit_seller', seller_id=seller.id) }}"
-                               class="text-indigo-600 hover:text-indigo-900">Редактировать</a>
-                            <form method="POST" action="{{ url_for('delete_seller', seller_id=seller.id) }}"
-                                  class="inline"
-                                  onsubmit="return confirm('Вы уверены, что хотите удалить продавца {{ seller.company_name }}?')">
-                                <button type="submit" class="text-red-600 hover:text-red-900">Удалить</button>
-                            </form>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if seller.user.blocked_at %}
+                            <div class="text-xs">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                    Заблокирован
+                                </span>
+                                {% if seller.user.blocked_by %}
+                                <div class="text-gray-500 mt-1">{{ seller.user.blocked_by.username }}</div>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <span class="text-gray-400 text-xs">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <div class="flex flex-col space-y-1">
+                                <a href="{{ url_for('edit_seller', seller_id=seller.id) }}"
+                                   class="text-indigo-600 hover:text-indigo-900">Редактировать</a>
+
+                                {% if seller.user.blocked_at %}
+                                <form method="POST" action="{{ url_for('unblock_seller', seller_id=seller.id) }}"
+                                      class="inline">
+                                    <button type="submit" class="text-green-600 hover:text-green-900">Разблокировать</button>
+                                </form>
+                                {% else %}
+                                <button onclick="showBlockModal({{ seller.id }}, '{{ seller.company_name }}')"
+                                        class="text-yellow-600 hover:text-yellow-900 text-left">Блокировать</button>
+                                {% endif %}
+
+                                <form method="POST" action="{{ url_for('delete_seller', seller_id=seller.id) }}"
+                                      class="inline"
+                                      onsubmit="return confirm('Вы уверены, что хотите удалить продавца {{ seller.company_name }}?')">
+                                    <button type="submit" class="text-red-600 hover:text-red-900">Удалить</button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -195,4 +289,87 @@
         {% endif %}
     </div>
 </div>
+
+<!-- Модальное окно блокировки -->
+<div id="blockModal" class="fixed z-10 inset-0 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+            <form id="blockForm" method="POST" action="">
+                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <svg class="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                        <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left flex-1">
+                            <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                                Блокировка продавца
+                            </h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500" id="blockModalCompanyName">
+                                    Вы собираетесь заблокировать продавца.
+                                </p>
+                                <div class="mt-4">
+                                    <label for="blockNotes" class="block text-sm font-medium text-gray-700">
+                                        Причина блокировки (необязательно)
+                                    </label>
+                                    <textarea id="blockNotes" name="notes" rows="3"
+                                              class="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                              placeholder="Укажите причину блокировки..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                    <button type="submit"
+                            class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-yellow-600 text-base font-medium text-white hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 sm:ml-3 sm:w-auto sm:text-sm">
+                        Заблокировать
+                    </button>
+                    <button type="button" onclick="hideBlockModal()"
+                            class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
+                        Отмена
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function showBlockModal(sellerId, companyName) {
+    const modal = document.getElementById('blockModal');
+    const form = document.getElementById('blockForm');
+    const companyNameEl = document.getElementById('blockModalCompanyName');
+    const notesField = document.getElementById('blockNotes');
+
+    form.action = `/admin/sellers/${sellerId}/block`;
+    companyNameEl.textContent = `Вы собираетесь заблокировать продавца "${companyName}".`;
+    notesField.value = '';
+    modal.classList.remove('hidden');
+}
+
+function hideBlockModal() {
+    const modal = document.getElementById('blockModal');
+    modal.classList.add('hidden');
+}
+
+// Закрытие по ESC
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        hideBlockModal();
+    }
+});
+
+// Закрытие по клику на фон
+document.getElementById('blockModal')?.addEventListener('click', function(e) {
+    if (e.target === this) {
+        hideBlockModal();
+    }
+});
+</script>
+
 {% endblock %}
