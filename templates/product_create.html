@@ -504,29 +504,68 @@ function productCreateForm() {
         },
 
         quickSelectCategory(categoryName) {
+            console.log('Quick select:', categoryName);
+
             // Ищем категорию по имени во всех subjects
-            const subject = this.allSubjects.find(s =>
-                s.subjectName.toLowerCase().includes(categoryName.toLowerCase())
-            );
+            // Используем более гибкий поиск - проверяем вхождение подстроки
+            const subject = this.allSubjects.find(s => {
+                const subjectName = s.subjectName.toLowerCase();
+                const searchName = categoryName.toLowerCase();
+
+                // Точное совпадение или вхождение
+                return subjectName === searchName ||
+                       subjectName.includes(searchName) ||
+                       searchName.includes(subjectName);
+            });
 
             if (subject) {
+                console.log('Found subject:', subject.subjectName, 'ParentID:', subject.parentID);
+
                 // Устанавливаем родительскую категорию
                 const parentId = subject.parentID;
                 if (parentId) {
                     this.selectedParentId = parentId.toString();
+                    this.parentSearchQuery = ''; // Очищаем поиск
                     this.onParentCategoryChange();
 
                     // Ждем обновления и выбираем subject
                     this.$nextTick(() => {
                         this.selectedSubjectId = subject.subjectID.toString();
-                        this.subjectSearchQuery = subject.subjectName;
+                        this.subjectSearchQuery = ''; // Очищаем поиск
                         this.loadCharacteristics();
+
+                        console.log('Selected:', this.selectedParentId, this.selectedSubjectId);
                     });
+                } else {
+                    console.warn('Subject has no parent ID:', subject);
                 }
             } else {
-                // Если не нашли, просто ищем по родительским категориям
-                this.parentSearchQuery = categoryName;
-                this.filterParentCategories();
+                console.warn('Subject not found for:', categoryName);
+                // Если не нашли, попробуем найти похожие
+                const similar = this.allSubjects.filter(s =>
+                    s.subjectName.toLowerCase().includes(categoryName.toLowerCase())
+                ).slice(0, 5);
+
+                if (similar.length > 0) {
+                    console.log('Similar subjects found:', similar.map(s => s.subjectName));
+                    // Выбираем первый похожий
+                    const first = similar[0];
+                    if (first.parentID) {
+                        this.selectedParentId = first.parentID.toString();
+                        this.parentSearchQuery = '';
+                        this.onParentCategoryChange();
+
+                        this.$nextTick(() => {
+                            this.selectedSubjectId = first.subjectID.toString();
+                            this.subjectSearchQuery = '';
+                            this.loadCharacteristics();
+                        });
+                    }
+                } else {
+                    // Совсем не нашли - ищем по родительским категориям
+                    this.parentSearchQuery = categoryName;
+                    this.filterParentCategories();
+                }
             }
         },
 
