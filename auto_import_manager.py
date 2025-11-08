@@ -280,20 +280,24 @@ class CSVProductParser:
         """
         return self.size_parser.parse(sizes_raw)
 
-    def _parse_photo_codes(self, product_id: str, photo_codes: str) -> List[str]:
+    def _parse_photo_codes(self, product_id: str, photo_codes: str) -> List[Dict[str, str]]:
         """
         Формирует URLs фотографий
 
         Формат фотографий:
-        - Без цензуры: http://sexoptovik.ru/_project/user_images/prods_res/{id}/{id}_{номер}_{1200}.jpg
+        - Без цензуры (sexoptovik): http://sexoptovik.ru/project/user_images/prods_res/{id}/{id}_{номер}_1200.jpg
         - С цензурой (блюр): https://x-story.ru/mp/_project/img_sx0_1200/{id}_{номер}_1200.jpg
+        - Без цензуры (x-story): https://x-story.ru/mp/_project/img_sx_1200/{id}_{номер}_1200.jpg
 
         В CSV указаны только номера фотографий через запятую
+
+        Returns:
+            List[Dict]: [{'blur': url, 'original': url, 'sexoptovik': url}, ...]
         """
         if not photo_codes or not product_id:
             return []
 
-        urls = []
+        photos = []
         photo_nums = [p.strip() for p in photo_codes.split(',') if p.strip()]
 
         # Извлекаем числовой ID из external_id (формат: id-12345-код)
@@ -305,12 +309,15 @@ class CSVProductParser:
             numeric_id = match.group(1)
 
         for num in photo_nums:
-            # Формируем URL (блюр версия по умолчанию)
-            # Блюр: https://x-story.ru/mp/_project/img_sx0_1200/{id}_{номер}_1200.jpg
-            blur_url = f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg"
-            urls.append(blur_url)
+            # Формируем все варианты URL
+            photo_obj = {
+                'blur': f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg",
+                'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg",
+                'sexoptovik': f"http://sexoptovik.ru/project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg"
+            }
+            photos.append(photo_obj)
 
-        return urls
+        return photos
 
 
 class CategoryMapper:

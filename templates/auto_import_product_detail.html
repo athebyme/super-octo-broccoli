@@ -191,14 +191,27 @@
             <!-- Фотографии -->
             {% if product.photo_urls_list %}
             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-                <h3 class="text-lg font-medium text-gray-900 mb-4">Фотографии ({{ product.photo_urls_list|length }})</h3>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Фотографии ({{ product.photo_urls_list|length }})</h3>
+                    <div class="flex items-center gap-2">
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="toggleCensorship" class="sr-only peer" checked>
+                            <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                            <span class="ms-2 text-sm font-medium text-gray-700">Цензура</span>
+                        </label>
+                    </div>
+                </div>
                 <div class="grid grid-cols-2 gap-2">
                     {% for photo in product.photo_urls_list[:6] %}
-                    <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden">
-                        <img src="{{ photo }}"
+                    <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden relative group">
+                        <img src="{{ photo.blur if photo.blur else (photo.original if photo.original else photo.sexoptovik) }}"
+                             data-blur="{{ photo.blur or '' }}"
+                             data-original="{{ photo.original or '' }}"
+                             data-sexoptovik="{{ photo.sexoptovik or '' }}"
                              alt="Фото товара"
-                             class="w-full h-full object-cover"
+                             class="product-photo w-full h-full object-cover transition-opacity duration-200"
                              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'%3E%3Crect fill=\'%23f3f4f6\' width=\'100\' height=\'100\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' fill=\'%239ca3af\' font-size=\'14\'%3EНет фото%3C/text%3E%3C/svg%3E'">
+                        <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all duration-200 pointer-events-none"></div>
                     </div>
                     {% endfor %}
                 </div>
@@ -468,6 +481,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Ошибка при выполнении запроса: ' + error);
                 saveCategoryBtn.disabled = false;
                 saveCategoryBtn.textContent = 'Сохранить';
+            });
+        });
+    }
+
+    // Photo censorship toggle
+    const toggleCensorship = document.getElementById('toggleCensorship');
+    if (toggleCensorship) {
+        toggleCensorship.addEventListener('change', function() {
+            const photos = document.querySelectorAll('.product-photo');
+            const useCensorship = this.checked;
+
+            photos.forEach(photo => {
+                const blurUrl = photo.dataset.blur;
+                const originalUrl = photo.dataset.original;
+                const sexoptovikUrl = photo.dataset.sexoptovik;
+
+                if (useCensorship) {
+                    // Показываем blur версию если есть, иначе sexoptovik
+                    if (blurUrl) {
+                        photo.src = blurUrl;
+                    } else if (sexoptovikUrl) {
+                        photo.src = sexoptovikUrl;
+                    }
+                } else {
+                    // Показываем original версию если есть, иначе sexoptovik
+                    if (originalUrl) {
+                        photo.src = originalUrl;
+                    } else if (sexoptovikUrl) {
+                        photo.src = sexoptovikUrl;
+                    }
+                }
+
+                // Добавляем анимацию смены
+                photo.style.opacity = '0.5';
+                setTimeout(() => {
+                    photo.style.opacity = '1';
+                }, 150);
             });
         });
     }
