@@ -224,7 +224,7 @@
             {% if product.import_status == 'validated' %}
             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
-                <button class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                <button id="importSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed">
                     Импортировать в WB
                 </button>
                 <p class="mt-2 text-xs text-gray-500 text-center">
@@ -235,4 +235,46 @@
         </div>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const importBtn = document.getElementById('importSingleBtn');
+
+    if (importBtn) {
+        importBtn.addEventListener('click', function() {
+            if (!confirm('Импортировать этот товар в Wildberries?')) {
+                return;
+            }
+
+            // Disable button during import
+            importBtn.disabled = true;
+            importBtn.textContent = 'Импортирую...';
+
+            // Send request
+            fetch('{{ url_for("auto_import_single_to_wb", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Товар успешно импортирован в Wildberries!');
+                    window.location.href = '{{ url_for("auto_import_products") }}';
+                } else {
+                    alert('Ошибка импорта: ' + (data.error || 'Неизвестная ошибка'));
+                    importBtn.disabled = false;
+                    importBtn.textContent = 'Импортировать в WB';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                importBtn.disabled = false;
+                importBtn.textContent = 'Импортировать в WB';
+            });
+        });
+    }
+});
+</script>
 {% endblock %}

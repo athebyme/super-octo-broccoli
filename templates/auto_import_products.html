@@ -33,10 +33,17 @@
             </a>
         </div>
 
-        <a href="{{ url_for('auto_import_dashboard') }}"
-           class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-            ← Назад к дашборду
-        </a>
+        <div class="flex gap-2">
+            <button id="importSelectedBtn"
+                    class="hidden px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    disabled>
+                Импортировать в WB (<span id="selectedCount">0</span>)
+            </button>
+            <a href="{{ url_for('auto_import_dashboard') }}"
+               class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                ← Назад к дашборду
+            </a>
+        </div>
     </div>
 
     <!-- Таблица товаров -->
@@ -46,6 +53,9 @@
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
+                        <th scope="col" class="px-6 py-3 text-left">
+                            <input type="checkbox" id="selectAll" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        </th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Товар
                         </th>
@@ -69,6 +79,11 @@
                 <tbody class="bg-white divide-y divide-gray-200">
                     {% for product in products %}
                     <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4">
+                            {% if product.import_status == 'validated' %}
+                            <input type="checkbox" class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" data-product-id="{{ product.id }}">
+                            {% endif %}
+                        </td>
                         <td class="px-6 py-4">
                             <div class="flex items-center">
                                 <div>
@@ -201,4 +216,101 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const selectAllCheckbox = document.getElementById('selectAll');
+    const productCheckboxes = document.querySelectorAll('.product-checkbox');
+    const importBtn = document.getElementById('importSelectedBtn');
+    const selectedCountSpan = document.getElementById('selectedCount');
+
+    // Update button visibility and count
+    function updateImportButton() {
+        const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
+        const count = checkedBoxes.length;
+
+        selectedCountSpan.textContent = count;
+
+        if (count > 0) {
+            importBtn.classList.remove('hidden');
+            importBtn.disabled = false;
+        } else {
+            importBtn.classList.add('hidden');
+            importBtn.disabled = true;
+        }
+    }
+
+    // Select all checkbox handler
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function() {
+            productCheckboxes.forEach(checkbox => {
+                checkbox.checked = this.checked;
+            });
+            updateImportButton();
+        });
+    }
+
+    // Individual checkbox handlers
+    productCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            // Update select all checkbox state
+            const allChecked = Array.from(productCheckboxes).every(cb => cb.checked);
+            const someChecked = Array.from(productCheckboxes).some(cb => cb.checked);
+
+            if (selectAllCheckbox) {
+                selectAllCheckbox.checked = allChecked;
+                selectAllCheckbox.indeterminate = someChecked && !allChecked;
+            }
+
+            updateImportButton();
+        });
+    });
+
+    // Import button handler
+    if (importBtn) {
+        importBtn.addEventListener('click', function() {
+            const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
+            const productIds = Array.from(checkedBoxes).map(cb => cb.dataset.productId);
+
+            if (productIds.length === 0) {
+                alert('Выберите товары для импорта');
+                return;
+            }
+
+            if (!confirm(`Импортировать ${productIds.length} товар(ов) в Wildberries?`)) {
+                return;
+            }
+
+            // Disable button during import
+            importBtn.disabled = true;
+            importBtn.textContent = 'Импортирую...';
+
+            // Send request
+            fetch('{{ url_for("auto_import_to_wb") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'product_ids=' + productIds.join(',')
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success || data.success > 0) {
+                    alert(`Импорт завершен!\nУспешно: ${data.success}\nОшибок: ${data.failed}\nПропущено: ${data.skipped}`);
+                    location.reload();
+                } else {
+                    alert('Ошибка импорта: ' + (data.error || 'Неизвестная ошибка'));
+                    importBtn.disabled = false;
+                    importBtn.innerHTML = 'Импортировать в WB (<span id="selectedCount">' + productIds.length + '</span>)';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                importBtn.disabled = false;
+                importBtn.innerHTML = 'Импортировать в WB (<span id="selectedCount">' + productIds.length + '</span>)';
+            });
+        });
+    }
+});
+</script>
 {% endblock %}
