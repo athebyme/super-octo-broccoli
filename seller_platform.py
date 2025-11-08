@@ -2216,15 +2216,34 @@ def products_bulk_edit():
                 elif operation == 'update_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
                     new_value = operation_value
+                    selected_category = request.form.get('selected_category', '').strip()
 
                     if not characteristic_id or not new_value:
                         flash('Укажите ID характеристики и новое значение', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
+
+                        # Собираем категории для повторного рендера
+                        categories_info = {}
+                        for product in products:
+                            category = product.object_name or 'Без категории'
+                            if category not in categories_info:
+                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
+                            categories_info[category]['count'] += 1
+                            categories_info[category]['product_ids'].append(product.id)
+                        categories = list(categories_info.values())
+
                         return render_template('products_bulk_edit.html',
                                              products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations)
+                                             edit_operations=edit_operations,
+                                             categories=categories)
+
+                    # Фильтруем товары по категории если выбрана
+                    products_to_update = products
+                    if selected_category:
+                        products_to_update = [p for p in products if p.object_name == selected_category]
+                        app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
                     # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
@@ -2236,7 +2255,7 @@ def products_bulk_edit():
                     formatted_value = str(new_value).strip()
                     app.logger.info(f"Formatted value as string: '{formatted_value}'")
 
-                    for product in products:
+                    for product in products_to_update:
                         try:
                             snapshot_before = _create_product_snapshot(product)
 
@@ -2300,15 +2319,34 @@ def products_bulk_edit():
                 elif operation == 'add_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
                     new_value = operation_value
+                    selected_category = request.form.get('selected_category', '').strip()
 
                     if not characteristic_id or not new_value:
                         flash('Укажите ID характеристики и значение', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
+
+                        # Собираем категории для повторного рендера
+                        categories_info = {}
+                        for product in products:
+                            category = product.object_name or 'Без категории'
+                            if category not in categories_info:
+                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
+                            categories_info[category]['count'] += 1
+                            categories_info[category]['product_ids'].append(product.id)
+                        categories = list(categories_info.values())
+
                         return render_template('products_bulk_edit.html',
                                              products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations)
+                                             edit_operations=edit_operations,
+                                             categories=categories)
+
+                    # Фильтруем товары по категории если выбрана
+                    products_to_update = products
+                    if selected_category:
+                        products_to_update = [p for p in products if p.object_name == selected_category]
+                        app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
                     # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
@@ -2320,7 +2358,7 @@ def products_bulk_edit():
                     formatted_value = str(new_value).strip()
                     app.logger.info(f"Formatted value as string: '{formatted_value}'")
 
-                    for product in products:
+                    for product in products_to_update:
                         try:
                             snapshot_before = _create_product_snapshot(product)
 
@@ -2426,10 +2464,28 @@ def products_bulk_edit():
             flash(f'Ошибка: {str(e)}', 'danger')
             return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
 
+    # Собираем информацию о категориях выбранных товаров
+    categories_info = {}
+    for product in products:
+        category = product.object_name or 'Без категории'
+        if category not in categories_info:
+            categories_info[category] = {
+                'name': category,
+                'count': 0,
+                'product_ids': [],
+                'subject_id': product.subject_id
+            }
+        categories_info[category]['count'] += 1
+        categories_info[category]['product_ids'].append(product.id)
+
+    # Преобразуем в список для удобства в шаблоне
+    categories = list(categories_info.values())
+
     return render_template(
         'products_bulk_edit.html',
         products=[p.to_dict() for p in products],
-        edit_operations=edit_operations
+        edit_operations=edit_operations,
+        categories=categories
     )
 
 
@@ -2922,6 +2978,97 @@ def api_characteristics_by_category(object_name):
     except Exception as e:
         app.logger.exception(f"💥 Unexpected error getting characteristics for '{object_name}': {e}")
         return {'error': 'Internal server error'}, 500
+
+
+@app.route('/api/characteristics/multi-category', methods=['POST'])
+@login_required
+def api_characteristics_multi_category():
+    """
+    Получить характеристики для нескольких категорий
+
+    Возвращает:
+    - common: общие характеристики для всех категорий
+    - by_category: характеристики по каждой категории отдельно
+
+    Request JSON:
+    {
+        "categories": ["Категория1", "Категория2"]
+    }
+    """
+    if not current_user.seller:
+        return {'error': 'No seller profile'}, 403
+
+    if not current_user.seller.has_valid_api_key():
+        return {'error': 'WB API key not configured'}, 400
+
+    data = request.get_json()
+    categories = data.get('categories', [])
+
+    if not categories:
+        return {'error': 'No categories provided'}, 400
+
+    app.logger.info(f"📋 API request for multi-category characteristics: {len(categories)} categories")
+
+    all_chars = {}  # {category: [characteristics]}
+
+    try:
+        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            for category in categories:
+                try:
+                    result = client.get_card_characteristics_by_object_name(category)
+
+                    characteristics = []
+                    for item in result.get('data', []):
+                        char = {
+                            'id': item.get('charcID'),
+                            'name': item.get('name'),
+                            'required': item.get('required', False),
+                            'max_count': item.get('maxCount', 1),
+                            'unit_name': item.get('unitName'),
+                            'values': []
+                        }
+
+                        if item.get('dictionary'):
+                            for dict_item in item['dictionary']:
+                                char['values'].append({
+                                    'id': dict_item.get('unitID'),
+                                    'value': dict_item.get('value')
+                                })
+
+                        characteristics.append(char)
+
+                    all_chars[category] = characteristics
+
+                except Exception as e:
+                    app.logger.warning(f"Failed to load characteristics for '{category}': {e}")
+                    all_chars[category] = []
+
+            # Находим общие характеристики (есть во всех категориях)
+            if len(all_chars) > 1:
+                # Получаем ID характеристик из первой категории
+                first_category = list(all_chars.values())[0]
+                common_char_ids = set(c['id'] for c in first_category if c['id'])
+
+                # Оставляем только те, которые есть во всех категориях
+                for chars in all_chars.values():
+                    char_ids = set(c['id'] for c in chars if c['id'])
+                    common_char_ids &= char_ids
+
+                # Формируем список общих характеристик
+                common_characteristics = [c for c in first_category if c['id'] in common_char_ids]
+            else:
+                # Если только одна категория, все характеристики общие
+                common_characteristics = list(all_chars.values())[0] if all_chars else []
+
+            return {
+                'common': common_characteristics,
+                'by_category': all_chars,
+                'categories_count': len(categories)
+            }
+
+    except Exception as e:
+        app.logger.exception(f"💥 Error in multi-category characteristics: {e}")
+        return {'error': str(e)}, 500
 
 
 @app.route('/api/products/<int:product_id>/characteristics')
