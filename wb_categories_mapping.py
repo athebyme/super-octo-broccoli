@@ -231,33 +231,83 @@ CSV_TO_WB_EXACT_MAPPING = {
 }
 
 
-def get_best_category_match(csv_category: str, product_title: str = '', all_categories: list = None) -> tuple:
+def get_best_category_match(csv_category: str, product_title: str = '', all_categories: list = None,
+                           external_id: str = None, source_type: str = 'sexoptovik') -> tuple:
     """
     Определяет наилучшее совпадение категории WB
+
+    Приоритет определения (от высшего к низшему):
+    1. Ручные исправления для конкретного товара (по external_id)
+    2. Ручные исправления для категории
+    3. Точное совпадение с CSV категориями
+    4. Проверка всех категорий из цепочки
+    5. Поиск по ключевым словам в категории
+    6. Поиск по ключевым словам в названии товара
+    7. Дефолт - общая категория "Товары для взрослых"
 
     Args:
         csv_category: Основная категория из CSV
         product_title: Название товара
         all_categories: Все категории товара (список)
+        external_id: ID товара из внешнего источника
+        source_type: Тип источника (sexoptovik и т.д.)
 
     Returns:
         (subject_id, subject_name, confidence)
     """
 
-    # 1. Точное совпадение с CSV категориями
+    # 0. Проверяем ручные исправления для конкретного товара (наивысший приоритет)
+    if external_id:
+        try:
+            from models import ProductCategoryCorrection, db
+            correction = ProductCategoryCorrection.query.filter_by(
+                external_id=external_id,
+                source_type=source_type
+            ).first()
+
+            if correction:
+                return (
+                    correction.corrected_wb_subject_id,
+                    correction.corrected_wb_subject_name or WB_ADULT_CATEGORIES.get(correction.corrected_wb_subject_id, 'Unknown'),
+                    1.0  # Максимальная уверенность для ручных исправлений
+                )
+        except Exception:
+            # Если не можем проверить (например, вне контекста Flask), пропускаем
+            pass
+
+    # 1. Проверяем ручные исправления для категории
+    if csv_category:
+        try:
+            from models import ProductCategoryCorrection, db
+            # Ищем самое свежее исправление для этой категории
+            correction = ProductCategoryCorrection.query.filter_by(
+                original_category=csv_category,
+                source_type=source_type
+            ).order_by(ProductCategoryCorrection.created_at.desc()).first()
+
+            if correction:
+                return (
+                    correction.corrected_wb_subject_id,
+                    correction.corrected_wb_subject_name or WB_ADULT_CATEGORIES.get(correction.corrected_wb_subject_id, 'Unknown'),
+                    0.98  # Очень высокая уверенность
+                )
+        except Exception:
+            pass
+
+    # 2. Точное совпадение с CSV категориями
     if csv_category in CSV_TO_WB_EXACT_MAPPING:
         subject_id = CSV_TO_WB_EXACT_MAPPING[csv_category]
-        return subject_id, WB_ADULT_CATEGORIES[subject_id], 1.0
+        return subject_id, WB_ADULT_CATEGORIES[subject_id], 0.95
 
-    # 2. Проверяем все категории из цепочки
+    # 3. Проверяем все категории из цепочки
     if all_categories:
         for cat in all_categories:
             if cat in CSV_TO_WB_EXACT_MAPPING:
                 subject_id = CSV_TO_WB_EXACT_MAPPING[cat]
-                return subject_id, WB_ADULT_CATEGORIES[subject_id], 0.95
+                return subject_id, WB_ADULT_CATEGORIES[subject_id], 0.90
 
-    # 3. Поиск по ключевым словам в категории
-    csv_lower = csv_category.lower()
+    # 4. Поиск по ключевым словам в категории
+    csv_lower = csv_category.lower() if csv_category else ''
     best_match = None
     best_score = 0.0
 
@@ -267,12 +317,12 @@ def get_best_category_match(csv_category: str, product_title: str = '', all_cate
             score = len(keyword) / len(csv_lower) if len(csv_lower) > 0 else 0
             if score > best_score:
                 best_score = score
-                best_match = (subject_id, WB_ADULT_CATEGORIES.get(subject_id, 'Unknown'), min(score * 1.2, 0.9))
+                best_match = (subject_id, WB_ADULT_CATEGORIES.get(subject_id, 'Unknown'), min(score * 0.85, 0.85))
 
     if best_match and best_score > 0.3:
         return best_match
 
-    # 4. Поиск по ключевым словам в названии товара
+    # 5. Поиск по ключевым словам в названии товара
     if product_title:
         title_lower = product_title.lower()
         title_match = None
@@ -280,7 +330,7 @@ def get_best_category_match(csv_category: str, product_title: str = '', all_cate
 
         for keyword, subject_id in CATEGORY_KEYWORDS_MAPPING.items():
             if keyword in title_lower:
-                score = 0.8  # Немного ниже уверенность при определении по названию
+                score = 0.75  # Ниже уверенность при определении по названию
                 if score > title_score:
                     title_score = score
                     title_match = (subject_id, WB_ADULT_CATEGORIES.get(subject_id, 'Unknown'), score)
@@ -288,5 +338,5 @@ def get_best_category_match(csv_category: str, product_title: str = '', all_cate
         if title_match and title_score > 0.5:
             return title_match
 
-    # 5. Дефолт - общая категория "Товары для взрослых"
+    # 6. Дефолт - общая категория "Товары для взрослых" (низкая уверенность)
     return 5038, 'Товары для взрослых', 0.3

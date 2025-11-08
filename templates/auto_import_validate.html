@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+
+{% block title %}Валидация категорий - Автоимпорт{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Header -->
+    <div class="md:flex md:items-center md:justify-between mb-6">
+        <div class="flex-1 min-w-0">
+            <h2 class="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+                Валидация категорий
+            </h2>
+            <p class="mt-1 text-sm text-gray-500">
+                Товары с уверенностью определения категории < {{ (min_confidence * 100)|round|int }}%
+            </p>
+        </div>
+        <div class="mt-4 flex md:mt-0 md:ml-4">
+            <a href="{{ url_for('auto_import_products') }}" class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                ← Все товары
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <div class="grid grid-cols-1 gap-5 sm:grid-cols-3">
+            <div>
+                <div class="text-sm font-medium text-gray-500">Всего требует проверки</div>
+                <div class="mt-1 text-3xl font-semibold text-gray-900">{{ total_count }}</div>
+            </div>
+            <div>
+                <div class="text-sm font-medium text-gray-500">Минимальная уверенность</div>
+                <div class="mt-1 text-3xl font-semibold text-gray-900">{{ (min_confidence * 100)|round|int }}%</div>
+            </div>
+            <div>
+                <div class="text-sm font-medium text-gray-500">Статус</div>
+                <div class="mt-1">
+                    {% if total_count > 0 %}
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-100 text-yellow-800">
+                        Требуется проверка
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                        Все хорошо
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Products list -->
+    {% if total_count > 0 %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+        <div class="px-4 py-5 sm:p-6">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Товар
+                            </th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Категория CSV
+                            </th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Категория WB
+                            </th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Уверенность
+                            </th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                Действия
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        {% for product in products %}
+                        <tr class="hover:bg-gray-50" id="product-row-{{ product.id }}">
+                            <td class="px-6 py-4">
+                                <div class="flex items-center">
+                                    <div>
+                                        <div class="text-sm font-medium text-gray-900">
+                                            {{ product.title[:60] }}{% if product.title|length > 60 %}...{% endif %}
+                                        </div>
+                                        <div class="text-sm text-gray-500">
+                                            ID: {{ product.external_id }} | {{ product.brand or '—' }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4">
+                                <div class="text-sm text-gray-900">{{ product.category }}</div>
+                                {% if product.all_categories_list and product.all_categories_list|length > 1 %}
+                                <div class="text-xs text-gray-500 mt-1">
+                                    {{ ' > '.join(product.all_categories_list) }}
+                                </div>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4">
+                                <div class="text-sm text-gray-900" id="category-name-{{ product.id }}">
+                                    {{ product.mapped_wb_category or '—' }}
+                                </div>
+                                <div class="text-xs text-gray-500" id="category-id-{{ product.id }}">
+                                    ID: {{ product.wb_subject_id or '—' }}
+                                </div>
+                            </td>
+                            <td class="px-6 py-4">
+                                <span id="confidence-badge-{{ product.id }}" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                                    {% if product.category_confidence >= 0.7 %}bg-yellow-100 text-yellow-800
+                                    {% else %}bg-red-100 text-red-800{% endif %}">
+                                    {{ (product.category_confidence * 100)|round|int }}%
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-sm">
+                                <div class="flex items-center space-x-2">
+                                    <button onclick="editCategory({{ product.id }}, '{{ product.mapped_wb_category }}', {{ product.wb_subject_id or 'null' }})"
+                                            class="text-indigo-600 hover:text-indigo-900 font-medium">
+                                        Изменить
+                                    </button>
+                                    <span class="text-gray-300">|</span>
+                                    <a href="{{ url_for('auto_import_product_detail', product_id=product.id) }}"
+                                       class="text-gray-600 hover:text-gray-900 font-medium">
+                                        Детали
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-12 text-center">
+        <svg class="mx-auto h-12 w-12 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <h3 class="mt-2 text-lg font-medium text-gray-900">Нет товаров требующих проверки</h3>
+        <p class="mt-1 text-sm text-gray-500">
+            Все товары имеют уверенность определения категории >= {{ (min_confidence * 100)|round|int }}%
+        </p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Modal for editing category -->
+<div id="editCategoryModal" class="hidden fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+    <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+        <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+        <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+        <div class="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+            <div>
+                <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                    Изменить категорию
+                </h3>
+                <div class="mt-4">
+                    <label for="modalCategorySelect" class="block text-sm font-medium text-gray-700">Выберите категорию WB</label>
+                    <select id="modalCategorySelect" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                        <option value="">Выберите категорию...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="mt-5 sm:mt-6 sm:grid sm:grid-cols-2 sm:gap-3 sm:grid-flow-row-dense">
+                <button type="button" id="modalSaveBtn" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:col-start-2 sm:text-sm">
+                    Сохранить
+                </button>
+                <button type="button" id="modalCancelBtn" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:col-start-1 sm:text-sm">
+                    Отмена
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const wbCategories = {{ wb_categories|tojson }};
+let currentEditingProductId = null;
+
+// Populate modal select
+const modalSelect = document.getElementById('modalCategorySelect');
+if (modalSelect && wbCategories) {
+    const sortedCategories = Object.entries(wbCategories).sort((a, b) => a[1].localeCompare(b[1]));
+    sortedCategories.forEach(([id, name]) => {
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = `${name} (ID: ${id})`;
+        modalSelect.appendChild(option);
+    });
+}
+
+function editCategory(productId, currentCategory, currentId) {
+    currentEditingProductId = productId;
+    const modal = document.getElementById('editCategoryModal');
+    const select = document.getElementById('modalCategorySelect');
+
+    // Set current selection
+    if (currentId) {
+        select.value = currentId;
+    }
+
+    // Show modal
+    modal.classList.remove('hidden');
+}
+
+document.getElementById('modalCancelBtn').addEventListener('click', function() {
+    document.getElementById('editCategoryModal').classList.add('hidden');
+    currentEditingProductId = null;
+});
+
+document.getElementById('modalSaveBtn').addEventListener('click', function() {
+    const selectedCategoryId = document.getElementById('modalCategorySelect').value;
+
+    if (!selectedCategoryId) {
+        alert('Пожалуйста, выберите категорию');
+        return;
+    }
+
+    if (!currentEditingProductId) {
+        alert('Ошибка: товар не выбран');
+        return;
+    }
+
+    const saveBtn = document.getElementById('modalSaveBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Сохранение...';
+
+    fetch(`/auto-import/product/${currentEditingProductId}/correct-category`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            wb_subject_id: parseInt(selectedCategoryId)
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Update table row
+            const categoryName = document.getElementById(`category-name-${currentEditingProductId}`);
+            const categoryId = document.getElementById(`category-id-${currentEditingProductId}`);
+            const confidenceBadge = document.getElementById(`confidence-badge-${currentEditingProductId}`);
+
+            if (categoryName) categoryName.textContent = data.new_category_name;
+            if (categoryId) categoryId.textContent = `ID: ${data.new_category_id}`;
+            if (confidenceBadge) {
+                confidenceBadge.textContent = '100%';
+                confidenceBadge.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800';
+            }
+
+            // Remove row from validation list if confidence is now 100%
+            const row = document.getElementById(`product-row-${currentEditingProductId}`);
+            if (row) {
+                row.style.backgroundColor = '#d1fae5';
+                setTimeout(() => {
+                    row.remove();
+                    // Reload if no more products
+                    const tbody = document.querySelector('tbody');
+                    if (tbody && tbody.children.length === 0) {
+                        location.reload();
+                    }
+                }, 1000);
+            }
+
+            // Close modal
+            document.getElementById('editCategoryModal').classList.add('hidden');
+            currentEditingProductId = null;
+
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Сохранить';
+        } else {
+            alert('Ошибка обновления: ' + (data.error || 'Неизвестная ошибка'));
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Сохранить';
+        }
+    })
+    .catch(error => {
+        alert('Ошибка при выполнении запроса: ' + error);
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Сохранить';
+    });
+});
+</script>
+{% endblock %}

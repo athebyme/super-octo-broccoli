@@ -716,8 +716,10 @@ class ImportedProduct(db.Model):
     # Данные товара
     title = db.Column(db.String(500))  # Название
     category = db.Column(db.String(200))  # Категория из источника
+    all_categories = db.Column(db.Text)  # Все категории из цепочки (JSON)
     mapped_wb_category = db.Column(db.String(200))  # Маппированная категория WB
     wb_subject_id = db.Column(db.Integer)  # ID предмета WB
+    category_confidence = db.Column(db.Float, default=0.0)  # Уверенность в определении категории (0-1)
 
     brand = db.Column(db.String(200))  # Бренд
     country = db.Column(db.String(100))  # Страна производства
@@ -809,6 +811,45 @@ class CategoryMapping(db.Model):
 
     def __repr__(self) -> str:
         return f'<CategoryMapping {self.source_category} -> {self.wb_category_name}>'
+
+
+class ProductCategoryCorrection(db.Model):
+    """Ручные исправления категорий для конкретных товаров"""
+    __tablename__ = 'product_category_corrections'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # Связь с импортированным товаром
+    imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=True, index=True)
+
+    # Идентификация товара (для переиспользования при повторном импорте)
+    external_id = db.Column(db.String(200), index=True)  # ID из внешнего источника
+    source_type = db.Column(db.String(50), default='sexoptovik')
+    product_title = db.Column(db.String(500))  # Название товара
+    original_category = db.Column(db.String(200))  # Оригинальная категория из CSV
+
+    # Исправленная категория WB
+    corrected_wb_subject_id = db.Column(db.Integer, nullable=False)  # ID предмета WB
+    corrected_wb_subject_name = db.Column(db.String(200))  # Название предмета WB
+
+    # Метаданные
+    corrected_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто исправил
+    correction_reason = db.Column(db.Text)  # Причина исправления (опционально)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    imported_product = db.relationship('ImportedProduct', backref=db.backref('category_correction', uselist=False))
+    corrected_by = db.relationship('User', backref='category_corrections')
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_correction_external', 'external_id', 'source_type'),
+        db.Index('idx_correction_category', 'original_category', 'source_type'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<ProductCategoryCorrection {self.external_id} -> {self.corrected_wb_subject_name}>'
 
 
 class PriceHistory(db.Model):

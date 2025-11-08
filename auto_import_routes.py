@@ -223,7 +223,47 @@ def register_auto_import_routes(app):
         except:
             product.validation_errors_list = []
 
-        return render_template('auto_import_product_detail.html', product=product)
+        # Получаем список всех WB категорий для dropdown
+        from wb_categories_mapping import WB_ADULT_CATEGORIES
+        wb_categories = WB_ADULT_CATEGORIES
+
+        return render_template('auto_import_product_detail.html', product=product, wb_categories=wb_categories)
+
+    @app.route('/auto-import/validate', methods=['GET'])
+    @login_required
+    def auto_import_validate():
+        """Страница валидации товаров с низкой уверенностью определения категории"""
+        if not current_user.seller:
+            flash('Для работы с автоимпортом обратитесь к администратору.', 'warning')
+            return redirect(url_for('dashboard'))
+
+        seller = current_user.seller
+
+        # Получаем минимальную уверенность из параметра (по умолчанию 0.9 = 90%)
+        min_confidence = float(request.args.get('min_confidence', 0.9))
+
+        # Получаем товары с низкой уверенностью
+        low_confidence_products = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.category_confidence < min_confidence
+        ).order_by(ImportedProduct.category_confidence.asc()).all()
+
+        # Парсим JSON поля для каждого товара
+        for product in low_confidence_products:
+            try:
+                product.all_categories_list = json.loads(product.all_categories) if product.all_categories else []
+            except:
+                product.all_categories_list = []
+
+        # Получаем список всех WB категорий для dropdown
+        from wb_categories_mapping import WB_ADULT_CATEGORIES
+        wb_categories = WB_ADULT_CATEGORIES
+
+        return render_template('auto_import_validate.html',
+                             products=low_confidence_products,
+                             wb_categories=wb_categories,
+                             min_confidence=min_confidence,
+                             total_count=len(low_confidence_products))
 
     @app.route('/auto-import/categories', methods=['GET'])
     @login_required
@@ -381,6 +421,85 @@ def register_auto_import_routes(app):
 
         flash(message, 'success')
         return jsonify({'success': True, 'deleted': deleted_count})
+
+    @app.route('/auto-import/product/<int:product_id>/correct-category', methods=['POST'])
+    @login_required
+    def auto_import_correct_category(product_id):
+        """Сохраняет ручное исправление категории для товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        # Получаем новую категорию
+        data = request.get_json()
+        new_wb_subject_id = data.get('wb_subject_id')
+
+        if not new_wb_subject_id:
+            return jsonify({'success': False, 'error': 'Category ID is required'}), 400
+
+        try:
+            # Получаем название категории
+            from wb_categories_mapping import WB_ADULT_CATEGORIES
+            new_wb_subject_name = WB_ADULT_CATEGORIES.get(new_wb_subject_id)
+
+            if not new_wb_subject_name:
+                return jsonify({'success': False, 'error': 'Invalid category ID'}), 400
+
+            # Проверяем, есть ли уже исправление для этого товара
+            from models import ProductCategoryCorrection
+            correction = ProductCategoryCorrection.query.filter_by(
+                external_id=product.external_id,
+                source_type=product.source_type
+            ).first()
+
+            if correction:
+                # Обновляем существующее исправление
+                correction.corrected_wb_subject_id = new_wb_subject_id
+                correction.corrected_wb_subject_name = new_wb_subject_name
+                correction.corrected_by_user_id = current_user.id
+                correction.product_title = product.title
+                correction.original_category = product.category
+                from datetime import datetime
+                correction.updated_at = datetime.utcnow()
+            else:
+                # Создаем новое исправление
+                correction = ProductCategoryCorrection(
+                    imported_product_id=product.id,
+                    external_id=product.external_id,
+                    source_type=product.source_type,
+                    product_title=product.title,
+                    original_category=product.category,
+                    corrected_wb_subject_id=new_wb_subject_id,
+                    corrected_wb_subject_name=new_wb_subject_name,
+                    corrected_by_user_id=current_user.id
+                )
+                db.session.add(correction)
+
+            # Обновляем категорию в самом товаре
+            product.wb_subject_id = new_wb_subject_id
+            product.mapped_wb_category = new_wb_subject_name
+            product.category_confidence = 1.0  # Максимальная уверенность для ручных исправлений
+
+            db.session.commit()
+
+            flash(f'Категория товара обновлена на "{new_wb_subject_name}"', 'success')
+            return jsonify({
+                'success': True,
+                'new_category_id': new_wb_subject_id,
+                'new_category_name': new_wb_subject_name
+            })
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # Пример использования:

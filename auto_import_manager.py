@@ -326,7 +326,7 @@ class CategoryMapper:
 
     def map_category(self, source_category: str, source_type: str = 'sexoptovik',
                     general_category: str = '', all_categories: List[str] = None,
-                    product_title: str = '') -> Tuple[Optional[int], Optional[str], float]:
+                    product_title: str = '', external_id: str = None) -> Tuple[Optional[int], Optional[str], float]:
         """
         Определяет категорию WB для товара
 
@@ -336,6 +336,7 @@ class CategoryMapper:
             general_category: Общая категория
             all_categories: Все категории товара
             product_title: Название товара (для анализа ключевых слов)
+            external_id: ID товара из внешнего источника (для ручных исправлений)
 
         Returns:
             Tuple[subject_id, subject_name, confidence]
@@ -343,7 +344,7 @@ class CategoryMapper:
         if not source_category:
             return None, None, 0.0
 
-        # Сначала проверяем БД (пользовательские переопределения)
+        # Сначала проверяем БД (пользовательские переопределения через CategoryMapping)
         mapping = CategoryMapping.query.filter_by(
             source_category=source_category,
             source_type=source_type
@@ -352,11 +353,13 @@ class CategoryMapper:
         if mapping:
             return mapping.wb_subject_id, mapping.wb_subject_name, mapping.confidence_score
 
-        # Используем новый точный алгоритм
+        # Используем новый точный алгоритм (включая проверку ручных исправлений через ProductCategoryCorrection)
         subject_id, subject_name, confidence = self.get_best_match(
-            source_category,
-            product_title,
-            all_categories
+            csv_category=source_category,
+            product_title=product_title,
+            all_categories=all_categories,
+            external_id=external_id,
+            source_type=source_type
         )
 
         return subject_id, subject_name, confidence
@@ -654,13 +657,14 @@ class AutoImportManager:
                     logger.debug(f"Товар {external_id} уже импортирован, пропускаем")
                     return 'skipped'
 
-            # Определяем категорию WB
+            # Определяем категорию WB (с учетом ручных исправлений)
             subject_id, subject_name, confidence = self.category_mapper.map_category(
                 product_data['category'],
                 self.settings.csv_source_type,
                 product_data.get('general_category', ''),
                 product_data.get('all_categories', []),
-                product_data.get('title', '')
+                product_data.get('title', ''),
+                external_id=product_data.get('external_id')
             )
 
             # Подробное логирование для отладки категорий
@@ -696,8 +700,10 @@ class AutoImportManager:
             imported_product.external_vendor_code = product_data['external_vendor_code']
             imported_product.title = product_data['title']
             imported_product.category = product_data['category']
+            imported_product.all_categories = json.dumps(product_data.get('all_categories', []), ensure_ascii=False)
             imported_product.mapped_wb_category = subject_name
             imported_product.wb_subject_id = subject_id
+            imported_product.category_confidence = confidence
             imported_product.brand = product_data['brand']
             imported_product.country = product_data['country']
             imported_product.gender = product_data['gender']

@@ -71,11 +71,39 @@
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-gray-500">Категория WB</dt>
-                        <dd class="mt-1 text-sm text-gray-900">
-                            {{ product.mapped_wb_category or '—' }}
-                            {% if product.wb_subject_id %}
-                            <span class="text-xs text-gray-500">(ID: {{ product.wb_subject_id }})</span>
-                            {% endif %}
+                        <dd class="mt-1">
+                            <div id="categoryDisplay" class="flex items-center justify-between">
+                                <div>
+                                    <span class="text-sm text-gray-900">{{ product.mapped_wb_category or '—' }}</span>
+                                    {% if product.wb_subject_id %}
+                                    <span class="text-xs text-gray-500 ml-1">(ID: {{ product.wb_subject_id }})</span>
+                                    {% endif %}
+                                    {% if product.category_confidence %}
+                                    <span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                                        {% if product.category_confidence >= 0.9 %}bg-green-100 text-green-800
+                                        {% elif product.category_confidence >= 0.7 %}bg-yellow-100 text-yellow-800
+                                        {% else %}bg-red-100 text-red-800{% endif %}">
+                                        {{ (product.category_confidence * 100)|round|int }}% уверенность
+                                    </span>
+                                    {% endif %}
+                                </div>
+                                <button type="button" id="editCategoryBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                                    Изменить
+                                </button>
+                            </div>
+                            <div id="categoryEditor" class="hidden mt-2">
+                                <select id="categorySelect" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                    <option value="">Выберите категорию...</option>
+                                </select>
+                                <div class="mt-2 flex gap-2">
+                                    <button type="button" id="saveCategoryBtn" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                        Сохранить
+                                    </button>
+                                    <button type="button" id="cancelCategoryBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                        Отмена
+                                    </button>
+                                </div>
+                            </div>
                         </dd>
                     </div>
                 </dl>
@@ -312,6 +340,87 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Ошибка при выполнении запроса: ' + error);
                 deleteBtn.disabled = false;
                 deleteBtn.textContent = 'Удалить товар';
+            });
+        });
+    }
+
+    // Category editing functionality
+    const editCategoryBtn = document.getElementById('editCategoryBtn');
+    const categoryDisplay = document.getElementById('categoryDisplay');
+    const categoryEditor = document.getElementById('categoryEditor');
+    const categorySelect = document.getElementById('categorySelect');
+    const saveCategoryBtn = document.getElementById('saveCategoryBtn');
+    const cancelCategoryBtn = document.getElementById('cancelCategoryBtn');
+
+    // WB adult categories from mapping
+    const wbCategories = {{ wb_categories|tojson }};
+
+    // Populate select with categories
+    if (categorySelect && wbCategories) {
+        // Sort categories by name
+        const sortedCategories = Object.entries(wbCategories).sort((a, b) => a[1].localeCompare(b[1]));
+
+        sortedCategories.forEach(([id, name]) => {
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = `${name} (ID: ${id})`;
+            if (parseInt(id) === {{ product.wb_subject_id or 'null' }}) {
+                option.selected = true;
+            }
+            categorySelect.appendChild(option);
+        });
+    }
+
+    if (editCategoryBtn) {
+        editCategoryBtn.addEventListener('click', function() {
+            categoryDisplay.classList.add('hidden');
+            categoryEditor.classList.remove('hidden');
+        });
+    }
+
+    if (cancelCategoryBtn) {
+        cancelCategoryBtn.addEventListener('click', function() {
+            categoryEditor.classList.add('hidden');
+            categoryDisplay.classList.remove('hidden');
+        });
+    }
+
+    if (saveCategoryBtn) {
+        saveCategoryBtn.addEventListener('click', function() {
+            const selectedCategoryId = categorySelect.value;
+
+            if (!selectedCategoryId) {
+                alert('Пожалуйста, выберите категорию');
+                return;
+            }
+
+            saveCategoryBtn.disabled = true;
+            saveCategoryBtn.textContent = 'Сохранение...';
+
+            fetch('{{ url_for("auto_import_correct_category", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    wb_subject_id: parseInt(selectedCategoryId)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Категория успешно обновлена!');
+                    window.location.reload();
+                } else {
+                    alert('Ошибка обновления: ' + (data.error || 'Неизвестная ошибка'));
+                    saveCategoryBtn.disabled = false;
+                    saveCategoryBtn.textContent = 'Сохранить';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                saveCategoryBtn.disabled = false;
+                saveCategoryBtn.textContent = 'Сохранить';
             });
         });
     }
