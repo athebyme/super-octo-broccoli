@@ -772,8 +772,35 @@ class AutoImportManager:
             parts.append(f"Цвет: {colors_str}")
 
         if product_data.get('sizes'):
-            sizes_str = ', '.join(product_data['sizes'])
-            parts.append(f"Размер: {sizes_str}")
+            # Размеры - это структурированный объект, не список
+            sizes_data = product_data['sizes']
+            size_parts = []
+
+            # Используем raw строку если есть
+            if sizes_data.get('raw'):
+                size_parts.append(sizes_data['raw'])
+            # Или собираем из simple_sizes
+            elif sizes_data.get('simple_sizes'):
+                size_parts.append(', '.join(str(s) for s in sizes_data['simple_sizes']))
+            # Или собираем из dimensions
+            elif sizes_data.get('dimensions'):
+                dims = sizes_data['dimensions']
+                dim_strs = []
+                if dims.get('length'):
+                    dim_strs.append(f"длина {', '.join(str(v) for v in dims['length'])} см")
+                if dims.get('diameter'):
+                    dim_strs.append(f"диаметр {', '.join(str(v) for v in dims['diameter'])} см")
+                if dims.get('width'):
+                    dim_strs.append(f"ширина {', '.join(str(v) for v in dims['width'])} см")
+                if dims.get('weight'):
+                    dim_strs.append(f"вес {', '.join(str(v) for v in dims['weight'])} г")
+                if dims.get('volume'):
+                    dim_strs.append(f"объём {', '.join(str(v) for v in dims['volume'])} мл")
+                if dim_strs:
+                    size_parts.append(', '.join(dim_strs))
+
+            if size_parts:
+                parts.append(f"Размер: {'; '.join(size_parts)}")
 
         if product_data.get('features'):
             parts.append(f"\nОсобенности: {product_data['features']}")
