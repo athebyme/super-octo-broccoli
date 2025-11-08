@@ -75,8 +75,8 @@
 
     <!-- Форма массового редактирования -->
     <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="{
-        operation: '{{ request.form.get('operation', '') }}',
-        productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+        operation: '{{ request.form.get('operation', '') | safe }}',
+        productCategory: {{ (products[0].object_name if products and products[0].object_name else '') | tojson }},
         characteristics: [],
         selectedChar: null,
         selectedValues: [],

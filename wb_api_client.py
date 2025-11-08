@@ -609,7 +609,7 @@ class WildberriesAPIClient:
                 Возможные поля:
                 - vendorCode: артикул продавца
                 - title: название товара (макс 60 символов)
-                - description: описание (1000-5000 символов)
+                - description: описание (макс 5000 символов)
                 - brand: бренд
                 - dimensions: габариты (см и кг)
                 - characteristics: список характеристик
