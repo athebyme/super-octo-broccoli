@@ -4186,6 +4186,12 @@ def apply_migrations():
         conn.close()
 
 
+# ============= РОУТЫ АВТОИМПОРТА =============
+# Регистрация роутов автоимпорта товаров
+from auto_import_routes import register_auto_import_routes
+register_auto_import_routes(app)
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{% block title %}Импортированные товары - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Импортированные товары</h1>
+        <p class="mt-2 text-sm text-gray-600">
+            Список всех товаров, импортированных из внешних источников
+        </p>
+    </div>
+
+    <!-- Фильтры и поиск -->
+    <div class="mb-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+        <div class="flex gap-2">
+            <a href="{{ url_for('auto_import_products') }}"
+               class="px-3 py-2 text-sm font-medium rounded-md {% if not status_filter %}bg-indigo-100 text-indigo-700{% else %}bg-white text-gray-700 hover:bg-gray-50{% endif %} border">
+                Все
+            </a>
+            <a href="{{ url_for('auto_import_products', status='validated') }}"
+               class="px-3 py-2 text-sm font-medium rounded-md {% if status_filter == 'validated' %}bg-blue-100 text-blue-700{% else %}bg-white text-gray-700 hover:bg-gray-50{% endif %} border">
+                Готово к импорту
+            </a>
+            <a href="{{ url_for('auto_import_products', status='imported') }}"
+               class="px-3 py-2 text-sm font-medium rounded-md {% if status_filter == 'imported' %}bg-green-100 text-green-700{% else %}bg-white text-gray-700 hover:bg-gray-50{% endif %} border">
+                Импортировано
+            </a>
+            <a href="{{ url_for('auto_import_products', status='failed') }}"
+               class="px-3 py-2 text-sm font-medium rounded-md {% if status_filter == 'failed' %}bg-red-100 text-red-700{% else %}bg-white text-gray-700 hover:bg-gray-50{% endif %} border">
+                Ошибки
+            </a>
+        </div>
+
+        <a href="{{ url_for('auto_import_dashboard') }}"
+           class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+            ← Назад к дашборду
+        </a>
+    </div>
+
+    <!-- Таблица товаров -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden">
+        {% if products %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Товар
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Категория
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Бренд
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Статус
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Дата
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Действия
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for product in products %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4">
+                            <div class="flex items-center">
+                                <div>
+                                    <div class="text-sm font-medium text-gray-900">
+                                        {{ product.title }}
+                                    </div>
+                                    <div class="text-sm text-gray-500">
+                                        ID: {{ product.external_id }}
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="text-sm text-gray-900">{{ product.category }}</div>
+                            {% if product.mapped_wb_category %}
+                            <div class="text-xs text-gray-500">→ {{ product.mapped_wb_category }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500">
+                            {{ product.brand or '—' }}
+                        </td>
+                        <td class="px-6 py-4">
+                            {% if product.import_status == 'imported' %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                Импортировано
+                            </span>
+                            {% elif product.import_status == 'validated' %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+                                Готово
+                            </span>
+                            {% elif product.import_status == 'failed' %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                Ошибка
+                            </span>
+                            {% else %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                                {{ product.import_status }}
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-500">
+                            {{ product.created_at.strftime('%d.%m.%Y') if product.created_at else '—' }}
+                        </td>
+                        <td class="px-6 py-4 text-right text-sm font-medium">
+                            <a href="{{ url_for('auto_import_product_detail', product_id=product.id) }}"
+                               class="text-indigo-600 hover:text-indigo-900">
+                                Подробнее →
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Пагинация -->
+        {% if pagination.pages > 1 %}
+        <div class="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+            <div class="flex-1 flex justify-between sm:hidden">
+                {% if pagination.has_prev %}
+                <a href="{{ url_for('auto_import_products', page=pagination.prev_num, status=status_filter) }}"
+                   class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Назад
+                </a>
+                {% endif %}
+                {% if pagination.has_next %}
+                <a href="{{ url_for('auto_import_products', page=pagination.next_num, status=status_filter) }}"
+                   class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                    Вперед
+                </a>
+                {% endif %}
+            </div>
+            <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-sm text-gray-700">
+                        Показано <span class="font-medium">{{ pagination.page }}</span> из <span class="font-medium">{{ pagination.pages }}</span> страниц
+                    </p>
+                </div>
+                <div>
+                    <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+                        {% if pagination.has_prev %}
+                        <a href="{{ url_for('auto_import_products', page=pagination.prev_num, status=status_filter) }}"
+                           class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            ←
+                        </a>
+                        {% endif %}
+                        {% for page_num in range(1, pagination.pages + 1) %}
+                            {% if page_num == pagination.page %}
+                            <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-indigo-50 text-sm font-medium text-indigo-600">
+                                {{ page_num }}
+                            </span>
+                            {% else %}
+                            <a href="{{ url_for('auto_import_products', page=page_num, status=status_filter) }}"
+                               class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
+                                {{ page_num }}
+                            </a>
+                            {% endif %}
+                        {% endfor %}
+                        {% if pagination.has_next %}
+                        <a href="{{ url_for('auto_import_products', page=pagination.next_num, status=status_filter) }}"
+                           class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
+                            →
+                        </a>
+                        {% endif %}
+                    </nav>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="text-center py-12">
+            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+            </svg>
+            <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
+            <p class="mt-1 text-sm text-gray-500">
+                {% if status_filter %}
+                Товары с таким статусом не найдены
+                {% else %}
+                Начните импорт товаров для отображения здесь
+                {% endif %}
+            </p>
+            <div class="mt-6">
+                <a href="{{ url_for('auto_import_dashboard') }}"
+                   class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                    Перейти к импорту
+                </a>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.title }} - Автоимпорт - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Навигация -->
+    <div class="mb-4">
+        <a href="{{ url_for('auto_import_products') }}" class="text-indigo-600 hover:text-indigo-900 text-sm">
+            ← Назад к списку товаров
+        </a>
+    </div>
+
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">{{ product.title }}</h1>
+                <p class="mt-2 text-sm text-gray-600">
+                    ID: {{ product.external_id }}
+                </p>
+            </div>
+            <div>
+                {% if product.import_status == 'imported' %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-green-100 text-green-800">
+                    ✓ Импортировано
+                </span>
+                {% elif product.import_status == 'validated' %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
+                    Готово к импорту
+                </span>
+                {% elif product.import_status == 'failed' %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-red-100 text-red-800">
+                    ✗ Ошибка
+                </span>
+                {% else %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-gray-100 text-gray-800">
+                    {{ product.import_status }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Основная информация -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Базовые данные -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Основная информация</h3>
+                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Артикул поставщика</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.external_vendor_code or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Бренд</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.brand or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Страна производства</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.country or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Пол</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.gender or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Категория источника</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.category or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Категория WB</dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ product.mapped_wb_category or '—' }}
+                            {% if product.wb_subject_id %}
+                            <span class="text-xs text-gray-500">(ID: {{ product.wb_subject_id }})</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Характеристики -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Характеристики</h3>
+                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Цвета</dt>
+                        <dd class="mt-1">
+                            {% if product.colors_list %}
+                                {% for color in product.colors_list %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-1 mb-1">
+                                    {{ color }}
+                                </span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-sm text-gray-900">—</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Размеры</dt>
+                        <dd class="mt-1">
+                            {% if product.sizes_list %}
+                                {% for size in product.sizes_list %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-1 mb-1">
+                                    {{ size }}
+                                </span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-sm text-gray-900">—</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <dt class="text-sm font-medium text-gray-500">Материалы</dt>
+                        <dd class="mt-1">
+                            {% if product.materials_list %}
+                                {% for material in product.materials_list %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mr-1 mb-1">
+                                    {{ material }}
+                                </span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-sm text-gray-900">—</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Описание -->
+            {% if product.description %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Описание</h3>
+                <div class="text-sm text-gray-700 whitespace-pre-line">{{ product.description }}</div>
+            </div>
+            {% endif %}
+
+            <!-- Ошибки валидации -->
+            {% if product.validation_errors_list %}
+            <div class="bg-red-50 border border-red-200 rounded-lg p-6">
+                <h3 class="text-lg font-medium text-red-900 mb-4">Ошибки валидации</h3>
+                <ul class="list-disc list-inside space-y-1">
+                    {% for error in product.validation_errors_list %}
+                    <li class="text-sm text-red-700">{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Боковая панель -->
+        <div class="space-y-6">
+            <!-- Фотографии -->
+            {% if product.photo_urls_list %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Фотографии ({{ product.photo_urls_list|length }})</h3>
+                <div class="grid grid-cols-2 gap-2">
+                    {% for photo in product.photo_urls_list[:6] %}
+                    <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden">
+                        <img src="{{ photo.blur if photo.blur else photo.original }}"
+                             alt="Фото товара"
+                             class="w-full h-full object-cover"
+                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'%3E%3Crect fill=\'%23f3f4f6\' width=\'100\' height=\'100\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' fill=\'%239ca3af\' font-size=\'14\'%3EНет фото%3C/text%3E%3C/svg%3E'">
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if product.photo_urls_list|length > 6 %}
+                <p class="mt-2 text-xs text-gray-500 text-center">
+                    +{{ product.photo_urls_list|length - 6 }} еще
+                </p>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Баркоды -->
+            {% if product.barcodes_list %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Баркоды</h3>
+                <ul class="space-y-2">
+                    {% for barcode in product.barcodes_list %}
+                    <li class="text-sm font-mono bg-gray-50 px-3 py-2 rounded border border-gray-200">
+                        {{ barcode }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <!-- Метаданные -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Информация об импорте</h3>
+                <dl class="space-y-3">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Источник</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.source_type }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Дата создания</dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ product.created_at.strftime('%d.%m.%Y %H:%M') if product.created_at else '—' }}
+                        </dd>
+                    </div>
+                    {% if product.imported_at %}
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Дата импорта</dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ product.imported_at.strftime('%d.%m.%Y %H:%M') }}
+                        </dd>
+                    </div>
+                    {% endif %}
+                    {% if product.import_error %}
+                    <div>
+                        <dt class="text-sm font-medium text-red-500">Ошибка импорта</dt>
+                        <dd class="mt-1 text-sm text-red-700">{{ product.import_error }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+            </div>
+
+            <!-- Действия -->
+            {% if product.import_status == 'validated' %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
+                <button class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                    Импортировать в WB
+                </button>
+                <p class="mt-2 text-xs text-gray-500 text-center">
+                    Товар готов к импорту в Wildberries
+                </p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
