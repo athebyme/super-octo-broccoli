@@ -1002,7 +1002,7 @@ class WildberriesAPIClient:
                 'POST',
                 'content',
                 endpoint,
-                json_data=request_body,
+                json=request_body,  # Исправлено: json вместо json_data
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )
@@ -1049,7 +1049,7 @@ class WildberriesAPIClient:
                 'POST',
                 'content',
                 endpoint,
-                json_data={},
+                json={},  # Исправлено: json вместо json_data
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )
