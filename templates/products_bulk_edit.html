@@ -73,8 +73,10 @@
         {{ products | tojson }}
     </script>
 
-    <!-- Форма массового редактирования -->
-    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="{
+    <!-- Alpine.js компонент -->
+    <script>
+    document.addEventListener('alpine:init', () => {
+        Alpine.data('bulkEditForm', () => ({
         operation: '{{ request.form.get('operation', '') | safe }}',
         productCategory: {{ (products[0].object_name if products and products[0].object_name else '') | tojson }},
         characteristics: [],
@@ -250,7 +252,12 @@
                 this.loading = false;
             }
         }
-    }">
+        }));
+    });
+    </script>
+
+    <!-- Форма массового редактирования -->
+    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="bulkEditForm">
         <!-- Выбор операции -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
             <h2 class="text-lg font-semibold text-gray-900 mb-6">Выберите операцию</h2>
