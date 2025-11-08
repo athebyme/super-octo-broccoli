@@ -562,12 +562,22 @@ class AutoImportManager:
         response.raise_for_status()
 
         # Определяем кодировку
-        if 'charset' in response.headers.get('content-type', ''):
+        # Для sexoptovik используется cp1251 (windows-1251)
+        if self.settings.csv_source_type == 'sexoptovik':
+            encoding = 'cp1251'
+        elif 'charset' in response.headers.get('content-type', ''):
             encoding = response.encoding
         else:
-            encoding = 'utf-8'
+            # Пробуем определить автоматически
+            try:
+                return response.content.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    return response.content.decode('cp1251')
+                except UnicodeDecodeError:
+                    return response.content.decode('latin-1')
 
-        return response.content.decode(encoding)
+        return response.content.decode(encoding, errors='replace')
 
     def _process_product(self, product_data: Dict) -> str:
         """

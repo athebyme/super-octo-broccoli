@@ -239,6 +239,67 @@ def register_auto_import_routes(app):
 
         return render_template('auto_import_categories.html', mappings=mappings)
 
+    @app.route('/auto-import/import-to-wb', methods=['POST'])
+    @login_required
+    def auto_import_to_wb():
+        """Массовый импорт товаров в WB"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+
+        # Получаем список товаров для импорта
+        product_ids_str = request.form.get('product_ids', '')
+        if not product_ids_str:
+            return jsonify({'success': False, 'error': 'No products selected'}), 400
+
+        try:
+            product_ids = [int(pid) for pid in product_ids_str.split(',')]
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid product IDs'}), 400
+
+        # Импортируем товары
+        from wb_product_importer import import_products_batch
+        result = import_products_batch(seller.id, product_ids)
+
+        if result.get('success'):
+            message = f"Импортировано: {result['success']}, Ошибок: {result['failed']}, Пропущено: {result['skipped']}"
+            flash(message, 'success' if result['failed'] == 0 else 'warning')
+            return jsonify(result)
+        else:
+            return jsonify(result), 500
+
+    @app.route('/auto-import/product/<int:product_id>/import', methods=['POST'])
+    @login_required
+    def auto_import_single_to_wb(product_id):
+        """Импорт одного товара в WB"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        imported_product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not imported_product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        # Импортируем товар
+        from wb_product_importer import WBProductImporter
+        importer = WBProductImporter(seller)
+        success, error, product = importer.import_product_to_wb(imported_product)
+
+        if success:
+            flash(f'Товар "{imported_product.title}" успешно импортирован в WB', 'success')
+            return jsonify({
+                'success': True,
+                'product_id': product.id if product else None
+            })
+        else:
+            flash(f'Ошибка импорта: {error}', 'danger')
+            return jsonify({'success': False, 'error': error}), 500
+
 
 # Пример использования:
 # from auto_import_routes import register_auto_import_routes
