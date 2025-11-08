@@ -21,6 +21,122 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+class SizeParser:
+    """
+    Интеллектуальный парсер размеров товаров
+    """
+
+    def __init__(self):
+        # Паттерны для извлечения размеров
+        self.dimension_patterns = {
+            'length': r'(?:общ\.|общая|общий)?\s*(?:длин[аы]|дл\.)\s*(?:проник[а-я]*\.)?\s*(\d+(?:[.,]\d+)?)\s*(?:см|мм|м)?',
+            'diameter': r'(?:макс\.|максимальн[а-я]*\.)?\s*диаметр\s*(?:при\s+расширении|шариков)?\s*(\d+(?:[.,]\d+)?)\s*(?:см|мм)?',
+            'width': r'(?:макс\.|максимальн[а-я]*\.)?\s*ширин[аы]\s*(\d+(?:[.,]\d+)?)\s*(?:см|мм)?',
+            'depth': r'глубин[аы]\s*(?:проник[а-я]*\.?)?\s*(\d+(?:[.,]\d+)?)\s*(?:см|мм)?',
+            'weight': r'вес\s*(\d+(?:[.,]\d+)?)\s*(?:г|кг|гр)?',
+            'volume': r'(?:объ[её]м|мл)\s*(\d+(?:[.,]\d+)?)\s*(?:мл|л)?',
+        }
+
+    def parse(self, sizes_raw: str) -> Dict[str, any]:
+        """
+        Парсит строку размеров и возвращает структурированные данные
+
+        Returns:
+            {
+                'raw': 'исходная строка',
+                'dimensions': {
+                    'length': [значение1, значение2, ...],
+                    'diameter': [значение1, ...],
+                    'weight': значение,
+                    ...
+                },
+                'simple_sizes': ['S', 'M', 'L'] или ['42', '44'] для одежды
+            }
+        """
+        if not sizes_raw:
+            return {'raw': '', 'dimensions': {}, 'simple_sizes': []}
+
+        result = {
+            'raw': sizes_raw,
+            'dimensions': {},
+            'simple_sizes': []
+        }
+
+        sizes_lower = sizes_raw.lower()
+
+        # Извлекаем размерности
+        for dim_type, pattern in self.dimension_patterns.items():
+            matches = re.findall(pattern, sizes_lower, re.IGNORECASE)
+            if matches:
+                # Конвертируем в float, заменяя запятую на точку
+                values = [float(m.replace(',', '.')) for m in matches if m]
+                if values:
+                    result['dimensions'][dim_type] = values
+
+        # Если не нашли размерности, пробуем определить как простые размеры
+        if not result['dimensions']:
+            # Размеры одежды (42-44, S-M-L и т.д.)
+            if re.search(r'\d{2}-\d{2}', sizes_raw):  # 42-44
+                parts = sizes_raw.split('-')
+                if len(parts) == 2:
+                    try:
+                        start = int(parts[0].strip())
+                        end = int(parts[1].strip())
+                        result['simple_sizes'] = [str(i) for i in range(start, end + 1)]
+                    except ValueError:
+                        result['simple_sizes'] = [sizes_raw.strip()]
+            elif ',' in sizes_raw:
+                result['simple_sizes'] = [s.strip() for s in sizes_raw.split(',') if s.strip()]
+            else:
+                result['simple_sizes'] = [sizes_raw.strip()]
+
+        return result
+
+    def format_for_wb(self, parsed_sizes: Dict, wb_category_id: int) -> Dict[str, str]:
+        """
+        Форматирует размеры для конкретной категории WB
+
+        Returns:
+            {'characteristic_name': 'value', ...}
+        """
+        wb_characteristics = {}
+        dimensions = parsed_sizes.get('dimensions', {})
+
+        # Маппинг характеристик по категориям
+        # Для интим-товаров обычно есть: длина, диаметр, вес
+        if dimensions.get('length'):
+            # Берем максимальную длину если их несколько
+            length = max(dimensions['length'])
+            wb_characteristics['Длина'] = f"{length:.1f} см"
+
+        if dimensions.get('diameter'):
+            # Берем максимальный диаметр
+            diameter = max(dimensions['diameter'])
+            wb_characteristics['Диаметр'] = f"{diameter:.1f} см"
+
+        if dimensions.get('width'):
+            width = max(dimensions['width'])
+            wb_characteristics['Ширина'] = f"{width:.1f} см"
+
+        if dimensions.get('depth'):
+            depth = max(dimensions['depth'])
+            wb_characteristics['Глубина'] = f"{depth:.1f} см"
+
+        if dimensions.get('weight'):
+            weight = dimensions['weight'][0]
+            wb_characteristics['Вес'] = f"{weight:.0f} г"
+
+        if dimensions.get('volume'):
+            volume = dimensions['volume'][0]
+            wb_characteristics['Объем'] = f"{volume:.0f} мл"
+
+        # Для одежды
+        if parsed_sizes.get('simple_sizes'):
+            wb_characteristics['Размер'] = ', '.join(parsed_sizes['simple_sizes'])
+
+        return wb_characteristics
+
+
 class CSVProductParser:
     """
     Парсер CSV файлов с товарами
@@ -48,6 +164,7 @@ class CSVProductParser:
     def __init__(self, source_type: str = 'sexoptovik', delimiter: str = ';'):
         self.source_type = source_type
         self.delimiter = delimiter
+        self.size_parser = SizeParser()
 
     def parse_csv_file(self, csv_content: str) -> List[Dict]:
         """
@@ -115,9 +232,9 @@ class CSVProductParser:
             photo_codes_raw = row[13].strip() if len(row) > 13 else ''
             photo_urls = self._parse_photo_codes(external_id, photo_codes_raw)
 
-            # Баркоды
+            # Баркоды (разделены через #)
             barcodes_raw = row[14].strip() if len(row) > 14 else ''
-            barcodes = [b.strip() for b in barcodes_raw.split(',') if b.strip()]
+            barcodes = [b.strip() for b in barcodes_raw.split('#') if b.strip()]
 
             # Материалы
             materials_raw = row[15].strip() if len(row) > 15 else ''
@@ -154,31 +271,14 @@ class CSVProductParser:
             logger.error(f"Ошибка обработки строки {row_num}: {e}")
             return None
 
-    def _parse_sizes(self, sizes_raw: str) -> List[str]:
-        """Парсит размеры из строки"""
-        if not sizes_raw:
-            return []
+    def _parse_sizes(self, sizes_raw: str) -> Dict:
+        """
+        Парсит размеры из строки с использованием умного парсера
 
-        # Размеры могут быть указаны по-разному: "S,M,L" или "42-44" или "One Size"
-        sizes = []
-
-        # Если через запятую
-        if ',' in sizes_raw:
-            sizes = [s.strip() for s in sizes_raw.split(',') if s.strip()]
-        # Если диапазон через тире
-        elif '-' in sizes_raw and sizes_raw.replace('-', '').replace(' ', '').isdigit():
-            parts = sizes_raw.split('-')
-            if len(parts) == 2:
-                try:
-                    start = int(parts[0].strip())
-                    end = int(parts[1].strip())
-                    sizes = [str(i) for i in range(start, end + 1)]
-                except ValueError:
-                    sizes = [sizes_raw.strip()]
-        else:
-            sizes = [sizes_raw.strip()]
-
-        return sizes
+        Returns:
+            Словарь с структурированными данными о размерах
+        """
+        return self.size_parser.parse(sizes_raw)
 
     def _parse_photo_codes(self, product_id: str, photo_codes: str) -> List[str]:
         """
@@ -205,17 +305,10 @@ class CSVProductParser:
             numeric_id = match.group(1)
 
         for num in photo_nums:
-            # Формируем оба варианта URL (блюр и оригинал)
-            # Приоритет: блюр если есть, иначе оригинал
+            # Формируем URL (блюр версия по умолчанию)
+            # Блюр: https://x-story.ru/mp/_project/img_sx0_1200/{id}_{номер}_1200.jpg
             blur_url = f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg"
-            original_url = f"http://sexoptovik.ru/_project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg"
-
-            # Сохраняем оба варианта
-            urls.append({
-                'blur': blur_url,
-                'original': original_url,
-                'index': num
-            })
+            urls.append(blur_url)
 
         return urls
 
@@ -231,24 +324,74 @@ class CategoryMapper:
             'sexoptovik': {
                 'Вибраторы': {'subject_id': 5994, 'subject_name': 'Вибраторы', 'confidence': 1.0},
                 'Фаллоимитаторы': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 1.0},
+                'Фаллосы': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 1.0},
                 'Белье эротическое': {'subject_id': 3, 'subject_name': 'Белье', 'confidence': 0.8},
                 'Белье': {'subject_id': 3, 'subject_name': 'Белье', 'confidence': 0.9},
                 'Костюмы эротические': {'subject_id': 6007, 'subject_name': 'Эротические костюмы', 'confidence': 1.0},
+                'Костюмы': {'subject_id': 6007, 'subject_name': 'Эротические костюмы', 'confidence': 0.8},
                 'Игрушки для взрослых': {'subject_id': 5993, 'subject_name': 'Игрушки для взрослых', 'confidence': 0.9},
                 'Массажеры': {'subject_id': 469, 'subject_name': 'Массажеры', 'confidence': 0.7},
                 'Лубриканты': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 1.0},
                 'Смазки': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 1.0},
+                'Смазка': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 1.0},
+                'Гели': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.9},
                 'Наручники': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 1.0},
+                'Фиксаторы': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 1.0},
                 'Маски': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.8},
+                'Повязки': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.9},
+                'Кляпы': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.9},
                 'Стимуляторы': {'subject_id': 5996, 'subject_name': 'Стимуляторы', 'confidence': 0.9},
                 'Анальные игрушки': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 1.0},
+                'Анальные стимуляторы': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 1.0},
+                'Анальные пробки': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 1.0},
+                'Анальные': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 0.8},
                 'Вакуумные помпы': {'subject_id': 5999, 'subject_name': 'Вакуумные помпы', 'confidence': 1.0},
+                'Помпы': {'subject_id': 5999, 'subject_name': 'Вакуумные помпы', 'confidence': 0.9},
                 'Кольца': {'subject_id': 6001, 'subject_name': 'Эрекционные кольца', 'confidence': 0.9},
+                'Эрекционные кольца': {'subject_id': 6001, 'subject_name': 'Эрекционные кольца', 'confidence': 1.0},
+                'Секс-наборы': {'subject_id': 6002, 'subject_name': 'Наборы', 'confidence': 1.0},
+                'Наборы': {'subject_id': 6002, 'subject_name': 'Наборы', 'confidence': 0.9},
+                'Мастурбаторы': {'subject_id': 6004, 'subject_name': 'Мастурбаторы', 'confidence': 1.0},
+                'Секс-куклы': {'subject_id': 6005, 'subject_name': 'Секс-куклы', 'confidence': 1.0},
+                'Вагинальные шарики': {'subject_id': 6006, 'subject_name': 'Вагинальные шарики', 'confidence': 1.0},
+                'Шарики': {'subject_id': 6006, 'subject_name': 'Вагинальные шарики', 'confidence': 0.7},
+                'БДСМ': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
+                'Плетки': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 1.0},
+                'Стеки': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 1.0},
+                'Ошейники': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 1.0},
             }
         }
 
+        # Ключевые слова для определения категорий по названию товара
+        self.keywords_mapping = {
+            'вибратор': {'subject_id': 5994, 'subject_name': 'Вибраторы', 'confidence': 0.9},
+            'фаллоимитатор': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 0.95},
+            'фаллос': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 0.9},
+            'анальн': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 0.85},
+            'пробк': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 0.85},
+            'мастурбатор': {'subject_id': 6004, 'subject_name': 'Мастурбаторы', 'confidence': 0.95},
+            'смазк': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.9},
+            'лубрикант': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.95},
+            'гель': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.8},
+            'набор': {'subject_id': 6002, 'subject_name': 'Наборы', 'confidence': 0.7},
+            'костюм': {'subject_id': 6007, 'subject_name': 'Эротические костюмы', 'confidence': 0.8},
+            'белье': {'subject_id': 3, 'subject_name': 'Белье', 'confidence': 0.8},
+            'кольцо': {'subject_id': 6001, 'subject_name': 'Эрекционные кольца', 'confidence': 0.85},
+            'помп': {'subject_id': 5999, 'subject_name': 'Вакуумные помпы', 'confidence': 0.9},
+            'наручник': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 0.9},
+            'фиксатор': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 0.9},
+            'маска': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.85},
+            'кляп': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.9},
+            'плет': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
+            'стек': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
+            'ошейник': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
+            'шарик': {'subject_id': 6006, 'subject_name': 'Вагинальные шарики', 'confidence': 0.75},
+            'бдсм': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
+        }
+
     def map_category(self, source_category: str, source_type: str = 'sexoptovik',
-                    general_category: str = '', all_categories: List[str] = None) -> Tuple[Optional[int], Optional[str], float]:
+                    general_category: str = '', all_categories: List[str] = None,
+                    product_title: str = '') -> Tuple[Optional[int], Optional[str], float]:
         """
         Определяет категорию WB для товара
 
@@ -257,6 +400,7 @@ class CategoryMapper:
             source_type: Тип источника
             general_category: Общая категория
             all_categories: Все категории товара
+            product_title: Название товара (для анализа ключевых слов)
 
         Returns:
             Tuple[subject_id, subject_name, confidence]
@@ -302,9 +446,24 @@ class CategoryMapper:
             if best_match and best_confidence > 0.5:
                 return best_match
 
+        # Пытаемся определить по ключевым словам в названии товара
+        if product_title:
+            title_lower = product_title.lower()
+            keyword_match = None
+            keyword_confidence = 0.0
+
+            for keyword, cat_data in self.keywords_mapping.items():
+                if keyword in title_lower:
+                    if cat_data['confidence'] > keyword_confidence:
+                        keyword_confidence = cat_data['confidence']
+                        keyword_match = (cat_data['subject_id'], cat_data['subject_name'], cat_data['confidence'])
+
+            if keyword_match and keyword_confidence > 0.7:
+                return keyword_match
+
         # Если не нашли - используем общую категорию или дефолт
-        if general_category:
-            return self.map_category(general_category, source_type, '', all_categories)
+        if general_category and general_category != source_category:
+            return self.map_category(general_category, source_type, '', all_categories, product_title)
 
         # Дефолтная категория - "Товары для взрослых"
         logger.warning(f"Не удалось определить категорию для '{source_category}', используем дефолт")
@@ -608,7 +767,8 @@ class AutoImportManager:
                 product_data['category'],
                 self.settings.csv_source_type,
                 product_data.get('general_category', ''),
-                product_data.get('all_categories', [])
+                product_data.get('all_categories', []),
+                product_data.get('title', '')
             )
 
             product_data['wb_subject_id'] = subject_id
