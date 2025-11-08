@@ -76,15 +76,11 @@ class SizeParser:
         # Если не нашли размерности, пробуем определить как простые размеры
         if not result['dimensions']:
             # Размеры одежды (42-44, S-M-L и т.д.)
-            if re.search(r'\d{2}-\d{2}', sizes_raw):  # 42-44
+            if re.search(r'\d{2}-\d{2}', sizes_raw):  # 42-44 или 46-48
+                # Для одежды/белья размеры через тире - это отдельные размеры, не диапазон
+                # "46-48" -> ["46", "48"], а НЕ ["46", "47", "48"]
                 parts = sizes_raw.split('-')
-                if len(parts) == 2:
-                    try:
-                        start = int(parts[0].strip())
-                        end = int(parts[1].strip())
-                        result['simple_sizes'] = [str(i) for i in range(start, end + 1)]
-                    except ValueError:
-                        result['simple_sizes'] = [sizes_raw.strip()]
+                result['simple_sizes'] = [p.strip() for p in parts if p.strip()]
             elif ',' in sizes_raw:
                 result['simple_sizes'] = [s.strip() for s in sizes_raw.split(',') if s.strip()]
             else:
@@ -770,6 +766,14 @@ class AutoImportManager:
                 product_data.get('all_categories', []),
                 product_data.get('title', '')
             )
+
+            # Подробное логирование для отладки категорий
+            logger.info(f"📦 КАТЕГОРИЯ | Товар: {product_data.get('title', '')[:50]}...")
+            logger.info(f"   CSV категория: {product_data['category']}")
+            if product_data.get('all_categories'):
+                logger.info(f"   Все категории CSV: {' > '.join(product_data.get('all_categories', []))}")
+            logger.info(f"   ➜ WB категория: {subject_name} (ID: {subject_id}) | Уверенность: {confidence:.2f}")
+            logger.info("-" * 80)
 
             product_data['wb_subject_id'] = subject_id
             product_data['wb_subject_name'] = subject_name
