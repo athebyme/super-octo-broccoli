@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Заголовок -->
+    <div class="mb-6">
+        <div class="flex items-center gap-3 mb-2">
+            <a href="{{ url_for('products_list') }}" class="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                </svg>
+            </a>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Создание новой карточки товара</h1>
+        </div>
+        <p class="text-gray-600 dark:text-gray-400 ml-9">
+            Заполните форму для создания новой карточки товара в Wildberries
+        </p>
+    </div>
+
+    <!-- Форма создания -->
+    <form method="POST" action="{{ url_for('product_create') }}" class="space-y-6" x-data="productCreateForm()">
+        <!-- Основная информация -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4">Основная информация</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Категория товара -->
+                <div class="col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Категория товара <span class="text-red-500">*</span>
+                    </label>
+                    <select name="subject_id"
+                            x-model="selectedSubjectId"
+                            @change="loadCharacteristics()"
+                            required
+                            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                        <option value="">Выберите категорию...</option>
+                        {% for subject in subjects %}
+                        <option value="{{ subject.subjectID }}">{{ subject.subjectName }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        Выберите категорию товара из справочника Wildberries
+                    </p>
+                </div>
+
+                <!-- Артикул -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Артикул продавца <span class="text-red-500">*</span>
+                    </label>
+                    <input type="text"
+                           name="vendor_code"
+                           required
+                           maxlength="72"
+                           placeholder="Например: PROD-001"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        Уникальный артикул товара (до 72 символов)
+                    </p>
+                </div>
+
+                <!-- Бренд -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Бренд
+                    </label>
+                    <input type="text"
+                           name="brand"
+                           placeholder="Например: Nike"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <!-- Название товара -->
+                <div class="col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Название товара <span class="text-red-500">*</span>
+                    </label>
+                    <input type="text"
+                           name="title"
+                           required
+                           maxlength="60"
+                           placeholder="Например: Футболка мужская хлопковая"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        Краткое название товара (до 60 символов)
+                    </p>
+                </div>
+
+                <!-- Описание -->
+                <div class="col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Описание товара
+                    </label>
+                    <textarea name="description"
+                              rows="5"
+                              placeholder="Подробное описание товара (минимум 1000 символов, рекомендуется 2000)"
+                              class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"></textarea>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                        Минимум 1000 символов, стандарт - 2000 символов
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Габариты и вес -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4">Габариты и вес (с упаковкой)</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Длина (см)
+                    </label>
+                    <input type="number"
+                           name="length"
+                           min="0"
+                           placeholder="0"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Ширина (см)
+                    </label>
+                    <input type="number"
+                           name="width"
+                           min="0"
+                           placeholder="0"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Высота (см)
+                    </label>
+                    <input type="number"
+                           name="height"
+                           min="0"
+                           placeholder="0"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Вес (кг)
+                    </label>
+                    <input type="number"
+                           name="weight"
+                           min="0"
+                           step="0.001"
+                           placeholder="0.0"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+            </div>
+
+            <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                Укажите габариты и вес товара с упаковкой. Если не указать, сгенерируются нулевые значения.
+            </p>
+        </div>
+
+        <!-- Размеры и цена -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4">Размеры и цена</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Размер (tech)
+                    </label>
+                    <input type="text"
+                           name="tech_size"
+                           placeholder="L, XL, 42..."
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Российский размер
+                    </label>
+                    <input type="text"
+                           name="wb_size"
+                           placeholder="48, 50..."
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Цена (руб)
+                    </label>
+                    <input type="number"
+                           name="price"
+                           min="0"
+                           placeholder="1500"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Баркод
+                    </label>
+                    <input type="text"
+                           name="barcode"
+                           placeholder="2000000123456"
+                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                </div>
+            </div>
+
+            <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                Если не указать размеры и баркод, они будут сгенерированы автоматически
+            </p>
+        </div>
+
+        <!-- Характеристики -->
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+            <h2 class="text-xl font-semibold text-gray-900 dark:text-white mb-4">Характеристики товара</h2>
+
+            <div x-show="!selectedSubjectId" class="text-center py-8 text-gray-500 dark:text-gray-400">
+                <svg class="mx-auto h-12 w-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <p>Сначала выберите категорию товара</p>
+            </div>
+
+            <div x-show="selectedSubjectId && characteristics.length === 0" class="text-center py-8">
+                <svg class="animate-spin mx-auto h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="mt-2 text-gray-600 dark:text-gray-400">Загрузка характеристик...</p>
+            </div>
+
+            <div x-show="selectedSubjectId && characteristics.length > 0" class="space-y-4">
+                <template x-for="(char, index) in characteristics" :key="index">
+                    <div class="flex items-start gap-4">
+                        <div class="flex-1">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" x-text="char.name + (char.required ? ' *' : '')"></label>
+
+                            <!-- Текстовое поле -->
+                            <template x-if="char.charcType === 0 || char.charcType === 4">
+                                <input type="text"
+                                       :name="'char_value[]'"
+                                       :required="char.required"
+                                       :placeholder="char.name"
+                                       class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            </template>
+
+                            <!-- Выпадающий список -->
+                            <template x-if="char.charcType === 1">
+                                <select :name="'char_value[]'"
+                                        :required="char.required"
+                                        class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                    <option value="">Выберите...</option>
+                                    <template x-for="value in char.values" :key="value">
+                                        <option :value="value" x-text="value"></option>
+                                    </template>
+                                </select>
+                            </template>
+
+                            <!-- Скрытое поле с ID характеристики -->
+                            <input type="hidden" :name="'char_id[]'" :value="char.id">
+                        </div>
+                    </div>
+                </template>
+
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    <span class="text-red-500">*</span> - обязательные характеристики
+                </p>
+            </div>
+        </div>
+
+        <!-- Кнопки -->
+        <div class="flex justify-end gap-4">
+            <a href="{{ url_for('products_list') }}"
+               class="px-6 py-2.5 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                Отмена
+            </a>
+            <button type="submit"
+                    class="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                Создать карточку
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+function productCreateForm() {
+    return {
+        selectedSubjectId: '',
+        characteristics: [],
+
+        async loadCharacteristics() {
+            if (!this.selectedSubjectId) {
+                this.characteristics = [];
+                return;
+            }
+
+            try {
+                // Запрашиваем характеристики для выбранной категории
+                const response = await fetch(`/api/products/characteristics/${this.selectedSubjectId}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    console.error('Error loading characteristics:', data.error);
+                    this.characteristics = [];
+                    return;
+                }
+
+                // Обрабатываем характеристики
+                this.characteristics = (data.data || []).map(char => ({
+                    id: char.charcID,
+                    name: char.name,
+                    required: char.required || false,
+                    charcType: char.charcType,
+                    values: (char.dictionary || []).map(d => d.value || d),
+                    maxCount: char.maxCount || 1
+                }));
+
+                console.log('Loaded characteristics:', this.characteristics);
+            } catch (error) {
+                console.error('Failed to load characteristics:', error);
+                this.characteristics = [];
+            }
+        }
+    }
+}
+</script>
+{% endblock %}
