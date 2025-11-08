@@ -138,11 +138,42 @@
                         <dt class="text-sm font-medium text-gray-500">Размеры</dt>
                         <dd class="mt-1">
                             {% if product.sizes_list %}
-                                {% for size in product.sizes_list %}
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-1 mb-1">
-                                    {{ size }}
-                                </span>
-                                {% endfor %}
+                                {% if product.sizes_list.raw %}
+                                <div class="text-sm text-gray-900 mb-2">{{ product.sizes_list.raw }}</div>
+                                {% endif %}
+
+                                {% if product.sizes_list.simple_sizes %}
+                                <div class="mb-2">
+                                    {% for size in product.sizes_list.simple_sizes %}
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-1 mb-1">
+                                        {{ size }}
+                                    </span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+
+                                {% if product.sizes_list.dimensions %}
+                                <div class="text-xs text-gray-600 space-y-1">
+                                    {% if product.sizes_list.dimensions.length %}
+                                    <div><span class="font-medium">Длина:</span> {{ product.sizes_list.dimensions.length|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.diameter %}
+                                    <div><span class="font-medium">Диаметр:</span> {{ product.sizes_list.dimensions.diameter|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.width %}
+                                    <div><span class="font-medium">Ширина:</span> {{ product.sizes_list.dimensions.width|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.depth %}
+                                    <div><span class="font-medium">Глубина:</span> {{ product.sizes_list.dimensions.depth|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.weight %}
+                                    <div><span class="font-medium">Вес:</span> {{ product.sizes_list.dimensions.weight|join(', ') }} г</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.volume %}
+                                    <div><span class="font-medium">Объём:</span> {{ product.sizes_list.dimensions.volume|join(', ') }} мл</div>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
                             {% else %}
                                 <span class="text-sm text-gray-900">—</span>
                             {% endif %}
