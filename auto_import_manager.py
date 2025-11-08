@@ -289,7 +289,7 @@ class CSVProductParser:
         - С цензурой (блюр): https://x-story.ru/mp/_project/img_sx0_1200/{id}_{номер}_1200.jpg
         - Без цензуры (x-story): https://x-story.ru/mp/_project/img_sx_1200/{id}_{номер}_1200.jpg
 
-        В CSV указаны только номера фотографий через запятую
+        В CSV номера фотографий могут быть через запятую или пробелы
 
         Returns:
             List[Dict]: [{'blur': url, 'original': url, 'sexoptovik': url}, ...]
@@ -298,7 +298,12 @@ class CSVProductParser:
             return []
 
         photos = []
-        photo_nums = [p.strip() for p in photo_codes.split(',') if p.strip()]
+        # Определяем разделитель: запятая или пробелы
+        if ',' in photo_codes:
+            photo_nums = [p.strip() for p in photo_codes.split(',') if p.strip()]
+        else:
+            # Разделяем по пробелам (один или несколько)
+            photo_nums = [p.strip() for p in photo_codes.split() if p.strip()]
 
         # Извлекаем числовой ID из external_id (формат: id-12345-код)
         match = re.search(r'id-(\d+)', product_id)
