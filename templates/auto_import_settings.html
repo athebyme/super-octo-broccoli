@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки автоимпорта - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Настройки автоимпорта</h1>
+        <p class="mt-2 text-sm text-gray-600">
+            Настройте параметры автоматического импорта товаров из внешних источников
+        </p>
+    </div>
+
+    <!-- Форма настроек -->
+    <form method="POST" action="{{ url_for('auto_import_settings') }}" class="space-y-6">
+        <!-- Основные настройки -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Основные настройки</h3>
+
+            <!-- Включить автоимпорт -->
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="is_enabled" {{ 'checked' if settings.is_enabled else '' }}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Включить автоимпорт</span>
+                </label>
+            </div>
+
+            <!-- Код поставщика -->
+            <div class="mb-4">
+                <label for="supplier_code" class="block text-sm font-medium text-gray-700 mb-1">
+                    Код поставщика <span class="text-red-500">*</span>
+                </label>
+                <input type="text" id="supplier_code" name="supplier_code"
+                       value="{{ settings.supplier_code or '' }}"
+                       required
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                       placeholder="Например: SP001">
+                <p class="mt-1 text-xs text-gray-500">
+                    Используется для формирования артикулов товаров
+                </p>
+            </div>
+
+            <!-- Шаблон артикула -->
+            <div class="mb-4">
+                <label for="vendor_code_pattern" class="block text-sm font-medium text-gray-700 mb-1">
+                    Шаблон артикула
+                </label>
+                <input type="text" id="vendor_code_pattern" name="vendor_code_pattern"
+                       value="{{ settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}' }}"
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                       placeholder="id-{product_id}-{supplier_code}">
+                <p class="mt-1 text-xs text-gray-500">
+                    Доступные переменные: {product_id}, {supplier_code}
+                </p>
+            </div>
+
+            <!-- URL источника -->
+            <div class="mb-4">
+                <label for="csv_source_url" class="block text-sm font-medium text-gray-700 mb-1">
+                    URL CSV файла <span class="text-red-500">*</span>
+                </label>
+                <input type="url" id="csv_source_url" name="csv_source_url"
+                       value="{{ settings.csv_source_url or '' }}"
+                       required
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                       placeholder="http://example.com/products.csv">
+                <p class="mt-1 text-xs text-gray-500">
+                    Адрес CSV файла с товарами для импорта
+                </p>
+            </div>
+
+            <!-- Тип источника -->
+            <div class="mb-4">
+                <label for="csv_source_type" class="block text-sm font-medium text-gray-700 mb-1">
+                    Тип источника
+                </label>
+                <select id="csv_source_type" name="csv_source_type"
+                        class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    <option value="sexoptovik" {{ 'selected' if settings.csv_source_type == 'sexoptovik' else '' }}>
+                        Sexoptovik
+                    </option>
+                    <option value="fixprice" {{ 'selected' if settings.csv_source_type == 'fixprice' else '' }}>
+                        Fix Price
+                    </option>
+                    <option value="custom" {{ 'selected' if settings.csv_source_type == 'custom' else '' }}>
+                        Пользовательский
+                    </option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Настройки импорта -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Параметры импорта</h3>
+
+            <!-- Импортировать только новые -->
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="import_only_new" {{ 'checked' if settings.import_only_new else '' }}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Импортировать только новые товары</span>
+                </label>
+                <p class="ml-6 mt-1 text-xs text-gray-500">
+                    Пропускать товары, которые уже были импортированы ранее
+                </p>
+            </div>
+
+            <!-- Автоматически активировать -->
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="auto_enable_products" {{ 'checked' if settings.auto_enable_products else '' }}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Автоматически активировать импортированные товары</span>
+                </label>
+            </div>
+
+            <!-- Использовать блюр -->
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="use_blurred_images" {{ 'checked' if settings.use_blurred_images else '' }}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Использовать блюренные фото (если доступно)</span>
+                </label>
+            </div>
+
+            <!-- Интервал автоимпорта -->
+            <div class="mb-4">
+                <label for="auto_import_interval_hours" class="block text-sm font-medium text-gray-700 mb-1">
+                    Интервал автоимпорта (часы)
+                </label>
+                <input type="number" id="auto_import_interval_hours" name="auto_import_interval_hours"
+                       value="{{ settings.auto_import_interval_hours or 24 }}"
+                       min="1" max="168"
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                <p class="mt-1 text-xs text-gray-500">
+                    Как часто запускать автоматический импорт (от 1 до 168 часов)
+                </p>
+            </div>
+        </div>
+
+        <!-- Настройки обработки изображений -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Обработка изображений</h3>
+
+            <!-- Приводить к 1200x1200 -->
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="resize_images_to_1200" {{ 'checked' if settings.resize_images_to_1200 else '' }}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Приводить изображения к размеру 1200x1200</span>
+                </label>
+                <p class="ml-6 mt-1 text-xs text-gray-500">
+                    Автоматически изменять размер изображений и добавлять паддинг
+                </p>
+            </div>
+
+            <!-- Цвет фона -->
+            <div class="mb-4">
+                <label for="image_background_color" class="block text-sm font-medium text-gray-700 mb-1">
+                    Цвет фона для паддинга
+                </label>
+                <select id="image_background_color" name="image_background_color"
+                        class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    <option value="white" {{ 'selected' if settings.image_background_color == 'white' else '' }}>
+                        Белый
+                    </option>
+                    <option value="black" {{ 'selected' if settings.image_background_color == 'black' else '' }}>
+                        Черный
+                    </option>
+                    <option value="gray" {{ 'selected' if settings.image_background_color == 'gray' else '' }}>
+                        Серый
+                    </option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Кнопки -->
+        <div class="flex gap-4">
+            <button type="submit"
+                    class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                Сохранить настройки
+            </button>
+            <a href="{{ url_for('auto_import_dashboard') }}"
+               class="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                Отмена
+            </a>
+        </div>
+    </form>
+</div>
+{% endblock %}

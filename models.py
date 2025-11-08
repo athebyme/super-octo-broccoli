@@ -616,6 +616,199 @@ class ProductSyncSettings(db.Model):
         }
 
 
+class AutoImportSettings(db.Model):
+    """Настройки автоимпорта товаров из внешних источников"""
+    __tablename__ = 'auto_import_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Основные настройки
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включен ли автоимпорт
+    supplier_code = db.Column(db.String(50))  # Код продавца для формирования артикулов
+
+    # Шаблон артикула (regex pattern)
+    vendor_code_pattern = db.Column(db.String(200), default='id-{product_id}-{supplier_code}')  # Шаблон артикула
+
+    # URL источника данных
+    csv_source_url = db.Column(db.String(500))  # URL CSV файла с товарами
+    csv_source_type = db.Column(db.String(50), default='sexoptovik')  # Тип источника (sexoptovik, fixprice, custom)
+
+    # Настройки импорта
+    import_only_new = db.Column(db.Boolean, default=True, nullable=False)  # Импортировать только новые товары
+    auto_enable_products = db.Column(db.Boolean, default=False, nullable=False)  # Автоматически активировать товары
+    use_blurred_images = db.Column(db.Boolean, default=True, nullable=False)  # Использовать блюренные фото когда доступно
+
+    # Настройки обработки фото
+    resize_images_to_1200 = db.Column(db.Boolean, default=True, nullable=False)  # Приводить к 1200x1200
+    image_background_color = db.Column(db.String(20), default='white')  # Цвет фона для дорисовки
+
+    # Частота автоимпорта (в часах)
+    auto_import_interval_hours = db.Column(db.Integer, default=24, nullable=False)  # По умолчанию раз в сутки
+
+    # Последний импорт
+    last_import_at = db.Column(db.DateTime)  # Когда был последний импорт
+    next_import_at = db.Column(db.DateTime)  # Когда запланирован следующий импорт
+    last_import_status = db.Column(db.String(50))  # Статус ('success', 'failed', 'running')
+    last_import_error = db.Column(db.Text)  # Текст ошибки если была
+    last_import_duration = db.Column(db.Float)  # Длительность последнего импорта в секундах
+
+    # Статистика
+    total_products_found = db.Column(db.Integer, default=0)  # Найдено товаров в источнике
+    products_imported = db.Column(db.Integer, default=0)  # Импортировано товаров
+    products_skipped = db.Column(db.Integer, default=0)  # Пропущено (уже есть)
+    products_failed = db.Column(db.Integer, default=0)  # Ошибки импорта
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('auto_import_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<AutoImportSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'supplier_code': self.supplier_code,
+            'vendor_code_pattern': self.vendor_code_pattern,
+            'csv_source_url': self.csv_source_url,
+            'csv_source_type': self.csv_source_type,
+            'import_only_new': self.import_only_new,
+            'auto_enable_products': self.auto_enable_products,
+            'use_blurred_images': self.use_blurred_images,
+            'resize_images_to_1200': self.resize_images_to_1200,
+            'image_background_color': self.image_background_color,
+            'auto_import_interval_hours': self.auto_import_interval_hours,
+            'last_import_at': self.last_import_at.isoformat() if self.last_import_at else None,
+            'next_import_at': self.next_import_at.isoformat() if self.next_import_at else None,
+            'last_import_status': self.last_import_status,
+            'last_import_duration': self.last_import_duration,
+            'total_products_found': self.total_products_found,
+            'products_imported': self.products_imported,
+            'products_skipped': self.products_skipped,
+            'products_failed': self.products_failed,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class ImportedProduct(db.Model):
+    """Импортированные товары из внешних источников"""
+    __tablename__ = 'imported_products'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True, index=True)  # Ссылка на созданный товар (если создан)
+
+    # Исходные данные из CSV
+    external_id = db.Column(db.String(200), index=True)  # ID из внешнего источника
+    external_vendor_code = db.Column(db.String(200))  # Артикул поставщика из источника
+    source_type = db.Column(db.String(50), default='sexoptovik')  # Источник данных
+
+    # Данные товара
+    title = db.Column(db.String(500))  # Название
+    category = db.Column(db.String(200))  # Категория из источника
+    mapped_wb_category = db.Column(db.String(200))  # Маппированная категория WB
+    wb_subject_id = db.Column(db.Integer)  # ID предмета WB
+
+    brand = db.Column(db.String(200))  # Бренд
+    country = db.Column(db.String(100))  # Страна производства
+    gender = db.Column(db.String(50))  # Пол
+    colors = db.Column(db.Text)  # Цвета (JSON)
+    sizes = db.Column(db.Text)  # Размеры (JSON)
+    materials = db.Column(db.Text)  # Материалы (JSON)
+
+    # Медиа
+    photo_urls = db.Column(db.Text)  # URLs фотографий (JSON)
+    processed_photos = db.Column(db.Text)  # Обработанные фотографии (JSON)
+
+    # Характеристики
+    barcodes = db.Column(db.Text)  # Баркоды (JSON)
+    characteristics = db.Column(db.Text)  # Полные характеристики (JSON)
+    description = db.Column(db.Text)  # Описание
+
+    # Статус импорта
+    import_status = db.Column(db.String(50), default='pending')  # 'pending', 'validated', 'imported', 'failed'
+    validation_errors = db.Column(db.Text)  # Ошибки валидации (JSON)
+    import_error = db.Column(db.Text)  # Ошибка импорта
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    imported_at = db.Column(db.DateTime)  # Когда импортировано в WB
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    product = db.relationship('Product', backref=db.backref('import_source', uselist=False))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_imported_seller_status', 'seller_id', 'import_status'),
+        db.Index('idx_imported_external_id', 'external_id', 'source_type'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<ImportedProduct {self.external_id} status={self.import_status}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        import json
+        return {
+            'id': self.id,
+            'external_id': self.external_id,
+            'external_vendor_code': self.external_vendor_code,
+            'title': self.title,
+            'category': self.category,
+            'mapped_wb_category': self.mapped_wb_category,
+            'brand': self.brand,
+            'import_status': self.import_status,
+            'validation_errors': json.loads(self.validation_errors) if self.validation_errors else [],
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'imported_at': self.imported_at.isoformat() if self.imported_at else None
+        }
+
+
+class CategoryMapping(db.Model):
+    """Маппинг категорий из внешних источников в категории WB"""
+    __tablename__ = 'category_mappings'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # Исходная категория
+    source_category = db.Column(db.String(200), nullable=False, index=True)  # Категория из источника
+    source_type = db.Column(db.String(50), default='sexoptovik')  # Тип источника
+
+    # Целевая категория WB
+    wb_category_name = db.Column(db.String(200), nullable=False)  # Название категории WB
+    wb_subject_id = db.Column(db.Integer, nullable=False)  # ID предмета WB
+    wb_subject_name = db.Column(db.String(200))  # Название предмета WB
+
+    # Приоритет (для случаев когда одна исходная категория может мапиться на несколько WB)
+    priority = db.Column(db.Integer, default=0)  # Чем выше, тем приоритетнее
+
+    # Автоматическое vs ручное
+    is_auto_mapped = db.Column(db.Boolean, default=True)  # Автоматически определено или вручную
+    confidence_score = db.Column(db.Float, default=0.0)  # Уверенность в маппинге (0-1)
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_category_source', 'source_category', 'source_type'),
+        db.UniqueConstraint('source_category', 'source_type', 'wb_subject_id', name='uq_category_mapping'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<CategoryMapping {self.source_category} -> {self.wb_category_name}>'
+
+
 class PriceHistory(db.Model):
     """История изменений цен и остатков товаров"""
     __tablename__ = 'price_history'
