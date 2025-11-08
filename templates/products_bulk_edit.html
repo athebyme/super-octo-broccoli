@@ -18,12 +18,25 @@
         <h1 class="text-3xl font-bold text-gray-900">Массовое редактирование</h1>
         <p class="mt-2 text-sm text-gray-600">
             Выбрано товаров: {{ products|length }}
-            {% if products and products[0].object_name %}
-            • Категория: <span class="font-semibold">{{ products[0].object_name }}</span>
-            {% else %}
-            • <span class="text-yellow-600 font-semibold">⚠️ Категория не определена - требуется синхронизация с WB</span>
-            {% endif %}
         </p>
+        {% if categories %}
+        <div class="mt-3">
+            <p class="text-sm font-medium text-gray-700 mb-2">Категории товаров:</p>
+            <div class="flex flex-wrap gap-2">
+                {% for category in categories %}
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium
+                             {% if loop.index == 1 %}bg-indigo-100 text-indigo-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                    {{ category.name }}
+                    <span class="ml-1.5 font-semibold">{{ category.count }}</span>
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <p class="mt-2 text-sm text-yellow-600">
+            ⚠️ Категории не определены - требуется синхронизация с WB
+        </p>
+        {% endif %}
     </div>
 
     <!-- Выбранные товары -->
@@ -73,11 +86,17 @@
         {{ products | tojson }}
     </script>
 
-    <!-- Форма массового редактирования -->
-    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="{
-        operation: '{{ request.form.get('operation', '') }}',
-        productCategory: '{{ products[0].object_name if products and products[0].object_name else '' }}',
+    <!-- Alpine.js компонент -->
+    <script>
+    window.bulkEditFormData = function() {
+        return {
+        operation: {{ request.form.get('operation', '') | tojson | default("''", true) }},
+        categories: {{ categories | tojson }},
+        selectedCategory: null,
+        showCategorySelector: false,
         characteristics: [],
+        commonCharacteristics: [],
+        characteristicsByCategory: {},
         selectedChar: null,
         selectedValues: [],
         selectedValuesAdd: [],
@@ -213,35 +232,64 @@
         },
 
         async loadCharacteristics() {
-            if (!this.productCategory) {
-                console.log('No category for products');
+            if (!this.categories || this.categories.length === 0) {
+                console.log('No categories');
                 return;
             }
 
             this.loading = true;
             this.characteristics = [];
+            this.commonCharacteristics = [];
             this.selectedChar = null;
             this.loadError = null;
 
             try {
-                console.log('Loading characteristics for category:', this.productCategory);
-                const response = await fetch(`/api/characteristics/${encodeURIComponent(this.productCategory)}`);
+                // Если выбрана конкретная категория - загружаем только её
+                if (this.selectedCategory) {
+                    console.log('Loading characteristics for category:', this.selectedCategory);
+                    const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    // Показываем suggestion если есть
-                    if (errorData.suggestion) {
-                        throw new Error(errorData.error + ' ' + errorData.suggestion);
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        if (errorData.suggestion) {
+                            throw new Error(errorData.error + ' ' + errorData.suggestion);
+                        }
+                        throw new Error(errorData.error || `HTTP ${response.status}`);
                     }
-                    throw new Error(errorData.error || `HTTP ${response.status}`);
+
+                    const data = await response.json();
+                    this.characteristics = data.characteristics || [];
+                    console.log('Characteristics loaded:', this.characteristics.length, 'items');
+                }
+                // Иначе загружаем для всех категорий и находим общие
+                else {
+                    const categoryNames = this.categories.map(c => c.name);
+                    console.log('Loading characteristics for multiple categories:', categoryNames);
+
+                    const response = await fetch('/api/characteristics/multi-category', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ categories: categoryNames })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    this.commonCharacteristics = data.common || [];
+                    this.characteristicsByCategory = data.by_category || {};
+                    this.characteristics = this.commonCharacteristics;
+
+                    console.log('Common characteristics:', this.commonCharacteristics.length, 'items');
                 }
 
-                const data = await response.json();
-                this.characteristics = data.characteristics || [];
-                console.log('Characteristics loaded:', this.characteristics.length, 'items');
-
                 if (this.characteristics.length === 0) {
-                    this.loadError = 'WB API не вернул характеристики для этой категории. Возможно, категория не поддерживает характеристики через API.';
+                    this.loadError = this.selectedCategory
+                        ? 'WB API не вернул характеристики для этой категории.'
+                        : 'Нет общих характеристик для выбранных категорий. Выберите конкретную категорию для редактирования.';
                 }
             } catch (e) {
                 console.error('Failed to load characteristics:', e);
@@ -249,8 +297,24 @@
             } finally {
                 this.loading = false;
             }
+        },
+
+        selectCategory(categoryName) {
+            this.selectedCategory = categoryName;
+            this.showCategorySelector = false;
+            this.loadCharacteristics();
+        },
+
+        clearCategoryFilter() {
+            this.selectedCategory = null;
+            this.loadCharacteristics();
         }
-    }">
+        };
+    }
+    </script>
+
+    <!-- Форма массового редактирования -->
+    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="bulkEditFormData()">
         <!-- Выбор операции -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
             <h2 class="text-lg font-semibold text-gray-900 mb-6">Выберите операцию</h2>
@@ -338,20 +402,55 @@
             <!-- Обновить характеристику -->
             <div x-show="operation === 'update_characteristic'">
                 <div class="space-y-4">
-                    <!-- Информация о категории -->
-                    <div x-show="productCategory" class="p-3 bg-blue-50 rounded-lg border border-blue-200">
-                        <div class="flex items-center">
-                            <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
-                            </svg>
-                            <span class="text-sm text-blue-700">
-                                Категория выбранных товаров: <strong x-text="productCategory"></strong>
-                            </span>
+                    <!-- Селектор категории -->
+                    <div x-show="categories && categories.length > 0">
+                        <div class="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <h4 class="text-sm font-medium text-blue-900 mb-2">
+                                        <svg class="h-4 w-4 inline mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1 a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                                        </svg>
+                                        Категории товаров
+                                    </h4>
+                                    <p class="text-xs text-blue-700 mb-3">
+                                        <template x-if="!selectedCategory && categories.length > 1">
+                                            <span>Будут показаны только общие характеристики для всех категорий</span>
+                                        </template>
+                                        <template x-if="selectedCategory">
+                                            <span>Редактирование для категории: <strong x-text="selectedCategory"></strong></span>
+                                        </template>
+                                        <template x-if="categories.length === 1">
+                                            <span>Категория: <strong x-text="categories[0].name"></strong></span>
+                                        </template>
+                                    </p>
+
+                                    <template x-if="categories.length > 1">
+                                        <div class="flex flex-wrap gap-2">
+                                            <button type="button"
+                                                    @click="clearCategoryFilter()"
+                                                    class="px-3 py-1 text-xs rounded-md transition"
+                                                    :class="!selectedCategory ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                                                Все общие
+                                            </button>
+                                            <template x-for="category in categories" :key="category.name">
+                                                <button type="button"
+                                                        @click="selectCategory(category.name)"
+                                                        class="px-3 py-1 text-xs rounded-md transition"
+                                                        :class="selectedCategory === category.name ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                                                    <span x-text="category.name"></span>
+                                                    <span class="ml-1 font-semibold" x-text="`(${category.count})`"></span>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Предупреждение если категория не указана -->
-                    <div x-show="!productCategory" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                    <div x-show="!categories || categories.length === 0" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
                         <div class="flex items-start">
                             <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                                 <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
@@ -507,20 +606,55 @@
             <!-- Добавить характеристику -->
             <div x-show="operation === 'add_characteristic'">
                 <div class="space-y-4">
-                    <!-- Информация о категории -->
-                    <div x-show="productCategory" class="p-3 bg-blue-50 rounded-lg border border-blue-200">
-                        <div class="flex items-center">
-                            <svg class="h-5 w-5 text-blue-400 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
-                            </svg>
-                            <span class="text-sm text-blue-700">
-                                Категория выбранных товаров: <strong x-text="productCategory"></strong>
-                            </span>
+                    <!-- Селектор категории -->
+                    <div x-show="categories && categories.length > 0">
+                        <div class="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                            <div class="flex items-start justify-between">
+                                <div class="flex-1">
+                                    <h4 class="text-sm font-medium text-blue-900 mb-2">
+                                        <svg class="h-4 w-4 inline mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                                        </svg>
+                                        Категории товаров
+                                    </h4>
+                                    <p class="text-xs text-blue-700 mb-3">
+                                        <template x-if="!selectedCategory && categories.length > 1">
+                                            <span>Будут показаны только общие характеристики для всех категорий</span>
+                                        </template>
+                                        <template x-if="selectedCategory">
+                                            <span>Редактирование для категории: <strong x-text="selectedCategory"></strong></span>
+                                        </template>
+                                        <template x-if="categories.length === 1">
+                                            <span>Категория: <strong x-text="categories[0].name"></strong></span>
+                                        </template>
+                                    </p>
+
+                                    <template x-if="categories.length > 1">
+                                        <div class="flex flex-wrap gap-2">
+                                            <button type="button"
+                                                    @click="clearCategoryFilter()"
+                                                    class="px-3 py-1 text-xs rounded-md transition"
+                                                    :class="!selectedCategory ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                                                Все общие
+                                            </button>
+                                            <template x-for="category in categories" :key="category.name">
+                                                <button type="button"
+                                                        @click="selectCategory(category.name)"
+                                                        class="px-3 py-1 text-xs rounded-md transition"
+                                                        :class="selectedCategory === category.name ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                                                    <span x-text="category.name"></span>
+                                                    <span class="ml-1 font-semibold" x-text="`(${category.count})`"></span>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Предупреждение если категория не указана -->
-                    <div x-show="!productCategory" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                    <div x-show="!categories || categories.length === 0" class="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
                         <div class="flex items-start">
                             <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                                 <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
@@ -695,6 +829,7 @@
 
         <!-- Общие скрытые поля для характеристик (используются обеими операциями) -->
         <input type="hidden" name="char_id" id="char_id_common">
+        <input type="hidden" name="selected_category" id="selected_category" x-model="selectedCategory">
 
         <!-- Скрытые поля с ID товаров -->
         {% for product in products %}

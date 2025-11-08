@@ -609,7 +609,7 @@ class WildberriesAPIClient:
                 Возможные поля:
                 - vendorCode: артикул продавца
                 - title: название товара (макс 60 символов)
-                - description: описание (1000-5000 символов)
+                - description: описание (макс 5000 символов)
                 - brand: бренд
                 - dimensions: габариты (см и кг)
                 - characteristics: список характеристик
@@ -902,6 +902,167 @@ class WildberriesAPIClient:
 
         # Получаем характеристики по subject_id
         return self.get_card_characteristics_config(subject_id)
+
+    def get_parent_categories(
+        self,
+        locale: str = 'ru'
+    ) -> Dict[str, Any]:
+        """
+        Получить список родительских категорий товаров
+
+        Args:
+            locale: Язык для названий категорий ('ru', 'en', 'zh')
+
+        Returns:
+            Список родительских категорий с ID и названиями
+        """
+        endpoint = "/content/v2/object/parent/all"
+
+        params = {}
+        if locale:
+            params['locale'] = locale
+
+        logger.info(f"🔍 Getting parent categories (locale={locale})")
+
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ Parent categories loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get parent categories: {str(e)}")
+            raise
+
+    def create_product_card(
+        self,
+        subject_id: int,
+        variants: List[Dict[str, Any]],
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Создать новую карточку товара в WB
+
+        Args:
+            subject_id: ID предмета (категории товара)
+            variants: Список вариантов товара. Каждый вариант - это dict с полями:
+                - vendorCode (обязательно): Артикул продавца
+                - brand: Бренд
+                - title: Название товара (макс 60 символов)
+                - description: Описание товара (1000-5000 символов в зависимости от категории)
+                - dimensions: Габариты и вес {length, width, height, weightBrutto}
+                - sizes: Массив размеров [{techSize, wbSize, price, skus}]
+                - characteristics: Характеристики [{id, value}]
+            log_to_db: Логировать ли запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Ответ от API WB
+
+        Example:
+            >>> client.create_product_card(
+            ...     subject_id=106,
+            ...     variants=[{
+            ...         'vendorCode': 'MY-PRODUCT-001',
+            ...         'brand': 'MyBrand',
+            ...         'title': 'Футболка мужская',
+            ...         'description': 'Качественная футболка из хлопка...',
+            ...         'dimensions': {
+            ...             'length': 30,
+            ...             'width': 20,
+            ...             'height': 5,
+            ...             'weightBrutto': 0.2
+            ...         },
+            ...         'sizes': [{
+            ...             'techSize': 'L',
+            ...             'wbSize': '48',
+            ...             'price': 1500,
+            ...             'skus': ['2000000123456']
+            ...         }],
+            ...         'characteristics': [
+            ...             {'id': 1234, 'value': ['Хлопок']},
+            ...             {'id': 5678, 'value': ['Синий']}
+            ...         ]
+            ...     }]
+            ... )
+        """
+        endpoint = "/content/v2/cards/upload"
+
+        # Формируем тело запроса согласно спецификации WB API
+        request_body = [{
+            'subjectID': subject_id,
+            'variants': variants
+        }]
+
+        logger.info(f"📤 Creating product card: subjectID={subject_id}, variants={len(variants)}")
+
+        try:
+            start_time = time.time()
+            response = self._make_request(
+                'POST',
+                'content',
+                endpoint,
+                json_data=request_body,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            response_time = time.time() - start_time
+
+            result = response.json()
+
+            # Проверяем ответ на ошибки
+            if result.get('error'):
+                error_text = result.get('errorText', 'Unknown error')
+                logger.error(f"❌ Failed to create card: {error_text}")
+                raise WBAPIException(f"Failed to create card: {error_text}")
+
+            logger.info(f"✅ Product card created successfully in {response_time:.2f}s")
+            logger.info(f"   Response: {result}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create product card: {str(e)}")
+            raise
+
+    def get_cards_errors_list(
+        self,
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Получить список несозданных карточек товаров с ошибками
+
+        Args:
+            log_to_db: Логировать ли запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Список карточек с ошибками создания
+        """
+        endpoint = "/content/v2/cards/error/list"
+
+        logger.info(f"🔍 Getting cards errors list")
+
+        try:
+            response = self._make_request(
+                'POST',
+                'content',
+                endpoint,
+                json_data={},
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+
+            error_cards = result.get('data', [])
+            logger.info(f"✅ Cards errors list loaded: {len(error_cards)} cards with errors")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get cards errors list: {str(e)}")
+            raise
 
     # ==================== УТИЛИТЫ ====================
 

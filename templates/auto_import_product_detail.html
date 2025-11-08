@@ -1,0 +1,572 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.title }} - Автоимпорт - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Навигация -->
+    <div class="mb-4">
+        <a href="{{ url_for('auto_import_products') }}" class="text-indigo-600 hover:text-indigo-900 text-sm">
+            ← Назад к списку товаров
+        </a>
+    </div>
+
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">{{ product.title }}</h1>
+                <p class="mt-2 text-sm text-gray-600">
+                    ID: {{ product.external_id }}
+                </p>
+            </div>
+            <div>
+                {% if product.import_status == 'imported' %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-green-100 text-green-800">
+                    ✓ Импортировано
+                </span>
+                {% elif product.import_status == 'validated' %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
+                    Готово к импорту
+                </span>
+                {% elif product.import_status == 'failed' %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-red-100 text-red-800">
+                    ✗ Ошибка
+                </span>
+                {% else %}
+                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-gray-100 text-gray-800">
+                    {{ product.import_status }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Основная информация -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Базовые данные -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Основная информация</h3>
+                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Артикул поставщика</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.external_vendor_code or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Бренд</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.brand or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Страна производства</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.country or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Пол</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.gender or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Категория источника</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.category or '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Категория WB</dt>
+                        <dd class="mt-1">
+                            <div id="categoryDisplay" class="flex items-center justify-between">
+                                <div>
+                                    <span class="text-sm text-gray-900">{{ product.mapped_wb_category or '—' }}</span>
+                                    {% if product.wb_subject_id %}
+                                    <span class="text-xs text-gray-500 ml-1">(ID: {{ product.wb_subject_id }})</span>
+                                    {% endif %}
+                                    {% if product.category_confidence %}
+                                    <span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                                        {% if product.category_confidence >= 0.9 %}bg-green-100 text-green-800
+                                        {% elif product.category_confidence >= 0.7 %}bg-yellow-100 text-yellow-800
+                                        {% else %}bg-red-100 text-red-800{% endif %}">
+                                        {{ (product.category_confidence * 100)|round|int }}% уверенность
+                                    </span>
+                                    {% endif %}
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    {% if product.category_confidence and product.category_confidence < 1.0 %}
+                                    <button type="button" id="confirmCategoryBtn" class="text-sm text-green-600 hover:text-green-900 font-medium">
+                                        ✓ Подтвердить
+                                    </button>
+                                    {% endif %}
+                                    <button type="button" id="editCategoryBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                                        Изменить
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="categoryEditor" class="hidden mt-2">
+                                <select id="categorySelect" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                                    <option value="">Выберите категорию...</option>
+                                </select>
+                                <div class="mt-2 flex gap-2">
+                                    <button type="button" id="saveCategoryBtn" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                        Сохранить
+                                    </button>
+                                    <button type="button" id="cancelCategoryBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                                        Отмена
+                                    </button>
+                                </div>
+                            </div>
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Характеристики -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Характеристики</h3>
+                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Цвета</dt>
+                        <dd class="mt-1">
+                            {% if product.colors_list %}
+                                {% for color in product.colors_list %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-1 mb-1">
+                                    {{ color }}
+                                </span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-sm text-gray-900">—</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Размеры</dt>
+                        <dd class="mt-1">
+                            {% if product.sizes_list %}
+                                {% if product.sizes_list.raw %}
+                                <div class="text-sm text-gray-900 mb-2">{{ product.sizes_list.raw }}</div>
+                                {% endif %}
+
+                                {% if product.sizes_list.simple_sizes %}
+                                <div class="mb-2">
+                                    {% for size in product.sizes_list.simple_sizes %}
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 mr-1 mb-1">
+                                        {{ size }}
+                                    </span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+
+                                {% if product.sizes_list.dimensions %}
+                                <div class="text-xs text-gray-600 space-y-1">
+                                    {% if product.sizes_list.dimensions.length %}
+                                    <div><span class="font-medium">Длина:</span> {{ product.sizes_list.dimensions.length|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.diameter %}
+                                    <div><span class="font-medium">Диаметр:</span> {{ product.sizes_list.dimensions.diameter|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.width %}
+                                    <div><span class="font-medium">Ширина:</span> {{ product.sizes_list.dimensions.width|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.depth %}
+                                    <div><span class="font-medium">Глубина:</span> {{ product.sizes_list.dimensions.depth|join(', ') }} см</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.weight %}
+                                    <div><span class="font-medium">Вес:</span> {{ product.sizes_list.dimensions.weight|join(', ') }} г</div>
+                                    {% endif %}
+                                    {% if product.sizes_list.dimensions.volume %}
+                                    <div><span class="font-medium">Объём:</span> {{ product.sizes_list.dimensions.volume|join(', ') }} мл</div>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-sm text-gray-900">—</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    <div class="sm:col-span-2">
+                        <dt class="text-sm font-medium text-gray-500">Материалы</dt>
+                        <dd class="mt-1">
+                            {% if product.materials_list %}
+                                {% for material in product.materials_list %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mr-1 mb-1">
+                                    {{ material }}
+                                </span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-sm text-gray-900">—</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Описание -->
+            {% if product.description %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Описание</h3>
+                <div class="text-sm text-gray-700 whitespace-pre-line">{{ product.description }}</div>
+            </div>
+            {% endif %}
+
+            <!-- Ошибки валидации -->
+            {% if product.validation_errors_list %}
+            <div class="bg-red-50 border border-red-200 rounded-lg p-6">
+                <h3 class="text-lg font-medium text-red-900 mb-4">Ошибки валидации</h3>
+                <ul class="list-disc list-inside space-y-1">
+                    {% for error in product.validation_errors_list %}
+                    <li class="text-sm text-red-700">{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Боковая панель -->
+        <div class="space-y-6">
+            <!-- Фотографии -->
+            {% if product.photo_urls_list %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Фотографии ({{ product.photo_urls_list|length }})</h3>
+                    <div class="flex items-center gap-3">
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="togglePadding" class="sr-only peer" checked>
+                            <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-green-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            <span class="ms-2 text-sm font-medium text-gray-700">Padding</span>
+                        </label>
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="toggleCensorship" class="sr-only peer">
+                            <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                            <span class="ms-2 text-sm font-medium text-gray-700">Цензура</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    {% for photo in product.photo_urls_list[:6] %}
+                    <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden relative group">
+                        <img src="/auto-import/photo/padded?url={{ (photo.sexoptovik or '')|urlencode }}"
+                             data-blur="{{ photo.blur or '' }}"
+                             data-original="{{ photo.original or '' }}"
+                             data-sexoptovik="{{ photo.sexoptovik or '' }}"
+                             alt="Фото товара"
+                             class="product-photo w-full h-full object-cover transition-opacity duration-200"
+                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'%3E%3Crect fill=\'%23f3f4f6\' width=\'100\' height=\'100\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' fill=\'%239ca3af\' font-size=\'14\'%3EНет фото%3C/text%3E%3C/svg%3E'">
+                        <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all duration-200 pointer-events-none"></div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if product.photo_urls_list|length > 6 %}
+                <p class="mt-2 text-xs text-gray-500 text-center">
+                    +{{ product.photo_urls_list|length - 6 }} еще
+                </p>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Баркоды -->
+            {% if product.barcodes_list %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Баркоды</h3>
+                <ul class="space-y-2">
+                    {% for barcode in product.barcodes_list %}
+                    <li class="text-sm font-mono bg-gray-50 px-3 py-2 rounded border border-gray-200">
+                        {{ barcode }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <!-- Метаданные -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Информация об импорте</h3>
+                <dl class="space-y-3">
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Источник</dt>
+                        <dd class="mt-1 text-sm text-gray-900">{{ product.source_type }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Дата создания</dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ product.created_at.strftime('%d.%m.%Y %H:%M') if product.created_at else '—' }}
+                        </dd>
+                    </div>
+                    {% if product.imported_at %}
+                    <div>
+                        <dt class="text-sm font-medium text-gray-500">Дата импорта</dt>
+                        <dd class="mt-1 text-sm text-gray-900">
+                            {{ product.imported_at.strftime('%d.%m.%Y %H:%M') }}
+                        </dd>
+                    </div>
+                    {% endif %}
+                    {% if product.import_error %}
+                    <div>
+                        <dt class="text-sm font-medium text-red-500">Ошибка импорта</dt>
+                        <dd class="mt-1 text-sm text-red-700">{{ product.import_error }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+            </div>
+
+            <!-- Действия -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
+                {% if product.import_status == 'validated' %}
+                <button id="importSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed mb-3">
+                    Импортировать в WB
+                </button>
+                <p class="mb-3 text-xs text-gray-500 text-center">
+                    Товар готов к импорту в Wildberries
+                </p>
+                {% endif %}
+                <button id="deleteSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50">
+                    Удалить товар
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const importBtn = document.getElementById('importSingleBtn');
+    const deleteBtn = document.getElementById('deleteSingleBtn');
+
+    if (importBtn) {
+        importBtn.addEventListener('click', function() {
+            if (!confirm('Импортировать этот товар в Wildberries?')) {
+                return;
+            }
+
+            // Disable button during import
+            importBtn.disabled = true;
+            importBtn.textContent = 'Импортирую...';
+
+            // Send request
+            fetch('{{ url_for("auto_import_single_to_wb", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Товар успешно импортирован в Wildberries!');
+                    window.location.href = '{{ url_for("auto_import_products") }}';
+                } else {
+                    alert('Ошибка импорта: ' + (data.error || 'Неизвестная ошибка'));
+                    importBtn.disabled = false;
+                    importBtn.textContent = 'Импортировать в WB';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                importBtn.disabled = false;
+                importBtn.textContent = 'Импортировать в WB';
+            });
+        });
+    }
+
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            if (!confirm('Удалить этот товар?\n\nЭто действие нельзя отменить!')) {
+                return;
+            }
+
+            // Disable button during deletion
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Удаление...';
+
+            // Send request
+            fetch('{{ url_for("auto_import_delete_product", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Товар удален');
+                    window.location.href = '{{ url_for("auto_import_products") }}';
+                } else {
+                    alert('Ошибка удаления: ' + (data.error || 'Неизвестная ошибка'));
+                    deleteBtn.disabled = false;
+                    deleteBtn.textContent = 'Удалить товар';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                deleteBtn.disabled = false;
+                deleteBtn.textContent = 'Удалить товар';
+            });
+        });
+    }
+
+    // Category editing functionality
+    const editCategoryBtn = document.getElementById('editCategoryBtn');
+    const confirmCategoryBtn = document.getElementById('confirmCategoryBtn');
+    const categoryDisplay = document.getElementById('categoryDisplay');
+    const categoryEditor = document.getElementById('categoryEditor');
+    const categorySelect = document.getElementById('categorySelect');
+    const saveCategoryBtn = document.getElementById('saveCategoryBtn');
+    const cancelCategoryBtn = document.getElementById('cancelCategoryBtn');
+
+    // WB adult categories from mapping
+    const wbCategories = {{ wb_categories|tojson }};
+
+    // Populate select with categories
+    if (categorySelect && wbCategories) {
+        // Sort categories by name
+        const sortedCategories = Object.entries(wbCategories).sort((a, b) => a[1].localeCompare(b[1]));
+
+        sortedCategories.forEach(([id, name]) => {
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = `${name} (ID: ${id})`;
+            if (parseInt(id) === {{ product.wb_subject_id or 'null' }}) {
+                option.selected = true;
+            }
+            categorySelect.appendChild(option);
+        });
+    }
+
+    if (editCategoryBtn) {
+        editCategoryBtn.addEventListener('click', function() {
+            categoryDisplay.classList.add('hidden');
+            categoryEditor.classList.remove('hidden');
+        });
+    }
+
+    if (cancelCategoryBtn) {
+        cancelCategoryBtn.addEventListener('click', function() {
+            categoryEditor.classList.add('hidden');
+            categoryDisplay.classList.remove('hidden');
+        });
+    }
+
+    // Confirm category button - confirms current category without changing it
+    if (confirmCategoryBtn) {
+        confirmCategoryBtn.addEventListener('click', function() {
+            if (!confirm('Подтвердить текущую категорию "{{ product.mapped_wb_category }}"?')) {
+                return;
+            }
+
+            confirmCategoryBtn.disabled = true;
+            const originalText = confirmCategoryBtn.textContent;
+            confirmCategoryBtn.textContent = 'Подтверждение...';
+
+            fetch('{{ url_for("auto_import_correct_category", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    wb_subject_id: {{ product.wb_subject_id or 'null' }}
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Категория подтверждена! Уверенность установлена в 100%');
+                    window.location.reload();
+                } else {
+                    alert('Ошибка подтверждения: ' + (data.error || 'Неизвестная ошибка'));
+                    confirmCategoryBtn.disabled = false;
+                    confirmCategoryBtn.textContent = originalText;
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                confirmCategoryBtn.disabled = false;
+                confirmCategoryBtn.textContent = originalText;
+            });
+        });
+    }
+
+    if (saveCategoryBtn) {
+        saveCategoryBtn.addEventListener('click', function() {
+            const selectedCategoryId = categorySelect.value;
+
+            if (!selectedCategoryId) {
+                alert('Пожалуйста, выберите категорию');
+                return;
+            }
+
+            saveCategoryBtn.disabled = true;
+            saveCategoryBtn.textContent = 'Сохранение...';
+
+            fetch('{{ url_for("auto_import_correct_category", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    wb_subject_id: parseInt(selectedCategoryId)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Категория успешно обновлена!');
+                    window.location.reload();
+                } else {
+                    alert('Ошибка обновления: ' + (data.error || 'Неизвестная ошибка'));
+                    saveCategoryBtn.disabled = false;
+                    saveCategoryBtn.textContent = 'Сохранить';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                saveCategoryBtn.disabled = false;
+                saveCategoryBtn.textContent = 'Сохранить';
+            });
+        });
+    }
+
+    // Photo censorship toggle
+    const toggleCensorship = document.getElementById('toggleCensorship');
+    const togglePadding = document.getElementById('togglePadding');
+
+    function updatePhotoUrls() {
+        const photos = document.querySelectorAll('.product-photo');
+        const useCensorship = toggleCensorship ? toggleCensorship.checked : false;
+        const usePadding = togglePadding ? togglePadding.checked : true;
+
+        photos.forEach(photo => {
+            const blurUrl = photo.dataset.blur;
+            const sexoptovikUrl = photo.dataset.sexoptovik;
+
+            // Определяем базовый URL в зависимости от цензуры
+            let baseUrl;
+            if (useCensorship) {
+                // С цензурой: пытаемся blur, если нет - sexoptovik
+                baseUrl = blurUrl || sexoptovikUrl;
+            } else {
+                // Без цензуры: всегда sexoptovik (x-story original недоступен)
+                baseUrl = sexoptovikUrl;
+            }
+
+            // Применяем padding если нужно
+            if (usePadding && baseUrl) {
+                // Используем endpoint для получения padded версии
+                photo.src = `/auto-import/photo/padded?url=${encodeURIComponent(baseUrl)}`;
+            } else {
+                photo.src = baseUrl;
+            }
+
+            // Добавляем анимацию смены
+            photo.style.opacity = '0.5';
+            setTimeout(() => {
+                photo.style.opacity = '1';
+            }, 150);
+        });
+    }
+
+    if (toggleCensorship) {
+        toggleCensorship.addEventListener('change', updatePhotoUrls);
+    }
+
+    if (togglePadding) {
+        togglePadding.addEventListener('change', updatePhotoUrls);
+    }
+});
+</script>
+{% endblock %}

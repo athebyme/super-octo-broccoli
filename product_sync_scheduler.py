@@ -43,6 +43,15 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Добавляем задачу проверки настроек мониторинга цен (каждые 5 минут)
+    scheduler.add_job(
+        func=lambda: check_and_monitor_prices_all_sellers(flask_app),
+        trigger=IntervalTrigger(minutes=5),
+        id='check_price_monitoring',
+        name='Check price monitoring settings for all sellers',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
@@ -111,6 +120,104 @@ def check_and_sync_all_sellers(flask_app):
 
         except Exception as e:
             logger.exception(f"❌ Error in check_and_sync_all_sellers: {str(e)}")
+
+
+def check_and_monitor_prices_all_sellers(flask_app):
+    """
+    Проверить настройки мониторинга цен для всех продавцов и запустить мониторинг если нужно
+
+    Args:
+        flask_app: Экземпляр Flask приложения
+    """
+    from models import Seller, PriceMonitorSettings
+    from seller_platform import perform_price_monitoring_sync
+    import threading
+
+    with flask_app.app_context():
+        try:
+            # Получаем всех продавцов с включенным мониторингом цен
+            sellers = Seller.query.join(PriceMonitorSettings).filter(
+                PriceMonitorSettings.is_enabled == True
+            ).all()
+
+            logger.info(f"📋 Checking price monitoring settings for {len(sellers)} sellers with monitoring enabled")
+
+            for seller in sellers:
+                settings = seller.price_monitor_settings
+
+                if not settings:
+                    continue
+
+                # Проверяем нужно ли запускать мониторинг
+                should_monitor = False
+
+                if settings.last_sync_at is None:
+                    # Первый запуск мониторинга
+                    should_monitor = True
+                    logger.info(f"🆕 First price monitoring for seller {seller.id}")
+                else:
+                    # Проверяем прошло ли достаточно времени с последней синхронизации
+                    time_since_last_sync = datetime.utcnow() - settings.last_sync_at
+                    interval_minutes = settings.sync_interval_minutes
+
+                    if time_since_last_sync >= timedelta(minutes=interval_minutes):
+                        should_monitor = True
+                        logger.info(f"⏰ Time for scheduled price monitoring for seller {seller.id}")
+
+                # Проверяем что мониторинг не запущен в данный момент
+                if should_monitor and settings.last_sync_status != 'running':
+                    # Запускаем мониторинг в фоновом потоке
+                    logger.info(f"🚀 Starting price monitoring for seller {seller.id} ({seller.company_name})")
+
+                    # Запускаем мониторинг
+                    thread = threading.Thread(
+                        target=_perform_price_monitoring_task,
+                        args=(seller.id, flask_app),
+                        daemon=True,
+                        name=f"price-monitor-seller-{seller.id}"
+                    )
+                    thread.start()
+                elif settings.last_sync_status == 'running':
+                    logger.debug(f"⏳ Price monitoring for seller {seller.id} already in progress")
+
+        except Exception as e:
+            logger.exception(f"❌ Error in check_and_monitor_prices_all_sellers: {str(e)}")
+
+
+def _perform_price_monitoring_task(seller_id, flask_app):
+    """
+    Выполнить мониторинг цен в фоновом потоке
+
+    Args:
+        seller_id: ID продавца
+        flask_app: Экземпляр Flask приложения
+    """
+    from models import Seller, PriceMonitorSettings, db
+    from seller_platform import perform_price_monitoring_sync
+
+    with flask_app.app_context():
+        try:
+            logger.info(f"🔍 Price monitoring task started for seller_id={seller_id}")
+
+            # Получаем продавца
+            seller = Seller.query.get(seller_id)
+            if not seller:
+                logger.error(f"Seller {seller_id} not found for price monitoring")
+                return
+
+            # Получаем настройки
+            settings = seller.price_monitor_settings
+            if not settings:
+                logger.error(f"Price monitor settings not found for seller {seller_id}")
+                return
+
+            # Выполняем мониторинг
+            result = perform_price_monitoring_sync(seller, settings)
+
+            logger.info(f"✅ Price monitoring completed for seller {seller_id}: {result}")
+
+        except Exception as e:
+            logger.exception(f"❌ Price monitoring failed for seller {seller_id}: {str(e)}")
 
 
 def shutdown_scheduler():
