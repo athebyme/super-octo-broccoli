@@ -312,78 +312,13 @@ class CSVProductParser:
 class CategoryMapper:
     """
     Маппер категорий из внешних источников в категории WB
+    Использует точный маппинг из wb_categories_mapping.py
     """
 
     def __init__(self):
-        # Предустановленные маппинги для категории интим-товаров
-        self.predefined_mappings = {
-            'sexoptovik': {
-                'Вибраторы': {'subject_id': 5994, 'subject_name': 'Вибраторы', 'confidence': 1.0},
-                'Фаллоимитаторы': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 1.0},
-                'Фаллосы': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 1.0},
-                'Белье эротическое': {'subject_id': 3, 'subject_name': 'Белье', 'confidence': 0.8},
-                'Белье': {'subject_id': 3, 'subject_name': 'Белье', 'confidence': 0.9},
-                'Костюмы эротические': {'subject_id': 6007, 'subject_name': 'Эротические костюмы', 'confidence': 1.0},
-                'Костюмы': {'subject_id': 6007, 'subject_name': 'Эротические костюмы', 'confidence': 0.8},
-                'Игрушки для взрослых': {'subject_id': 5993, 'subject_name': 'Игрушки для взрослых', 'confidence': 0.9},
-                'Массажеры': {'subject_id': 469, 'subject_name': 'Массажеры', 'confidence': 0.7},
-                'Лубриканты': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 1.0},
-                'Смазки': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 1.0},
-                'Смазка': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 1.0},
-                'Гели': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.9},
-                'Наручники': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 1.0},
-                'Фиксаторы': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 1.0},
-                'Маски': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.8},
-                'Повязки': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.9},
-                'Кляпы': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.9},
-                'Стимуляторы': {'subject_id': 5996, 'subject_name': 'Стимуляторы', 'confidence': 0.9},
-                'Анальные игрушки': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 1.0},
-                'Анальные стимуляторы': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 1.0},
-                'Анальные пробки': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 1.0},
-                'Анальные': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 0.8},
-                'Вакуумные помпы': {'subject_id': 5999, 'subject_name': 'Вакуумные помпы', 'confidence': 1.0},
-                'Помпы': {'subject_id': 5999, 'subject_name': 'Вакуумные помпы', 'confidence': 0.9},
-                'Кольца': {'subject_id': 6001, 'subject_name': 'Эрекционные кольца', 'confidence': 0.9},
-                'Эрекционные кольца': {'subject_id': 6001, 'subject_name': 'Эрекционные кольца', 'confidence': 1.0},
-                'Секс-наборы': {'subject_id': 6002, 'subject_name': 'Наборы', 'confidence': 1.0},
-                'Наборы': {'subject_id': 6002, 'subject_name': 'Наборы', 'confidence': 0.9},
-                'Мастурбаторы': {'subject_id': 6004, 'subject_name': 'Мастурбаторы', 'confidence': 1.0},
-                'Секс-куклы': {'subject_id': 6005, 'subject_name': 'Секс-куклы', 'confidence': 1.0},
-                'Вагинальные шарики': {'subject_id': 6006, 'subject_name': 'Вагинальные шарики', 'confidence': 1.0},
-                'Шарики': {'subject_id': 6006, 'subject_name': 'Вагинальные шарики', 'confidence': 0.7},
-                'БДСМ': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
-                'Плетки': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 1.0},
-                'Стеки': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 1.0},
-                'Ошейники': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 1.0},
-            }
-        }
-
-        # Ключевые слова для определения категорий по названию товара
-        self.keywords_mapping = {
-            'вибратор': {'subject_id': 5994, 'subject_name': 'Вибраторы', 'confidence': 0.9},
-            'фаллоимитатор': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 0.95},
-            'фаллос': {'subject_id': 5995, 'subject_name': 'Фаллоимитаторы', 'confidence': 0.9},
-            'анальн': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 0.85},
-            'пробк': {'subject_id': 5997, 'subject_name': 'Анальные игрушки', 'confidence': 0.85},
-            'мастурбатор': {'subject_id': 6004, 'subject_name': 'Мастурбаторы', 'confidence': 0.95},
-            'смазк': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.9},
-            'лубрикант': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.95},
-            'гель': {'subject_id': 6003, 'subject_name': 'Лубриканты', 'confidence': 0.8},
-            'набор': {'subject_id': 6002, 'subject_name': 'Наборы', 'confidence': 0.7},
-            'костюм': {'subject_id': 6007, 'subject_name': 'Эротические костюмы', 'confidence': 0.8},
-            'белье': {'subject_id': 3, 'subject_name': 'Белье', 'confidence': 0.8},
-            'кольцо': {'subject_id': 6001, 'subject_name': 'Эрекционные кольца', 'confidence': 0.85},
-            'помп': {'subject_id': 5999, 'subject_name': 'Вакуумные помпы', 'confidence': 0.9},
-            'наручник': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 0.9},
-            'фиксатор': {'subject_id': 5998, 'subject_name': 'Наручники и фиксаторы', 'confidence': 0.9},
-            'маска': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.85},
-            'кляп': {'subject_id': 6000, 'subject_name': 'Маски и повязки', 'confidence': 0.9},
-            'плет': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
-            'стек': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
-            'ошейник': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
-            'шарик': {'subject_id': 6006, 'subject_name': 'Вагинальные шарики', 'confidence': 0.75},
-            'бдсм': {'subject_id': 6008, 'subject_name': 'БДСМ аксессуары', 'confidence': 0.9},
-        }
+        # Импортируем точный маппинг категорий WB
+        from wb_categories_mapping import get_best_category_match
+        self.get_best_match = get_best_category_match
 
     def map_category(self, source_category: str, source_type: str = 'sexoptovik',
                     general_category: str = '', all_categories: List[str] = None,
@@ -404,7 +339,7 @@ class CategoryMapper:
         if not source_category:
             return None, None, 0.0
 
-        # Сначала проверяем БД
+        # Сначала проверяем БД (пользовательские переопределения)
         mapping = CategoryMapping.query.filter_by(
             source_category=source_category,
             source_type=source_type
@@ -413,57 +348,14 @@ class CategoryMapper:
         if mapping:
             return mapping.wb_subject_id, mapping.wb_subject_name, mapping.confidence_score
 
-        # Проверяем предустановленные маппинги
-        if source_type in self.predefined_mappings:
-            category_mappings = self.predefined_mappings[source_type]
+        # Используем новый точный алгоритм
+        subject_id, subject_name, confidence = self.get_best_match(
+            source_category,
+            product_title,
+            all_categories
+        )
 
-            # Точное совпадение
-            if source_category in category_mappings:
-                mapping_data = category_mappings[source_category]
-                return mapping_data['subject_id'], mapping_data['subject_name'], mapping_data['confidence']
-
-            # Частичное совпадение (нечеткий поиск)
-            source_lower = source_category.lower()
-            best_match = None
-            best_confidence = 0.0
-
-            for cat_key, cat_data in category_mappings.items():
-                cat_lower = cat_key.lower()
-                if source_lower in cat_lower or cat_lower in source_lower:
-                    # Вычисляем уверенность на основе длины совпадения
-                    overlap = len(set(source_lower.split()) & set(cat_lower.split()))
-                    total = len(set(source_lower.split()) | set(cat_lower.split()))
-                    confidence = (overlap / total) * cat_data['confidence'] if total > 0 else 0.0
-
-                    if confidence > best_confidence:
-                        best_confidence = confidence
-                        best_match = (cat_data['subject_id'], cat_data['subject_name'], confidence)
-
-            if best_match and best_confidence > 0.5:
-                return best_match
-
-        # Пытаемся определить по ключевым словам в названии товара
-        if product_title:
-            title_lower = product_title.lower()
-            keyword_match = None
-            keyword_confidence = 0.0
-
-            for keyword, cat_data in self.keywords_mapping.items():
-                if keyword in title_lower:
-                    if cat_data['confidence'] > keyword_confidence:
-                        keyword_confidence = cat_data['confidence']
-                        keyword_match = (cat_data['subject_id'], cat_data['subject_name'], cat_data['confidence'])
-
-            if keyword_match and keyword_confidence > 0.7:
-                return keyword_match
-
-        # Если не нашли - используем общую категорию или дефолт
-        if general_category and general_category != source_category:
-            return self.map_category(general_category, source_type, '', all_categories, product_title)
-
-        # Дефолтная категория - "Товары для взрослых"
-        logger.warning(f"Не удалось определить категорию для '{source_category}', используем дефолт")
-        return 5993, 'Игрушки для взрослых', 0.3
+        return subject_id, subject_name, confidence
 
 
 class ImageProcessor:
