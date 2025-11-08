@@ -39,6 +39,15 @@
                     disabled>
                 Импортировать в WB (<span id="selectedCount">0</span>)
             </button>
+            <button id="deleteSelectedBtn"
+                    class="hidden px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    disabled>
+                Удалить (<span id="deleteSelectedCount">0</span>)
+            </button>
+            <button id="deleteAllBtn"
+                    class="px-4 py-2 border border-red-300 shadow-sm text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50">
+                Удалить все
+            </button>
             <a href="{{ url_for('auto_import_dashboard') }}"
                class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                 ← Назад к дашборду
@@ -80,9 +89,10 @@
                     {% for product in products %}
                     <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4">
-                            {% if product.import_status == 'validated' %}
-                            <input type="checkbox" class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" data-product-id="{{ product.id }}">
-                            {% endif %}
+                            <input type="checkbox"
+                                   class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                   data-product-id="{{ product.id }}"
+                                   data-status="{{ product.import_status }}">
                         </td>
                         <td class="px-6 py-4">
                             <div class="flex items-center">
@@ -222,21 +232,40 @@ document.addEventListener('DOMContentLoaded', function() {
     const selectAllCheckbox = document.getElementById('selectAll');
     const productCheckboxes = document.querySelectorAll('.product-checkbox');
     const importBtn = document.getElementById('importSelectedBtn');
+    const deleteBtn = document.getElementById('deleteSelectedBtn');
+    const deleteAllBtn = document.getElementById('deleteAllBtn');
     const selectedCountSpan = document.getElementById('selectedCount');
+    const deleteSelectedCountSpan = document.getElementById('deleteSelectedCount');
 
     // Update button visibility and count
-    function updateImportButton() {
+    function updateButtons() {
         const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
         const count = checkedBoxes.length;
 
-        selectedCountSpan.textContent = count;
+        // Count validated products for import button
+        const validatedCount = Array.from(checkedBoxes).filter(
+            cb => cb.dataset.status === 'validated'
+        ).length;
 
-        if (count > 0) {
+        selectedCountSpan.textContent = validatedCount;
+        deleteSelectedCountSpan.textContent = count;
+
+        // Show import button only if there are validated products
+        if (validatedCount > 0) {
             importBtn.classList.remove('hidden');
             importBtn.disabled = false;
         } else {
             importBtn.classList.add('hidden');
             importBtn.disabled = true;
+        }
+
+        // Show delete button if any products selected
+        if (count > 0) {
+            deleteBtn.classList.remove('hidden');
+            deleteBtn.disabled = false;
+        } else {
+            deleteBtn.classList.add('hidden');
+            deleteBtn.disabled = true;
         }
     }
 
@@ -246,7 +275,7 @@ document.addEventListener('DOMContentLoaded', function() {
             productCheckboxes.forEach(checkbox => {
                 checkbox.checked = this.checked;
             });
-            updateImportButton();
+            updateButtons();
         });
     }
 
@@ -262,7 +291,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 selectAllCheckbox.indeterminate = someChecked && !allChecked;
             }
 
-            updateImportButton();
+            updateButtons();
         });
     });
 
@@ -308,6 +337,98 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Ошибка при выполнении запроса: ' + error);
                 importBtn.disabled = false;
                 importBtn.innerHTML = 'Импортировать в WB (<span id="selectedCount">' + productIds.length + '</span>)';
+            });
+        });
+    }
+
+    // Delete selected button handler
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
+            const productIds = Array.from(checkedBoxes).map(cb => cb.dataset.productId);
+
+            if (productIds.length === 0) {
+                alert('Выберите товары для удаления');
+                return;
+            }
+
+            if (!confirm(`Удалить ${productIds.length} товар(ов)?`)) {
+                return;
+            }
+
+            // Disable button during deletion
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Удаление...';
+
+            // Send request
+            fetch('{{ url_for("auto_import_delete_products") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'product_ids=' + productIds.join(',')
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Удалено товаров: ${data.deleted}`);
+                    location.reload();
+                } else {
+                    alert('Ошибка удаления: ' + (data.error || 'Неизвестная ошибка'));
+                    deleteBtn.disabled = false;
+                    deleteBtn.innerHTML = 'Удалить (<span id="deleteSelectedCount">' + productIds.length + '</span>)';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                deleteBtn.disabled = false;
+                deleteBtn.innerHTML = 'Удалить (<span id="deleteSelectedCount">' + productIds.length + '</span>)';
+            });
+        });
+    }
+
+    // Delete all button handler
+    if (deleteAllBtn) {
+        deleteAllBtn.addEventListener('click', function() {
+            const currentFilter = '{{ status_filter or "" }}';
+            let message = 'Удалить ВСЕ товары из автоимпорта?';
+
+            if (currentFilter) {
+                message = `Удалить все товары со статусом "${currentFilter}"?`;
+            }
+
+            if (!confirm(message + '\n\nЭто действие нельзя отменить!')) {
+                return;
+            }
+
+            // Disable button during deletion
+            deleteAllBtn.disabled = true;
+            deleteAllBtn.textContent = 'Удаление...';
+
+            // Send request
+            const body = currentFilter ? 'status=' + currentFilter : '';
+            fetch('{{ url_for("auto_import_delete_all") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: body
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Удалено товаров: ${data.deleted}`);
+                    location.reload();
+                } else {
+                    alert('Ошибка удаления: ' + (data.error || 'Неизвестная ошибка'));
+                    deleteAllBtn.disabled = false;
+                    deleteAllBtn.textContent = 'Удалить все';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                deleteAllBtn.disabled = false;
+                deleteAllBtn.textContent = 'Удалить все';
             });
         });
     }

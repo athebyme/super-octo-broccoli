@@ -221,17 +221,20 @@
             </div>
 
             <!-- Действия -->
-            {% if product.import_status == 'validated' %}
             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
-                <button id="importSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                {% if product.import_status == 'validated' %}
+                <button id="importSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed mb-3">
                     Импортировать в WB
                 </button>
-                <p class="mt-2 text-xs text-gray-500 text-center">
+                <p class="mb-3 text-xs text-gray-500 text-center">
                     Товар готов к импорту в Wildberries
                 </p>
+                {% endif %}
+                <button id="deleteSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50">
+                    Удалить товар
+                </button>
             </div>
-            {% endif %}
         </div>
     </div>
 </div>
@@ -239,6 +242,7 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const importBtn = document.getElementById('importSingleBtn');
+    const deleteBtn = document.getElementById('deleteSingleBtn');
 
     if (importBtn) {
         importBtn.addEventListener('click', function() {
@@ -272,6 +276,42 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Ошибка при выполнении запроса: ' + error);
                 importBtn.disabled = false;
                 importBtn.textContent = 'Импортировать в WB';
+            });
+        });
+    }
+
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function() {
+            if (!confirm('Удалить этот товар?\n\nЭто действие нельзя отменить!')) {
+                return;
+            }
+
+            // Disable button during deletion
+            deleteBtn.disabled = true;
+            deleteBtn.textContent = 'Удаление...';
+
+            // Send request
+            fetch('{{ url_for("auto_import_delete_product", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Товар удален');
+                    window.location.href = '{{ url_for("auto_import_products") }}';
+                } else {
+                    alert('Ошибка удаления: ' + (data.error || 'Неизвестная ошибка'));
+                    deleteBtn.disabled = false;
+                    deleteBtn.textContent = 'Удалить товар';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                deleteBtn.disabled = false;
+                deleteBtn.textContent = 'Удалить товар';
             });
         });
     }

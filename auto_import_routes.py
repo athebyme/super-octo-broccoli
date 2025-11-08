@@ -301,6 +301,87 @@ def register_auto_import_routes(app):
             flash(f'Ошибка импорта: {error}', 'danger')
             return jsonify({'success': False, 'error': error}), 500
 
+    @app.route('/auto-import/product/<int:product_id>/delete', methods=['POST'])
+    @login_required
+    def auto_import_delete_product(product_id):
+        """Удаление одного товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        title = product.title
+        db.session.delete(product)
+        db.session.commit()
+
+        flash(f'Товар "{title}" удален', 'success')
+        return jsonify({'success': True})
+
+    @app.route('/auto-import/products/delete', methods=['POST'])
+    @login_required
+    def auto_import_delete_products():
+        """Массовое удаление товаров"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+
+        # Получаем список товаров для удаления
+        product_ids_str = request.form.get('product_ids', '')
+        if not product_ids_str:
+            return jsonify({'success': False, 'error': 'No products selected'}), 400
+
+        try:
+            product_ids = [int(pid) for pid in product_ids_str.split(',')]
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid product IDs'}), 400
+
+        # Удаляем товары
+        deleted_count = ImportedProduct.query.filter(
+            ImportedProduct.id.in_(product_ids),
+            ImportedProduct.seller_id == seller.id
+        ).delete(synchronize_session=False)
+
+        db.session.commit()
+
+        flash(f'Удалено товаров: {deleted_count}', 'success')
+        return jsonify({'success': True, 'deleted': deleted_count})
+
+    @app.route('/auto-import/products/delete-all', methods=['POST'])
+    @login_required
+    def auto_import_delete_all():
+        """Удаление всех товаров"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+
+        # Получаем фильтр статуса (опционально)
+        status_filter = request.form.get('status', None)
+
+        # Удаляем товары
+        query = ImportedProduct.query.filter_by(seller_id=seller.id)
+
+        if status_filter:
+            query = query.filter_by(import_status=status_filter)
+
+        deleted_count = query.delete(synchronize_session=False)
+        db.session.commit()
+
+        message = f'Удалено товаров: {deleted_count}'
+        if status_filter:
+            message += f' (статус: {status_filter})'
+
+        flash(message, 'success')
+        return jsonify({'success': True, 'deleted': deleted_count})
+
 
 # Пример использования:
 # from auto_import_routes import register_auto_import_routes
