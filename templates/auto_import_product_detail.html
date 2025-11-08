@@ -87,9 +87,16 @@
                                     </span>
                                     {% endif %}
                                 </div>
-                                <button type="button" id="editCategoryBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
-                                    Изменить
-                                </button>
+                                <div class="flex items-center gap-3">
+                                    {% if product.category_confidence and product.category_confidence < 1.0 %}
+                                    <button type="button" id="confirmCategoryBtn" class="text-sm text-green-600 hover:text-green-900 font-medium">
+                                        ✓ Подтвердить
+                                    </button>
+                                    {% endif %}
+                                    <button type="button" id="editCategoryBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                                        Изменить
+                                    </button>
+                                </div>
                             </div>
                             <div id="categoryEditor" class="hidden mt-2">
                                 <select id="categorySelect" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
@@ -346,6 +353,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Category editing functionality
     const editCategoryBtn = document.getElementById('editCategoryBtn');
+    const confirmCategoryBtn = document.getElementById('confirmCategoryBtn');
     const categoryDisplay = document.getElementById('categoryDisplay');
     const categoryEditor = document.getElementById('categoryEditor');
     const categorySelect = document.getElementById('categorySelect');
@@ -382,6 +390,45 @@ document.addEventListener('DOMContentLoaded', function() {
         cancelCategoryBtn.addEventListener('click', function() {
             categoryEditor.classList.add('hidden');
             categoryDisplay.classList.remove('hidden');
+        });
+    }
+
+    // Confirm category button - confirms current category without changing it
+    if (confirmCategoryBtn) {
+        confirmCategoryBtn.addEventListener('click', function() {
+            if (!confirm('Подтвердить текущую категорию "{{ product.mapped_wb_category }}"?')) {
+                return;
+            }
+
+            confirmCategoryBtn.disabled = true;
+            const originalText = confirmCategoryBtn.textContent;
+            confirmCategoryBtn.textContent = 'Подтверждение...';
+
+            fetch('{{ url_for("auto_import_correct_category", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    wb_subject_id: {{ product.wb_subject_id or 'null' }}
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Категория подтверждена! Уверенность установлена в 100%');
+                    window.location.reload();
+                } else {
+                    alert('Ошибка подтверждения: ' + (data.error || 'Неизвестная ошибка'));
+                    confirmCategoryBtn.disabled = false;
+                    confirmCategoryBtn.textContent = originalText;
+                }
+            })
+            .catch(error => {
+                alert('Ошибка при выполнении запроса: ' + error);
+                confirmCategoryBtn.disabled = false;
+                confirmCategoryBtn.textContent = originalText;
+            });
         });
     }
 

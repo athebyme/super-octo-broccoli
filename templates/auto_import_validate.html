@@ -114,6 +114,11 @@
                             </td>
                             <td class="px-6 py-4 text-sm">
                                 <div class="flex items-center space-x-2">
+                                    <button onclick="confirmCategory({{ product.id }}, {{ product.wb_subject_id or 'null' }}, '{{ product.mapped_wb_category }}')"
+                                            class="text-green-600 hover:text-green-900 font-medium">
+                                        ✓ Подтвердить
+                                    </button>
+                                    <span class="text-gray-300">|</span>
                                     <button onclick="editCategory({{ product.id }}, '{{ product.mapped_wb_category }}', {{ product.wb_subject_id or 'null' }})"
                                             class="text-indigo-600 hover:text-indigo-900 font-medium">
                                         Изменить
@@ -187,6 +192,53 @@ if (modalSelect && wbCategories) {
         option.value = id;
         option.textContent = `${name} (ID: ${id})`;
         modalSelect.appendChild(option);
+    });
+}
+
+function confirmCategory(productId, categoryId, categoryName) {
+    if (!confirm(`Подтвердить текущую категорию "${categoryName}"?`)) {
+        return;
+    }
+
+    fetch(`/auto-import/product/${productId}/correct-category`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            wb_subject_id: parseInt(categoryId)
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Update table row
+            const confidenceBadge = document.getElementById(`confidence-badge-${productId}`);
+
+            if (confidenceBadge) {
+                confidenceBadge.textContent = '100%';
+                confidenceBadge.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800';
+            }
+
+            // Highlight row and remove after animation
+            const row = document.getElementById(`product-row-${productId}`);
+            if (row) {
+                row.style.backgroundColor = '#d1fae5';
+                setTimeout(() => {
+                    row.remove();
+                    // Reload if no more products
+                    const tbody = document.querySelector('tbody');
+                    if (tbody && tbody.children.length === 0) {
+                        location.reload();
+                    }
+                }, 1000);
+            }
+        } else {
+            alert('Ошибка подтверждения: ' + (data.error || 'Неизвестная ошибка'));
+        }
+    })
+    .catch(error => {
+        alert('Ошибка при выполнении запроса: ' + error);
     });
 }
 
