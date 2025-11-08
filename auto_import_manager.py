@@ -60,7 +60,7 @@ class CSVProductParser:
         """
         products = []
         csv_file = StringIO(csv_content)
-        reader = csv.reader(csv_file, delimiter=',')
+        reader = csv.reader(csv_file, delimiter=';', quotechar='"', quoting=csv.QUOTE_ALL)
 
         for row_num, row in enumerate(reader, 1):
             try:
