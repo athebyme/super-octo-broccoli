@@ -113,15 +113,11 @@
                     return false;
                 }
 
-                // Проверяем значение
-                let valueField = null;
-                if (this.operation === 'update_characteristic') {
-                    valueField = document.getElementById('value_char') || document.getElementById('value_char_manual');
-                } else {
-                    valueField = document.getElementById('value_char_add') || document.getElementById('value_char_add_select') || document.getElementById('value_char_add_manual');
-                }
+                // Проверяем значение в скрытом поле
+                const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
+                const valueField = document.getElementById(valueFieldId);
 
-                if (valueField && !valueField.value) {
+                if (!valueField || !valueField.value || !valueField.value.trim()) {
                     alert('Выберите или введите значение характеристики');
                     return false;
                 }
@@ -179,10 +175,10 @@
             // Обновляем hidden поле
             if (operation === 'add') {
                 this.selectedValuesAdd = [...arr];
-                document.getElementById('value_char_add').value = arr.join(', ');
+                document.getElementById('value_input_add').value = arr.join(', ');
             } else {
                 this.selectedValues = [...arr];
-                document.getElementById('value_char').value = arr.join(', ');
+                document.getElementById('value_input').value = arr.join(', ');
             }
             return true;
         },
@@ -209,11 +205,11 @@
             const charIdField = document.getElementById('char_id_common');
             if (charIdField) charIdField.value = '';
 
-            const valueCharField = document.getElementById('value_char');
-            if (valueCharField) valueCharField.value = '';
+            const valueInputField = document.getElementById('value_input');
+            if (valueInputField) valueInputField.value = '';
 
-            const valueCharAddField = document.getElementById('value_char_add');
-            if (valueCharAddField) valueCharAddField.value = '';
+            const valueInputAddField = document.getElementById('value_input_add');
+            if (valueInputAddField) valueInputAddField.value = '';
         },
 
         async loadCharacteristics() {
@@ -471,20 +467,18 @@
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
                                             <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
                                             <button type="button"
-                                                    @click="selectedValues = []; document.getElementById('value_char').value = ''"
+                                                    @click="selectedValues = []; document.getElementById('value_input').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
                                                     x-show="selectedValues.length > 0">
                                                 Сбросить
                                             </button>
                                         </div>
-                                        <input type="hidden" name="value" id="value_char">
                                     </div>
                                 </template>
 
                                 <!-- Для одиночных значений -->
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
-                                    <select name="value"
-                                            id="value_char"
+                                    <select @change="document.getElementById('value_input').value = $event.target.value"
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -498,11 +492,13 @@
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
                             <input type="text"
-                                   name="value"
-                                   id="value_char_manual"
+                                   @input="document.getElementById('value_input').value = $event.target.value"
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
+
+                        <!-- Скрытое поле для отправки значения -->
+                        <input type="hidden" name="value" id="value_input">
                     </div>
                 </div>
             </div>
@@ -640,20 +636,18 @@
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
                                             <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
                                             <button type="button"
-                                                    @click="selectedValuesAdd = []; document.getElementById('value_char_add').value = ''"
+                                                    @click="selectedValuesAdd = []; document.getElementById('value_input_add').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
                                                     x-show="selectedValuesAdd.length > 0">
                                                 Сбросить
                                             </button>
                                         </div>
-                                        <input type="hidden" name="value" id="value_char_add">
                                     </div>
                                 </template>
 
                                 <!-- Для одиночных значений -->
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
-                                    <select name="value"
-                                            id="value_char_add_select"
+                                    <select @change="document.getElementById('value_input_add').value = $event.target.value"
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -667,11 +661,13 @@
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
                             <input type="text"
-                                   name="value"
-                                   id="value_char_add_manual"
+                                   @input="document.getElementById('value_input_add').value = $event.target.value"
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
+
+                        <!-- Скрытое поле для отправки значения -->
+                        <input type="hidden" name="value" id="value_input_add">
                     </div>
                 </div>
 
