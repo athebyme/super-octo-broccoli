@@ -633,6 +633,7 @@ class AutoImportSettings(db.Model):
     # URL источника данных
     csv_source_url = db.Column(db.String(500))  # URL CSV файла с товарами
     csv_source_type = db.Column(db.String(50), default='sexoptovik')  # Тип источника (sexoptovik, fixprice, custom)
+    csv_delimiter = db.Column(db.String(5), default=';')  # Разделитель полей в CSV
 
     # Настройки импорта
     import_only_new = db.Column(db.Boolean, default=True, nullable=False)  # Импортировать только новые товары
@@ -679,6 +680,7 @@ class AutoImportSettings(db.Model):
             'vendor_code_pattern': self.vendor_code_pattern,
             'csv_source_url': self.csv_source_url,
             'csv_source_type': self.csv_source_type,
+            'csv_delimiter': self.csv_delimiter,
             'import_only_new': self.import_only_new,
             'auto_enable_products': self.auto_enable_products,
             'use_blurred_images': self.use_blurred_images,

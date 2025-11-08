@@ -45,8 +45,9 @@ class CSVProductParser:
     17 - батарейки (если нужны) + входят/не входят
     """
 
-    def __init__(self, source_type: str = 'sexoptovik'):
+    def __init__(self, source_type: str = 'sexoptovik', delimiter: str = ';'):
         self.source_type = source_type
+        self.delimiter = delimiter
 
     def parse_csv_file(self, csv_content: str) -> List[Dict]:
         """
@@ -60,7 +61,7 @@ class CSVProductParser:
         """
         products = []
         csv_file = StringIO(csv_content)
-        reader = csv.reader(csv_file, delimiter=';', quotechar='"', quoting=csv.QUOTE_ALL)
+        reader = csv.reader(csv_file, delimiter=self.delimiter, quotechar='"')
 
         for row_num, row in enumerate(reader, 1):
             try:
@@ -477,7 +478,8 @@ class AutoImportManager:
     def __init__(self, seller: Seller, settings: AutoImportSettings):
         self.seller = seller
         self.settings = settings
-        self.parser = CSVProductParser(settings.csv_source_type)
+        delimiter = settings.csv_delimiter if settings.csv_delimiter else ';'
+        self.parser = CSVProductParser(settings.csv_source_type, delimiter)
         self.category_mapper = CategoryMapper()
         self.validator = ProductValidator()
 

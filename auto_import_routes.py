@@ -90,6 +90,7 @@ def register_auto_import_routes(app):
             settings.vendor_code_pattern = request.form.get('vendor_code_pattern', 'id-{product_id}-{supplier_code}').strip()
             settings.csv_source_url = request.form.get('csv_source_url', '').strip()
             settings.csv_source_type = request.form.get('csv_source_type', 'sexoptovik')
+            settings.csv_delimiter = request.form.get('csv_delimiter', ';').strip() or ';'
             settings.import_only_new = request.form.get('import_only_new') == 'on'
             settings.auto_enable_products = request.form.get('auto_enable_products') == 'on'
             settings.use_blurred_images = request.form.get('use_blurred_images') == 'on'
