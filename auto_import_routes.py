@@ -239,14 +239,35 @@ def register_auto_import_routes(app):
 
         seller = current_user.seller
 
-        # Получаем минимальную уверенность из параметра (по умолчанию 0.9 = 90%)
+        # Параметры пагинации и фильтрации
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 20, type=int)
         min_confidence = float(request.args.get('min_confidence', 0.9))
+        max_confidence = float(request.args.get('max_confidence', 1.0))
+        category_filter = request.args.get('category', '')
 
-        # Получаем товары с низкой уверенностью
-        low_confidence_products = ImportedProduct.query.filter(
+        # Базовый запрос
+        query = ImportedProduct.query.filter(
             ImportedProduct.seller_id == seller.id,
             ImportedProduct.category_confidence < min_confidence
-        ).order_by(ImportedProduct.category_confidence.asc()).all()
+        )
+
+        # Дополнительные фильтры
+        if max_confidence < 1.0:
+            query = query.filter(ImportedProduct.category_confidence <= max_confidence)
+
+        if category_filter:
+            query = query.filter(ImportedProduct.mapped_wb_category.like(f'%{category_filter}%'))
+
+        # Подсчет общего количества
+        total_count = query.count()
+
+        # Получаем товары с пагинацией
+        pagination = query.order_by(ImportedProduct.category_confidence.asc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+
+        low_confidence_products = pagination.items
 
         # Парсим JSON поля для каждого товара
         for product in low_confidence_products:
@@ -263,7 +284,12 @@ def register_auto_import_routes(app):
                              products=low_confidence_products,
                              wb_categories=wb_categories,
                              min_confidence=min_confidence,
-                             total_count=len(low_confidence_products))
+                             max_confidence=max_confidence,
+                             category_filter=category_filter,
+                             total_count=total_count,
+                             pagination=pagination,
+                             page=page,
+                             per_page=per_page)
 
     @app.route('/auto-import/categories', methods=['GET'])
     @login_required
@@ -495,6 +521,74 @@ def register_auto_import_routes(app):
                 'success': True,
                 'new_category_id': new_wb_subject_id,
                 'new_category_name': new_wb_subject_name
+            })
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/recalculate-categories', methods=['POST'])
+    @login_required
+    def auto_import_recalculate_categories():
+        """
+        Пересчитывает категории для всех товаров с учетом ручных исправлений
+        Применяет все исправления из ProductCategoryCorrection к остальным товарам
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+
+        try:
+            from wb_categories_mapping import get_best_category_match
+
+            # Получаем все товары с низкой уверенностью (< 95%)
+            products_to_recalculate = ImportedProduct.query.filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.category_confidence < 0.95
+            ).all()
+
+            updated_count = 0
+            improved_count = 0
+
+            for product in products_to_recalculate:
+                # Парсим все категории
+                try:
+                    all_categories = json.loads(product.all_categories) if product.all_categories else []
+                except:
+                    all_categories = []
+
+                # Заново определяем категорию (get_best_category_match автоматически
+                # проверит таблицу ProductCategoryCorrection и применит исправления)
+                new_wb_id, new_wb_name, new_confidence = get_best_category_match(
+                    csv_category=product.category,
+                    product_title=product.title,
+                    all_categories=all_categories,
+                    external_id=product.external_id,
+                    source_type=product.source_type
+                )
+
+                # Проверяем, изменилась ли категория или уверенность
+                old_confidence = product.category_confidence or 0.0
+                category_changed = (new_wb_id != product.wb_subject_id)
+                confidence_improved = (new_confidence > old_confidence)
+
+                if category_changed or confidence_improved:
+                    product.wb_subject_id = new_wb_id
+                    product.mapped_wb_category = new_wb_name
+                    product.category_confidence = new_confidence
+                    updated_count += 1
+
+                    if confidence_improved:
+                        improved_count += 1
+
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'total_checked': len(products_to_recalculate),
+                'updated_count': updated_count,
+                'improved_count': improved_count
             })
 
         except Exception as e:
