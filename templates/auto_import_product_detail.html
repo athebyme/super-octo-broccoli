@@ -226,12 +226,12 @@
                     <h3 class="text-lg font-medium text-gray-900">Фотографии ({{ product.photo_urls_list|length }})</h3>
                     <div class="flex items-center gap-3">
                         <label class="inline-flex items-center cursor-pointer">
-                            <input type="checkbox" id="togglePadding" class="sr-only peer">
+                            <input type="checkbox" id="togglePadding" class="sr-only peer" checked>
                             <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-green-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
                             <span class="ms-2 text-sm font-medium text-gray-700">Padding</span>
                         </label>
                         <label class="inline-flex items-center cursor-pointer">
-                            <input type="checkbox" id="toggleCensorship" class="sr-only peer" checked>
+                            <input type="checkbox" id="toggleCensorship" class="sr-only peer">
                             <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                             <span class="ms-2 text-sm font-medium text-gray-700">Цензура</span>
                         </label>
@@ -240,7 +240,7 @@
                 <div class="grid grid-cols-2 gap-2">
                     {% for photo in product.photo_urls_list[:6] %}
                     <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden relative group">
-                        <img src="{{ photo.blur if photo.blur else (photo.original if photo.original else photo.sexoptovik) }}"
+                        <img src="/auto-import/photo/padded?url={{ (photo.sexoptovik or '')|urlencode }}"
                              data-blur="{{ photo.blur or '' }}"
                              data-original="{{ photo.original or '' }}"
                              data-sexoptovik="{{ photo.sexoptovik or '' }}"
@@ -527,20 +527,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function updatePhotoUrls() {
         const photos = document.querySelectorAll('.product-photo');
-        const useCensorship = toggleCensorship ? toggleCensorship.checked : true;
-        const usePadding = togglePadding ? togglePadding.checked : false;
+        const useCensorship = toggleCensorship ? toggleCensorship.checked : false;
+        const usePadding = togglePadding ? togglePadding.checked : true;
 
         photos.forEach(photo => {
             const blurUrl = photo.dataset.blur;
-            const originalUrl = photo.dataset.original;
             const sexoptovikUrl = photo.dataset.sexoptovik;
 
             // Определяем базовый URL в зависимости от цензуры
             let baseUrl;
             if (useCensorship) {
+                // С цензурой: пытаемся blur, если нет - sexoptovik
                 baseUrl = blurUrl || sexoptovikUrl;
             } else {
-                baseUrl = originalUrl || sexoptovikUrl;
+                // Без цензуры: всегда sexoptovik (x-story original недоступен)
+                baseUrl = sexoptovikUrl;
             }
 
             // Применяем padding если нужно
