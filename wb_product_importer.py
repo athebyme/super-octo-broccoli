@@ -47,10 +47,24 @@ class WBProductImporter:
         try:
             # Парсим данные
             colors = json.loads(imported_product.colors) if imported_product.colors else []
-            sizes = json.loads(imported_product.sizes) if imported_product.sizes else []
+            sizes_data = json.loads(imported_product.sizes) if imported_product.sizes else {}
             barcodes = json.loads(imported_product.barcodes) if imported_product.barcodes else []
             materials = json.loads(imported_product.materials) if imported_product.materials else []
             photo_urls = json.loads(imported_product.photo_urls) if imported_product.photo_urls else []
+
+            # Извлекаем простые размеры из структуры парсера
+            # sizes_data - это словарь с полями: raw, dimensions, simple_sizes
+            if isinstance(sizes_data, dict):
+                # Если есть simple_sizes (например, "46-48" -> ["46", "48"])
+                sizes_list = sizes_data.get('simple_sizes', [])
+                # Если нет simple_sizes, но есть raw - используем raw
+                if not sizes_list and sizes_data.get('raw'):
+                    sizes_list = [sizes_data['raw']]
+            elif isinstance(sizes_data, list):
+                # Старый формат - список размеров
+                sizes_list = sizes_data
+            else:
+                sizes_list = []
 
             # Формируем артикул
             from auto_import_manager import AutoImportManager
@@ -62,44 +76,53 @@ class WBProductImporter:
             else:
                 vendor_code = imported_product.external_vendor_code
 
-            # Формируем nomenclatures (размеры)
-            nomenclatures = []
-            for idx, size in enumerate(sizes):
-                barcode = barcodes[idx] if idx < len(barcodes) else barcodes[0] if barcodes else ''
-                nomenclatures.append({
-                    'vendorCode': f"{vendor_code}-{size}",
-                    'size': size,
-                    'barcode': barcode
-                })
+            # Формируем sizes для WB API v2
+            # Sizes - это массив [{techSize, wbSize, price, skus}]
+            # techSize - размер для продавца, wbSize - размер для покупателя
+            # price - цена (будет 0, потом можно обновить)
+            # skus - массив баркодов
+            wb_sizes = []
+
+            # Если есть размеры из товара
+            if sizes_list:
+                for idx, size_val in enumerate(sizes_list):
+                    size_str = str(size_val)
+
+                    # Берем соответствующий баркод или первый доступный
+                    barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')
+
+                    wb_sizes.append({
+                        'techSize': size_str,
+                        'wbSize': size_str,
+                        'price': 0,  # Цена будет установлена позже
+                        'skus': [barcode] if barcode else []
+                    })
 
             # Если нет размеров, создаем один дефолтный
-            if not nomenclatures:
-                nomenclatures.append({
-                    'vendorCode': vendor_code,
-                    'size': 'One Size',
-                    'barcode': barcodes[0] if barcodes else ''
+            if not wb_sizes:
+                wb_sizes.append({
+                    'techSize': 'One Size',
+                    'wbSize': 'One Size',
+                    'price': 0,
+                    'skus': [barcodes[0]] if barcodes else []
                 })
 
-            # Формируем характеристики
+            # Формируем характеристики для WB API v2
+            # ВАЖНО: WB API v2 требует характеристики в формате [{id, value}]
+            # где id - это числовой ID из справочника WB
+            # Но для начального создания карточки можно передать пустой массив,
+            # а потом обновить характеристики через update_card
+            #
+            # TODO: Реализовать маппинг характеристик на ID из WB API
+            # Для этого нужно:
+            # 1. Получить список характеристик для subject_id: api_client.get_card_characteristics_config(subject_id)
+            # 2. Найти соответствующие ID для каждой характеристики
+            # 3. Преобразовать в формат [{id, value}]
+
             characteristics = []
 
-            # Обязательные характеристики
-            if imported_product.brand:
-                characteristics.append({'Бренд': imported_product.brand})
-
-            if imported_product.country:
-                characteristics.append({'Страна производства': imported_product.country})
-
-            if colors:
-                characteristics.append({'Цвет': colors[0] if len(colors) == 1 else colors})
-
-            if materials:
-                material_str = ', '.join(materials)
-                characteristics.append({'Состав': material_str})
-
-            # Комплектация
-            if imported_product.description:
-                characteristics.append({'Комплектация': imported_product.description[:500]})
+            # Пока оставляем пустой массив - характеристики можно добавить позже через update
+            # После создания карточки можно будет получить её ID и обновить характеристики
 
             # Формируем медиа (фотографии)
             media_urls = []
@@ -112,33 +135,66 @@ class WBProductImporter:
                 if url:
                     media_urls.append(url)
 
-            # Создаем карточку через API
-            card_data = {
-                'subjectID': imported_product.wb_subject_id,
+            # Формируем dimensions (габариты)
+            # Для начала используем дефолтные значения
+            dimensions = {
+                'length': 10,  # см
+                'width': 10,   # см
+                'height': 5,   # см
+                'weightBrutto': 0.1  # кг
+            }
+
+            # Формируем variant для WB API v2
+            variant = {
                 'vendorCode': vendor_code,
-                'title': imported_product.title,
-                'description': imported_product.description or imported_product.title,
+                'title': imported_product.title[:60] if imported_product.title else 'Товар',  # Макс 60 символов
+                'description': imported_product.description or imported_product.title or 'Описание товара',
                 'brand': imported_product.brand or 'NoName',
-                'nomenclatures': nomenclatures,
-                'characteristics': characteristics,
-                'photos': media_urls[:10] if media_urls else []  # Первые 10 фото
+                'dimensions': dimensions,
+                'sizes': wb_sizes,
+                'characteristics': characteristics
             }
 
             logger.info(f"Создание карточки WB для товара {imported_product.external_id}")
-            logger.debug(f"Данные карточки: {card_data}")
+            logger.debug(f"Данные варианта: {variant}")
 
             # Вызов API WB для создания карточки
-            # response = self.api_client.create_card(card_data)
-            # nm_id = response.get('nmID')
+            try:
+                response = self.api_client.create_product_card(
+                    subject_id=imported_product.wb_subject_id,
+                    variants=[variant],
+                    log_to_db=True,
+                    seller_id=self.seller.id
+                )
 
-            # ВРЕМЕННО: Имитируем успешное создание для демо
-            # TODO: Раскомментировать когда будет реальный API
-            nm_id = None  # response.get('nmID') когда API заработает
+                # Проверяем ответ
+                if response.get('error'):
+                    error_text = response.get('errorText', 'Unknown error')
+                    raise Exception(f"WB API error: {error_text}")
+
+                # Получаем nmID из ответа
+                # После создания карточки нужно получить её ID
+                # Это можно сделать через get_cards_list с фильтром по vendorCode
+                # Или через проверку списка несозданных карточек (errors list)
+
+                # Пытаемся найти созданную карточку по vendorCode
+                try:
+                    created_card = self.api_client.get_card_by_vendor_code(vendor_code)
+                    nm_id = created_card.get('nmID')
+                    logger.info(f"Карточка создана с nmID: {nm_id}")
+                except Exception as e:
+                    logger.warning(f"Не удалось получить nmID: {e}")
+                    nm_id = None
+
+            except Exception as e:
+                error_msg = f"Ошибка создания карточки WB: {str(e)}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
 
             # Создаем запись Product в БД
             product = Product(
                 seller_id=self.seller.id,
-                nm_id=nm_id or 0,  # TODO: получить реальный nmID от WB
+                nm_id=nm_id or 0,  # nm_id от WB или 0 если не удалось получить
                 vendor_code=vendor_code,
                 title=imported_product.title,
                 brand=imported_product.brand,
@@ -146,7 +202,7 @@ class WBProductImporter:
                 object_name=imported_product.mapped_wb_category,
                 description=imported_product.description,
                 photos_json=json.dumps(media_urls, ensure_ascii=False),
-                sizes_json=json.dumps(nomenclatures, ensure_ascii=False),
+                sizes_json=json.dumps(wb_sizes, ensure_ascii=False),
                 characteristics_json=json.dumps(characteristics, ensure_ascii=False),
                 is_active=True,
                 last_sync=datetime.utcnow()
