@@ -219,6 +219,7 @@ class CSVProductParser:
             # Размеры
             sizes_raw = row[10].strip() if len(row) > 10 else ''
             sizes = self._parse_sizes(sizes_raw)
+            logger.info(f"  РАЗМЕРЫ: '{sizes_raw}' → {sizes}")
 
             # Комплект
             bundle_raw = row[11].strip() if len(row) > 11 else ''
@@ -227,6 +228,9 @@ class CSVProductParser:
             # Коды фотографий
             photo_codes_raw = row[13].strip() if len(row) > 13 else ''
             photo_urls = self._parse_photo_codes(external_id, photo_codes_raw)
+            logger.info(f"  ФОТО: коды='{photo_codes_raw}' external_id='{external_id}' → {len(photo_urls)} URLs")
+            if photo_urls:
+                logger.info(f"  Первое фото: {photo_urls[0]}")
 
             # Баркоды (разделены через #)
             barcodes_raw = row[14].strip() if len(row) > 14 else ''
