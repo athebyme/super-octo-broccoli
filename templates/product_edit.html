@@ -34,6 +34,7 @@
 
     <form method="POST" class="space-y-8" x-data="{
         descLength: {{ product.description|length if product.description else 0 }},
+        titleLength: {{ product.title|length if product.title else 0 }},
         validationErrors: [],
 
         validateForm(e) {
@@ -51,6 +52,7 @@
 
             // Валидация названия
             const title = document.getElementById('title').value;
+            this.titleLength = title.length;
             if (title && title.length > 60) {
                 this.validationErrors.push('Название слишком длинное (' + title.length + ' символов, максимум 60)');
             }
@@ -118,9 +120,10 @@
                            id="title"
                            value="{{ product.title }}"
                            maxlength="60"
+                           @input="titleLength = $event.target.value.length"
                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                     <p class="mt-1 text-xs text-gray-500">
-                        Символов: <span x-text="document.getElementById('title')?.value.length || 0"></span> / 60
+                        Символов: <span x-text="titleLength"></span> / 60
                     </p>
                 </div>
 
