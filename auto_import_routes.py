@@ -3,13 +3,13 @@
 Роуты для автоимпорта товаров
 Эти роуты нужно добавить в seller_platform.py
 """
-from flask import render_template, redirect, url_for, flash, request, jsonify
+from flask import render_template, redirect, url_for, flash, request, jsonify, send_file
 from flask_login import login_required, current_user
 import json
 import threading
 
 from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
-from auto_import_manager import AutoImportManager
+from auto_import_manager import AutoImportManager, ImageProcessor
 
 
 def register_auto_import_routes(app):
@@ -500,6 +500,42 @@ def register_auto_import_routes(app):
         except Exception as e:
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/photo/padded', methods=['GET'])
+    def auto_import_photo_padded():
+        """
+        Возвращает фото с примененным padding до 1200x1200
+        Query params:
+            url: URL исходного фото
+            bg_color: Цвет фона для padding (по умолчанию 'white')
+        """
+        photo_url = request.args.get('url')
+        bg_color = request.args.get('bg_color', 'white')
+
+        if not photo_url:
+            return jsonify({'error': 'URL параметр обязателен'}), 400
+
+        try:
+            # Скачиваем и обрабатываем фото
+            processed_image = ImageProcessor.download_and_process_image(
+                photo_url,
+                target_size=(1200, 1200),
+                background_color=bg_color
+            )
+
+            if not processed_image:
+                return jsonify({'error': 'Не удалось обработать изображение'}), 500
+
+            # Возвращаем обработанное изображение
+            return send_file(
+                processed_image,
+                mimetype='image/jpeg',
+                as_attachment=False,
+                download_name='padded_photo.jpg'
+            )
+
+        except Exception as e:
+            return jsonify({'error': f'Ошибка обработки: {str(e)}'}), 500
 
 
 # Пример использования:
