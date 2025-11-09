@@ -319,8 +319,10 @@ class CSVProductParser:
         for num in photo_nums:
             # Формируем все варианты URL
             # ВАЖНО: sexoptovik первый - он используется по умолчанию
+            # ПРОБЛЕМА: /admin/_project/ требует авторизации и недоступен извне
+            # TODO: Уточнить у пользователя публичный URL для фотографий
             photo_obj = {
-                'sexoptovik': f"https://sexoptovik.ru/admin/_project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg",
+                'sexoptovik': f"http://sexoptovik.ru/project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg",
                 'blur': f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg",
                 'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg"
             }
@@ -401,8 +403,28 @@ class ImageProcessor:
             BytesIO с обработанным изображением или None
         """
         try:
-            response = requests.get(url, timeout=30)
+            # Заголовки для обхода защиты от hotlinking
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://sexoptovik.ru/',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-origin'
+            }
+
+            response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
+
+            # Проверяем, что получили изображение, а не HTML/текст
+            content_type = response.headers.get('Content-Type', '')
+            if not content_type.startswith('image/'):
+                # Возможно, сервер вернул ошибку в виде HTML
+                logger.warning(f"URL {url} вернул не изображение: Content-Type={content_type}")
+                # Пробуем все равно распарсить
 
             img = Image.open(BytesIO(response.content))
 
