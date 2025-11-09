@@ -617,6 +617,8 @@ def register_auto_import_routes(app):
             return jsonify({'error': 'URL параметр обязателен'}), 400
 
         try:
+            logger.info(f"🖼️  Запрос обработки фото: {photo_url}")
+
             # Получаем настройки автоимпорта для получения credentials sexoptovik
             seller = current_user.seller if current_user.is_authenticated else None
             auth_cookies = None
@@ -624,16 +626,31 @@ def register_auto_import_routes(app):
             if seller and seller.auto_import_settings:
                 settings = seller.auto_import_settings
                 # Если URL от sexoptovik и есть логин/пароль - авторизуемся
-                if 'sexoptovik.ru' in photo_url and settings.sexoptovik_login and settings.sexoptovik_password:
-                    from auto_import_manager import SexoptovikAuth
-                    auth_cookies = SexoptovikAuth.get_auth_cookies(
-                        settings.sexoptovik_login,
-                        settings.sexoptovik_password
-                    )
-                    if not auth_cookies:
-                        logger.warning(f"Не удалось получить cookies для sexoptovik")
+                if 'sexoptovik.ru' in photo_url:
+                    if settings.sexoptovik_login and settings.sexoptovik_password:
+                        logger.info(f"🔐 Авторизация на sexoptovik с логином: {settings.sexoptovik_login}")
+                        from auto_import_manager import SexoptovikAuth
+                        auth_cookies = SexoptovikAuth.get_auth_cookies(
+                            settings.sexoptovik_login,
+                            settings.sexoptovik_password
+                        )
+                        if not auth_cookies:
+                            error_msg = "Не удалось авторизоваться на sexoptovik.ru. Проверьте логин и пароль в настройках."
+                            logger.error(f"❌ {error_msg}")
+                            return jsonify({'error': error_msg, 'details': 'Авторизация не прошла'}), 401
+                        logger.info(f"✅ Авторизация успешна, получены cookies")
+                    else:
+                        error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
+                        logger.warning(f"⚠️  {error_msg}")
+                        return jsonify({'error': error_msg, 'details': 'Отсутствуют учетные данные'}), 403
+            else:
+                if 'sexoptovik.ru' in photo_url:
+                    error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
+                    logger.warning(f"⚠️  {error_msg}")
+                    return jsonify({'error': error_msg, 'details': 'Настройки не найдены'}), 403
 
             # Скачиваем и обрабатываем фото
+            logger.info(f"⬇️  Скачивание и обработка изображения...")
             processed_image = ImageProcessor.download_and_process_image(
                 photo_url,
                 target_size=(1200, 1200),
@@ -642,8 +659,11 @@ def register_auto_import_routes(app):
             )
 
             if not processed_image:
-                return jsonify({'error': 'Не удалось обработать изображение'}), 500
+                error_msg = "Не удалось скачать или обработать изображение. Проверьте URL и доступность сервера."
+                logger.error(f"❌ {error_msg} URL: {photo_url}")
+                return jsonify({'error': error_msg, 'details': f'URL: {photo_url}'}), 500
 
+            logger.info(f"✅ Изображение успешно обработано")
             # Возвращаем обработанное изображение
             return send_file(
                 processed_image,
@@ -653,7 +673,14 @@ def register_auto_import_routes(app):
             )
 
         except Exception as e:
-            return jsonify({'error': f'Ошибка обработки: {str(e)}'}), 500
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"❌ Критическая ошибка при обработке фото:\n{error_trace}")
+            return jsonify({
+                'error': f'Ошибка обработки изображения: {str(e)}',
+                'details': error_trace.split('\n')[-2] if error_trace else str(e),
+                'url': photo_url
+            }), 500
 
 
 # Пример использования:
