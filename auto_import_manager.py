@@ -408,27 +408,42 @@ class SexoptovikAuth:
             return cls._session_cookies[cache_key]
 
         try:
-            logger.info(f"Авторизация на sexoptovik.ru для пользователя {login}")
+            logger.info(f"🔐 Начало авторизации на sexoptovik.ru для пользователя: {login}")
 
             # Создаем сессию
             session = requests.Session()
 
+            # Сначала загружаем страницу логина для получения сессии
+            login_page_url = 'https://sexoptovik.ru/login_page.php'
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            }
+
+            logger.info(f"📄 Загрузка страницы логина...")
+            get_response = session.get(login_page_url, headers=headers, timeout=30)
+            get_response.raise_for_status()
+            logger.info(f"✅ Страница логина загружена, статус: {get_response.status_code}")
+            logger.info(f"🍪 Cookies после GET: {session.cookies.get_dict()}")
+
             # POST запрос на авторизацию
-            auth_url = 'https://sexoptovik.ru/login_page.php'
             auth_data = {
                 'client_login': login,
                 'client_password': password,
                 'submit': 'Войти'
             }
 
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': 'https://sexoptovik.ru/login_page.php',
-                'Origin': 'https://sexoptovik.ru'
-            }
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            headers['Referer'] = login_page_url
+            headers['Origin'] = 'https://sexoptovik.ru'
 
-            response = session.post(auth_url, data=auth_data, headers=headers, timeout=30)
+            logger.info(f"📤 Отправка данных авторизации...")
+            response = session.post(login_page_url, data=auth_data, headers=headers, timeout=30, allow_redirects=True)
+            logger.info(f"📥 Ответ получен, статус: {response.status_code}")
+            logger.info(f"🔗 Final URL: {response.url}")
+            logger.info(f"🍪 Cookies после POST: {session.cookies.get_dict()}")
+
             response.raise_for_status()
 
             # Получаем cookies из сессии
@@ -436,15 +451,24 @@ class SexoptovikAuth:
 
             # Проверяем, что получили cookies авторизации
             if 'client_login' in cookies_dict and 'client_password' in cookies_dict:
-                logger.info(f"✅ Успешная авторизация для {login}")
+                logger.info(f"✅ Успешная авторизация для {login}, cookies: {list(cookies_dict.keys())}")
                 cls._session_cookies[cache_key] = cookies_dict
                 return cookies_dict
             else:
-                logger.error(f"❌ Авторизация не удалась для {login}: cookies не получены")
+                # Логируем содержимое ответа для отладки
+                logger.error(f"❌ Авторизация не удалась для {login}")
+                logger.error(f"Полученные cookies: {list(cookies_dict.keys())}")
+                logger.error(f"Статус код: {response.status_code}")
+                logger.error(f"URL после редиректов: {response.url}")
+                # Выводим первые 500 символов ответа
+                response_preview = response.text[:500] if hasattr(response, 'text') else "N/A"
+                logger.error(f"Начало ответа: {response_preview}")
                 return None
 
         except Exception as e:
-            logger.error(f"❌ Ошибка авторизации на sexoptovik.ru: {e}")
+            import traceback
+            logger.error(f"❌ Критическая ошибка авторизации на sexoptovik.ru: {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
             return None
 
     @classmethod
