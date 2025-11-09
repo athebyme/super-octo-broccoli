@@ -438,11 +438,16 @@ class SexoptovikAuth:
             headers['Referer'] = login_page_url
             headers['Origin'] = 'https://sexoptovik.ru'
 
-            logger.info(f"📤 Отправка данных авторизации...")
+            logger.info(f"📤 Отправка данных авторизации: login={login}")
+            logger.info(f"POST данные: {list(auth_data.keys())}")
             response = session.post(login_page_url, data=auth_data, headers=headers, timeout=30, allow_redirects=True)
             logger.info(f"📥 Ответ получен, статус: {response.status_code}")
             logger.info(f"🔗 Final URL: {response.url}")
             logger.info(f"🍪 Cookies после POST: {session.cookies.get_dict()}")
+
+            # Логируем содержимое ответа (первые 1000 символов)
+            response_text = response.text[:1000] if hasattr(response, 'text') else 'N/A'
+            logger.info(f"📄 Начало ответа (1000 символов):\n{response_text}")
 
             response.raise_for_status()
 
@@ -465,12 +470,17 @@ class SexoptovikAuth:
             else:
                 # Логируем содержимое ответа для отладки
                 logger.error(f"❌ Авторизация не удалась для {login} - нет PHPSESSID")
-                logger.error(f"Полученные cookies: {list(cookies_dict.keys())}")
+                logger.error(f"Полученные cookies: {cookies_dict}")
                 logger.error(f"Статус код: {response.status_code}")
                 logger.error(f"URL после редиректов: {response.url}")
-                # Выводим первые 500 символов ответа
-                response_preview = response.text[:500] if hasattr(response, 'text') else "N/A"
-                logger.error(f"Начало ответа: {response_preview}")
+                # Выводим первые 1000 символов ответа
+                response_preview = response.text[:1000] if hasattr(response, 'text') else "N/A"
+                logger.error(f"Начало ответа (1000 символов):\n{response_preview}")
+
+                # Проверяем, есть ли на странице сообщение об ошибке
+                if 'неверн' in response.text.lower() or 'error' in response.text.lower():
+                    logger.error(f"⚠️  На странице обнаружено сообщение об ошибке авторизации")
+
                 return None
 
         except Exception as e:
