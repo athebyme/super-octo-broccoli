@@ -319,10 +319,9 @@ class CSVProductParser:
         for num in photo_nums:
             # Формируем все варианты URL
             # ВАЖНО: sexoptovik первый - он используется по умолчанию
-            # ПРОБЛЕМА: /admin/_project/ требует авторизации и недоступен извне
-            # TODO: Уточнить у пользователя публичный URL для фотографий
+            # Новый формат с /admin/_project/ требует авторизации (используем SexoptovikAuth)
             photo_obj = {
-                'sexoptovik': f"http://sexoptovik.ru/project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg",
+                'sexoptovik': f"https://sexoptovik.ru/admin/_project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg",
                 'blur': f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg",
                 'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg"
             }
