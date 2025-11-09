@@ -97,6 +97,10 @@ def register_auto_import_routes(app):
             settings.resize_images_to_1200 = request.form.get('resize_images_to_1200') == 'on'
             settings.image_background_color = request.form.get('image_background_color', 'white').strip()
 
+            # Авторизация Sexoptovik
+            settings.sexoptovik_login = request.form.get('sexoptovik_login', '').strip()
+            settings.sexoptovik_password = request.form.get('sexoptovik_password', '').strip()
+
             try:
                 settings.auto_import_interval_hours = int(request.form.get('auto_import_interval_hours', 24))
             except ValueError:
