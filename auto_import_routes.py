@@ -615,7 +615,7 @@ def register_auto_import_routes(app):
 
         try:
             # Получаем настройки автоимпорта для получения credentials sexoptovik
-            seller = get_current_seller()
+            seller = current_user.seller if current_user.is_authenticated else None
             auth_cookies = None
 
             if seller and seller.auto_import_settings:
