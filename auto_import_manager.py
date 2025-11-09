@@ -383,6 +383,84 @@ class CategoryMapper:
         return subject_id, subject_name, confidence
 
 
+class SexoptovikAuth:
+    """
+    Авторизация на sexoptovik.ru для доступа к фотографиям
+    """
+
+    _session_cookies = {}  # Кеш cookies для каждого логина
+
+    @classmethod
+    def get_auth_cookies(cls, login: str, password: str) -> Optional[dict]:
+        """
+        Авторизуется на sexoptovik.ru и возвращает cookies
+
+        Args:
+            login: Логин от sexoptovik.ru
+            password: Пароль от sexoptovik.ru
+
+        Returns:
+            dict с cookies или None если авторизация не удалась
+        """
+        # Проверяем кеш
+        cache_key = f"{login}:{password}"
+        if cache_key in cls._session_cookies:
+            logger.debug(f"Используем кешированные cookies для {login}")
+            return cls._session_cookies[cache_key]
+
+        try:
+            logger.info(f"Авторизация на sexoptovik.ru для пользователя {login}")
+
+            # Создаем сессию
+            session = requests.Session()
+
+            # POST запрос на авторизацию
+            auth_url = 'https://sexoptovik.ru/login_page.php'
+            auth_data = {
+                'client_login': login,
+                'client_password': password,
+                'submit': 'Войти'
+            }
+
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://sexoptovik.ru/login_page.php',
+                'Origin': 'https://sexoptovik.ru'
+            }
+
+            response = session.post(auth_url, data=auth_data, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            # Получаем cookies из сессии
+            cookies_dict = session.cookies.get_dict()
+
+            # Проверяем, что получили cookies авторизации
+            if 'client_login' in cookies_dict and 'client_password' in cookies_dict:
+                logger.info(f"✅ Успешная авторизация для {login}")
+                cls._session_cookies[cache_key] = cookies_dict
+                return cookies_dict
+            else:
+                logger.error(f"❌ Авторизация не удалась для {login}: cookies не получены")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка авторизации на sexoptovik.ru: {e}")
+            return None
+
+    @classmethod
+    def clear_cache(cls, login: str = None):
+        """Очистить кеш cookies"""
+        if login:
+            # Удаляем cookies для конкретного логина
+            keys_to_delete = [key for key in cls._session_cookies.keys() if key.startswith(f"{login}:")]
+            for key in keys_to_delete:
+                del cls._session_cookies[key]
+        else:
+            # Очищаем весь кеш
+            cls._session_cookies.clear()
+
+
 class ImageProcessor:
     """
     Обработчик изображений товаров
@@ -390,7 +468,8 @@ class ImageProcessor:
 
     @staticmethod
     def download_and_process_image(url: str, target_size: Tuple[int, int] = (1200, 1200),
-                                   background_color: str = 'white') -> Optional[BytesIO]:
+                                   background_color: str = 'white',
+                                   auth_cookies: Optional[dict] = None) -> Optional[BytesIO]:
         """
         Скачивает и обрабатывает изображение
 
@@ -398,6 +477,7 @@ class ImageProcessor:
             url: URL изображения
             target_size: Целевой размер (ширина, высота)
             background_color: Цвет фона для дорисовки
+            auth_cookies: Cookies для авторизации (для sexoptovik)
 
         Returns:
             BytesIO с обработанным изображением или None
@@ -416,7 +496,8 @@ class ImageProcessor:
                 'Sec-Fetch-Site': 'same-origin'
             }
 
-            response = requests.get(url, headers=headers, timeout=30)
+            # Если переданы cookies авторизации - используем их
+            response = requests.get(url, headers=headers, cookies=auth_cookies, timeout=30)
             response.raise_for_status()
 
             # Проверяем, что получили изображение, а не HTML/текст

@@ -610,11 +610,28 @@ def register_auto_import_routes(app):
             return jsonify({'error': 'URL параметр обязателен'}), 400
 
         try:
+            # Получаем настройки автоимпорта для получения credentials sexoptovik
+            seller = get_current_seller()
+            auth_cookies = None
+
+            if seller and seller.auto_import_settings:
+                settings = seller.auto_import_settings
+                # Если URL от sexoptovik и есть логин/пароль - авторизуемся
+                if 'sexoptovik.ru' in photo_url and settings.sexoptovik_login and settings.sexoptovik_password:
+                    from auto_import_manager import SexoptovikAuth
+                    auth_cookies = SexoptovikAuth.get_auth_cookies(
+                        settings.sexoptovik_login,
+                        settings.sexoptovik_password
+                    )
+                    if not auth_cookies:
+                        logger.warning(f"Не удалось получить cookies для sexoptovik")
+
             # Скачиваем и обрабатываем фото
             processed_image = ImageProcessor.download_and_process_image(
                 photo_url,
                 target_size=(1200, 1200),
-                background_color=bg_color
+                background_color=bg_color,
+                auth_cookies=auth_cookies
             )
 
             if not processed_image:

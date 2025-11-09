@@ -635,6 +635,10 @@ class AutoImportSettings(db.Model):
     csv_source_type = db.Column(db.String(50), default='sexoptovik')  # Тип источника (sexoptovik, fixprice, custom)
     csv_delimiter = db.Column(db.String(5), default=';')  # Разделитель полей в CSV
 
+    # Авторизация для доступа к фотографиям sexoptovik
+    sexoptovik_login = db.Column(db.String(200))  # Логин для sexoptovik.ru
+    sexoptovik_password = db.Column(db.String(200))  # Пароль для sexoptovik.ru
+
     # Настройки импорта
     import_only_new = db.Column(db.Boolean, default=True, nullable=False)  # Импортировать только новые товары
     auto_enable_products = db.Column(db.Boolean, default=False, nullable=False)  # Автоматически активировать товары
@@ -681,6 +685,7 @@ class AutoImportSettings(db.Model):
             'csv_source_url': self.csv_source_url,
             'csv_source_type': self.csv_source_type,
             'csv_delimiter': self.csv_delimiter,
+            'sexoptovik_login': self.sexoptovik_login,  # Только логин, пароль не отдаем
             'import_only_new': self.import_only_new,
             'auto_enable_products': self.auto_enable_products,
             'use_blurred_images': self.use_blurred_images,
