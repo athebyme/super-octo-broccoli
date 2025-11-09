@@ -165,9 +165,11 @@ class WBProductImporter:
             # Формируем медиа (фотографии)
             media_urls = []
             for photo in photo_urls[:30]:  # Максимум 30 фото
-                # Приоритет блюру если есть
+                # Приоритет sexoptovik (без цензуры) по умолчанию
+                # TODO: Добавить настройку для включения цензуры (blur)
                 if isinstance(photo, dict):
-                    url = photo.get('blur') or photo.get('original')
+                    # Сначала пробуем sexoptovik, потом blur, потом original
+                    url = photo.get('sexoptovik') or photo.get('blur') or photo.get('original')
                 else:
                     url = photo
                 if url:

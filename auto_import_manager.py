@@ -285,14 +285,17 @@ class CSVProductParser:
         Формирует URLs фотографий
 
         Формат фотографий:
-        - Без цензуры (sexoptovik): http://sexoptovik.ru/project/user_images/prods_res/{id}/{id}_{номер}_1200.jpg
+        - Без цензуры (sexoptovik): https://sexoptovik.ru/admin/_project/user_images/prods_res/{id}/{id}_{номер}_1200.jpg
         - С цензурой (блюр): https://x-story.ru/mp/_project/img_sx0_1200/{id}_{номер}_1200.jpg
         - Без цензуры (x-story): https://x-story.ru/mp/_project/img_sx_1200/{id}_{номер}_1200.jpg
 
         В CSV номера фотографий могут быть через запятую или пробелы
 
+        По умолчанию используется sexoptovik (без цензуры).
+        Если в настройках включена цензура - будет использоваться blur (x-story).
+
         Returns:
-            List[Dict]: [{'blur': url, 'original': url, 'sexoptovik': url}, ...]
+            List[Dict]: [{'sexoptovik': url, 'blur': url, 'original': url}, ...]
         """
         if not photo_codes or not product_id:
             return []
@@ -315,10 +318,11 @@ class CSVProductParser:
 
         for num in photo_nums:
             # Формируем все варианты URL
+            # ВАЖНО: sexoptovik первый - он используется по умолчанию
             photo_obj = {
+                'sexoptovik': f"https://sexoptovik.ru/admin/_project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg",
                 'blur': f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg",
-                'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg",
-                'sexoptovik': f"http://sexoptovik.ru/project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg"
+                'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg"
             }
             photos.append(photo_obj)
 
@@ -657,18 +661,6 @@ class AutoImportManager:
         try:
             external_id = product_data['external_id']
 
-            # Проверяем, не импортирован ли уже
-            if self.settings.import_only_new:
-                existing = ImportedProduct.query.filter_by(
-                    seller_id=self.seller.id,
-                    external_id=external_id,
-                    source_type=self.settings.csv_source_type
-                ).first()
-
-                if existing and existing.import_status == 'imported':
-                    logger.debug(f"Товар {external_id} уже импортирован, пропускаем")
-                    return 'skipped'
-
             # Определяем категорию WB (с учетом ручных исправлений)
             subject_id, subject_name, confidence = self.category_mapper.map_category(
                 product_data['category'],
@@ -701,14 +693,20 @@ class AutoImportManager:
                 source_type=self.settings.csv_source_type
             ).first()
 
-            if not imported_product:
+            # Запоминаем, был ли товар уже импортирован ранее
+            was_already_imported = False
+            if imported_product:
+                was_already_imported = (imported_product.import_status == 'imported')
+                if was_already_imported:
+                    logger.info(f"Товар {external_id} уже был импортирован на WB ранее, обновляем данные")
+            else:
                 imported_product = ImportedProduct(
                     seller_id=self.seller.id,
                     external_id=external_id,
                     source_type=self.settings.csv_source_type
                 )
 
-            # Заполняем данные
+            # Заполняем данные (обновляем всегда, даже если товар уже импортирован)
             imported_product.external_vendor_code = product_data['external_vendor_code']
             imported_product.title = product_data['title']
             imported_product.category = product_data['category']
@@ -729,17 +727,28 @@ class AutoImportManager:
             description = self._generate_description(product_data)
             imported_product.description = description
 
-            if is_valid:
-                imported_product.import_status = 'validated'
-                imported_product.validation_errors = None
+            # ВАЖНО: Если товар уже был импортирован на WB, НЕ меняем статус обратно на 'validated'
+            # Это предотвратит повторный импорт того же товара
+            if not was_already_imported:
+                if is_valid:
+                    imported_product.import_status = 'validated'
+                    imported_product.validation_errors = None
+                else:
+                    imported_product.import_status = 'failed'
+                    imported_product.validation_errors = json.dumps(errors, ensure_ascii=False)
             else:
-                imported_product.import_status = 'failed'
-                imported_product.validation_errors = json.dumps(errors, ensure_ascii=False)
+                # Товар уже импортирован - оставляем статус 'imported', но обновляем данные
+                # Это позволит видеть актуальную информацию из CSV
+                logger.info(f"Товар {external_id} сохраняет статус 'imported', данные обновлены")
 
             db.session.add(imported_product)
             db.session.commit()
 
-            if is_valid:
+            if was_already_imported:
+                # Товар уже был импортирован - считаем его пропущенным, а не импортированным заново
+                logger.info(f"Товар {external_id} уже импортирован, пропускаем")
+                return 'skipped'
+            elif is_valid:
                 logger.info(f"Товар {external_id} успешно обработан и готов к импорту")
                 return 'imported'
             else:
