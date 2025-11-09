@@ -7,9 +7,12 @@ from flask import render_template, redirect, url_for, flash, request, jsonify, s
 from flask_login import login_required, current_user
 import json
 import threading
+import logging
 
 from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
 from auto_import_manager import AutoImportManager, ImageProcessor
+
+logger = logging.getLogger(__name__)
 
 
 def register_auto_import_routes(app):
