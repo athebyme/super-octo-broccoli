@@ -621,12 +621,18 @@ def register_auto_import_routes(app):
 
             # Получаем настройки автоимпорта для получения credentials sexoptovik
             seller = current_user.seller if current_user.is_authenticated else None
+            logger.info(f"👤 Current user authenticated: {current_user.is_authenticated}, seller: {seller is not None}")
             auth_cookies = None
 
             if seller and seller.auto_import_settings:
                 settings = seller.auto_import_settings
+                logger.info(f"⚙️  Настройки найдены. Проверяем URL...")
+
                 # Если URL от sexoptovik и есть логин/пароль - авторизуемся
                 if 'sexoptovik.ru' in photo_url:
+                    logger.info(f"🌐 URL от sexoptovik.ru обнаружен")
+                    logger.info(f"🔑 Login: {settings.sexoptovik_login}, Password: {'***' if settings.sexoptovik_password else None}")
+
                     if settings.sexoptovik_login and settings.sexoptovik_password:
                         logger.info(f"🔐 Авторизация на sexoptovik с логином: {settings.sexoptovik_login}")
                         from auto_import_manager import SexoptovikAuth
@@ -643,7 +649,10 @@ def register_auto_import_routes(app):
                         error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
                         logger.warning(f"⚠️  {error_msg}")
                         return jsonify({'error': error_msg, 'details': 'Отсутствуют учетные данные'}), 403
+                else:
+                    logger.info(f"ℹ️  URL не от sexoptovik.ru, авторизация не требуется")
             else:
+                logger.warning(f"⚠️  Seller: {seller is not None}, Auto import settings: {seller.auto_import_settings if seller else None}")
                 if 'sexoptovik.ru' in photo_url:
                     error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
                     logger.warning(f"⚠️  {error_msg}")
