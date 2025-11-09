@@ -28,7 +28,7 @@ def migrate():
                     for field in fields_to_add:
                         print(f"  Добавление поля {field}...")
                         conn.execute(db.text(
-                            f"ALTER TABLE auto_import_settings ADD COLUMN IF NOT EXISTS {field} VARCHAR(200)"
+                            f"ALTER TABLE auto_import_settings ADD COLUMN {field} VARCHAR(200)"
                         ))
                     conn.commit()
                 print(f"✅ Добавлены поля: {', '.join(fields_to_add)}")
