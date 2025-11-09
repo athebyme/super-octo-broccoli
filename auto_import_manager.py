@@ -450,13 +450,21 @@ class SexoptovikAuth:
             cookies_dict = session.cookies.get_dict()
 
             # Проверяем, что получили cookies авторизации
-            if 'client_login' in cookies_dict and 'client_password' in cookies_dict:
-                logger.info(f"✅ Успешная авторизация для {login}, cookies: {list(cookies_dict.keys())}")
+            # Sexoptovik использует PHPSESSID и admin_pretends_as для авторизованных сессий
+            if 'PHPSESSID' in cookies_dict:
+                logger.info(f"✅ Успешная авторизация для {login}")
+                logger.info(f"Полученные cookies: {list(cookies_dict.keys())}")
+
+                # Проверяем, что это именно авторизованная сессия
+                # Если есть admin_pretends_as - значит авторизация прошла успешно
+                if 'admin_pretends_as' in cookies_dict:
+                    logger.info(f"✅ Подтверждена авторизованная сессия (admin_pretends_as={cookies_dict['admin_pretends_as']})")
+
                 cls._session_cookies[cache_key] = cookies_dict
                 return cookies_dict
             else:
                 # Логируем содержимое ответа для отладки
-                logger.error(f"❌ Авторизация не удалась для {login}")
+                logger.error(f"❌ Авторизация не удалась для {login} - нет PHPSESSID")
                 logger.error(f"Полученные cookies: {list(cookies_dict.keys())}")
                 logger.error(f"Статус код: {response.status_code}")
                 logger.error(f"URL после редиректов: {response.url}")
