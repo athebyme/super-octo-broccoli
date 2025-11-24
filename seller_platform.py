@@ -3173,12 +3173,20 @@ def api_characteristics_by_category(object_name):
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
             result = client.get_card_characteristics_by_object_name(object_name)
 
+            # Логируем все названия характеристик для отладки
+            all_char_names = [item.get('name', '') for item in result.get('data', [])]
+            app.logger.info(f"📋 Found characteristics: {all_char_names}")
+
             # Загружаем справочники для известных характеристик
             directories = {}
             for item in result.get('data', []):
                 char_name = item.get('name', '')
+                app.logger.debug(f"🔍 Checking characteristic: '{char_name}'")
+
                 if char_name in CHAR_TO_DIRECTORY:
                     directory_type = CHAR_TO_DIRECTORY[char_name]
+                    app.logger.info(f"✓ Matched '{char_name}' to directory '{directory_type}'")
+
                     if directory_type not in directories:
                         try:
                             method_name = f'get_directory_{directory_type}'
@@ -3189,6 +3197,8 @@ def api_characteristics_by_category(object_name):
                         except Exception as e:
                             app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
                             directories[directory_type] = []
+                else:
+                    app.logger.debug(f"⊘ No directory mapping for '{char_name}'")
 
             # Преобразуем результат в более удобный формат
             characteristics = []
@@ -3214,6 +3224,8 @@ def api_characteristics_by_category(object_name):
                     directory_type = CHAR_TO_DIRECTORY[char['name']]
                     directory_data = directories.get(directory_type, [])
 
+                    app.logger.info(f"📚 Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
+
                     if directory_type == 'countries':
                         # Для стран используем поле 'name'
                         for country in directory_data:
@@ -3237,6 +3249,8 @@ def api_characteristics_by_category(object_name):
                                     'id': value,
                                     'value': value
                                 })
+
+                    app.logger.info(f"✅ Added {len(char['values'])} values to '{char['name']}'")
 
                 characteristics.append(char)
 
