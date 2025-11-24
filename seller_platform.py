@@ -3157,16 +3157,33 @@ def api_characteristics_by_category(object_name):
 
     app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
 
-    # Маппинг названий характеристик к справочникам WB
-    CHAR_TO_DIRECTORY = {
-        'Цвет': 'colors',
-        'Страна производства': 'countries',
-        'Пол': 'kinds',
-        'Сезон': 'seasons',
-        'Ставка НДС': 'vat',
-        'ТНВЭД-код': 'tnved',
-        'Код ТН ВЭД': 'tnved',
-    }
+    # Функция для определения справочника по названию характеристики (fuzzy matching)
+    def get_directory_type(char_name: str) -> Optional[str]:
+        """Определяет тип справочника по названию характеристики"""
+        name_lower = char_name.lower().strip()
+
+        if 'цвет' in name_lower:
+            return 'colors'
+        elif 'стран' in name_lower and 'производ' in name_lower:
+            return 'countries'
+        elif name_lower in ['пол', 'гендер']:
+            return 'kinds'
+        elif 'сезон' in name_lower:
+            return 'seasons'
+        elif 'ндс' in name_lower or 'нвд' in name_lower or 'vat' in name_lower:
+            return 'vat'
+        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower or 'tnved' in name_lower:
+            return 'tnved'
+        return None
+
+    # Функция для безопасного извлечения значения из справочника
+    def extract_value(entry) -> Optional[str]:
+        """Извлекает значение из записи справочника (dict или str)"""
+        if isinstance(entry, dict):
+            return entry.get('name') or entry.get('value') or entry.get('id')
+        elif isinstance(entry, str):
+            return entry
+        return None
 
     # Сначала попробуем получить из WB API
     try:
@@ -3183,8 +3200,8 @@ def api_characteristics_by_category(object_name):
                 char_name = item.get('name', '')
                 app.logger.debug(f"🔍 Checking characteristic: '{char_name}'")
 
-                if char_name in CHAR_TO_DIRECTORY:
-                    directory_type = CHAR_TO_DIRECTORY[char_name]
+                directory_type = get_directory_type(char_name)
+                if directory_type:
                     app.logger.info(f"✓ Matched '{char_name}' to directory '{directory_type}'")
 
                     if directory_type not in directories:
@@ -3220,37 +3237,23 @@ def api_characteristics_by_category(object_name):
                             'value': dict_item.get('value')
                         })
                 # Если словаря нет, но есть справочник - используем его
-                elif char['name'] in CHAR_TO_DIRECTORY:
-                    directory_type = CHAR_TO_DIRECTORY[char['name']]
-                    directory_data = directories.get(directory_type, [])
+                else:
+                    directory_type = get_directory_type(char['name'])
+                    if directory_type:
+                        directory_data = directories.get(directory_type, [])
 
-                    app.logger.info(f"📚 Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
+                        app.logger.info(f"📚 Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
 
-                    if directory_type == 'countries':
-                        # Для стран используем поле 'name'
-                        for country in directory_data:
-                            char['values'].append({
-                                'id': country.get('name'),  # Используем название как ID
-                                'value': country.get('name')
-                            })
-                    elif directory_type == 'colors':
-                        # Для цветов используем поле 'name'
-                        for color in directory_data:
-                            char['values'].append({
-                                'id': color.get('name'),
-                                'value': color.get('name')
-                            })
-                    elif directory_type in ['kinds', 'seasons', 'vat', 'tnved']:
-                        # Для остальных используем поле 'name' или 'value'
+                        # Универсальная обработка всех справочников
                         for entry in directory_data:
-                            value = entry.get('name') or entry.get('value')
+                            value = extract_value(entry)
                             if value:
                                 char['values'].append({
                                     'id': value,
                                     'value': value
                                 })
 
-                    app.logger.info(f"✅ Added {len(char['values'])} values to '{char['name']}'")
+                        app.logger.info(f"✅ Added {len(char['values'])} values to '{char['name']}'")
 
                 characteristics.append(char)
 
@@ -3308,16 +3311,33 @@ def api_characteristics_multi_category():
 
     app.logger.info(f"📋 API request for multi-category characteristics: {len(categories)} categories")
 
-    # Маппинг названий характеристик к справочникам WB
-    CHAR_TO_DIRECTORY = {
-        'Цвет': 'colors',
-        'Страна производства': 'countries',
-        'Пол': 'kinds',
-        'Сезон': 'seasons',
-        'Ставка НДС': 'vat',
-        'ТНВЭД-код': 'tnved',
-        'Код ТН ВЭД': 'tnved',
-    }
+    # Функция для определения справочника по названию характеристики (fuzzy matching)
+    def get_directory_type(char_name: str) -> Optional[str]:
+        """Определяет тип справочника по названию характеристики"""
+        name_lower = char_name.lower().strip()
+
+        if 'цвет' in name_lower:
+            return 'colors'
+        elif 'стран' in name_lower and 'производ' in name_lower:
+            return 'countries'
+        elif name_lower in ['пол', 'гендер']:
+            return 'kinds'
+        elif 'сезон' in name_lower:
+            return 'seasons'
+        elif 'ндс' in name_lower or 'нвд' in name_lower or 'vat' in name_lower:
+            return 'vat'
+        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower or 'tnved' in name_lower:
+            return 'tnved'
+        return None
+
+    # Функция для безопасного извлечения значения из справочника
+    def extract_value(entry) -> Optional[str]:
+        """Извлекает значение из записи справочника (dict или str)"""
+        if isinstance(entry, dict):
+            return entry.get('name') or entry.get('value') or entry.get('id')
+        elif isinstance(entry, str):
+            return entry
+        return None
 
     all_chars = {}  # {category: [characteristics]}
 
@@ -3333,18 +3353,17 @@ def api_characteristics_multi_category():
                     # Загружаем справочники для этой категории
                     for item in result.get('data', []):
                         char_name = item.get('name', '')
-                        if char_name in CHAR_TO_DIRECTORY:
-                            directory_type = CHAR_TO_DIRECTORY[char_name]
-                            if directory_type not in directories:
-                                try:
-                                    method_name = f'get_directory_{directory_type}'
-                                    method = getattr(client, method_name)
-                                    dir_result = method()
-                                    directories[directory_type] = dir_result.get('data', [])
-                                    app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
-                                except Exception as e:
-                                    app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
-                                    directories[directory_type] = []
+                        directory_type = get_directory_type(char_name)
+                        if directory_type and directory_type not in directories:
+                            try:
+                                method_name = f'get_directory_{directory_type}'
+                                method = getattr(client, method_name)
+                                dir_result = method()
+                                directories[directory_type] = dir_result.get('data', [])
+                                app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
+                            except Exception as e:
+                                app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
+                                directories[directory_type] = []
 
                     characteristics = []
                     for item in result.get('data', []):
@@ -3365,25 +3384,14 @@ def api_characteristics_multi_category():
                                     'value': dict_item.get('value')
                                 })
                         # Если словаря нет, но есть справочник - используем его
-                        elif char['name'] in CHAR_TO_DIRECTORY:
-                            directory_type = CHAR_TO_DIRECTORY[char['name']]
-                            directory_data = directories.get(directory_type, [])
+                        else:
+                            directory_type = get_directory_type(char['name'])
+                            if directory_type:
+                                directory_data = directories.get(directory_type, [])
 
-                            if directory_type == 'countries':
-                                for country in directory_data:
-                                    char['values'].append({
-                                        'id': country.get('name'),
-                                        'value': country.get('name')
-                                    })
-                            elif directory_type == 'colors':
-                                for color in directory_data:
-                                    char['values'].append({
-                                        'id': color.get('name'),
-                                        'value': color.get('name')
-                                    })
-                            elif directory_type in ['kinds', 'seasons', 'vat', 'tnved']:
+                                # Универсальная обработка всех справочников
                                 for entry in directory_data:
-                                    value = entry.get('name') or entry.get('value')
+                                    value = extract_value(entry)
                                     if value:
                                         char['values'].append({
                                             'id': value,
