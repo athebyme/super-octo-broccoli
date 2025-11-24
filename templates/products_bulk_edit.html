@@ -110,6 +110,8 @@
         characteristicsByCategory: {},
         selectedChar: null,
         selectedCharId: null,
+        charValue: '',  // Значение для update_characteristic
+        charValueAdd: '',  // Значение для add_characteristic
         selectedValues: [],
         selectedValuesAdd: [],
         loading: false,
@@ -213,13 +215,14 @@
                 arr.push(value);
             }
 
-            // Обновляем hidden поле
+            // Обновляем значение
+            const joinedValue = arr.join(', ');
             if (operation === 'add') {
                 this.selectedValuesAdd = [...arr];
-                document.getElementById('value_input_add').value = arr.join(', ');
+                this.charValueAdd = joinedValue;
             } else {
                 this.selectedValues = [...arr];
-                document.getElementById('value_input').value = arr.join(', ');
+                this.charValue = joinedValue;
             }
             return true;
         },
@@ -239,19 +242,11 @@
             // Очищаем все поля при смене операции
             this.selectedChar = null;
             this.selectedCharId = null;
+            this.charValue = '';
+            this.charValueAdd = '';
             this.selectedValues = [];
             this.selectedValuesAdd = [];
             this.characteristics = [];
-
-            // Очищаем скрытые поля
-            const charIdField = document.getElementById('char_id_common');
-            if (charIdField) charIdField.value = '';
-
-            const valueInputField = document.getElementById('value_input');
-            if (valueInputField) valueInputField.value = '';
-
-            const valueInputAddField = document.getElementById('value_input_add');
-            if (valueInputAddField) valueInputAddField.value = '';
         },
 
         async loadCharacteristics() {
@@ -265,6 +260,8 @@
             this.commonCharacteristics = [];
             this.selectedChar = null;
             this.selectedCharId = null;
+            this.charValue = '';
+            this.charValueAdd = '';
             this.loadError = null;
 
             try {
@@ -626,7 +623,7 @@
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
                                             <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar && selectedChar.max_count"></strong></span>
                                             <button type="button"
-                                                    @click="selectedValues = []; document.getElementById('value_input').value = ''"
+                                                    @click="selectedValues = []; charValue = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
                                                     x-show="selectedValues.length > 0">
                                                 Сбросить
@@ -637,7 +634,7 @@
 
                                 <!-- Для одиночных значений -->
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
-                                    <select @change="document.getElementById('value_input').value = $event.target.value"
+                                    <select x-model="charValue"
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -651,13 +648,13 @@
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
                             <input type="text"
-                                   @input="document.getElementById('value_input').value = $event.target.value"
+                                   x-model="charValue"
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value_update" id="value_input">
+                        <input type="hidden" name="value" id="value_input" x-model="charValue">
                     </div>
                 </div>
             </div>
@@ -840,7 +837,7 @@
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
                                             <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar && selectedChar.max_count"></strong></span>
                                             <button type="button"
-                                                    @click="selectedValuesAdd = []; document.getElementById('value_input_add').value = ''"
+                                                    @click="selectedValuesAdd = []; charValueAdd = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
                                                     x-show="selectedValuesAdd.length > 0">
                                                 Сбросить
@@ -851,7 +848,7 @@
 
                                 <!-- Для одиночных значений -->
                                 <template x-if="selectedChar && (!selectedChar.max_count || selectedChar.max_count === 1)">
-                                    <select @change="document.getElementById('value_input_add').value = $event.target.value"
+                                    <select x-model="charValueAdd"
                                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                                         <option value="">-- Выберите значение --</option>
                                         <template x-for="val in selectedChar.values" :key="val.id">
@@ -865,13 +862,13 @@
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
                             <input type="text"
-                                   @input="document.getElementById('value_input_add').value = $event.target.value"
+                                   x-model="charValueAdd"
                                    placeholder="Введите значение характеристики"
                                    class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value_add" id="value_input_add">
+                        <input type="hidden" name="value" id="value_input_add" x-model="charValueAdd">
                     </div>
                 </div>
 
