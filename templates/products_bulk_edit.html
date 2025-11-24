@@ -280,6 +280,17 @@
                     const data = await response.json();
                     this.characteristics = data.characteristics || [];
                     console.log('Characteristics loaded:', this.characteristics.length, 'items');
+
+                    // Логируем первые несколько характеристик с их values для отладки
+                    if (this.characteristics.length > 0) {
+                        const sample = this.characteristics.slice(0, 3).map(ch => ({
+                            name: ch.name,
+                            id: ch.id,
+                            values_count: ch.values ? ch.values.length : 0,
+                            sample_values: ch.values ? ch.values.slice(0, 3) : []
+                        }));
+                        console.log('Sample characteristics with values:', JSON.stringify(sample, null, 2));
+                    }
                 }
                 // Иначе загружаем для всех категорий и находим общие
                 else {
@@ -304,6 +315,17 @@
                     this.characteristics = this.commonCharacteristics;
 
                     console.log('Common characteristics:', this.commonCharacteristics.length, 'items');
+
+                    // Логируем первые несколько характеристик с их values для отладки
+                    if (this.commonCharacteristics.length > 0) {
+                        const sample = this.commonCharacteristics.slice(0, 3).map(ch => ({
+                            name: ch.name,
+                            id: ch.id,
+                            values_count: ch.values ? ch.values.length : 0,
+                            sample_values: ch.values ? ch.values.slice(0, 3) : []
+                        }));
+                        console.log('Sample characteristics with values:', JSON.stringify(sample, null, 2));
+                    }
                 }
 
                 if (this.characteristics.length === 0) {
