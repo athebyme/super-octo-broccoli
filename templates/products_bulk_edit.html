@@ -281,15 +281,17 @@
                     this.characteristics = data.characteristics || [];
                     console.log('Characteristics loaded:', this.characteristics.length, 'items');
 
-                    // Логируем первые несколько характеристик с их values для отладки
+                    // Логируем ВСЕ характеристики с values для отладки
                     if (this.characteristics.length > 0) {
-                        const sample = this.characteristics.slice(0, 3).map(ch => ({
-                            name: ch.name,
-                            id: ch.id,
-                            values_count: ch.values ? ch.values.length : 0,
-                            sample_values: ch.values ? ch.values.slice(0, 3) : []
-                        }));
-                        console.log('Sample characteristics with values:', JSON.stringify(sample, null, 2));
+                        const charsWithValues = this.characteristics.filter(ch => ch.values && ch.values.length > 0);
+                        const charsWithoutValues = this.characteristics.filter(ch => !ch.values || ch.values.length === 0);
+
+                        console.log(`✅ ${charsWithValues.length} characteristics WITH values:`);
+                        charsWithValues.forEach(ch => {
+                            console.log(`  - ${ch.name} (ID: ${ch.id}): ${ch.values.length} values`);
+                        });
+
+                        console.log(`⚠️ ${charsWithoutValues.length} characteristics WITHOUT values`);
                     }
                 }
                 // Иначе загружаем для всех категорий и находим общие
@@ -316,15 +318,17 @@
 
                     console.log('Common characteristics:', this.commonCharacteristics.length, 'items');
 
-                    // Логируем первые несколько характеристик с их values для отладки
+                    // Логируем ВСЕ характеристики с values для отладки
                     if (this.commonCharacteristics.length > 0) {
-                        const sample = this.commonCharacteristics.slice(0, 3).map(ch => ({
-                            name: ch.name,
-                            id: ch.id,
-                            values_count: ch.values ? ch.values.length : 0,
-                            sample_values: ch.values ? ch.values.slice(0, 3) : []
-                        }));
-                        console.log('Sample characteristics with values:', JSON.stringify(sample, null, 2));
+                        const charsWithValues = this.commonCharacteristics.filter(ch => ch.values && ch.values.length > 0);
+                        const charsWithoutValues = this.commonCharacteristics.filter(ch => !ch.values || ch.values.length === 0);
+
+                        console.log(`✅ ${charsWithValues.length} characteristics WITH values:`);
+                        charsWithValues.forEach(ch => {
+                            console.log(`  - ${ch.name} (ID: ${ch.id}): ${ch.values.length} values`);
+                        });
+
+                        console.log(`⚠️ ${charsWithoutValues.length} characteristics WITHOUT values`);
                     }
                 }
 
