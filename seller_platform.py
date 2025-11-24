@@ -3244,7 +3244,13 @@ def api_characteristics_by_category(object_name):
 
                         app.logger.info(f"📚 Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
 
+                        # Логируем первые несколько записей для отладки
+                        if directory_data:
+                            sample = directory_data[:3]
+                            app.logger.info(f"  📝 Sample entries: {sample}")
+
                         # Универсальная обработка всех справочников
+                        values_added = 0
                         for entry in directory_data:
                             value = extract_value(entry)
                             if value:
@@ -3252,8 +3258,11 @@ def api_characteristics_by_category(object_name):
                                     'id': value,
                                     'value': value
                                 })
+                                values_added += 1
 
-                        app.logger.info(f"✅ Added {len(char['values'])} values to '{char['name']}'")
+                        app.logger.info(f"✅ Added {values_added} values to '{char['name']}' (total in char: {len(char['values'])} values)")
+                    else:
+                        app.logger.debug(f"  ℹ️ No directory mapping for '{char['name']}' - will use free text input")
 
                 characteristics.append(char)
 
@@ -3389,7 +3398,15 @@ def api_characteristics_multi_category():
                             if directory_type:
                                 directory_data = directories.get(directory_type, [])
 
+                                app.logger.info(f"📚 [{category}] Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
+
+                                # Логируем первые несколько записей для отладки
+                                if directory_data:
+                                    sample = directory_data[:3]
+                                    app.logger.info(f"  📝 Sample entries: {sample}")
+
                                 # Универсальная обработка всех справочников
+                                values_added = 0
                                 for entry in directory_data:
                                     value = extract_value(entry)
                                     if value:
@@ -3397,6 +3414,11 @@ def api_characteristics_multi_category():
                                             'id': value,
                                             'value': value
                                         })
+                                        values_added += 1
+
+                                app.logger.info(f"✅ [{category}] Added {values_added} values to '{char['name']}' (total in char: {len(char['values'])} values)")
+                            else:
+                                app.logger.debug(f"  ℹ️ [{category}] No directory mapping for '{char['name']}' - will use free text input")
 
                         characteristics.append(char)
 
