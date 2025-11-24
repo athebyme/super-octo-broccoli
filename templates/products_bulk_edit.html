@@ -144,7 +144,10 @@
 
             // Для характеристик проверяем заполненность полей
             if (this.operation === 'update_characteristic' || this.operation === 'add_characteristic') {
-                const charId = document.getElementById('char_id_common').value;
+                const charIdField = document.getElementById('char_id_common');
+                const charId = charIdField ? charIdField.value : null;
+                console.log('Validation - char_id_common:', charId);
+
                 if (!charId) {
                     alert('Выберите характеристику');
                     return false;
@@ -153,6 +156,7 @@
                 // Проверяем значение в скрытом поле
                 const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
                 const valueField = document.getElementById(valueFieldId);
+                console.log('Validation - value field:', valueFieldId, 'value:', valueField ? valueField.value : 'field not found');
 
                 if (!valueField || !valueField.value || !valueField.value.trim()) {
                     alert('Выберите или введите значение характеристики');
@@ -526,7 +530,13 @@
                                 @change="if(selectedCharId) {
                                     selectedChar = characteristics.find(c => c.id == selectedCharId);
                                     console.log('Selected char:', selectedChar ? selectedChar.name : 'null', 'Values:', selectedChar ? (selectedChar.values ? selectedChar.values.length : 0) : 0);
-                                    document.getElementById('char_id_common').value = selectedCharId;
+                                    const hiddenField = document.getElementById('char_id_common');
+                                    if (hiddenField) {
+                                        hiddenField.value = selectedCharId;
+                                        console.log('Set char_id_common to:', selectedCharId);
+                                    } else {
+                                        console.error('char_id_common field not found!');
+                                    }
                                 }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
@@ -734,7 +744,13 @@
                                 @change="if(selectedCharId) {
                                     selectedChar = characteristics.find(c => c.id == selectedCharId);
                                     console.log('Selected char:', selectedChar ? selectedChar.name : 'null', 'Values:', selectedChar ? (selectedChar.values ? selectedChar.values.length : 0) : 0);
-                                    document.getElementById('char_id_common').value = selectedCharId;
+                                    const hiddenField = document.getElementById('char_id_common');
+                                    if (hiddenField) {
+                                        hiddenField.value = selectedCharId;
+                                        console.log('Set char_id_common to:', selectedCharId);
+                                    } else {
+                                        console.error('char_id_common field not found!');
+                                    }
                                 }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
