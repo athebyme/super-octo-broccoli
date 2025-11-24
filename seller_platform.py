@@ -2185,21 +2185,45 @@ def products_bulk_edit():
     # Получаем выбранные товары из сессии или параметров
     selected_ids = request.args.getlist('ids') or request.form.getlist('product_ids')
 
-    if not selected_ids:
+    # Поддержка фильтров по бренду и категории
+    filter_brand = request.args.get('filter_brand', '').strip()
+    filter_category = request.args.get('filter_category', '').strip()
+    filter_type = None  # Тип фильтра для отображения
+
+    # Если есть фильтры, получаем товары по фильтрам
+    if filter_brand or filter_category:
+        query = Product.query.filter(Product.seller_id == current_user.seller.id)
+
+        if filter_brand:
+            query = query.filter(Product.brand == filter_brand)
+            filter_type = f'бренд "{filter_brand}"'
+
+        if filter_category:
+            query = query.filter(Product.object_name == filter_category)
+            filter_type = f'категория "{filter_category}"' if not filter_brand else f'{filter_type} и категория "{filter_category}"'
+
+        products = query.all()
+
+        if not products:
+            flash(f'Не найдено товаров с фильтром: {filter_type}', 'warning')
+            return redirect(url_for('products_list'))
+
+    # Иначе используем выбранные ID
+    elif selected_ids:
+        try:
+            selected_ids = [int(pid) for pid in selected_ids]
+        except ValueError:
+            flash('Неверный формат ID товаров', 'danger')
+            return redirect(url_for('products_list'))
+
+        # Получаем выбранные товары
+        products = Product.query.filter(
+            Product.id.in_(selected_ids),
+            Product.seller_id == current_user.seller.id
+        ).all()
+    else:
         flash('Не выбраны товары для редактирования', 'warning')
         return redirect(url_for('products_list'))
-
-    try:
-        selected_ids = [int(pid) for pid in selected_ids]
-    except ValueError:
-        flash('Неверный формат ID товаров', 'danger')
-        return redirect(url_for('products_list'))
-
-    # Получаем выбранные товары
-    products = Product.query.filter(
-        Product.id.in_(selected_ids),
-        Product.seller_id == current_user.seller.id
-    ).all()
 
     if not products:
         flash('Товары не найдены', 'warning')
@@ -2687,7 +2711,10 @@ def products_bulk_edit():
         'products_bulk_edit.html',
         products=[p.to_dict() for p in products],
         edit_operations=edit_operations,
-        categories=categories
+        categories=categories,
+        filter_type=filter_type,
+        filter_brand=filter_brand,
+        filter_category=filter_category
     )
 
 
