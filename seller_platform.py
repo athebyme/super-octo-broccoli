@@ -3157,10 +3157,38 @@ def api_characteristics_by_category(object_name):
 
     app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
 
+    # Маппинг названий характеристик к справочникам WB
+    CHAR_TO_DIRECTORY = {
+        'Цвет': 'colors',
+        'Страна производства': 'countries',
+        'Пол': 'kinds',
+        'Сезон': 'seasons',
+        'Ставка НДС': 'vat',
+        'ТНВЭД-код': 'tnved',
+        'Код ТН ВЭД': 'tnved',
+    }
+
     # Сначала попробуем получить из WB API
     try:
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
             result = client.get_card_characteristics_by_object_name(object_name)
+
+            # Загружаем справочники для известных характеристик
+            directories = {}
+            for item in result.get('data', []):
+                char_name = item.get('name', '')
+                if char_name in CHAR_TO_DIRECTORY:
+                    directory_type = CHAR_TO_DIRECTORY[char_name]
+                    if directory_type not in directories:
+                        try:
+                            method_name = f'get_directory_{directory_type}'
+                            method = getattr(client, method_name)
+                            dir_result = method()
+                            directories[directory_type] = dir_result.get('data', [])
+                            app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
+                        except Exception as e:
+                            app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
+                            directories[directory_type] = []
 
             # Преобразуем результат в более удобный формат
             characteristics = []
@@ -3174,13 +3202,41 @@ def api_characteristics_by_category(object_name):
                     'values': []
                 }
 
-                # Добавляем возможные значения если они есть
+                # Добавляем возможные значения из словаря API
                 if item.get('dictionary'):
                     for dict_item in item['dictionary']:
                         char['values'].append({
                             'id': dict_item.get('unitID'),
                             'value': dict_item.get('value')
                         })
+                # Если словаря нет, но есть справочник - используем его
+                elif char['name'] in CHAR_TO_DIRECTORY:
+                    directory_type = CHAR_TO_DIRECTORY[char['name']]
+                    directory_data = directories.get(directory_type, [])
+
+                    if directory_type == 'countries':
+                        # Для стран используем поле 'name'
+                        for country in directory_data:
+                            char['values'].append({
+                                'id': country.get('name'),  # Используем название как ID
+                                'value': country.get('name')
+                            })
+                    elif directory_type == 'colors':
+                        # Для цветов используем поле 'name'
+                        for color in directory_data:
+                            char['values'].append({
+                                'id': color.get('name'),
+                                'value': color.get('name')
+                            })
+                    elif directory_type in ['kinds', 'seasons', 'vat', 'tnved']:
+                        # Для остальных используем поле 'name' или 'value'
+                        for entry in directory_data:
+                            value = entry.get('name') or entry.get('value')
+                            if value:
+                                char['values'].append({
+                                    'id': value,
+                                    'value': value
+                                })
 
                 characteristics.append(char)
 
