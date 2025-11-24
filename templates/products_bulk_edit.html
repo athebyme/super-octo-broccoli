@@ -327,7 +327,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
-                           @change="clearFields(); if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           @change="clearFields(); if (categories && categories.length > 0 && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
