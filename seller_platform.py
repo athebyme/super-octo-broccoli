@@ -3445,6 +3445,18 @@ def api_characteristics_multi_category():
                 # Если только одна категория, все характеристики общие
                 common_characteristics = list(all_chars.values())[0] if all_chars else []
 
+            # Логируем что возвращаем
+            app.logger.info(f"📤 Returning {len(common_characteristics)} common characteristics")
+            chars_with_values = [c for c in common_characteristics if c.get('values') and len(c['values']) > 0]
+            app.logger.info(f"  ✓ {len(chars_with_values)} characteristics have values")
+
+            # Логируем первые несколько характеристик для отладки
+            if common_characteristics:
+                sample = common_characteristics[:5]
+                for ch in sample:
+                    values_count = len(ch.get('values', []))
+                    app.logger.info(f"  - {ch['name']} (ID: {ch['id']}): {values_count} values")
+
             return {
                 'common': common_characteristics,
                 'by_category': all_chars,
