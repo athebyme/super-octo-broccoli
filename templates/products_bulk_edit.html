@@ -327,7 +327,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
-                           @change="clearFields(); if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           @change="clearFields(); if (categories && categories.length > 0 && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
@@ -540,7 +540,7 @@
                             Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
-                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                                (можно указать до <span x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : ''"></span> значений через запятую)
                             </span>
                         </label>
 
@@ -564,7 +564,7 @@
                                             </template>
                                         </div>
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
-                                            <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
+                                            <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : 0"></strong></span>
                                             <button type="button"
                                                     @click="selectedValues = []; document.getElementById('value_input').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
@@ -744,7 +744,7 @@
                             Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
-                                (можно указать до <span x-text="selectedChar.max_count"></span> значений)
+                                (можно указать до <span x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : ''"></span> значений)
                             </span>
                         </label>
 
@@ -768,7 +768,7 @@
                                             </template>
                                         </div>
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
-                                            <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
+                                            <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : 0"></strong></span>
                                             <button type="button"
                                                     @click="selectedValuesAdd = []; document.getElementById('value_input_add').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
