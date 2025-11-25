@@ -654,7 +654,7 @@
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value" id="value_input" x-model="charValue">
+                        <input type="hidden" name="value" id="value_input" x-model="charValue" :disabled="operation !== 'update_characteristic'">
                     </div>
                 </div>
             </div>
@@ -868,7 +868,7 @@
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value" id="value_input_add" x-model="charValueAdd">
+                        <input type="hidden" name="value" id="value_input_add" x-model="charValueAdd" :disabled="operation !== 'add_characteristic'">
                     </div>
                 </div>
 
@@ -895,8 +895,8 @@
         </div>
 
         <!-- Общие скрытые поля для характеристик (используются обеими операциями) -->
-        <input type="hidden" name="char_id" id="char_id_common">
-        <input type="hidden" name="selected_category" id="selected_category" x-model="selectedCategory">
+        <input type="hidden" name="char_id" id="char_id_common" :disabled="operation !== 'update_characteristic' && operation !== 'add_characteristic'">
+        <input type="hidden" name="selected_category" id="selected_category" x-model="selectedCategory" :disabled="operation !== 'update_characteristic' && operation !== 'add_characteristic'">
 
         <!-- Скрытые поля с ID товаров -->
         {% for product in products %}

@@ -2274,11 +2274,14 @@ def products_bulk_edit():
         app.logger.info(f"📋 Form data: operation={operation}")
         app.logger.info(f"📋 Form value field: '{operation_value}'")
         app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
+        app.logger.info(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
         app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
-        if len(request.form) < 20:  # Показываем все поля если их немного
-            for key, value in request.form.items():
-                if key != 'product_ids':
-                    app.logger.debug(f"   {key} = '{value}'")
+
+        # Показываем ВСЕ поля (кроме product_ids) для отладки
+        app.logger.info("📋 All form fields:")
+        for key, value in request.form.items():
+            if key != 'product_ids':
+                app.logger.info(f"   {key} = '{value}'")
 
         try:
             with WildberriesAPIClient(
@@ -2441,8 +2444,30 @@ def products_bulk_edit():
                     new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
-                    if not characteristic_id or not new_value:
-                        flash('Укажите ID характеристики и новое значение', 'warning')
+                    app.logger.info(f"🔍 Update characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
+
+                    if not characteristic_id:
+                        flash('Не указан ID характеристики (char_id пустой)', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+
+                        categories_info = {}
+                        for product in products:
+                            category = product.object_name or 'Без категории'
+                            if category not in categories_info:
+                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
+                            categories_info[category]['count'] += 1
+                            categories_info[category]['product_ids'].append(product.id)
+                        categories = list(categories_info.values())
+
+                        return render_template('products_bulk_edit.html',
+                                             products=[p.to_dict() for p in products],
+                                             edit_operations=edit_operations,
+                                             categories=categories)
+
+                    if not new_value:
+                        flash('Не указано новое значение (value пустой)', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
@@ -2544,13 +2569,34 @@ def products_bulk_edit():
                     new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
-                    if not characteristic_id or not new_value:
-                        flash('Укажите ID характеристики и значение', 'warning')
+                    app.logger.info(f"🔍 Add characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
+
+                    if not characteristic_id:
+                        flash('Не указан ID характеристики (char_id пустой)', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
 
-                        # Собираем категории для повторного рендера
+                        categories_info = {}
+                        for product in products:
+                            category = product.object_name or 'Без категории'
+                            if category not in categories_info:
+                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
+                            categories_info[category]['count'] += 1
+                            categories_info[category]['product_ids'].append(product.id)
+                        categories = list(categories_info.values())
+
+                        return render_template('products_bulk_edit.html',
+                                             products=[p.to_dict() for p in products],
+                                             edit_operations=edit_operations,
+                                             categories=categories)
+
+                    if not new_value:
+                        flash('Не указано значение для добавления (value пустой)', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+
                         categories_info = {}
                         for product in products:
                             category = product.object_name or 'Без категории'
