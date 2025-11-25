@@ -98,6 +98,7 @@
         commonCharacteristics: [],
         characteristicsByCategory: {},
         selectedChar: null,
+        selectedCharId: null,
         selectedValues: [],
         selectedValuesAdd: [],
         loading: false,
@@ -216,6 +217,7 @@
         clearFields() {
             // Очищаем все поля при смене операции
             this.selectedChar = null;
+            this.selectedCharId = null;
             this.selectedValues = [];
             this.selectedValuesAdd = [];
             this.characteristics = [];
@@ -241,6 +243,7 @@
             this.characteristics = [];
             this.commonCharacteristics = [];
             this.selectedChar = null;
+            this.selectedCharId = null;
             this.loadError = null;
 
             try {
@@ -476,13 +479,17 @@
                             Характеристика
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
-                        <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
+                        <select x-model="selectedCharId"
+                                @change="if(selectedCharId) {
+                                    selectedChar = characteristics.find(c => c.id == selectedCharId);
+                                    document.getElementById('char_id_common').value = selectedCharId;
+                                    console.log('Selected char:', selectedChar ? selectedChar.name : 'null');
+                                }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
                             <template x-for="char in characteristics" :key="char.id">
-                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                                <option :value="char.id" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
 
@@ -680,13 +687,17 @@
                             Характеристика
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
-                        <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
+                        <select x-model="selectedCharId"
+                                @change="if(selectedCharId) {
+                                    selectedChar = characteristics.find(c => c.id == selectedCharId);
+                                    document.getElementById('char_id_common').value = selectedCharId;
+                                    console.log('Selected char (add):', selectedChar ? selectedChar.name : 'null');
+                                }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
                             <template x-for="char in characteristics" :key="char.id">
-                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                                <option :value="char.id" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
 
