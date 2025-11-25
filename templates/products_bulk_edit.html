@@ -148,22 +148,34 @@
             if (this.operation === 'update_characteristic' || this.operation === 'add_characteristic') {
                 const charIdField = document.getElementById('char_id_common');
                 const charId = charIdField ? charIdField.value : null;
-                console.log('Validation - char_id_common:', charId);
+
+                console.log('=== VALIDATION DEBUG ===');
+                console.log('Operation:', this.operation);
+                console.log('char_id_common value:', charId);
+                console.log('Alpine charValue:', this.charValue);
+                console.log('Alpine charValueAdd:', this.charValueAdd);
+                console.log('Alpine selectedChar:', this.selectedChar);
 
                 if (!charId) {
                     alert('Выберите характеристику');
                     return false;
                 }
 
-                // Проверяем значение в скрытом поле
-                const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
-                const valueField = document.getElementById(valueFieldId);
-                console.log('Validation - value field:', valueFieldId, 'value:', valueField ? valueField.value : 'field not found');
+                // Проверяем Alpine переменную напрямую
+                const alpineValue = this.operation === 'update_characteristic' ? this.charValue : this.charValueAdd;
+                console.log('Alpine value to check:', alpineValue);
 
-                if (!valueField || !valueField.value || !valueField.value.trim()) {
-                    alert('Выберите или введите значение характеристики');
+                if (!alpineValue || !alpineValue.trim()) {
+                    alert('Выберите или введите значение характеристики.\n\nДебаг:\ncharValue=' + this.charValue + '\ncharValueAdd=' + this.charValueAdd);
                     return false;
                 }
+
+                // Проверяем скрытое поле
+                const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
+                const valueField = document.getElementById(valueFieldId);
+                console.log('Hidden field ID:', valueFieldId);
+                console.log('Hidden field value:', valueField ? valueField.value : 'field not found');
+                console.log('Hidden field disabled:', valueField ? valueField.disabled : 'N/A');
             }
 
             // Для других операций проверяем поле value
