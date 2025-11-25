@@ -16,6 +16,27 @@ from requests.packages.urllib3.util.retry import Retry
 logger = logging.getLogger('wb_api')
 
 
+def chunk_list(items: List, chunk_size: int) -> List[List]:
+    """
+    Разбить список на чанки (батчи)
+
+    Args:
+        items: Список элементов
+        chunk_size: Размер чанка
+
+    Returns:
+        Список чанков
+
+    Example:
+        >>> chunk_list([1,2,3,4,5], 2)
+        [[1,2], [3,4], [5]]
+    """
+    chunks = []
+    for i in range(0, len(items), chunk_size):
+        chunks.append(items[i:i + chunk_size])
+    return chunks
+
+
 class WBAPIException(Exception):
     """Базовое исключение для WB API"""
     pass
@@ -712,6 +733,90 @@ class WildberriesAPIClient:
             Результат обновления
         """
         return self.update_card(nm_id, {"characteristics": characteristics})
+
+    def update_cards_batch(
+        self,
+        cards: List[Dict[str, Any]],
+        log_to_db: bool = False,
+        seller_id: int = None,
+        validate: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Обновить несколько карточек одним запросом (Content API v2)
+
+        Args:
+            cards: Список подготовленных карточек для обновления
+                   Каждая карточка должна содержать:
+                   - nmID: обязательно
+                   - vendorCode: обязательно
+                   - sizes: обязательно (массив)
+                   - другие поля опционально
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+            validate: Валидировать данные перед отправкой
+
+        Returns:
+            Результат обновления
+
+        Raises:
+            WBAPIException: если слишком много карточек или размер запроса превышает лимит
+
+        Note:
+            - Максимум 3000 карточек за раз
+            - Максимальный размер запроса 10 МБ
+            - Все карточки должны быть ПОЛНЫМИ (не частичные обновления)
+        """
+        import sys
+
+        if len(cards) > 3000:
+            raise WBAPIException(
+                f"Too many cards ({len(cards)}). "
+                f"Maximum 3000 cards per request. Use chunking."
+            )
+
+        if not cards:
+            logger.warning("⚠️ Empty cards list provided to update_cards_batch")
+            return {'success': True, 'updated': 0}
+
+        # Проверка размера запроса
+        import json
+        size_bytes = sys.getsizeof(json.dumps(cards))
+        size_mb = size_bytes / 1024 / 1024
+
+        if size_mb > 10:
+            raise WBAPIException(
+                f"Request size too large ({size_mb:.2f} MB). "
+                f"Maximum 10 MB. Reduce batch size or remove heavy fields."
+            )
+
+        logger.info(f"📤 Batch update: {len(cards)} cards, size: {size_mb:.2f} MB")
+
+        # Валидация карточек
+        if validate:
+            from wb_validators import validate_and_log_errors
+            for i, card in enumerate(cards):
+                if not validate_and_log_errors(card, operation="update"):
+                    logger.error(f"❌ Validation failed for card #{i} (nmID={card.get('nmID')})")
+                    raise WBAPIException(f"Validation failed for card #{i}")
+
+        endpoint = "/content/v2/cards/update"
+
+        try:
+            response = self._make_request(
+                'POST', 'content', endpoint,
+                log_to_db=log_to_db,
+                seller_id=seller_id,
+                json=cards  # Отправляем массив карточек
+            )
+            result = response.json()
+            logger.info(f"✅ Batch update result: {result}")
+            return result
+        except WBAPIException as e:
+            logger.error(f"❌ WB API error in batch update: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in batch update: {str(e)}")
+            raise
 
     def update_prices(
         self,

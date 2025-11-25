@@ -148,22 +148,34 @@
             if (this.operation === 'update_characteristic' || this.operation === 'add_characteristic') {
                 const charIdField = document.getElementById('char_id_common');
                 const charId = charIdField ? charIdField.value : null;
-                console.log('Validation - char_id_common:', charId);
+
+                console.log('=== VALIDATION DEBUG ===');
+                console.log('Operation:', this.operation);
+                console.log('char_id_common value:', charId);
+                console.log('Alpine charValue:', this.charValue);
+                console.log('Alpine charValueAdd:', this.charValueAdd);
+                console.log('Alpine selectedChar:', this.selectedChar);
 
                 if (!charId) {
                     alert('Выберите характеристику');
                     return false;
                 }
 
-                // Проверяем значение в скрытом поле
-                const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
-                const valueField = document.getElementById(valueFieldId);
-                console.log('Validation - value field:', valueFieldId, 'value:', valueField ? valueField.value : 'field not found');
+                // Проверяем Alpine переменную напрямую
+                const alpineValue = this.operation === 'update_characteristic' ? this.charValue : this.charValueAdd;
+                console.log('Alpine value to check:', alpineValue);
 
-                if (!valueField || !valueField.value || !valueField.value.trim()) {
-                    alert('Выберите или введите значение характеристики');
+                if (!alpineValue || !alpineValue.trim()) {
+                    alert('Выберите или введите значение характеристики.\n\nДебаг:\ncharValue=' + this.charValue + '\ncharValueAdd=' + this.charValueAdd);
                     return false;
                 }
+
+                // Проверяем скрытое поле
+                const valueFieldId = this.operation === 'update_characteristic' ? 'value_input' : 'value_input_add';
+                const valueField = document.getElementById(valueFieldId);
+                console.log('Hidden field ID:', valueFieldId);
+                console.log('Hidden field value:', valueField ? valueField.value : 'field not found');
+                console.log('Hidden field disabled:', valueField ? valueField.disabled : 'N/A');
             }
 
             // Для других операций проверяем поле value
@@ -398,6 +410,7 @@
                        name="value"
                        id="value_brand"
                        placeholder="Введите название бренда"
+                       :disabled="operation !== 'update_brand'"
                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                 <p class="mt-2 text-sm text-gray-600">
                     Этот бренд будет установлен для всех {{ products|length }} выбранных товаров
@@ -413,6 +426,7 @@
                           id="value_append"
                           rows="4"
                           placeholder="Введите текст, который будет добавлен в конец описания каждого товара"
+                          :disabled="operation !== 'append_description'"
                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
                 <p class="mt-2 text-sm text-gray-600">
                     Текст будет добавлен в конец существующего описания всех выбранных товаров
@@ -428,6 +442,7 @@
                           id="value_replace"
                           rows="6"
                           placeholder="Введите новое описание для всех товаров"
+                          :disabled="operation !== 'replace_description'"
                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
                 <p class="mt-2 text-sm text-gray-600">
                     Описание будет полностью заменено для всех выбранных товаров
@@ -654,7 +669,7 @@
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value" id="value_input" x-model="charValue">
+                        <input type="hidden" name="value" id="value_input" x-model="charValue" :disabled="operation !== 'update_characteristic'">
                     </div>
                 </div>
             </div>
@@ -868,7 +883,7 @@
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value" id="value_input_add" x-model="charValueAdd">
+                        <input type="hidden" name="value" id="value_input_add" x-model="charValueAdd" :disabled="operation !== 'add_characteristic'">
                     </div>
                 </div>
 
@@ -895,8 +910,8 @@
         </div>
 
         <!-- Общие скрытые поля для характеристик (используются обеими операциями) -->
-        <input type="hidden" name="char_id" id="char_id_common">
-        <input type="hidden" name="selected_category" id="selected_category" x-model="selectedCategory">
+        <input type="hidden" name="char_id" id="char_id_common" :disabled="operation !== 'update_characteristic' && operation !== 'add_characteristic'">
+        <input type="hidden" name="selected_category" id="selected_category" x-model="selectedCategory" :disabled="operation !== 'update_characteristic' && operation !== 'add_characteristic'">
 
         <!-- Скрытые поля с ID товаров -->
         {% for product in products %}

@@ -2245,11 +2245,8 @@ def products_bulk_edit():
         # Создаем запись bulk операции
         operation_value = request.form.get('value', '').strip()
 
-        # Для характеристик получаем значение из специальных полей
-        if operation == 'update_characteristic':
-            operation_value = request.form.get('value_update', '').strip()
-        elif operation == 'add_characteristic':
-            operation_value = request.form.get('value_add', '').strip()
+        # Для характеристик значение уже получено из поля 'value' выше
+        # (не нужно переопределять operation_value)
 
         # Определяем описание операции
         operation_descriptions = {
@@ -2277,11 +2274,14 @@ def products_bulk_edit():
         app.logger.info(f"📋 Form data: operation={operation}")
         app.logger.info(f"📋 Form value field: '{operation_value}'")
         app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
+        app.logger.info(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
         app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
-        if len(request.form) < 20:  # Показываем все поля если их немного
-            for key, value in request.form.items():
-                if key != 'product_ids':
-                    app.logger.debug(f"   {key} = '{value}'")
+
+        # Показываем ВСЕ поля (кроме product_ids) для отладки
+        app.logger.info("📋 All form fields:")
+        for key, value in request.form.items():
+            if key != 'product_ids':
+                app.logger.info(f"   {key} = '{value}'")
 
         try:
             with WildberriesAPIClient(
@@ -2441,11 +2441,33 @@ def products_bulk_edit():
 
                 elif operation == 'update_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = request.form.get('value_update', '').strip()
+                    new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
-                    if not characteristic_id or not new_value:
-                        flash('Укажите ID характеристики и новое значение', 'warning')
+                    app.logger.info(f"🔍 Update characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
+
+                    if not characteristic_id:
+                        flash('Не указан ID характеристики (char_id пустой)', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+
+                        categories_info = {}
+                        for product in products:
+                            category = product.object_name or 'Без категории'
+                            if category not in categories_info:
+                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
+                            categories_info[category]['count'] += 1
+                            categories_info[category]['product_ids'].append(product.id)
+                        categories = list(categories_info.values())
+
+                        return render_template('products_bulk_edit.html',
+                                             products=[p.to_dict() for p in products],
+                                             edit_operations=edit_operations,
+                                             categories=categories)
+
+                    if not new_value:
+                        flash('Не указано новое значение (value пустой)', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
@@ -2481,12 +2503,30 @@ def products_bulk_edit():
                     formatted_value = str(new_value).strip()
                     app.logger.info(f"Formatted value as string: '{formatted_value}'")
 
+                    # ==================== БАТЧИНГ ====================
+                    # Подготавливаем все карточки для обновления
+                    app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
+
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    cards_to_update = []
+                    product_map = {}  # Сопоставление nmID -> product для обновления БД
+
+                    app.logger.info(f"⚡ Using DB data instead of {len(products_to_update)} GET requests to WB API")
+
                     for product in products_to_update:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
+                            # Используем данные из БД - мгновенно и без rate limits!
+                            full_card = product.to_wb_card_format()
+
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
 
                             # Получаем текущие характеристики
-                            current_characteristics = product.get_characteristics()
+                            current_characteristics = full_card.get('characteristics', [])
 
                             # Обновляем значение характеристики
                             char_found = False
@@ -2503,57 +2543,123 @@ def products_bulk_edit():
                                     'value': formatted_value
                                 })
 
-                            # Логируем характеристики перед отправкой
-                            app.logger.info(f"Updating nmID={product.nm_id} with {len(current_characteristics)} characteristics")
-                            target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
-                            if target_char:
-                                app.logger.info(f"Target characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
+                            # Обновляем характеристики в карточке
+                            full_card['characteristics'] = current_characteristics
 
-                            # Обновляем через API
-                            client.update_card(
-                                product.nm_id,
-                                {'characteristics': current_characteristics},
+                            # Очищаем нередактируемые поля
+                            card_ready = prepare_card_for_update(full_card, {})
+
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = product
+
+                            # Логируем прогресс каждые 100 карточек
+                            if len(cards_to_update) % 100 == 0:
+                                app.logger.info(f"  📦 Prepared {len(cards_to_update)}/{len(products_to_update)} cards...")
+
+                        except Exception as e:
+                            error_count += 1
+                            error_msg = f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(error_msg)
+
+                    app.logger.info(f"✅ Prepared {len(cards_to_update)} cards (0 API calls!)")
+
+                    if not cards_to_update:
+                        flash('Не удалось подготовить ни одной карточки для обновления', 'danger')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('products_list'))
+
+                    # Разбиваем на батчи по 100 карточек
+                    BATCH_SIZE = 100
+                    batches = chunk_list(cards_to_update, BATCH_SIZE)
+
+                    app.logger.info(f"📦 Split into {len(batches)} batches (batch size: {BATCH_SIZE})")
+
+                    # Обновляем батчами
+                    for batch_num, batch in enumerate(batches, 1):
+                        try:
+                            app.logger.info(f"📤 Batch {batch_num}/{len(batches)}: updating {len(batch)} cards...")
+
+                            result = client.update_cards_batch(
+                                batch,
                                 log_to_db=True,
                                 seller_id=current_user.seller.id
                             )
-                            product.set_characteristics(current_characteristics)
-                            product.last_sync = datetime.utcnow()
 
-                            snapshot_after = _create_product_snapshot(product)
+                            # Обновляем БД для успешно обновленных карточек
+                            for card in batch:
+                                nm_id = card['nmID']
+                                product = product_map.get(nm_id)
+                                if product:
+                                    snapshot_before = _create_product_snapshot(product)
 
-                            card_history = CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['characteristics'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=True,
-                                wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
+                                    product.set_characteristics(card['characteristics'])
+                                    product.last_sync = datetime.utcnow()
 
-                            success_count += 1
+                                    snapshot_after = _create_product_snapshot(product)
+
+                                    card_history = CardEditHistory(
+                                        product_id=product.id,
+                                        seller_id=current_user.seller.id,
+                                        bulk_edit_id=bulk_operation.id,
+                                        action='update',
+                                        changed_fields=['characteristics'],
+                                        snapshot_before=snapshot_before,
+                                        snapshot_after=snapshot_after,
+                                        wb_synced=True,
+                                        wb_sync_status='success'
+                                    )
+                                    db.session.add(card_history)
+
+                                    success_count += 1
+
+                            db.session.commit()
+                            app.logger.info(f"✅ Batch {batch_num}/{len(batches)} completed: {len(batch)} cards updated")
+
                         except Exception as e:
-                            error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            error_count += len(batch)
+                            error_msg = f"Batch {batch_num}: {str(e)}"
                             errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
+                            # Продолжаем со следующим батчем
 
-                    db.session.commit()
+                    app.logger.info(f"✅ Batch update complete: {success_count} success, {error_count} errors")
 
                 elif operation == 'add_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = request.form.get('value_add', '').strip()
+                    new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
-                    if not characteristic_id or not new_value:
-                        flash('Укажите ID характеристики и значение', 'warning')
+                    app.logger.info(f"🔍 Add characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
+
+                    if not characteristic_id:
+                        flash('Не указан ID характеристики (char_id пустой)', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
 
-                        # Собираем категории для повторного рендера
+                        categories_info = {}
+                        for product in products:
+                            category = product.object_name or 'Без категории'
+                            if category not in categories_info:
+                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
+                            categories_info[category]['count'] += 1
+                            categories_info[category]['product_ids'].append(product.id)
+                        categories = list(categories_info.values())
+
+                        return render_template('products_bulk_edit.html',
+                                             products=[p.to_dict() for p in products],
+                                             edit_operations=edit_operations,
+                                             categories=categories)
+
+                    if not new_value:
+                        flash('Не указано значение для добавления (value пустой)', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+
                         categories_info = {}
                         for product in products:
                             category = product.object_name or 'Без категории'
@@ -3114,6 +3220,38 @@ def api_logs():
 
 # ============= API ENDPOINTS =============
 
+# Кэш для характеристик и справочников WB API
+# Формат: {key: (data, timestamp)}
+_characteristics_cache = {}
+_CACHE_TTL = 3600  # 1 час
+
+def _get_from_cache(key: str):
+    """Получить данные из кэша если они свежие"""
+    if key in _characteristics_cache:
+        data, timestamp = _characteristics_cache[key]
+        if time.time() - timestamp < _CACHE_TTL:
+            app.logger.info(f"💾 Cache HIT for '{key}' (age: {int(time.time() - timestamp)}s)")
+            return data
+        else:
+            app.logger.info(f"⏰ Cache EXPIRED for '{key}' (age: {int(time.time() - timestamp)}s)")
+            del _characteristics_cache[key]
+    return None
+
+def _save_to_cache(key: str, data):
+    """Сохранить данные в кэш"""
+    _characteristics_cache[key] = (data, time.time())
+    app.logger.info(f"💾 Cache SAVED for '{key}'")
+
+@app.route('/api/characteristics/cache/clear', methods=['POST'])
+@login_required
+def api_clear_characteristics_cache():
+    """Очистить кэш характеристик"""
+    global _characteristics_cache
+    count = len(_characteristics_cache)
+    _characteristics_cache.clear()
+    app.logger.info(f"🗑️ Cleared {count} cache entries")
+    return {'success': True, 'cleared_entries': count}
+
 @app.route('/api/characteristics/categories')
 @login_required
 def api_characteristics_categories():
@@ -3156,6 +3294,12 @@ def api_characteristics_by_category(object_name):
         return {'error': 'WB API key not configured'}, 400
 
     app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
+
+    # Проверяем кэш
+    cache_key = f"characteristics_{current_user.seller.id}_{object_name}"
+    cached_result = _get_from_cache(cache_key)
+    if cached_result:
+        return cached_result
 
     # Функция для определения справочника по названию характеристики (fuzzy matching)
     def get_directory_type(char_name: str) -> Optional[str]:
@@ -3205,15 +3349,26 @@ def api_characteristics_by_category(object_name):
                     app.logger.info(f"✓ Matched '{char_name}' to directory '{directory_type}'")
 
                     if directory_type not in directories:
-                        try:
-                            method_name = f'get_directory_{directory_type}'
-                            method = getattr(client, method_name)
-                            dir_result = method()
-                            directories[directory_type] = dir_result.get('data', [])
-                            app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
-                        except Exception as e:
-                            app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
-                            directories[directory_type] = []
+                        # Проверяем кэш справочника
+                        dir_cache_key = f"directory_{directory_type}"
+                        cached_dir = _get_from_cache(dir_cache_key)
+
+                        if cached_dir is not None:
+                            directories[directory_type] = cached_dir
+                            app.logger.info(f"💾 Using cached {directory_type} directory: {len(cached_dir)} items")
+                        else:
+                            try:
+                                method_name = f'get_directory_{directory_type}'
+                                method = getattr(client, method_name)
+                                dir_result = method()
+                                directories[directory_type] = dir_result.get('data', [])
+                                app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
+
+                                # Сохраняем справочник в кэш
+                                _save_to_cache(dir_cache_key, directories[directory_type])
+                            except Exception as e:
+                                app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
+                                directories[directory_type] = []
                 else:
                     app.logger.debug(f"⊘ No directory mapping for '{char_name}'")
 
@@ -3268,11 +3423,16 @@ def api_characteristics_by_category(object_name):
 
             app.logger.info(f"✅ Loaded {len(characteristics)} characteristics for '{object_name}'")
 
-            return {
+            result = {
                 'object_name': object_name,
                 'characteristics': characteristics,
                 'count': len(characteristics)
             }
+
+            # Сохраняем в кэш
+            _save_to_cache(cache_key, result)
+
+            return result
 
     except WBAPIException as e:
         app.logger.error(f"❌ WB API error getting characteristics for '{object_name}': {e}")
