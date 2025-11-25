@@ -2221,6 +2221,12 @@ def products_bulk_edit():
         # Создаем запись bulk операции
         operation_value = request.form.get('value', '').strip()
 
+        # Для характеристик получаем значение из специальных полей
+        if operation == 'update_characteristic':
+            operation_value = request.form.get('value_update', '').strip()
+        elif operation == 'add_characteristic':
+            operation_value = request.form.get('value_add', '').strip()
+
         # Определяем описание операции
         operation_descriptions = {
             'update_brand': f'Обновление бренда на "{operation_value}"',
@@ -2411,7 +2417,7 @@ def products_bulk_edit():
 
                 elif operation == 'update_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = operation_value
+                    new_value = request.form.get('value_update', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
                     if not characteristic_id or not new_value:
@@ -2514,7 +2520,7 @@ def products_bulk_edit():
 
                 elif operation == 'add_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = operation_value
+                    new_value = request.form.get('value_add', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
                     if not characteristic_id or not new_value:
