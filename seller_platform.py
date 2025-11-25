@@ -2513,21 +2513,19 @@ def products_bulk_edit():
                     cards_to_update = []
                     product_map = {}  # Сопоставление nmID -> product для обновления БД
 
+                    app.logger.info(f"⚡ Using DB data instead of {len(products_to_update)} GET requests to WB API")
+
                     for product in products_to_update:
                         try:
-                            # Получаем полную карточку из WB API
-                            full_card = client.get_card_by_nm_id(
-                                product.nm_id,
-                                log_to_db=False,
-                                seller_id=current_user.seller.id
-                            )
+                            # Используем данные из БД - мгновенно и без rate limits!
+                            full_card = product.to_wb_card_format()
 
-                            if not full_card:
+                            if not full_card or not full_card.get('sizes'):
                                 error_count += 1
-                                errors.append(f"Товар {product.vendor_code}: карточка не найдена в WB API")
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
                                 continue
 
-                            # Получаем текущие характеристики из карточки
+                            # Получаем текущие характеристики
                             current_characteristics = full_card.get('characteristics', [])
 
                             # Обновляем значение характеристики
@@ -2554,11 +2552,17 @@ def products_bulk_edit():
                             cards_to_update.append(card_ready)
                             product_map[product.nm_id] = product
 
+                            # Логируем прогресс каждые 100 карточек
+                            if len(cards_to_update) % 100 == 0:
+                                app.logger.info(f"  📦 Prepared {len(cards_to_update)}/{len(products_to_update)} cards...")
+
                         except Exception as e:
                             error_count += 1
                             error_msg = f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}"
                             errors.append(error_msg)
                             app.logger.error(error_msg)
+
+                    app.logger.info(f"✅ Prepared {len(cards_to_update)} cards (0 API calls!)")
 
                     if not cards_to_update:
                         flash('Не удалось подготовить ни одной карточки для обновления', 'danger')

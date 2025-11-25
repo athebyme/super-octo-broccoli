@@ -250,6 +250,56 @@ class Product(db.Model):
         except:
             self.characteristics_json = '[]'
 
+    def to_wb_card_format(self):
+        """
+        Конвертировать данные из БД в формат карточки WB API
+
+        Returns:
+            Словарь в формате WB API для Content API v2
+        """
+        import json
+
+        # Базовая структура карточки
+        card = {
+            'nmID': self.nm_id,
+            'imtID': self.imt_id,
+            'vendorCode': self.vendor_code or '',
+            'subjectID': self.subject_id,
+            'title': self.title or '',
+            'description': self.description or '',
+            'brand': self.brand or '',
+        }
+
+        # Размеры (обязательно!)
+        try:
+            card['sizes'] = json.loads(self.sizes_json) if self.sizes_json else []
+        except:
+            card['sizes'] = []
+
+        # Характеристики
+        try:
+            card['characteristics'] = json.loads(self.characteristics_json) if self.characteristics_json else []
+        except:
+            card['characteristics'] = []
+
+        # Фотографии
+        try:
+            card['photos'] = json.loads(self.photos_json) if self.photos_json else []
+        except:
+            card['photos'] = []
+
+        # Габариты
+        try:
+            card['dimensions'] = json.loads(self.dimensions_json) if self.dimensions_json else {}
+        except:
+            card['dimensions'] = {}
+
+        # Видео
+        if self.video_url:
+            card['video'] = self.video_url
+
+        return card
+
 
 class APILog(db.Model):
     """Логи взаимодействия с API WB"""
