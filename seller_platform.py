@@ -3157,6 +3157,38 @@ def api_logs():
 
 # ============= API ENDPOINTS =============
 
+# Кэш для характеристик и справочников WB API
+# Формат: {key: (data, timestamp)}
+_characteristics_cache = {}
+_CACHE_TTL = 3600  # 1 час
+
+def _get_from_cache(key: str):
+    """Получить данные из кэша если они свежие"""
+    if key in _characteristics_cache:
+        data, timestamp = _characteristics_cache[key]
+        if time.time() - timestamp < _CACHE_TTL:
+            app.logger.info(f"💾 Cache HIT for '{key}' (age: {int(time.time() - timestamp)}s)")
+            return data
+        else:
+            app.logger.info(f"⏰ Cache EXPIRED for '{key}' (age: {int(time.time() - timestamp)}s)")
+            del _characteristics_cache[key]
+    return None
+
+def _save_to_cache(key: str, data):
+    """Сохранить данные в кэш"""
+    _characteristics_cache[key] = (data, time.time())
+    app.logger.info(f"💾 Cache SAVED for '{key}'")
+
+@app.route('/api/characteristics/cache/clear', methods=['POST'])
+@login_required
+def api_clear_characteristics_cache():
+    """Очистить кэш характеристик"""
+    global _characteristics_cache
+    count = len(_characteristics_cache)
+    _characteristics_cache.clear()
+    app.logger.info(f"🗑️ Cleared {count} cache entries")
+    return {'success': True, 'cleared_entries': count}
+
 @app.route('/api/characteristics/categories')
 @login_required
 def api_characteristics_categories():
@@ -3199,6 +3231,12 @@ def api_characteristics_by_category(object_name):
         return {'error': 'WB API key not configured'}, 400
 
     app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
+
+    # Проверяем кэш
+    cache_key = f"characteristics_{current_user.seller.id}_{object_name}"
+    cached_result = _get_from_cache(cache_key)
+    if cached_result:
+        return cached_result
 
     # Функция для определения справочника по названию характеристики (fuzzy matching)
     def get_directory_type(char_name: str) -> Optional[str]:
@@ -3248,15 +3286,26 @@ def api_characteristics_by_category(object_name):
                     app.logger.info(f"✓ Matched '{char_name}' to directory '{directory_type}'")
 
                     if directory_type not in directories:
-                        try:
-                            method_name = f'get_directory_{directory_type}'
-                            method = getattr(client, method_name)
-                            dir_result = method()
-                            directories[directory_type] = dir_result.get('data', [])
-                            app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
-                        except Exception as e:
-                            app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
-                            directories[directory_type] = []
+                        # Проверяем кэш справочника
+                        dir_cache_key = f"directory_{directory_type}"
+                        cached_dir = _get_from_cache(dir_cache_key)
+
+                        if cached_dir is not None:
+                            directories[directory_type] = cached_dir
+                            app.logger.info(f"💾 Using cached {directory_type} directory: {len(cached_dir)} items")
+                        else:
+                            try:
+                                method_name = f'get_directory_{directory_type}'
+                                method = getattr(client, method_name)
+                                dir_result = method()
+                                directories[directory_type] = dir_result.get('data', [])
+                                app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
+
+                                # Сохраняем справочник в кэш
+                                _save_to_cache(dir_cache_key, directories[directory_type])
+                            except Exception as e:
+                                app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
+                                directories[directory_type] = []
                 else:
                     app.logger.debug(f"⊘ No directory mapping for '{char_name}'")
 
@@ -3311,11 +3360,16 @@ def api_characteristics_by_category(object_name):
 
             app.logger.info(f"✅ Loaded {len(characteristics)} characteristics for '{object_name}'")
 
-            return {
+            result = {
                 'object_name': object_name,
                 'characteristics': characteristics,
                 'count': len(characteristics)
             }
+
+            # Сохраняем в кэш
+            _save_to_cache(cache_key, result)
+
+            return result
 
     except WBAPIException as e:
         app.logger.error(f"❌ WB API error getting characteristics for '{object_name}': {e}")
