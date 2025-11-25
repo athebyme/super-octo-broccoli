@@ -2503,12 +2503,32 @@ def products_bulk_edit():
                     formatted_value = str(new_value).strip()
                     app.logger.info(f"Formatted value as string: '{formatted_value}'")
 
+                    # ==================== БАТЧИНГ ====================
+                    # Подготавливаем все карточки для обновления
+                    app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
+
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    cards_to_update = []
+                    product_map = {}  # Сопоставление nmID -> product для обновления БД
+
                     for product in products_to_update:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
+                            # Получаем полную карточку из WB API
+                            full_card = client.get_card_by_nm_id(
+                                product.nm_id,
+                                log_to_db=False,
+                                seller_id=current_user.seller.id
+                            )
 
-                            # Получаем текущие характеристики
-                            current_characteristics = product.get_characteristics()
+                            if not full_card:
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: карточка не найдена в WB API")
+                                continue
+
+                            # Получаем текущие характеристики из карточки
+                            current_characteristics = full_card.get('characteristics', [])
 
                             # Обновляем значение характеристики
                             char_found = False
@@ -2525,44 +2545,83 @@ def products_bulk_edit():
                                     'value': formatted_value
                                 })
 
-                            # Логируем характеристики перед отправкой
-                            app.logger.info(f"Updating nmID={product.nm_id} with {len(current_characteristics)} characteristics")
-                            target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
-                            if target_char:
-                                app.logger.info(f"Target characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
+                            # Обновляем характеристики в карточке
+                            full_card['characteristics'] = current_characteristics
 
-                            # Обновляем через API
-                            client.update_card(
-                                product.nm_id,
-                                {'characteristics': current_characteristics},
+                            # Очищаем нередактируемые поля
+                            card_ready = prepare_card_for_update(full_card, {})
+
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = product
+
+                        except Exception as e:
+                            error_count += 1
+                            error_msg = f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(error_msg)
+
+                    if not cards_to_update:
+                        flash('Не удалось подготовить ни одной карточки для обновления', 'danger')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('products_list'))
+
+                    # Разбиваем на батчи по 100 карточек
+                    BATCH_SIZE = 100
+                    batches = chunk_list(cards_to_update, BATCH_SIZE)
+
+                    app.logger.info(f"📦 Split into {len(batches)} batches (batch size: {BATCH_SIZE})")
+
+                    # Обновляем батчами
+                    for batch_num, batch in enumerate(batches, 1):
+                        try:
+                            app.logger.info(f"📤 Batch {batch_num}/{len(batches)}: updating {len(batch)} cards...")
+
+                            result = client.update_cards_batch(
+                                batch,
                                 log_to_db=True,
                                 seller_id=current_user.seller.id
                             )
-                            product.set_characteristics(current_characteristics)
-                            product.last_sync = datetime.utcnow()
 
-                            snapshot_after = _create_product_snapshot(product)
+                            # Обновляем БД для успешно обновленных карточек
+                            for card in batch:
+                                nm_id = card['nmID']
+                                product = product_map.get(nm_id)
+                                if product:
+                                    snapshot_before = _create_product_snapshot(product)
 
-                            card_history = CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['characteristics'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=True,
-                                wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
+                                    product.set_characteristics(card['characteristics'])
+                                    product.last_sync = datetime.utcnow()
 
-                            success_count += 1
+                                    snapshot_after = _create_product_snapshot(product)
+
+                                    card_history = CardEditHistory(
+                                        product_id=product.id,
+                                        seller_id=current_user.seller.id,
+                                        bulk_edit_id=bulk_operation.id,
+                                        action='update',
+                                        changed_fields=['characteristics'],
+                                        snapshot_before=snapshot_before,
+                                        snapshot_after=snapshot_after,
+                                        wb_synced=True,
+                                        wb_sync_status='success'
+                                    )
+                                    db.session.add(card_history)
+
+                                    success_count += 1
+
+                            db.session.commit()
+                            app.logger.info(f"✅ Batch {batch_num}/{len(batches)} completed: {len(batch)} cards updated")
+
                         except Exception as e:
-                            error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            error_count += len(batch)
+                            error_msg = f"Batch {batch_num}: {str(e)}"
                             errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
+                            # Продолжаем со следующим батчем
 
-                    db.session.commit()
+                    app.logger.info(f"✅ Batch update complete: {success_count} success, {error_count} errors")
 
                 elif operation == 'add_characteristic':
                     characteristic_id = request.form.get('char_id', '').strip()
