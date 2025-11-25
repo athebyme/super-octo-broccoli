@@ -285,14 +285,17 @@ class CSVProductParser:
         Формирует URLs фотографий
 
         Формат фотографий:
-        - Без цензуры (sexoptovik): http://sexoptovik.ru/project/user_images/prods_res/{id}/{id}_{номер}_1200.jpg
+        - Без цензуры (sexoptovik): https://sexoptovik.ru/admin/_project/user_images/prods_res/{id}/{id}_{номер}_1200.jpg
         - С цензурой (блюр): https://x-story.ru/mp/_project/img_sx0_1200/{id}_{номер}_1200.jpg
         - Без цензуры (x-story): https://x-story.ru/mp/_project/img_sx_1200/{id}_{номер}_1200.jpg
 
         В CSV номера фотографий могут быть через запятую или пробелы
 
+        По умолчанию используется sexoptovik (без цензуры).
+        Если в настройках включена цензура - будет использоваться blur (x-story).
+
         Returns:
-            List[Dict]: [{'blur': url, 'original': url, 'sexoptovik': url}, ...]
+            List[Dict]: [{'sexoptovik': url, 'blur': url, 'original': url}, ...]
         """
         if not photo_codes or not product_id:
             return []
@@ -315,10 +318,12 @@ class CSVProductParser:
 
         for num in photo_nums:
             # Формируем все варианты URL
+            # ВАЖНО: sexoptovik первый - он используется по умолчанию
+            # Новый формат с /admin/_project/ требует авторизации (используем SexoptovikAuth)
             photo_obj = {
+                'sexoptovik': f"https://sexoptovik.ru/admin/_project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg",
                 'blur': f"https://x-story.ru/mp/_project/img_sx0_1200/{numeric_id}_{num}_1200.jpg",
-                'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg",
-                'sexoptovik': f"http://sexoptovik.ru/project/user_images/prods_res/{numeric_id}/{numeric_id}_{num}_1200.jpg"
+                'original': f"https://x-story.ru/mp/_project/img_sx_1200/{numeric_id}_{num}_1200.jpg"
             }
             photos.append(photo_obj)
 
@@ -377,6 +382,126 @@ class CategoryMapper:
         return subject_id, subject_name, confidence
 
 
+class SexoptovikAuth:
+    """
+    Авторизация на sexoptovik.ru для доступа к фотографиям
+    """
+
+    _session_cookies = {}  # Кеш cookies для каждого логина
+
+    @classmethod
+    def get_auth_cookies(cls, login: str, password: str) -> Optional[dict]:
+        """
+        Авторизуется на sexoptovik.ru и возвращает cookies
+
+        Args:
+            login: Логин от sexoptovik.ru
+            password: Пароль от sexoptovik.ru
+
+        Returns:
+            dict с cookies или None если авторизация не удалась
+        """
+        # Проверяем кеш
+        cache_key = f"{login}:{password}"
+        if cache_key in cls._session_cookies:
+            logger.debug(f"Используем кешированные cookies для {login}")
+            return cls._session_cookies[cache_key]
+
+        try:
+            logger.info(f"🔐 Начало авторизации на sexoptovik.ru для пользователя: {login}")
+
+            # Создаем сессию
+            session = requests.Session()
+
+            # Сначала загружаем страницу логина для получения сессии
+            login_page_url = 'https://sexoptovik.ru/login_page.php'
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            }
+
+            logger.info(f"📄 Загрузка страницы логина...")
+            get_response = session.get(login_page_url, headers=headers, timeout=30)
+            get_response.raise_for_status()
+            logger.info(f"✅ Страница логина загружена, статус: {get_response.status_code}")
+            logger.info(f"🍪 Cookies после GET: {session.cookies.get_dict()}")
+
+            # POST запрос на авторизацию
+            auth_data = {
+                'client_login': login,
+                'client_password': password,
+                'submit': 'Войти'
+            }
+
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            headers['Referer'] = login_page_url
+            headers['Origin'] = 'https://sexoptovik.ru'
+
+            logger.info(f"📤 Отправка данных авторизации: login={login}")
+            logger.info(f"POST данные: {list(auth_data.keys())}")
+            response = session.post(login_page_url, data=auth_data, headers=headers, timeout=30, allow_redirects=True)
+            logger.info(f"📥 Ответ получен, статус: {response.status_code}")
+            logger.info(f"🔗 Final URL: {response.url}")
+            logger.info(f"🍪 Cookies после POST: {session.cookies.get_dict()}")
+
+            # Логируем содержимое ответа (первые 1000 символов)
+            response_text = response.text[:1000] if hasattr(response, 'text') else 'N/A'
+            logger.info(f"📄 Начало ответа (1000 символов):\n{response_text}")
+
+            response.raise_for_status()
+
+            # Получаем cookies из сессии
+            cookies_dict = session.cookies.get_dict()
+
+            # Проверяем, что получили cookies авторизации
+            # Sexoptovik использует PHPSESSID и admin_pretends_as для авторизованных сессий
+            if 'PHPSESSID' in cookies_dict:
+                logger.info(f"✅ Успешная авторизация для {login}")
+                logger.info(f"Полученные cookies: {list(cookies_dict.keys())}")
+
+                # Проверяем, что это именно авторизованная сессия
+                # Если есть admin_pretends_as - значит авторизация прошла успешно
+                if 'admin_pretends_as' in cookies_dict:
+                    logger.info(f"✅ Подтверждена авторизованная сессия (admin_pretends_as={cookies_dict['admin_pretends_as']})")
+
+                cls._session_cookies[cache_key] = cookies_dict
+                return cookies_dict
+            else:
+                # Логируем содержимое ответа для отладки
+                logger.error(f"❌ Авторизация не удалась для {login} - нет PHPSESSID")
+                logger.error(f"Полученные cookies: {cookies_dict}")
+                logger.error(f"Статус код: {response.status_code}")
+                logger.error(f"URL после редиректов: {response.url}")
+                # Выводим первые 1000 символов ответа
+                response_preview = response.text[:1000] if hasattr(response, 'text') else "N/A"
+                logger.error(f"Начало ответа (1000 символов):\n{response_preview}")
+
+                # Проверяем, есть ли на странице сообщение об ошибке
+                if 'неверн' in response.text.lower() or 'error' in response.text.lower():
+                    logger.error(f"⚠️  На странице обнаружено сообщение об ошибке авторизации")
+
+                return None
+
+        except Exception as e:
+            import traceback
+            logger.error(f"❌ Критическая ошибка авторизации на sexoptovik.ru: {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
+            return None
+
+    @classmethod
+    def clear_cache(cls, login: str = None):
+        """Очистить кеш cookies"""
+        if login:
+            # Удаляем cookies для конкретного логина
+            keys_to_delete = [key for key in cls._session_cookies.keys() if key.startswith(f"{login}:")]
+            for key in keys_to_delete:
+                del cls._session_cookies[key]
+        else:
+            # Очищаем весь кеш
+            cls._session_cookies.clear()
+
+
 class ImageProcessor:
     """
     Обработчик изображений товаров
@@ -384,7 +509,8 @@ class ImageProcessor:
 
     @staticmethod
     def download_and_process_image(url: str, target_size: Tuple[int, int] = (1200, 1200),
-                                   background_color: str = 'white') -> Optional[BytesIO]:
+                                   background_color: str = 'white',
+                                   auth_cookies: Optional[dict] = None) -> Optional[BytesIO]:
         """
         Скачивает и обрабатывает изображение
 
@@ -392,13 +518,35 @@ class ImageProcessor:
             url: URL изображения
             target_size: Целевой размер (ширина, высота)
             background_color: Цвет фона для дорисовки
+            auth_cookies: Cookies для авторизации (для sexoptovik)
 
         Returns:
             BytesIO с обработанным изображением или None
         """
         try:
-            response = requests.get(url, timeout=30)
+            # Заголовки для обхода защиты от hotlinking
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://sexoptovik.ru/',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-origin'
+            }
+
+            # Если переданы cookies авторизации - используем их
+            response = requests.get(url, headers=headers, cookies=auth_cookies, timeout=30)
             response.raise_for_status()
+
+            # Проверяем, что получили изображение, а не HTML/текст
+            content_type = response.headers.get('Content-Type', '')
+            if not content_type.startswith('image/'):
+                # Возможно, сервер вернул ошибку в виде HTML
+                logger.warning(f"URL {url} вернул не изображение: Content-Type={content_type}")
+                # Пробуем все равно распарсить
 
             img = Image.open(BytesIO(response.content))
 
@@ -657,18 +805,6 @@ class AutoImportManager:
         try:
             external_id = product_data['external_id']
 
-            # Проверяем, не импортирован ли уже
-            if self.settings.import_only_new:
-                existing = ImportedProduct.query.filter_by(
-                    seller_id=self.seller.id,
-                    external_id=external_id,
-                    source_type=self.settings.csv_source_type
-                ).first()
-
-                if existing and existing.import_status == 'imported':
-                    logger.debug(f"Товар {external_id} уже импортирован, пропускаем")
-                    return 'skipped'
-
             # Определяем категорию WB (с учетом ручных исправлений)
             subject_id, subject_name, confidence = self.category_mapper.map_category(
                 product_data['category'],
@@ -701,14 +837,20 @@ class AutoImportManager:
                 source_type=self.settings.csv_source_type
             ).first()
 
-            if not imported_product:
+            # Запоминаем, был ли товар уже импортирован ранее
+            was_already_imported = False
+            if imported_product:
+                was_already_imported = (imported_product.import_status == 'imported')
+                if was_already_imported:
+                    logger.info(f"Товар {external_id} уже был импортирован на WB ранее, обновляем данные")
+            else:
                 imported_product = ImportedProduct(
                     seller_id=self.seller.id,
                     external_id=external_id,
                     source_type=self.settings.csv_source_type
                 )
 
-            # Заполняем данные
+            # Заполняем данные (обновляем всегда, даже если товар уже импортирован)
             imported_product.external_vendor_code = product_data['external_vendor_code']
             imported_product.title = product_data['title']
             imported_product.category = product_data['category']
@@ -729,17 +871,28 @@ class AutoImportManager:
             description = self._generate_description(product_data)
             imported_product.description = description
 
-            if is_valid:
-                imported_product.import_status = 'validated'
-                imported_product.validation_errors = None
+            # ВАЖНО: Если товар уже был импортирован на WB, НЕ меняем статус обратно на 'validated'
+            # Это предотвратит повторный импорт того же товара
+            if not was_already_imported:
+                if is_valid:
+                    imported_product.import_status = 'validated'
+                    imported_product.validation_errors = None
+                else:
+                    imported_product.import_status = 'failed'
+                    imported_product.validation_errors = json.dumps(errors, ensure_ascii=False)
             else:
-                imported_product.import_status = 'failed'
-                imported_product.validation_errors = json.dumps(errors, ensure_ascii=False)
+                # Товар уже импортирован - оставляем статус 'imported', но обновляем данные
+                # Это позволит видеть актуальную информацию из CSV
+                logger.info(f"Товар {external_id} сохраняет статус 'imported', данные обновлены")
 
             db.session.add(imported_product)
             db.session.commit()
 
-            if is_valid:
+            if was_already_imported:
+                # Товар уже был импортирован - считаем его пропущенным, а не импортированным заново
+                logger.info(f"Товар {external_id} уже импортирован, пропускаем")
+                return 'skipped'
+            elif is_valid:
                 logger.info(f"Товар {external_id} успешно обработан и готов к импорту")
                 return 'imported'
             else:

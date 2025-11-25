@@ -7,9 +7,12 @@ from flask import render_template, redirect, url_for, flash, request, jsonify, s
 from flask_login import login_required, current_user
 import json
 import threading
+import logging
 
 from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
 from auto_import_manager import AutoImportManager, ImageProcessor
+
+logger = logging.getLogger(__name__)
 
 
 def register_auto_import_routes(app):
@@ -96,6 +99,10 @@ def register_auto_import_routes(app):
             settings.use_blurred_images = request.form.get('use_blurred_images') == 'on'
             settings.resize_images_to_1200 = request.form.get('resize_images_to_1200') == 'on'
             settings.image_background_color = request.form.get('image_background_color', 'white').strip()
+
+            # Авторизация Sexoptovik
+            settings.sexoptovik_login = request.form.get('sexoptovik_login', '').strip()
+            settings.sexoptovik_password = request.form.get('sexoptovik_password', '').strip()
 
             try:
                 settings.auto_import_interval_hours = int(request.form.get('auto_import_interval_hours', 24))
@@ -610,16 +617,62 @@ def register_auto_import_routes(app):
             return jsonify({'error': 'URL параметр обязателен'}), 400
 
         try:
+            logger.info(f"🖼️  Запрос обработки фото: {photo_url}")
+
+            # Получаем настройки автоимпорта для получения credentials sexoptovik
+            seller = current_user.seller if current_user.is_authenticated else None
+            logger.info(f"👤 Current user authenticated: {current_user.is_authenticated}, seller: {seller is not None}")
+            auth_cookies = None
+
+            if seller and seller.auto_import_settings:
+                settings = seller.auto_import_settings
+                logger.info(f"⚙️  Настройки найдены. Проверяем URL...")
+
+                # Если URL от sexoptovik и есть логин/пароль - авторизуемся
+                if 'sexoptovik.ru' in photo_url:
+                    logger.info(f"🌐 URL от sexoptovik.ru обнаружен")
+                    logger.info(f"🔑 Login: {settings.sexoptovik_login}, Password: {'***' if settings.sexoptovik_password else None}")
+
+                    if settings.sexoptovik_login and settings.sexoptovik_password:
+                        logger.info(f"🔐 Авторизация на sexoptovik с логином: {settings.sexoptovik_login}")
+                        from auto_import_manager import SexoptovikAuth
+                        auth_cookies = SexoptovikAuth.get_auth_cookies(
+                            settings.sexoptovik_login,
+                            settings.sexoptovik_password
+                        )
+                        if not auth_cookies:
+                            error_msg = "Не удалось авторизоваться на sexoptovik.ru. Проверьте логин и пароль в настройках."
+                            logger.error(f"❌ {error_msg}")
+                            return jsonify({'error': error_msg, 'details': 'Авторизация не прошла'}), 401
+                        logger.info(f"✅ Авторизация успешна, получены cookies")
+                    else:
+                        error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
+                        logger.warning(f"⚠️  {error_msg}")
+                        return jsonify({'error': error_msg, 'details': 'Отсутствуют учетные данные'}), 403
+                else:
+                    logger.info(f"ℹ️  URL не от sexoptovik.ru, авторизация не требуется")
+            else:
+                logger.warning(f"⚠️  Seller: {seller is not None}, Auto import settings: {seller.auto_import_settings if seller else None}")
+                if 'sexoptovik.ru' in photo_url:
+                    error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
+                    logger.warning(f"⚠️  {error_msg}")
+                    return jsonify({'error': error_msg, 'details': 'Настройки не найдены'}), 403
+
             # Скачиваем и обрабатываем фото
+            logger.info(f"⬇️  Скачивание и обработка изображения...")
             processed_image = ImageProcessor.download_and_process_image(
                 photo_url,
                 target_size=(1200, 1200),
-                background_color=bg_color
+                background_color=bg_color,
+                auth_cookies=auth_cookies
             )
 
             if not processed_image:
-                return jsonify({'error': 'Не удалось обработать изображение'}), 500
+                error_msg = "Не удалось скачать или обработать изображение. Проверьте URL и доступность сервера."
+                logger.error(f"❌ {error_msg} URL: {photo_url}")
+                return jsonify({'error': error_msg, 'details': f'URL: {photo_url}'}), 500
 
+            logger.info(f"✅ Изображение успешно обработано")
             # Возвращаем обработанное изображение
             return send_file(
                 processed_image,
@@ -629,7 +682,14 @@ def register_auto_import_routes(app):
             )
 
         except Exception as e:
-            return jsonify({'error': f'Ошибка обработки: {str(e)}'}), 500
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"❌ Критическая ошибка при обработке фото:\n{error_trace}")
+            return jsonify({
+                'error': f'Ошибка обработки изображения: {str(e)}',
+                'details': error_trace.split('\n')[-2] if error_trace else str(e),
+                'url': photo_url
+            }), 500
 
 
 # Пример использования:

@@ -191,6 +191,60 @@
             </div>
         </div>
 
+        <!-- Авторизация Sexoptovik -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-2">Авторизация Sexoptovik</h3>
+            <p class="text-sm text-gray-600 mb-4">
+                Для доступа к фотографиям товаров на sexoptovik.ru требуется авторизация.
+                Укажите ваши учетные данные.
+            </p>
+
+            <!-- Логин -->
+            <div class="mb-4">
+                <label for="sexoptovik_login" class="block text-sm font-medium text-gray-700 mb-1">
+                    Логин Sexoptovik
+                </label>
+                <input type="text" id="sexoptovik_login" name="sexoptovik_login"
+                       value="{{ settings.sexoptovik_login or '' }}"
+                       autocomplete="username"
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                       placeholder="Ваш логин на sexoptovik.ru">
+                <p class="mt-1 text-xs text-gray-500">
+                    Логин для авторизации на sexoptovik.ru
+                </p>
+            </div>
+
+            <!-- Пароль -->
+            <div class="mb-4">
+                <label for="sexoptovik_password" class="block text-sm font-medium text-gray-700 mb-1">
+                    Пароль Sexoptovik
+                </label>
+                <input type="password" id="sexoptovik_password" name="sexoptovik_password"
+                       value="{{ settings.sexoptovik_password or '' }}"
+                       autocomplete="current-password"
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                       placeholder="Ваш пароль">
+                <p class="mt-1 text-xs text-gray-500">
+                    Пароль будет сохранен в зашифрованном виде
+                </p>
+            </div>
+
+            <!-- Статус авторизации -->
+            <div class="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
+                <div class="flex items-start">
+                    <svg class="h-5 w-5 text-gray-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div class="ml-3">
+                        <p class="text-sm text-gray-700">
+                            После сохранения учетных данных фотографии товаров будут автоматически загружаться
+                            с сервера sexoptovik.ru при просмотре и импорте.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Кнопки -->
         <div class="flex gap-4">
             <button type="submit"

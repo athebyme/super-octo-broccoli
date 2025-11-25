@@ -933,6 +933,96 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get parent categories: {str(e)}")
             raise
 
+    def get_directory_colors(self, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник цветов"""
+        endpoint = "/content/v2/directory/colors"
+        params = {'locale': locale} if locale else {}
+
+        logger.info(f"🎨 Getting colors directory (locale={locale})")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ Colors loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get colors: {str(e)}")
+            raise
+
+    def get_directory_countries(self, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник стран производства"""
+        endpoint = "/content/v2/directory/countries"
+        params = {'locale': locale} if locale else {}
+
+        logger.info(f"🌍 Getting countries directory (locale={locale})")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ Countries loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get countries: {str(e)}")
+            raise
+
+    def get_directory_kinds(self, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник полов"""
+        endpoint = "/content/v2/directory/kinds"
+        params = {'locale': locale} if locale else {}
+
+        logger.info(f"👤 Getting kinds/genders directory (locale={locale})")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ Kinds loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get kinds: {str(e)}")
+            raise
+
+    def get_directory_seasons(self, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник сезонов"""
+        endpoint = "/content/v2/directory/seasons"
+        params = {'locale': locale} if locale else {}
+
+        logger.info(f"🌤️ Getting seasons directory (locale={locale})")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ Seasons loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get seasons: {str(e)}")
+            raise
+
+    def get_directory_vat(self, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник ставок НДС"""
+        endpoint = "/content/v2/directory/vat"
+        params = {'locale': locale} if locale else {}
+
+        logger.info(f"💰 Getting VAT rates directory (locale={locale})")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ VAT rates loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get VAT rates: {str(e)}")
+            raise
+
+    def get_directory_tnved(self, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник кодов ТНВЭД"""
+        endpoint = "/content/v2/directory/tnved"
+        params = {'locale': locale} if locale else {}
+
+        logger.info(f"📋 Getting TNVED codes directory (locale={locale})")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            logger.info(f"✅ TNVED codes loaded: {len(result.get('data', []))} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get TNVED codes: {str(e)}")
+            raise
+
     def create_product_card(
         self,
         subject_id: int,
@@ -1002,7 +1092,7 @@ class WildberriesAPIClient:
                 'POST',
                 'content',
                 endpoint,
-                json_data=request_body,
+                json=request_body,  # Исправлено: json вместо json_data
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )
@@ -1049,7 +1139,7 @@ class WildberriesAPIClient:
                 'POST',
                 'content',
                 endpoint,
-                json_data={},
+                json={},  # Исправлено: json вместо json_data
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )

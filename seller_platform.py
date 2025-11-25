@@ -2185,21 +2185,45 @@ def products_bulk_edit():
     # Получаем выбранные товары из сессии или параметров
     selected_ids = request.args.getlist('ids') or request.form.getlist('product_ids')
 
-    if not selected_ids:
+    # Поддержка фильтров по бренду и категории
+    filter_brand = request.args.get('filter_brand', '').strip()
+    filter_category = request.args.get('filter_category', '').strip()
+    filter_type = None  # Тип фильтра для отображения
+
+    # Если есть фильтры, получаем товары по фильтрам
+    if filter_brand or filter_category:
+        query = Product.query.filter(Product.seller_id == current_user.seller.id)
+
+        if filter_brand:
+            query = query.filter(Product.brand == filter_brand)
+            filter_type = f'бренд "{filter_brand}"'
+
+        if filter_category:
+            query = query.filter(Product.object_name == filter_category)
+            filter_type = f'категория "{filter_category}"' if not filter_brand else f'{filter_type} и категория "{filter_category}"'
+
+        products = query.all()
+
+        if not products:
+            flash(f'Не найдено товаров с фильтром: {filter_type}', 'warning')
+            return redirect(url_for('products_list'))
+
+    # Иначе используем выбранные ID
+    elif selected_ids:
+        try:
+            selected_ids = [int(pid) for pid in selected_ids]
+        except ValueError:
+            flash('Неверный формат ID товаров', 'danger')
+            return redirect(url_for('products_list'))
+
+        # Получаем выбранные товары
+        products = Product.query.filter(
+            Product.id.in_(selected_ids),
+            Product.seller_id == current_user.seller.id
+        ).all()
+    else:
         flash('Не выбраны товары для редактирования', 'warning')
         return redirect(url_for('products_list'))
-
-    try:
-        selected_ids = [int(pid) for pid in selected_ids]
-    except ValueError:
-        flash('Неверный формат ID товаров', 'danger')
-        return redirect(url_for('products_list'))
-
-    # Получаем выбранные товары
-    products = Product.query.filter(
-        Product.id.in_(selected_ids),
-        Product.seller_id == current_user.seller.id
-    ).all()
 
     if not products:
         flash('Товары не найдены', 'warning')
@@ -2687,7 +2711,10 @@ def products_bulk_edit():
         'products_bulk_edit.html',
         products=[p.to_dict() for p in products],
         edit_operations=edit_operations,
-        categories=categories
+        categories=categories,
+        filter_type=filter_type,
+        filter_brand=filter_brand,
+        filter_category=filter_category
     )
 
 
@@ -3130,10 +3157,65 @@ def api_characteristics_by_category(object_name):
 
     app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
 
+    # Функция для определения справочника по названию характеристики (fuzzy matching)
+    def get_directory_type(char_name: str) -> Optional[str]:
+        """Определяет тип справочника по названию характеристики"""
+        name_lower = char_name.lower().strip()
+
+        if 'цвет' in name_lower:
+            return 'colors'
+        elif 'стран' in name_lower and 'производ' in name_lower:
+            return 'countries'
+        elif name_lower in ['пол', 'гендер']:
+            return 'kinds'
+        elif 'сезон' in name_lower:
+            return 'seasons'
+        elif 'ндс' in name_lower or 'нвд' in name_lower or 'vat' in name_lower:
+            return 'vat'
+        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower or 'tnved' in name_lower:
+            return 'tnved'
+        return None
+
+    # Функция для безопасного извлечения значения из справочника
+    def extract_value(entry) -> Optional[str]:
+        """Извлекает значение из записи справочника (dict или str)"""
+        if isinstance(entry, dict):
+            return entry.get('name') or entry.get('value') or entry.get('id')
+        elif isinstance(entry, str):
+            return entry
+        return None
+
     # Сначала попробуем получить из WB API
     try:
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
             result = client.get_card_characteristics_by_object_name(object_name)
+
+            # Логируем все названия характеристик для отладки
+            all_char_names = [item.get('name', '') for item in result.get('data', [])]
+            app.logger.info(f"📋 Found characteristics: {all_char_names}")
+
+            # Загружаем справочники для известных характеристик
+            directories = {}
+            for item in result.get('data', []):
+                char_name = item.get('name', '')
+                app.logger.debug(f"🔍 Checking characteristic: '{char_name}'")
+
+                directory_type = get_directory_type(char_name)
+                if directory_type:
+                    app.logger.info(f"✓ Matched '{char_name}' to directory '{directory_type}'")
+
+                    if directory_type not in directories:
+                        try:
+                            method_name = f'get_directory_{directory_type}'
+                            method = getattr(client, method_name)
+                            dir_result = method()
+                            directories[directory_type] = dir_result.get('data', [])
+                            app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
+                        except Exception as e:
+                            app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
+                            directories[directory_type] = []
+                else:
+                    app.logger.debug(f"⊘ No directory mapping for '{char_name}'")
 
             # Преобразуем результат в более удобный формат
             characteristics = []
@@ -3147,13 +3229,40 @@ def api_characteristics_by_category(object_name):
                     'values': []
                 }
 
-                # Добавляем возможные значения если они есть
+                # Добавляем возможные значения из словаря API
                 if item.get('dictionary'):
                     for dict_item in item['dictionary']:
                         char['values'].append({
                             'id': dict_item.get('unitID'),
                             'value': dict_item.get('value')
                         })
+                # Если словаря нет, но есть справочник - используем его
+                else:
+                    directory_type = get_directory_type(char['name'])
+                    if directory_type:
+                        directory_data = directories.get(directory_type, [])
+
+                        app.logger.info(f"📚 Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
+
+                        # Логируем первые несколько записей для отладки
+                        if directory_data:
+                            sample = directory_data[:3]
+                            app.logger.info(f"  📝 Sample entries: {sample}")
+
+                        # Универсальная обработка всех справочников
+                        values_added = 0
+                        for entry in directory_data:
+                            value = extract_value(entry)
+                            if value:
+                                char['values'].append({
+                                    'id': value,
+                                    'value': value
+                                })
+                                values_added += 1
+
+                        app.logger.info(f"✅ Added {values_added} values to '{char['name']}' (total in char: {len(char['values'])} values)")
+                    else:
+                        app.logger.debug(f"  ℹ️ No directory mapping for '{char['name']}' - will use free text input")
 
                 characteristics.append(char)
 
@@ -3211,13 +3320,59 @@ def api_characteristics_multi_category():
 
     app.logger.info(f"📋 API request for multi-category characteristics: {len(categories)} categories")
 
+    # Функция для определения справочника по названию характеристики (fuzzy matching)
+    def get_directory_type(char_name: str) -> Optional[str]:
+        """Определяет тип справочника по названию характеристики"""
+        name_lower = char_name.lower().strip()
+
+        if 'цвет' in name_lower:
+            return 'colors'
+        elif 'стран' in name_lower and 'производ' in name_lower:
+            return 'countries'
+        elif name_lower in ['пол', 'гендер']:
+            return 'kinds'
+        elif 'сезон' in name_lower:
+            return 'seasons'
+        elif 'ндс' in name_lower or 'нвд' in name_lower or 'vat' in name_lower:
+            return 'vat'
+        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower or 'tnved' in name_lower:
+            return 'tnved'
+        return None
+
+    # Функция для безопасного извлечения значения из справочника
+    def extract_value(entry) -> Optional[str]:
+        """Извлекает значение из записи справочника (dict или str)"""
+        if isinstance(entry, dict):
+            return entry.get('name') or entry.get('value') or entry.get('id')
+        elif isinstance(entry, str):
+            return entry
+        return None
+
     all_chars = {}  # {category: [characteristics]}
 
     try:
         with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
+            # Загружаем справочники один раз для всех категорий
+            directories = {}
+
             for category in categories:
                 try:
                     result = client.get_card_characteristics_by_object_name(category)
+
+                    # Загружаем справочники для этой категории
+                    for item in result.get('data', []):
+                        char_name = item.get('name', '')
+                        directory_type = get_directory_type(char_name)
+                        if directory_type and directory_type not in directories:
+                            try:
+                                method_name = f'get_directory_{directory_type}'
+                                method = getattr(client, method_name)
+                                dir_result = method()
+                                directories[directory_type] = dir_result.get('data', [])
+                                app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
+                            except Exception as e:
+                                app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
+                                directories[directory_type] = []
 
                     characteristics = []
                     for item in result.get('data', []):
@@ -3230,12 +3385,40 @@ def api_characteristics_multi_category():
                             'values': []
                         }
 
+                        # Добавляем возможные значения из словаря API
                         if item.get('dictionary'):
                             for dict_item in item['dictionary']:
                                 char['values'].append({
                                     'id': dict_item.get('unitID'),
                                     'value': dict_item.get('value')
                                 })
+                        # Если словаря нет, но есть справочник - используем его
+                        else:
+                            directory_type = get_directory_type(char['name'])
+                            if directory_type:
+                                directory_data = directories.get(directory_type, [])
+
+                                app.logger.info(f"📚 [{category}] Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
+
+                                # Логируем первые несколько записей для отладки
+                                if directory_data:
+                                    sample = directory_data[:3]
+                                    app.logger.info(f"  📝 Sample entries: {sample}")
+
+                                # Универсальная обработка всех справочников
+                                values_added = 0
+                                for entry in directory_data:
+                                    value = extract_value(entry)
+                                    if value:
+                                        char['values'].append({
+                                            'id': value,
+                                            'value': value
+                                        })
+                                        values_added += 1
+
+                                app.logger.info(f"✅ [{category}] Added {values_added} values to '{char['name']}' (total in char: {len(char['values'])} values)")
+                            else:
+                                app.logger.debug(f"  ℹ️ [{category}] No directory mapping for '{char['name']}' - will use free text input")
 
                         characteristics.append(char)
 
@@ -3261,6 +3444,18 @@ def api_characteristics_multi_category():
             else:
                 # Если только одна категория, все характеристики общие
                 common_characteristics = list(all_chars.values())[0] if all_chars else []
+
+            # Логируем что возвращаем
+            app.logger.info(f"📤 Returning {len(common_characteristics)} common characteristics")
+            chars_with_values = [c for c in common_characteristics if c.get('values') and len(c['values']) > 0]
+            app.logger.info(f"  ✓ {len(chars_with_values)} characteristics have values")
+
+            # Логируем первые несколько характеристик для отладки
+            if common_characteristics:
+                sample = common_characteristics[:5]
+                for ch in sample:
+                    values_count = len(ch.get('values', []))
+                    app.logger.info(f"  - {ch['name']} (ID: {ch['id']}): {values_count} values")
 
             return {
                 'common': common_characteristics,
