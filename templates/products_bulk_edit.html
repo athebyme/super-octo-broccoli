@@ -98,6 +98,7 @@
         commonCharacteristics: [],
         characteristicsByCategory: {},
         selectedChar: null,
+        selectedCharId: null,
         selectedValues: [],
         selectedValuesAdd: [],
         loading: false,
@@ -216,6 +217,7 @@
         clearFields() {
             // Очищаем все поля при смене операции
             this.selectedChar = null;
+            this.selectedCharId = null;
             this.selectedValues = [];
             this.selectedValuesAdd = [];
             this.characteristics = [];
@@ -241,6 +243,7 @@
             this.characteristics = [];
             this.commonCharacteristics = [];
             this.selectedChar = null;
+            this.selectedCharId = null;
             this.loadError = null;
 
             try {
@@ -327,7 +330,7 @@
                            name="operation"
                            value="{{ op.id }}"
                            x-model="operation"
-                           @change="clearFields(); if (productCategory && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                           @change="clearFields(); if (categories && categories.length > 0 && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
                            class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
                     <div class="ml-3">
                         <div class="font-medium text-gray-900">{{ op.name }}</div>
@@ -476,13 +479,17 @@
                             Характеристика
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
-                        <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
+                        <select x-model="selectedCharId"
+                                @change="if(selectedCharId) {
+                                    selectedChar = characteristics.find(c => c.id == selectedCharId);
+                                    document.getElementById('char_id_common').value = selectedCharId;
+                                    console.log('Selected char:', selectedChar ? selectedChar.name : 'null');
+                                }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
                             <template x-for="char in characteristics" :key="char.id">
-                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                                <option :value="char.id" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
 
@@ -540,7 +547,7 @@
                             Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
-                                (можно указать до <span x-text="selectedChar.max_count"></span> значений через запятую)
+                                (можно указать до <span x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : ''"></span> значений через запятую)
                             </span>
                         </label>
 
@@ -564,7 +571,7 @@
                                             </template>
                                         </div>
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
-                                            <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
+                                            <span>Выбрано: <strong x-text="selectedValues.length"></strong> из <strong x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : 0"></strong></span>
                                             <button type="button"
                                                     @click="selectedValues = []; document.getElementById('value_input').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
@@ -597,7 +604,7 @@
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value" id="value_input">
+                        <input type="hidden" name="value_update" id="value_input">
                     </div>
                 </div>
             </div>
@@ -680,13 +687,17 @@
                             Характеристика
                             <span x-show="loading" class="ml-2 text-indigo-600 text-xs">Загрузка...</span>
                         </label>
-                        <select x-model="selectedChar"
-                                @change="if(selectedChar) { document.getElementById('char_id_common').value = selectedChar.id }"
+                        <select x-model="selectedCharId"
+                                @change="if(selectedCharId) {
+                                    selectedChar = characteristics.find(c => c.id == selectedCharId);
+                                    document.getElementById('char_id_common').value = selectedCharId;
+                                    console.log('Selected char (add):', selectedChar ? selectedChar.name : 'null');
+                                }"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
                             <template x-for="char in characteristics" :key="char.id">
-                                <option :value="char" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                                <option :value="char.id" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
                             </template>
                         </select>
 
@@ -744,7 +755,7 @@
                             Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
-                                (можно указать до <span x-text="selectedChar.max_count"></span> значений)
+                                (можно указать до <span x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : ''"></span> значений)
                             </span>
                         </label>
 
@@ -768,7 +779,7 @@
                                             </template>
                                         </div>
                                         <div class="flex items-center justify-between text-xs text-gray-600 mt-2">
-                                            <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar.max_count"></strong></span>
+                                            <span>Выбрано: <strong x-text="selectedValuesAdd.length"></strong> из <strong x-text="selectedChar && selectedChar.max_count ? selectedChar.max_count : 0"></strong></span>
                                             <button type="button"
                                                     @click="selectedValuesAdd = []; document.getElementById('value_input_add').value = ''"
                                                     class="text-indigo-600 hover:text-indigo-800"
@@ -801,7 +812,7 @@
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
-                        <input type="hidden" name="value" id="value_input_add">
+                        <input type="hidden" name="value_add" id="value_input_add">
                     </div>
                 </div>
 
