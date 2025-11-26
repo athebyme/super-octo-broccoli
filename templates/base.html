@@ -19,47 +19,89 @@
                             WB Seller Platform
                         </a>
                     </div>
-                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
+                    <div class="hidden sm:ml-6 sm:flex sm:space-x-4">
                         <a href="{{ url_for('dashboard') }}"
                            class="{% if request.endpoint == 'dashboard' %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Дашборд
+                            Главная
                         </a>
+
+                        {% if current_user.seller %}
+                        <!-- Товары dropdown -->
+                        <div x-data="{ open: false }" @mouseleave="open = false" class="relative">
+                            <button @mouseenter="open = true"
+                                    class="{% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'products_bulk_edit', 'product_sync_status_page', 'auto_import_dashboard', 'auto_import_settings', 'auto_import_products', 'auto_import_product_detail'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                                Товары
+                                <svg class="ml-1 h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                                </svg>
+                            </button>
+                            <div x-show="open" @mouseenter="open = true"
+                                 x-transition:enter="transition ease-out duration-100"
+                                 x-transition:enter-start="opacity-0 scale-95"
+                                 x-transition:enter-end="opacity-100 scale-100"
+                                 x-transition:leave="transition ease-in duration-75"
+                                 x-transition:leave-start="opacity-100 scale-100"
+                                 x-transition:leave-end="opacity-0 scale-95"
+                                 class="absolute left-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50">
+                                <div class="py-1">
+                                    <a href="{{ url_for('products_list') }}" class="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <span class="mr-2">📦</span> Карточки товаров
+                                    </a>
+                                    <a href="{{ url_for('product_sync_status_page') }}" class="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <span class="mr-2">🔄</span> Синхронизация
+                                    </a>
+                                    <a href="{{ url_for('auto_import_dashboard') }}" class="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <span class="mr-2">📥</span> Автоимпорт
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Мониторинг dropdown -->
+                        <div x-data="{ open: false }" @mouseleave="open = false" class="relative">
+                            <button @mouseenter="open = true"
+                                    class="{% if request.endpoint in ['price_monitor_settings', 'suspicious_price_changes', 'analytics_dashboard'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                                Мониторинг
+                                <svg class="ml-1 h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                                </svg>
+                            </button>
+                            <div x-show="open" @mouseenter="open = true"
+                                 x-transition:enter="transition ease-out duration-100"
+                                 x-transition:enter-start="opacity-0 scale-95"
+                                 x-transition:enter-end="opacity-100 scale-100"
+                                 x-transition:leave="transition ease-in duration-75"
+                                 x-transition:leave-start="opacity-100 scale-100"
+                                 x-transition:leave-end="opacity-0 scale-95"
+                                 class="absolute left-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50">
+                                <div class="py-1">
+                                    <a href="{{ url_for('analytics_dashboard') }}" class="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <span class="mr-2">📊</span> Аналитика
+                                    </a>
+                                    <a href="{{ url_for('price_monitor_settings') }}" class="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <span class="mr-2">💰</span> Мониторинг цен
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+
                         <a href="{{ url_for('reports') }}"
                            class="{% if request.endpoint in ['reports', 'download_report'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Отчёты
                         </a>
+
                         {% if current_user.seller %}
-                        <a href="{{ url_for('products_list') }}"
-                           class="{% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'products_bulk_edit'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Карточки товаров
-                        </a>
-                        <a href="{{ url_for('product_sync_status_page') }}"
-                           class="{% if request.endpoint == 'product_sync_status_page' %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Синхронизация
-                        </a>
-                        {% endif %}
-                        {% if current_user.seller %}
-                        <a href="{{ url_for('price_monitor_settings') }}"
-                           class="{% if request.endpoint in ['price_monitor_settings', 'suspicious_price_changes'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Мониторинг цен
-                        </a>
-                        <a href="{{ url_for('auto_import_dashboard') }}"
-                           class="{% if request.endpoint in ['auto_import_dashboard', 'auto_import_settings', 'auto_import_products', 'auto_import_product_detail'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Автоимпорт
-                        </a>
-                        <a href="{{ url_for('analytics_dashboard') }}"
-                           class="{% if request.endpoint == 'analytics_dashboard' %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Аналитика
-                        </a>
                         <a href="{{ url_for('telegram_settings') }}"
                            class="{% if request.endpoint == 'telegram_settings' %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Telegram
+                            Уведомления
                         </a>
                         {% endif %}
+
                         {% if current_user.is_admin %}
                         <a href="{{ url_for('admin_panel') }}"
                            class="{% if request.endpoint in ['admin_panel', 'add_seller', 'edit_seller'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Админ панель
+                            Админ
                         </a>
                         {% endif %}
                     </div>

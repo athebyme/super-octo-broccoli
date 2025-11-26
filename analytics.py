@@ -48,17 +48,21 @@ class SellerAnalytics:
             and_(
                 Product.seller_id == self.seller_id,
                 Product.is_active == True,
+                Product.quantity.isnot(None),
                 Product.quantity < 5,
                 Product.quantity > 0
             )
         ).scalar() or 0
 
-        # Товары без остатков
+        # Товары без остатков (включая NULL как 0)
         out_of_stock_products = db.session.query(func.count(Product.id)).filter(
             and_(
                 Product.seller_id == self.seller_id,
                 Product.is_active == True,
-                Product.quantity == 0
+                or_(
+                    Product.quantity == 0,
+                    Product.quantity.is_(None)
+                )
             )
         ).scalar() or 0
 
@@ -137,9 +141,14 @@ class SellerAnalytics:
         labels = []
         data = []
 
-        for record in history:
-            labels.append(record.date.strftime('%d.%m'))
-            data.append(record.count)
+        if history:
+            for record in history:
+                labels.append(record.date.strftime('%d.%m'))
+                data.append(record.count)
+        else:
+            # Если истории нет, показываем пустой график
+            labels = ['Нет данных']
+            data = [0]
 
         return {
             'labels': labels,
@@ -259,6 +268,11 @@ class SellerAnalytics:
                 labels.append(label)
                 data.append(count)
 
+        # Если нет данных, показываем пустую диаграмму
+        if not labels:
+            labels = ['Нет данных']
+            data = [0]
+
         return {
             'labels': labels,
             'datasets': [{
@@ -336,6 +350,11 @@ class SellerAnalytics:
         for brand, count in brands:
             labels.append(brand)
             data.append(count)
+
+        # Если нет данных, показываем пустую диаграмму
+        if not labels:
+            labels = ['Нет данных']
+            data = [0]
 
         return {
             'labels': labels,
