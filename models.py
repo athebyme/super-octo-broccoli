@@ -1227,3 +1227,108 @@ def log_admin_action(admin_user_id: int, action: str, target_type: str = None,
     db.session.add(audit_log)
     db.session.commit()
     return audit_log
+
+
+# ============= TELEGRAM NOTIFICATIONS =============
+
+class TelegramSettings(db.Model):
+    """Настройки Telegram уведомлений для продавца"""
+    __tablename__ = 'telegram_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Настройки бота
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включены ли уведомления
+    bot_token = db.Column(db.String(500))  # Токен бота (зашифрованный)
+    chat_id = db.Column(db.String(200))  # ID чата для отправки уведомлений
+
+    # Типы уведомлений
+    notify_low_stock = db.Column(db.Boolean, default=True, nullable=False)  # Низкие остатки
+    low_stock_threshold = db.Column(db.Integer, default=5)  # Порог низких остатков
+
+    notify_price_changes = db.Column(db.Boolean, default=True, nullable=False)  # Изменения цен
+    notify_stock_changes = db.Column(db.Boolean, default=False, nullable=False)  # Изменения остатков
+
+    notify_sync_errors = db.Column(db.Boolean, default=True, nullable=False)  # Ошибки синхронизации
+    notify_import_complete = db.Column(db.Boolean, default=True, nullable=False)  # Завершение импорта
+    notify_bulk_operations = db.Column(db.Boolean, default=True, nullable=False)  # Массовые операции
+
+    # Расписание уведомлений
+    daily_summary = db.Column(db.Boolean, default=False, nullable=False)  # Ежедневная сводка
+    daily_summary_time = db.Column(db.String(5), default='09:00')  # Время отправки (HH:MM)
+
+    # Статус последней отправки
+    last_notification_at = db.Column(db.DateTime)  # Время последнего уведомления
+    last_notification_status = db.Column(db.String(50))  # Статус ('success', 'failed')
+    last_notification_error = db.Column(db.Text)  # Текст ошибки
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('telegram_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<TelegramSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'chat_id': self.chat_id,
+            'notify_low_stock': self.notify_low_stock,
+            'low_stock_threshold': self.low_stock_threshold,
+            'notify_price_changes': self.notify_price_changes,
+            'notify_stock_changes': self.notify_stock_changes,
+            'notify_sync_errors': self.notify_sync_errors,
+            'notify_import_complete': self.notify_import_complete,
+            'notify_bulk_operations': self.notify_bulk_operations,
+            'daily_summary': self.daily_summary,
+            'daily_summary_time': self.daily_summary_time,
+            'last_notification_at': self.last_notification_at.isoformat() if self.last_notification_at else None,
+            'last_notification_status': self.last_notification_status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class TelegramNotificationLog(db.Model):
+    """Лог отправленных Telegram уведомлений"""
+    __tablename__ = 'telegram_notification_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Тип уведомления
+    notification_type = db.Column(db.String(50), nullable=False, index=True)  # 'low_stock', 'price_change', 'error', etc.
+
+    # Содержимое
+    message_text = db.Column(db.Text, nullable=False)  # Текст сообщения
+
+    # Связанные объекты
+    related_product_id = db.Column(db.Integer, db.ForeignKey('products.id'))  # Связанный товар
+    related_data = db.Column(db.JSON)  # Дополнительные данные
+
+    # Статус отправки
+    sent_successfully = db.Column(db.Boolean, default=False, nullable=False)
+    error_message = db.Column(db.Text)  # Ошибка при отправке
+    telegram_message_id = db.Column(db.String(100))  # ID сообщения в Telegram
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    product = db.relationship('Product', backref=db.backref('telegram_notifications', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_tg_log_seller_created', 'seller_id', 'created_at'),
+        db.Index('idx_tg_log_type_created', 'notification_type', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<TelegramNotificationLog seller_id={self.seller_id} type={self.notification_type}>'

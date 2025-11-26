@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки Telegram - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Настройки Telegram уведомлений</h1>
+        <p class="mt-2 text-sm text-gray-600">
+            Настройте бота для получения уведомлений о важных событиях
+        </p>
+    </div>
+
+    <!-- Инструкция -->
+    <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm text-blue-700">
+                    <strong>Как настроить:</strong>
+                </p>
+                <ol class="mt-2 text-sm text-blue-700 list-decimal list-inside space-y-1">
+                    <li>Создайте бота через <a href="https://t.me/BotFather" target="_blank" class="underline">@BotFather</a> в Telegram</li>
+                    <li>Скопируйте токен бота (например: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11)</li>
+                    <li>Добавьте бота в свой чат или канал</li>
+                    <li>Узнайте Chat ID через <a href="https://t.me/getmyid_bot" target="_blank" class="underline">@getmyid_bot</a></li>
+                    <li>Введите данные ниже и нажмите "Проверить подключение"</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+
+    <!-- Форма настроек -->
+    <form method="POST" action="{{ url_for('telegram_settings') }}" class="space-y-6">
+        <!-- Основные настройки -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-4">Основные настройки</h2>
+
+            <div class="space-y-4">
+                <!-- Включить уведомления -->
+                <div class="flex items-center">
+                    <input type="checkbox" name="is_enabled" id="is_enabled"
+                           {% if settings and settings.is_enabled %}checked{% endif %}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="is_enabled" class="ml-2 block text-sm text-gray-900">
+                        Включить Telegram уведомления
+                    </label>
+                </div>
+
+                <!-- Токен бота -->
+                <div>
+                    <label for="bot_token" class="block text-sm font-medium text-gray-700">Токен бота</label>
+                    <input type="text" name="bot_token" id="bot_token"
+                           value="{{ settings.bot_token if settings else '' }}"
+                           placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    <p class="mt-1 text-xs text-gray-500">Получите токен у @BotFather</p>
+                </div>
+
+                <!-- Chat ID -->
+                <div>
+                    <label for="chat_id" class="block text-sm font-medium text-gray-700">Chat ID</label>
+                    <input type="text" name="chat_id" id="chat_id"
+                           value="{{ settings.chat_id if settings else '' }}"
+                           placeholder="123456789 или @your_channel"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                    <p class="mt-1 text-xs text-gray-500">ID чата или @username канала</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Типы уведомлений -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-4">Типы уведомлений</h2>
+
+            <div class="space-y-3">
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_low_stock" id="notify_low_stock"
+                               {% if not settings or settings.notify_low_stock %}checked{% endif %}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="notify_low_stock" class="font-medium text-gray-700">Низкие остатки</label>
+                        <p class="text-gray-500">Уведомлять когда товар заканчивается</p>
+                    </div>
+                </div>
+
+                <div class="ml-8">
+                    <label for="low_stock_threshold" class="block text-sm text-gray-700">Порог (шт.)</label>
+                    <input type="number" name="low_stock_threshold" id="low_stock_threshold" min="1" max="100"
+                           value="{{ settings.low_stock_threshold if settings else 5 }}"
+                           class="mt-1 block w-32 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_price_changes" id="notify_price_changes"
+                               {% if not settings or settings.notify_price_changes %}checked{% endif %}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="notify_price_changes" class="font-medium text-gray-700">Изменения цен</label>
+                        <p class="text-gray-500">Уведомлять о подозрительных изменениях цен</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_stock_changes" id="notify_stock_changes"
+                               {% if settings and settings.notify_stock_changes %}checked{% endif %}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="notify_stock_changes" class="font-medium text-gray-700">Изменения остатков</label>
+                        <p class="text-gray-500">Уведомлять о резких изменениях остатков</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_sync_errors" id="notify_sync_errors"
+                               {% if not settings or settings.notify_sync_errors %}checked{% endif %}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="notify_sync_errors" class="font-medium text-gray-700">Ошибки синхронизации</label>
+                        <p class="text-gray-500">Уведомлять о проблемах с WB API</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_import_complete" id="notify_import_complete"
+                               {% if not settings or settings.notify_import_complete %}checked{% endif %}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="notify_import_complete" class="font-medium text-gray-700">Завершение импорта</label>
+                        <p class="text-gray-500">Уведомлять когда импорт товаров завершен</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_bulk_operations" id="notify_bulk_operations"
+                               {% if not settings or settings.notify_bulk_operations %}checked{% endif %}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3 text-sm">
+                        <label for="notify_bulk_operations" class="font-medium text-gray-700">Массовые операции</label>
+                        <p class="text-gray-500">Уведомлять о завершении массовых изменений</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ежедневная сводка -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-4">Ежедневная сводка</h2>
+
+            <div class="space-y-4">
+                <div class="flex items-center">
+                    <input type="checkbox" name="daily_summary" id="daily_summary"
+                           {% if settings and settings.daily_summary %}checked{% endif %}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="daily_summary" class="ml-2 block text-sm text-gray-900">
+                        Отправлять ежедневную сводку
+                    </label>
+                </div>
+
+                <div>
+                    <label for="daily_summary_time" class="block text-sm font-medium text-gray-700">Время отправки</label>
+                    <input type="time" name="daily_summary_time" id="daily_summary_time"
+                           value="{{ settings.daily_summary_time if settings else '09:00' }}"
+                           class="mt-1 block w-32 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+            </div>
+        </div>
+
+        <!-- Кнопки -->
+        <div class="flex items-center justify-between">
+            <div class="flex gap-3">
+                <button type="submit" name="action" value="save"
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Сохранить настройки
+                </button>
+                <button type="submit" name="action" value="test"
+                        class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                    Проверить подключение
+                </button>
+            </div>
+            <a href="{{ url_for('dashboard') }}"
+               class="text-sm text-gray-600 hover:text-gray-900">
+                Отмена
+            </a>
+        </div>
+    </form>
+
+    <!-- Статус последнего уведомления -->
+    {% if settings and settings.last_notification_at %}
+    <div class="mt-8 bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Статус</h2>
+        <div class="space-y-2 text-sm">
+            <p>
+                <span class="font-medium text-gray-700">Последнее уведомление:</span>
+                {{ settings.last_notification_at.strftime('%d.%m.%Y %H:%M') }}
+            </p>
+            <p>
+                <span class="font-medium text-gray-700">Статус:</span>
+                {% if settings.last_notification_status == 'success' %}
+                    <span class="text-green-600">✓ Успешно</span>
+                {% else %}
+                    <span class="text-red-600">✗ Ошибка</span>
+                {% endif %}
+            </p>
+            {% if settings.last_notification_error %}
+            <p>
+                <span class="font-medium text-gray-700">Ошибка:</span>
+                <span class="text-red-600">{{ settings.last_notification_error }}</span>
+            </p>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -25,6 +25,7 @@ from models import (
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
+    TelegramSettings, TelegramNotificationLog,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -34,6 +35,8 @@ import threading
 import logging
 from logging.handlers import RotatingFileHandler
 from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
+from analytics import SellerAnalytics
+from telegram_bot import TelegramNotifier
 
 # Настройка приложения
 app = Flask(__name__)
@@ -4545,6 +4548,164 @@ def apply_migrations():
         conn.rollback()
     finally:
         conn.close()
+
+
+# ============= АНАЛИТИКА И ДАШБОРДЫ =============
+
+@app.route('/analytics')
+@login_required
+def analytics_dashboard():
+    """Страница аналитики с графиками"""
+    if not current_user.seller:
+        flash('Только продавцы могут просматривать аналитику', 'error')
+        return redirect(url_for('dashboard'))
+
+    try:
+        # Получаем все данные для дашборда
+        analytics = SellerAnalytics(current_user.seller.id)
+        dashboard_data = analytics.get_dashboard_data()
+
+        return render_template('analytics_dashboard.html', analytics=dashboard_data)
+
+    except Exception as e:
+        app.logger.error(f"Ошибка при загрузке аналитики: {str(e)}")
+        flash('Ошибка при загрузке аналитики', 'error')
+        return redirect(url_for('dashboard'))
+
+
+# ============= TELEGRAM УВЕДОМЛЕНИЯ =============
+
+@app.route('/telegram/settings', methods=['GET', 'POST'])
+@login_required
+def telegram_settings():
+    """Настройки Telegram уведомлений"""
+    if not current_user.seller:
+        flash('Только продавцы могут настраивать уведомления', 'error')
+        return redirect(url_for('dashboard'))
+
+    # Получаем или создаем настройки
+    settings = TelegramSettings.query.filter_by(seller_id=current_user.seller.id).first()
+
+    if request.method == 'POST':
+        action = request.form.get('action', 'save')
+
+        try:
+            # Создаем настройки если их нет
+            if not settings:
+                settings = TelegramSettings(seller_id=current_user.seller.id)
+                db.session.add(settings)
+
+            # Обновляем настройки
+            settings.is_enabled = 'is_enabled' in request.form
+            settings.bot_token = request.form.get('bot_token', '').strip()
+            settings.chat_id = request.form.get('chat_id', '').strip()
+
+            settings.notify_low_stock = 'notify_low_stock' in request.form
+            settings.low_stock_threshold = int(request.form.get('low_stock_threshold', 5))
+            settings.notify_price_changes = 'notify_price_changes' in request.form
+            settings.notify_stock_changes = 'notify_stock_changes' in request.form
+            settings.notify_sync_errors = 'notify_sync_errors' in request.form
+            settings.notify_import_complete = 'notify_import_complete' in request.form
+            settings.notify_bulk_operations = 'notify_bulk_operations' in request.form
+
+            settings.daily_summary = 'daily_summary' in request.form
+            settings.daily_summary_time = request.form.get('daily_summary_time', '09:00')
+
+            if action == 'test':
+                # Проверка подключения
+                if not settings.bot_token or not settings.chat_id:
+                    flash('Необходимо указать токен бота и Chat ID', 'error')
+                    return render_template('telegram_settings.html', settings=settings)
+
+                try:
+                    notifier = TelegramNotifier(settings.bot_token, settings.chat_id)
+                    if notifier.test_connection():
+                        settings.last_notification_at = datetime.utcnow()
+                        settings.last_notification_status = 'success'
+                        settings.last_notification_error = None
+                        db.session.commit()
+                        flash('✅ Подключение к Telegram успешно установлено!', 'success')
+                    else:
+                        settings.last_notification_status = 'failed'
+                        settings.last_notification_error = 'Не удалось отправить тестовое сообщение'
+                        db.session.commit()
+                        flash('Ошибка при подключении к Telegram. Проверьте токен и Chat ID.', 'error')
+
+                except Exception as e:
+                    settings.last_notification_status = 'failed'
+                    settings.last_notification_error = str(e)
+                    db.session.commit()
+                    flash(f'Ошибка: {str(e)}', 'error')
+
+            else:
+                # Сохранение настроек
+                db.session.commit()
+                flash('Настройки сохранены', 'success')
+
+            # Логирование действия
+            log_user_activity(
+                current_user.id,
+                'telegram_settings_update',
+                f'action={action}',
+                request
+            )
+
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Ошибка при сохранении настроек Telegram: {str(e)}")
+            flash(f'Ошибка при сохранении настроек: {str(e)}', 'error')
+
+        return redirect(url_for('telegram_settings'))
+
+    return render_template('telegram_settings.html', settings=settings)
+
+
+@app.route('/api/telegram/send_test_alert')
+@login_required
+def send_test_telegram_alert():
+    """Отправка тестового уведомления (для отладки)"""
+    if not current_user.seller:
+        return {'success': False, 'error': 'Seller not found'}, 403
+
+    settings = TelegramSettings.query.filter_by(seller_id=current_user.seller.id).first()
+
+    if not settings or not settings.is_enabled:
+        return {'success': False, 'error': 'Telegram notifications not enabled'}, 400
+
+    if not settings.bot_token or not settings.chat_id:
+        return {'success': False, 'error': 'Bot token or chat ID not configured'}, 400
+
+    try:
+        notifier = TelegramNotifier(settings.bot_token, settings.chat_id)
+
+        # Отправляем тестовое уведомление
+        test_data = {
+            'title': 'Тестовый товар',
+            'nm_id': 123456789,
+            'vendor_code': 'TEST-001',
+            'quantity': 3
+        }
+
+        success = notifier.send_low_stock_alert(test_data)
+
+        if success:
+            # Логируем уведомление
+            log = TelegramNotificationLog(
+                seller_id=current_user.seller.id,
+                notification_type='test',
+                message_text='Тестовое уведомление',
+                sent_successfully=True
+            )
+            db.session.add(log)
+            db.session.commit()
+
+            return {'success': True, 'message': 'Test notification sent successfully'}
+        else:
+            return {'success': False, 'error': 'Failed to send notification'}, 500
+
+    except Exception as e:
+        app.logger.error(f"Error sending test Telegram notification: {str(e)}")
+        return {'success': False, 'error': str(e)}, 500
 
 
 # ============= РОУТЫ АВТОИМПОРТА =============
