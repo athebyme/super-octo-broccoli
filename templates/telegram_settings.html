@@ -93,7 +93,7 @@
 
                 <div class="ml-8">
                     <label for="low_stock_threshold" class="block text-sm text-gray-700">Порог (шт.)</label>
-                    <input type="number" name="low_stock_threshold" id="low_stock_threshold" min="1" max="100"
+                    <input type="number" name="low_stock_threshold" id="low_stock_threshold" min="0" max="100"
                            value="{{ settings.low_stock_threshold if settings else 5 }}"
                            class="mt-1 block w-32 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
                 </div>
