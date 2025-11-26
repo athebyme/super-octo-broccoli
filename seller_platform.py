@@ -1477,6 +1477,21 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
 
+                # Отправляем Telegram уведомление о завершении импорта
+                try:
+                    telegram_settings = TelegramSettings.query.filter_by(seller_id=seller.id).first()
+                    if telegram_settings and telegram_settings.is_enabled and telegram_settings.notify_import_complete:
+                        if telegram_settings.bot_token and telegram_settings.chat_id:
+                            notifier = TelegramNotifier(telegram_settings.bot_token, telegram_settings.chat_id)
+                            notifier.send_import_complete_alert({
+                                'imported': created_count,
+                                'skipped': 0,
+                                'failed': 0
+                            })
+                            app.logger.info(f"📱 Telegram notification sent for import completion")
+                except Exception as e:
+                    app.logger.error(f"Failed to send Telegram import notification: {str(e)}")
+
         except WBAuthException as e:
             with flask_app.app_context():
                 seller = Seller.query.get(seller_id)
@@ -2774,6 +2789,22 @@ def products_bulk_edit():
                 db.session.commit()
 
                 app.logger.info(f"✅ Bulk operation {bulk_operation.id} completed: {success_count} success, {error_count} errors")
+
+                # Отправляем Telegram уведомление о завершении
+                try:
+                    telegram_settings = TelegramSettings.query.filter_by(seller_id=current_user.seller.id).first()
+                    if telegram_settings and telegram_settings.is_enabled and telegram_settings.notify_bulk_operations:
+                        if telegram_settings.bot_token and telegram_settings.chat_id:
+                            notifier = TelegramNotifier(telegram_settings.bot_token, telegram_settings.chat_id)
+                            operation_description = operation_descriptions.get(operation, 'Массовая операция')
+                            notifier.send_bulk_operation_complete_alert({
+                                'description': operation_description,
+                                'success_count': success_count,
+                                'error_count': error_count
+                            })
+                            app.logger.info(f"📱 Telegram notification sent for bulk operation {bulk_operation.id}")
+                except Exception as e:
+                    app.logger.error(f"Failed to send Telegram notification: {str(e)}")
 
                 # Показываем результаты
                 if success_count > 0:
