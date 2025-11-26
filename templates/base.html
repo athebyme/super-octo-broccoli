@@ -154,6 +154,16 @@
 
     <style>
         [x-cloak] { display: none !important; }
+
+        /* Фикс для dropdown меню */
+        nav [x-data] {
+            position: relative;
+        }
+
+        nav [x-data] > div[x-show] {
+            position: absolute;
+            z-index: 9999;
+        }
     </style>
 </body>
 </html>
