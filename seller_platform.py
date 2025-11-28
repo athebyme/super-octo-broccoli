@@ -1477,6 +1477,47 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
 
+                # Синхронизируем остатки товаров через Marketplace API
+                app.logger.info(f"🔄 Syncing product stocks from Marketplace API...")
+                try:
+                    stocks_start = time.time()
+                    all_stocks = client.get_all_warehouse_stocks(batch_size=1000)
+                    app.logger.info(f"✅ Got {len(all_stocks)} stock records from Marketplace API")
+
+                    # Группируем остатки по nmId (суммируем по всем складам)
+                    stocks_by_nm = {}
+                    for stock_record in all_stocks:
+                        nm_id = stock_record.get('nmId')
+                        quantity = stock_record.get('amount', 0)  # Marketplace API использует 'amount'
+
+                        if nm_id:
+                            if nm_id not in stocks_by_nm:
+                                stocks_by_nm[nm_id] = 0
+                            stocks_by_nm[nm_id] += quantity
+
+                    app.logger.info(f"📊 Aggregated stocks for {len(stocks_by_nm)} unique products")
+
+                    # Обновляем quantity в Product
+                    stocks_updated = 0
+                    for nm_id, total_quantity in stocks_by_nm.items():
+                        product = Product.query.filter_by(
+                            seller_id=seller.id,
+                            nm_id=nm_id
+                        ).first()
+
+                        if product:
+                            product.quantity = total_quantity
+                            stocks_updated += 1
+
+                    db.session.commit()
+
+                    stocks_elapsed = time.time() - stocks_start
+                    app.logger.info(f"✅ Stocks sync completed in {stocks_elapsed:.1f}s: {stocks_updated} products updated")
+
+                except Exception as stocks_error:
+                    app.logger.error(f"⚠️ Failed to sync stocks (non-critical): {str(stocks_error)}")
+                    # Не прерываем основную синхронизацию если остатки не загрузились
+
                 # Отправляем Telegram уведомление о завершении импорта
                 try:
                     telegram_settings = TelegramSettings.query.filter_by(seller_id=seller.id).first()
