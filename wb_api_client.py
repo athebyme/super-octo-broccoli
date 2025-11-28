@@ -102,6 +102,7 @@ class WildberriesAPIClient:
     CONTENT_API_URL = "https://content-api.wildberries.ru"
     STATISTICS_API_URL = "https://statistics-api.wildberries.ru"
     MARKETPLACE_API_URL = "https://marketplace-api.wildberries.ru"
+    ANALYTICS_API_URL = "https://seller-analytics-api.wildberries.ru"
 
     # Sandbox URLs для тестирования
     CONTENT_API_SANDBOX = "https://content-api-sandbox.wildberries.ru"
@@ -173,7 +174,8 @@ class WildberriesAPIClient:
         urls = {
             'content': self.CONTENT_API_SANDBOX if self.sandbox else self.CONTENT_API_URL,
             'statistics': self.STATISTICS_API_SANDBOX if self.sandbox else self.STATISTICS_API_URL,
-            'marketplace': self.MARKETPLACE_API_URL  # Нет sandbox для marketplace
+            'marketplace': self.MARKETPLACE_API_URL,  # Нет sandbox для marketplace
+            'analytics': self.ANALYTICS_API_URL  # Analytics API
         }
         return urls.get(api_type, self.CONTENT_API_URL)
 
@@ -556,60 +558,75 @@ class WildberriesAPIClient:
         response = self._make_request('GET', 'marketplace', endpoint, params=params)
         return response.json()
 
-    def get_warehouse_stocks(self, skip: int = 0, take: int = 1000) -> Dict[str, Any]:
+    def get_warehouse_stocks(self, offset: int = 0, limit: int = 1000) -> Dict[str, Any]:
         """
-        Получить остатки по складам (Marketplace API)
+        Получить данные об остатках товаров (Analytics API v2)
 
         Args:
-            skip: Сколько записей пропустить
-            take: Сколько записей получить (макс 1000)
+            offset: После какого элемента выдавать данные
+            limit: Количество товаров в ответе (макс 1000, default 100)
 
         Returns:
-            Словарь с остатками по складам
+            Словарь с данными об остатках товаров
 
-        Endpoint: POST /api/v3/stocks/{warehouse_id}
+        Endpoint: POST /api/v2/stocks-report/products/products
         """
-        endpoint = "/api/v3/stocks/0"  # 0 = все склады
+        endpoint = "/api/v2/stocks-report/products/products"
 
         body = {
-            "skip": skip,
-            "take": min(take, 1000)  # WB ограничивает до 1000
+            "offset": offset,
+            "limit": min(limit, 1000)  # WB ограничивает до 1000
         }
 
-        response = self._make_request('POST', 'marketplace', endpoint, json=body)
+        # Analytics API использует другой base URL
+        response = self._make_request('POST', 'analytics', endpoint, json=body)
         return response.json()
 
     def get_all_warehouse_stocks(self, batch_size: int = 1000) -> List[Dict[str, Any]]:
         """
-        Получить все остатки по складам с автоматической пагинацией
+        Получить все остатки товаров с автоматической пагинацией
 
         Args:
             batch_size: Размер пачки для одного запроса (макс 1000)
 
         Returns:
-            Список всех остатков
+            Список товаров с остатками в формате:
+            [{"nmId": 123456, "amount": 50}, ...]
         """
         all_stocks = []
-        skip = 0
+        offset = 0
 
         while True:
-            data = self.get_warehouse_stocks(skip=skip, take=batch_size)
-            stocks = data.get('stocks', [])
+            response = self.get_warehouse_stocks(offset=offset, limit=batch_size)
 
-            if not stocks:
+            # Analytics API возвращает {"data": {"items": [...]}}
+            data = response.get('data', {})
+            items = data.get('items', [])
+
+            if not items:
                 logger.info(f"No more stocks to load. Total: {len(all_stocks)}")
                 break
 
-            all_stocks.extend(stocks)
-            logger.info(f"Loaded {len(all_stocks)} stock records so far...")
+            # Преобразуем в формат [{nmId, amount}, ...]
+            for item in items:
+                nm_id = item.get('nmID')
+                stock_count = item.get('metrics', {}).get('stockCount', 0)
+
+                if nm_id is not None:
+                    all_stocks.append({
+                        'nmId': nm_id,
+                        'amount': stock_count
+                    })
+
+            logger.info(f"Loaded {len(all_stocks)} products with stocks so far...")
 
             # Если получили меньше чем лимит, значит это последняя пачка
-            if len(stocks) < batch_size:
+            if len(items) < batch_size:
                 break
 
-            skip += len(stocks)
+            offset += len(items)
 
-        logger.info(f"Total stock records loaded: {len(all_stocks)}")
+        logger.info(f"Total products with stocks loaded: {len(all_stocks)}")
         return all_stocks
 
     def update_card(
