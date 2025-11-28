@@ -623,17 +623,26 @@ class ProductSyncSettings(db.Model):
     sync_products = db.Column(db.Boolean, default=True, nullable=False)  # Синхронизировать карточки товаров
     sync_stocks = db.Column(db.Boolean, default=True, nullable=False)  # Синхронизировать остатки
 
-    # Последняя синхронизация
-    last_sync_at = db.Column(db.DateTime)  # Когда была последняя синхронизация
-    next_sync_at = db.Column(db.DateTime)  # Когда запланирована следующая синхронизация
+    # Последняя синхронизация товаров
+    last_sync_at = db.Column(db.DateTime)  # Когда была последняя синхронизация товаров
+    next_sync_at = db.Column(db.DateTime)  # Когда запланирована следующая синхронизация товаров
     last_sync_status = db.Column(db.String(50))  # Статус ('success', 'failed', 'running')
     last_sync_error = db.Column(db.Text)  # Текст ошибки если была
     last_sync_duration = db.Column(db.Float)  # Длительность последней синхронизации в секундах
 
-    # Статистика
+    # Статистика синхронизации товаров
     products_synced = db.Column(db.Integer, default=0)  # Количество синхронизированных товаров
     products_added = db.Column(db.Integer, default=0)  # Количество добавленных товаров
     products_updated = db.Column(db.Integer, default=0)  # Количество обновленных товаров
+
+    # Настройки синхронизации остатков (отдельно от товаров)
+    stocks_sync_interval_minutes = db.Column(db.Integer, default=30, nullable=False)  # Частота синхронизации остатков (по умолчанию раз в 30 мин)
+    last_stocks_sync_at = db.Column(db.DateTime)  # Когда были последний раз синхронизированы остатки
+    next_stocks_sync_at = db.Column(db.DateTime)  # Когда запланирована следующая синхронизация остатков
+    last_stocks_sync_status = db.Column(db.String(50))  # Статус синхронизации остатков
+    last_stocks_sync_error = db.Column(db.Text)  # Ошибка синхронизации остатков
+    last_stocks_sync_duration = db.Column(db.Float)  # Длительность синхронизации остатков в секундах
+    stocks_synced = db.Column(db.Integer, default=0)  # Количество обновленных остатков
 
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -661,6 +670,12 @@ class ProductSyncSettings(db.Model):
             'products_synced': self.products_synced,
             'products_added': self.products_added,
             'products_updated': self.products_updated,
+            'stocks_sync_interval_minutes': self.stocks_sync_interval_minutes,
+            'last_stocks_sync_at': self.last_stocks_sync_at.isoformat() if self.last_stocks_sync_at else None,
+            'next_stocks_sync_at': self.next_stocks_sync_at.isoformat() if self.next_stocks_sync_at else None,
+            'last_stocks_sync_status': self.last_stocks_sync_status,
+            'last_stocks_sync_duration': self.last_stocks_sync_duration,
+            'stocks_synced': self.stocks_synced,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

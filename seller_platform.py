@@ -1477,47 +1477,6 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
 
-                # Синхронизируем остатки товаров через Marketplace API
-                app.logger.info(f"🔄 Syncing product stocks from Marketplace API...")
-                try:
-                    stocks_start = time.time()
-                    all_stocks = client.get_all_warehouse_stocks(batch_size=1000)
-                    app.logger.info(f"✅ Got {len(all_stocks)} stock records from Marketplace API")
-
-                    # Группируем остатки по nmId (суммируем по всем складам)
-                    stocks_by_nm = {}
-                    for stock_record in all_stocks:
-                        nm_id = stock_record.get('nmId')
-                        quantity = stock_record.get('amount', 0)  # Marketplace API использует 'amount'
-
-                        if nm_id:
-                            if nm_id not in stocks_by_nm:
-                                stocks_by_nm[nm_id] = 0
-                            stocks_by_nm[nm_id] += quantity
-
-                    app.logger.info(f"📊 Aggregated stocks for {len(stocks_by_nm)} unique products")
-
-                    # Обновляем quantity в Product
-                    stocks_updated = 0
-                    for nm_id, total_quantity in stocks_by_nm.items():
-                        product = Product.query.filter_by(
-                            seller_id=seller.id,
-                            nm_id=nm_id
-                        ).first()
-
-                        if product:
-                            product.quantity = total_quantity
-                            stocks_updated += 1
-
-                    db.session.commit()
-
-                    stocks_elapsed = time.time() - stocks_start
-                    app.logger.info(f"✅ Stocks sync completed in {stocks_elapsed:.1f}s: {stocks_updated} products updated")
-
-                except Exception as stocks_error:
-                    app.logger.error(f"⚠️ Failed to sync stocks (non-critical): {str(stocks_error)}")
-                    # Не прерываем основную синхронизацию если остатки не загрузились
-
                 # Отправляем Telegram уведомление о завершении импорта
                 try:
                     telegram_settings = TelegramSettings.query.filter_by(seller_id=seller.id).first()
@@ -1571,6 +1530,111 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         sync_settings.last_sync_error = str(e)
                     db.session.commit()
                 app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
+
+
+def _perform_stocks_sync_task(seller_id: int, flask_app):
+    """
+    Фоновая задача синхронизации остатков товаров
+
+    Args:
+        seller_id: ID продавца
+        flask_app: Экземпляр Flask приложения для контекста
+    """
+    with flask_app.app_context():
+        try:
+            # Получаем продавца из БД
+            seller = Seller.query.get(seller_id)
+            if not seller:
+                app.logger.error(f"Seller {seller_id} not found for stocks sync")
+                return
+
+            # Получаем настройки синхронизации
+            sync_settings = seller.product_sync_settings
+            if not sync_settings:
+                sync_settings = ProductSyncSettings(seller_id=seller.id)
+                db.session.add(sync_settings)
+                db.session.commit()
+
+            sync_settings.last_stocks_sync_status = 'running'
+            db.session.commit()
+
+            start_time = time.time()
+
+            with WildberriesAPIClient(seller.wb_api_key) as client:
+                # Получаем остатки через Marketplace API v3
+                app.logger.info(f"🔄 Background stocks sync: fetching stocks for seller_id={seller_id}")
+                all_stocks = client.get_all_warehouse_stocks(batch_size=1000)
+                app.logger.info(f"✅ Got {len(all_stocks)} stock records from Marketplace API")
+
+                # Группируем остатки по nmId (суммируем по всем складам)
+                stocks_by_nm = {}
+                for stock_record in all_stocks:
+                    nm_id = stock_record.get('nmId')
+                    quantity = stock_record.get('amount', 0)  # Marketplace API использует 'amount'
+
+                    if nm_id:
+                        if nm_id not in stocks_by_nm:
+                            stocks_by_nm[nm_id] = 0
+                        stocks_by_nm[nm_id] += quantity
+
+                app.logger.info(f"📊 Aggregated stocks for {len(stocks_by_nm)} unique products")
+
+                # Обновляем quantity в Product
+                stocks_updated = 0
+                for nm_id, total_quantity in stocks_by_nm.items():
+                    product = Product.query.filter_by(
+                        seller_id=seller.id,
+                        nm_id=nm_id
+                    ).first()
+
+                    if product:
+                        product.quantity = total_quantity
+                        stocks_updated += 1
+
+                db.session.commit()
+
+                elapsed = time.time() - start_time
+
+                # Обновляем статистику в ProductSyncSettings
+                sync_settings.last_stocks_sync_at = datetime.utcnow()
+                sync_settings.last_stocks_sync_status = 'success'
+                sync_settings.last_stocks_sync_duration = elapsed
+                sync_settings.stocks_synced = stocks_updated
+                sync_settings.last_stocks_sync_error = None
+
+                db.session.commit()
+
+                app.logger.info(f"✅ Background stocks sync completed in {elapsed:.1f}s: {stocks_updated} products updated")
+
+        except WBAuthException as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller and seller.product_sync_settings:
+                    sync_settings = seller.product_sync_settings
+                    sync_settings.last_stocks_sync_status = 'auth_error'
+                    sync_settings.last_stocks_sync_error = str(e)
+                    db.session.commit()
+                app.logger.error(f"❌ Background stocks sync auth error: {str(e)}")
+
+        except WBAPIException as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller and seller.product_sync_settings:
+                    sync_settings = seller.product_sync_settings
+                    sync_settings.last_stocks_sync_status = 'error'
+                    sync_settings.last_stocks_sync_error = str(e)
+                    db.session.commit()
+                app.logger.error(f"❌ Background stocks sync API error: {str(e)}")
+
+        except Exception as e:
+            with flask_app.app_context():
+                seller = Seller.query.get(seller_id)
+                if seller and seller.product_sync_settings:
+                    sync_settings = seller.product_sync_settings
+                    sync_settings.last_stocks_sync_status = 'error'
+                    sync_settings.last_stocks_sync_error = str(e)
+                    db.session.commit()
+                app.logger.exception(f"❌ Background stocks sync unexpected error: {str(e)}")
 
 
 @app.route('/products/sync-status', methods=['GET'])
@@ -1638,7 +1702,7 @@ def sync_products():
 @app.route('/products/sync-stocks', methods=['POST'])
 @login_required
 def sync_warehouse_stocks():
-    """Синхронизация остатков по складам через API WB"""
+    """Запуск синхронизации остатков товаров в фоновом режиме"""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
@@ -1647,156 +1711,27 @@ def sync_warehouse_stocks():
         flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
         return redirect(url_for('api_settings'))
 
+    # Проверяем что синхронизация остатков не запущена уже
+    sync_settings = current_user.seller.product_sync_settings
+    if sync_settings and sync_settings.last_stocks_sync_status == 'running':
+        flash('Синхронизация остатков уже выполняется. Пожалуйста, подождите...', 'warning')
+        return redirect(url_for('products_list'))
+
     try:
-        start_time = time.time()
-
-        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            # Получаем все остатки через Statistics API
-            # Используем дату 30 дней назад для получения актуальных данных
-            from datetime import timedelta
-            date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
-
-            app.logger.info(f"🔄 Начинаем загрузку остатков для seller_id={current_user.seller.id}")
-            all_stocks = client.get_stocks(date_from=date_from)
-            app.logger.info(f"✅ Получено {len(all_stocks)} записей об остатках из WB API")
-
-            # Статистика
-            created_count = 0
-            updated_count = 0
-
-            # Группируем остатки по nmId и складу (Statistics API может возвращать несколько записей)
-            stocks_by_product = {}
-            for stock_data in all_stocks:
-                nm_id = stock_data.get('nmId')
-                warehouse_name = stock_data.get('warehouseName', 'Неизвестный склад')
-
-                if not nm_id:
-                    continue
-
-                key = (nm_id, warehouse_name)
-                if key not in stocks_by_product:
-                    stocks_by_product[key] = {
-                        'nm_id': nm_id,
-                        'warehouse_name': warehouse_name,
-                        'quantity': 0,
-                        'quantity_full': 0,
-                        'barcode': stock_data.get('barcode', ''),
-                        'subject': stock_data.get('subject', ''),
-                    }
-
-                # Суммируем количества (могут быть разные размеры)
-                stocks_by_product[key]['quantity'] += stock_data.get('quantity', 0)
-                stocks_by_product[key]['quantity_full'] += stock_data.get('quantityFull', 0)
-
-            app.logger.info(f"📊 Агрегировано {len(stocks_by_product)} уникальных записей остатков")
-
-            # Обрабатываем каждую агрегированную запись
-            for key, stock_data in stocks_by_product.items():
-                nm_id = stock_data['nm_id']
-                warehouse_name = stock_data['warehouse_name']
-
-                # Находим товар по nm_id
-                product = Product.query.filter_by(
-                    seller_id=current_user.seller.id,
-                    nm_id=nm_id
-                ).first()
-
-                if not product:
-                    # Товар не найден - пропускаем (возможно не синхронизированы карточки)
-                    continue
-
-                # Генерируем warehouse_id из имени (для уникальности)
-                # WB не возвращает ID склада в Statistics API, используем хеш имени
-                warehouse_id = hash(warehouse_name) % 1000000
-
-                # Ищем существующую запись об остатках для этого товара и склада
-                stock = ProductStock.query.filter_by(
-                    product_id=product.id,
-                    warehouse_id=warehouse_id
-                ).first()
-
-                quantity = stock_data['quantity']
-                quantity_full = stock_data['quantity_full']
-
-                if stock:
-                    # Обновляем существующую запись
-                    stock.warehouse_name = warehouse_name
-                    stock.quantity = quantity
-                    stock.quantity_full = quantity_full
-                    stock.updated_at = datetime.utcnow()
-                    updated_count += 1
-                else:
-                    # Создаем новую запись
-                    stock = ProductStock(
-                        product_id=product.id,
-                        warehouse_id=warehouse_id,
-                        warehouse_name=warehouse_name,
-                        quantity=quantity,
-                        quantity_full=quantity_full,
-                        in_way_to_client=0,
-                        in_way_from_client=0
-                    )
-                    db.session.add(stock)
-                    created_count += 1
-
-            # Сохраняем все изменения
-            db.session.commit()
-
-            app.logger.info(f"💾 Сохранено остатков в БД: {created_count} новых, {updated_count} обновлено")
-
-            elapsed = time.time() - start_time
-
-            # Логируем успешный запрос
-            APILog.log_request(
-                seller_id=current_user.seller.id,
-                endpoint='/api/v1/supplier/stocks',
-                method='GET',
-                status_code=200,
-                response_time=elapsed,
-                success=True
-            )
-
-            app.logger.info(f"✅ Синхронизация остатков завершена успешно за {elapsed:.1f}с")
-
-            flash(
-                f'Синхронизация остатков завершена за {elapsed:.1f}с: '
-                f'{created_count} новых, {updated_count} обновлено',
-                'success'
-            )
-
-    except WBAuthException as e:
-        app.logger.error(f"❌ Ошибка авторизации при загрузке остатков: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/api/v1/supplier/stocks',
-            method='GET',
-            status_code=401,
-            response_time=0,
-            success=False,
-            error_message=f'Authentication failed: {str(e)}'
+        # Запускаем синхронизацию в фоновом потоке
+        thread = threading.Thread(
+            target=_perform_stocks_sync_task,
+            args=(current_user.seller.id, app),
+            daemon=True
         )
+        thread.start()
 
-        flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
-
-    except WBAPIException as e:
-        app.logger.error(f"❌ Ошибка WB API при загрузке остатков: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/api/v1/supplier/stocks',
-            method='GET',
-            status_code=500,
-            response_time=0,
-            success=False,
-            error_message=str(e)
-        )
-
-        flash(f'Ошибка API WB: {str(e)}', 'danger')
+        flash('Синхронизация остатков запущена в фоновом режиме. Обновите страницу через минуту чтобы увидеть результаты.', 'info')
+        app.logger.info(f"✅ Background stocks sync started for seller_id={current_user.seller.id}")
 
     except Exception as e:
-        app.logger.exception(f"❌ Неожиданная ошибка синхронизации остатков: {str(e)}")
-        flash(f'Ошибка синхронизации остатков: {str(e)}', 'danger')
+        app.logger.exception(f"❌ Failed to start background stocks sync: {str(e)}")
+        flash(f'Ошибка запуска синхронизации остатков: {str(e)}', 'danger')
 
     return redirect(url_for('products_list'))
 
