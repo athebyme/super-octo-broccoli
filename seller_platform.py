@@ -1561,16 +1561,20 @@ def _perform_stocks_sync_task(seller_id: int, flask_app):
             start_time = time.time()
 
             with WildberriesAPIClient(seller.wb_api_key) as client:
-                # Получаем остатки через Marketplace API v3
+                # Получаем остатки через Statistics API (более доступный)
                 app.logger.info(f"🔄 Background stocks sync: fetching stocks for seller_id={seller_id}")
-                all_stocks = client.get_all_warehouse_stocks(batch_size=1000)
-                app.logger.info(f"✅ Got {len(all_stocks)} stock records from Marketplace API")
 
-                # Группируем остатки по nmId (суммируем по всем складам)
+                from datetime import timedelta
+                date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+                all_stocks = client.get_stocks(date_from=date_from)
+                app.logger.info(f"✅ Got {len(all_stocks)} stock records from Statistics API")
+
+                # Группируем остатки по nmId (суммируем по всем складам и размерам)
                 stocks_by_nm = {}
                 for stock_record in all_stocks:
                     nm_id = stock_record.get('nmId')
-                    quantity = stock_record.get('amount', 0)  # Marketplace API использует 'amount'
+                    quantity = stock_record.get('quantity', 0)
 
                     if nm_id:
                         if nm_id not in stocks_by_nm:
@@ -1605,6 +1609,32 @@ def _perform_stocks_sync_task(seller_id: int, flask_app):
                 db.session.commit()
 
                 app.logger.info(f"✅ Background stocks sync completed in {elapsed:.1f}s: {stocks_updated} products updated")
+
+                # Проверяем товары с низкими остатками для Telegram уведомлений
+                try:
+                    telegram_settings = TelegramSettings.query.filter_by(seller_id=seller.id).first()
+                    if telegram_settings and telegram_settings.is_enabled and telegram_settings.notify_low_stock:
+                        if telegram_settings.bot_token and telegram_settings.chat_id:
+                            # Находим товары с низкими остатками
+                            low_stock_products = Product.query.filter(
+                                Product.seller_id == seller.id,
+                                Product.is_active == True,
+                                Product.quantity.isnot(None),
+                                Product.quantity > 0,
+                                Product.quantity <= telegram_settings.low_stock_threshold
+                            ).all()
+
+                            if low_stock_products:
+                                notifier = TelegramNotifier(telegram_settings.bot_token, telegram_settings.chat_id)
+                                for product in low_stock_products[:5]:  # Ограничиваем 5 товарами чтобы не спамить
+                                    notifier.send_low_stock_alert({
+                                        'title': product.title or 'Без названия',
+                                        'nm_id': product.nm_id,
+                                        'quantity': product.quantity
+                                    })
+                                app.logger.info(f"📱 Sent {len(low_stock_products[:5])} low stock alerts to Telegram")
+                except Exception as e:
+                    app.logger.error(f"Failed to send Telegram low stock alerts: {str(e)}")
 
         except WBAuthException as e:
             with flask_app.app_context():
