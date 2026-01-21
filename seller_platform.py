@@ -2494,14 +2494,15 @@ def products_bulk_edit():
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
-                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
+                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
+                    # вызовет clean_characteristics_for_update для оборачивания в массив
                     app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
-                    # Для ID из справочника: "123" -> ["123"]
-                    # Для текста: "Россия" -> ["Россия"]
+                    # Форматируем как строку, позже автоматически обернется в массив
+                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
+                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
+                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
 
                     # ==================== БАТЧИНГ ====================
                     # Подготавливаем все карточки для обновления
@@ -2681,14 +2682,15 @@ def products_bulk_edit():
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
-                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
+                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
+                    # вызовет clean_characteristics_for_update для оборачивания в массив
                     app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
-                    # Для ID из справочника: "123" -> ["123"]
-                    # Для текста: "Россия" -> ["Россия"]
+                    # Форматируем как строку, позже автоматически обернется в массив
+                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
+                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
+                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
 
                     for product in products_to_update:
                         try:

@@ -90,6 +90,27 @@ def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
 
                 if 'value' not in char:
                     errors.append(f"Характеристика #{i+1}: отсутствует 'value'")
+                else:
+                    # Проверяем формат value
+                    value = char['value']
+                    # WB API ожидает массив для большинства характеристик (тип 1)
+                    if not isinstance(value, list):
+                        errors.append(
+                            f"Характеристика #{i+1} (id={char.get('id')}): "
+                            f"'value' должно быть массивом, получено {type(value).__name__}. "
+                            f"Используйте clean_characteristics_for_update() перед валидацией."
+                        )
+                    elif len(value) == 0:
+                        logger.warning(f"Характеристика #{i+1} (id={char.get('id')}): пустой массив значений")
+                    else:
+                        # Проверяем что все элементы - строки или числа
+                        for j, item in enumerate(value):
+                            if not isinstance(item, (str, int, float)):
+                                errors.append(
+                                    f"Характеристика #{i+1} (id={char.get('id')}), "
+                                    f"элемент #{j+1}: должен быть строкой или числом, "
+                                    f"получено {type(item).__name__}"
+                                )
 
     # Валидация sizes
     if 'sizes' in card_data and card_data['sizes']:
@@ -229,6 +250,11 @@ def prepare_card_for_update(
             prepared.pop('dimensions', None)
             logger.info("Removed empty dimensions")
 
+    # КРИТИЧНО: Очищаем характеристики - оборачиваем строки в массивы
+    if 'characteristics' in prepared and prepared['characteristics']:
+        logger.info(f"🧹 Cleaning {len(prepared['characteristics'])} characteristics before API call")
+        prepared['characteristics'] = clean_characteristics_for_update(prepared['characteristics'])
+
     return prepared
 
 
@@ -238,6 +264,14 @@ def clean_characteristics_for_update(
     """
     Очистка характеристик для отправки в WB API
 
+    КРИТИЧНО: WB API для характеристик типа 1 (большинство) ожидает массив строк,
+    а не просто строку. Эта функция оборачивает строки в массивы.
+
+    Примеры:
+        "Россия" -> ["Россия"]
+        "123" -> ["123"]
+        ["Хлопок", "Эластан"] -> ["Хлопок", "Эластан"] (без изменений)
+
     Args:
         characteristics: Список характеристик
 
@@ -245,8 +279,9 @@ def clean_characteristics_for_update(
         Очищенный список характеристик
     """
     cleaned = []
+    wrapped_count = 0
 
-    logger.info(f"🧹 Cleaning {len(characteristics)} characteristics for update")
+    logger.info(f"🧹 Cleaning {len(characteristics)} characteristics for WB API update")
 
     for i, char in enumerate(characteristics):
         # Оставляем только необходимые поля
@@ -255,23 +290,38 @@ def clean_characteristics_for_update(
             'value': char.get('value')
         }
 
-        logger.debug(f"  Char #{i+1}: id={cleaned_char['id']}, value={cleaned_char['value']} (type: {type(cleaned_char['value']).__name__})")
-
         # Пропускаем характеристики без значения
         if cleaned_char['value'] is None or cleaned_char['value'] == '':
-            logger.debug(f"  Char #{i+1}: Skipping (empty value)")
+            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): Skipping (empty value)")
             continue
 
-        # Если value - строка, оборачиваем в массив для типа 1
+        # КРИТИЧНО: Если value - строка, оборачиваем в массив
+        # WB API ожидает массив для характеристик типа 1
         if isinstance(cleaned_char['value'], str):
-            logger.debug(f"  Char #{i+1}: Wrapping string '{cleaned_char['value']}' in array")
+            original_value = cleaned_char['value']
             cleaned_char['value'] = [cleaned_char['value']]
+            wrapped_count += 1
+            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): '{original_value}' -> ['{original_value}']")
+        elif isinstance(cleaned_char['value'], (int, float)):
+            # Числа тоже оборачиваем в массив (на всякий случай)
+            original_value = cleaned_char['value']
+            cleaned_char['value'] = [str(original_value)]
+            wrapped_count += 1
+            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): {original_value} -> ['{original_value}']")
         elif isinstance(cleaned_char['value'], list):
-            logger.debug(f"  Char #{i+1}: Already a list with {len(cleaned_char['value'])} items")
+            # Уже массив - проверяем что элементы строки
+            for j, item in enumerate(cleaned_char['value']):
+                if not isinstance(item, str):
+                    cleaned_char['value'][j] = str(item)
+            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): Already a list with {len(cleaned_char['value'])} items")
+        else:
+            logger.warning(f"  Char #{i+1} (id={cleaned_char['id']}): Unknown type {type(cleaned_char['value']).__name__}, converting to string array")
+            cleaned_char['value'] = [str(cleaned_char['value'])]
+            wrapped_count += 1
 
         cleaned.append(cleaned_char)
 
-    logger.info(f"✅ Cleaned {len(cleaned)} characteristics (skipped {len(characteristics) - len(cleaned)})")
+    logger.info(f"✅ Cleaned {len(cleaned)} characteristics: {wrapped_count} wrapped in arrays, {len(characteristics) - len(cleaned)} skipped")
     return cleaned
 
 
