@@ -11,7 +11,19 @@ mkdir -p uploads processed data
 if [ "$APP_MODULE" = "seller_platform:app" ]; then
 echo "🚀 Инициализация seller-platform..."
 
-# Запуск миграций БД
+# Сначала создаем базовую структуру БД через Flask/SQLAlchemy
+echo "📦 Создание базовой структуры базы данных..."
+python - <<'PYCODE'
+from seller_platform import app, db, ensure_storage_roots
+
+ensure_storage_roots()
+with app.app_context():
+    # create_all() безопасно - создает только отсутствующие таблицы
+    db.create_all()
+    print("✅ Базовая структура БД создана")
+PYCODE
+
+# Теперь применяем миграции для добавления новых колонок
 echo "📦 Применение миграций базы данных..."
 python migrate_db.py --db-path data/seller_platform.db
 python migrate_add_characteristics.py data/seller_platform.db
@@ -21,16 +33,7 @@ python migrate_add_price_monitoring.py || echo "⚠️ Price monitoring migratio
 python migrate_add_product_sync_settings.py || echo "⚠️ Product sync settings migration skipped (already applied or error)"
 python migrate_add_admin_features.py || echo "⚠️ Admin features migration skipped (already applied or error)"
 
-# Дополнительная инициализация через Flask
-python - <<'PYCODE'
-from seller_platform import app, db, ensure_storage_roots
-
-ensure_storage_roots()
-with app.app_context():
-    # create_all() безопасно - создает только отсутствующие таблицы
-    db.create_all()
-    print("✅ Инициализация seller-platform завершена")
-PYCODE
+echo "✅ Инициализация seller-platform завершена"
 else
 echo "🚀 Инициализация wb-calculator..."
 python - <<'PYCODE'

@@ -18,23 +18,33 @@ def migrate_database(db_path: str):
         # === Миграция 1: Добавление полей в таблицу sellers ===
         print("📝 Проверка таблицы sellers...")
 
-        # Получить список существующих колонок
-        cursor.execute("PRAGMA table_info(sellers)")
-        existing_columns = {row[1] for row in cursor.fetchall()}
+        # Проверяем существует ли таблица sellers
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='sellers'
+        """)
 
-        # Список новых колонок для добавления
-        new_columns = {
-            'api_last_sync': 'DATETIME',
-            'api_sync_status': 'VARCHAR(50)',
-        }
+        if not cursor.fetchone():
+            print("  ⚠️  Таблица sellers не существует, пропускаем миграцию")
+            print("  💡 Таблица будет создана автоматически через db.create_all()")
+        else:
+            # Получить список существующих колонок
+            cursor.execute("PRAGMA table_info(sellers)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
 
-        for column_name, column_type in new_columns.items():
-            if column_name not in existing_columns:
-                print(f"  ➕ Добавление колонки: {column_name}")
-                cursor.execute(f"ALTER TABLE sellers ADD COLUMN {column_name} {column_type}")
-                conn.commit()
-            else:
-                print(f"  ✓ Колонка {column_name} уже существует")
+            # Список новых колонок для добавления
+            new_columns = {
+                'api_last_sync': 'DATETIME',
+                'api_sync_status': 'VARCHAR(50)',
+            }
+
+            for column_name, column_type in new_columns.items():
+                if column_name not in existing_columns:
+                    print(f"  ➕ Добавление колонки: {column_name}")
+                    cursor.execute(f"ALTER TABLE sellers ADD COLUMN {column_name} {column_type}")
+                    conn.commit()
+                else:
+                    print(f"  ✓ Колонка {column_name} уже существует")
 
         # === Миграция 2: Создание таблицы products ===
         print("📝 Проверка таблицы products...")
