@@ -4555,6 +4555,12 @@ from auto_import_routes import register_auto_import_routes
 register_auto_import_routes(app)
 
 
+# ============= РОУТЫ ОБЪЕДИНЕНИЯ КАРТОЧЕК =============
+# Регистрация роутов для объединения/разъединения карточек
+from routes_merge_cards import register_merge_routes
+register_merge_routes(app)
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

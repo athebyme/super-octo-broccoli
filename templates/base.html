@@ -47,6 +47,10 @@
                            class="{% if request.endpoint in ['auto_import_dashboard', 'auto_import_settings', 'auto_import_products', 'auto_import_product_detail'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Автоимпорт
                         </a>
+                        <a href="{{ url_for('products_merge') }}"
+                           class="{% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history'] %}border-indigo-500 text-gray-900{% else %}border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700{% endif %} inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Объединение
+                        </a>
                         {% endif %}
                         {% if current_user.is_admin %}
                         <a href="{{ url_for('admin_panel') }}"
