@@ -247,9 +247,16 @@ def register_merge_routes(app):
             # Разъединяем через API
             client = WildberriesAPIClient(current_user.seller.wb_api_key)
 
+            # ВАЖНО: Нужно передать ВСЕ nmID которые объединены, включая target
+            # merged_nm_ids содержит только те, что были в чекбоксах (без target)
+            # Получаем все nmID из snapshot_after - там все карточки с одинаковым imt_id
+            all_nm_ids = [int(nm_id) for nm_id in merge.snapshot_after.keys()]
+
+            app.logger.info(f"🔓 Unmerging {len(all_nm_ids)} cards: {all_nm_ids}")
+
             try:
                 result = client.unmerge_cards(
-                    nm_ids=merge.merged_nm_ids,
+                    nm_ids=all_nm_ids,
                     log_to_db=True,
                     seller_id=current_user.seller.id
                 )
