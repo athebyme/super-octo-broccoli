@@ -175,6 +175,17 @@
                             <span class="px-3 py-1 text-xs bg-green-500 rounded-full">
                                 Объединено
                             </span>
+                            {% if group.cards|length > 1 %}
+                            <form method="POST" action="{{ url_for('products_merge_unmerge_group', imt_id=group.imt_id) }}" class="inline" onsubmit="return confirm('Разъединить {{ group.cards|length }} карточек? Каждая получит новый imtID.');">
+                                <button type="submit"
+                                        class="px-3 py-1 text-xs bg-yellow-500 hover:bg-yellow-600 text-white rounded-full transition flex items-center gap-1">
+                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                                    </svg>
+                                    Разъединить
+                                </button>
+                            </form>
+                            {% endif %}
                             {% else %}
                             <span class="px-3 py-1 text-xs bg-white/20 rounded-full">
                                 Не объединены
@@ -249,25 +260,58 @@
         <!-- Скрытое поле для передачи nmIDs -->
         <input type="hidden" name="nm_ids" id="nm_ids_input">
 
-        <!-- Информационная панель выбора -->
-        <div id="selectionInfo" class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6 hidden">
+        <!-- Компактная панель выбора -->
+        <div id="selectionInfo" class="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border-l-4 border-indigo-500 rounded-r-lg shadow-lg p-4 mb-6 hidden">
             <div class="flex items-center justify-between">
-                <div>
-                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                        Выбрано для объединения
-                    </h3>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">
-                        Главная карточка: <span id="targetCard" class="font-semibold">не выбрана</span>
-                    </p>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">
-                        Карточек для объединения: <span id="mergeCount" class="font-semibold">0</span>
-                    </p>
+                <div class="flex-1">
+                    <div class="flex items-center gap-4 mb-2">
+                        <h3 class="text-base font-semibold text-gray-900 dark:text-white flex items-center">
+                            <svg class="w-5 h-5 mr-2 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Выбор сохранен
+                        </h3>
+                        <button type="button"
+                                onclick="clearSelection()"
+                                class="px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-900/50 transition">
+                            Очистить
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <div class="flex items-start">
+                            <svg class="w-4 h-4 mr-2 mt-0.5 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <div>
+                                <span class="text-gray-600 dark:text-gray-400">Главная:</span>
+                                <span id="targetCard" class="font-semibold text-gray-900 dark:text-white">не выбрана</span>
+                            </div>
+                        </div>
+                        <div class="flex items-start">
+                            <svg class="w-4 h-4 mr-2 mt-0.5 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"></path>
+                            </svg>
+                            <div>
+                                <span class="text-gray-600 dark:text-gray-400">Для объединения:</span>
+                                <span id="mergeCount" class="font-semibold text-gray-900 dark:text-white">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Список выбранных карточек (компактный) -->
+                    <div id="selectedCardsList" class="mt-3 hidden">
+                        <button type="button"
+                                onclick="toggleSelectedCards()"
+                                class="flex items-center text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300">
+                            <svg id="toggleIcon" class="w-4 h-4 mr-1 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                            </svg>
+                            <span id="toggleText">Показать выбранные карточки</span>
+                        </button>
+                        <div id="cardsListContent" class="mt-2 hidden max-h-40 overflow-y-auto space-y-1">
+                            <!-- Список будет заполнен JS -->
+                        </div>
+                    </div>
                 </div>
-                <button type="button"
-                        onclick="clearSelection()"
-                        class="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition">
-                    Очистить выбор
-                </button>
             </div>
         </div>
 
@@ -346,18 +390,90 @@
 <script>
 let selectedTarget = null;
 let selectedMerges = new Set();
+let selectedCardsData = {}; // Храним данные о выбранных карточках
 
+// === LocalStorage Functions ===
+function saveSelectionToStorage() {
+    const selectionData = {
+        target: selectedTarget,
+        merges: Array.from(selectedMerges),
+        cardsData: selectedCardsData
+    };
+    localStorage.setItem('merge_selection', JSON.stringify(selectionData));
+}
+
+function loadSelectionFromStorage() {
+    try {
+        const stored = localStorage.getItem('merge_selection');
+        if (stored) {
+            const data = JSON.parse(stored);
+            selectedTarget = data.target;
+            selectedMerges = new Set(data.merges || []);
+            selectedCardsData = data.cardsData || {};
+            return true;
+        }
+    } catch (e) {
+        console.error('Error loading selection:', e);
+    }
+    return false;
+}
+
+function clearStoredSelection() {
+    localStorage.removeItem('merge_selection');
+}
+
+// === Selection Functions ===
 function selectTarget(radio) {
     selectedTarget = {
         nmId: radio.value,
         subjectId: radio.dataset.subject
     };
+
+    // Сохраняем данные карточки
+    const card = radio.closest('.bg-white, .dark\\:bg-gray-700');
+    if (card) {
+        const titleEl = card.querySelector('h3');
+        const imgEl = card.querySelector('img');
+        selectedCardsData[radio.value] = {
+            nmId: radio.value,
+            title: titleEl ? titleEl.textContent.trim() : '',
+            image: imgEl ? imgEl.src : '',
+            isTarget: true
+        };
+    }
+
+    saveSelectionToStorage();
     updateSelection();
 }
 
 function updateSelection() {
     const checkboxes = document.querySelectorAll('.merge-checkbox:checked');
     selectedMerges = new Set(Array.from(checkboxes).map(cb => cb.value));
+
+    // Сохраняем данные о выбранных карточках
+    checkboxes.forEach(cb => {
+        if (!selectedCardsData[cb.value]) {
+            const card = cb.closest('.bg-white, .dark\\:bg-gray-700');
+            if (card) {
+                const titleEl = card.querySelector('h3');
+                const imgEl = card.querySelector('img');
+                selectedCardsData[cb.value] = {
+                    nmId: cb.value,
+                    title: titleEl ? titleEl.textContent.trim() : '',
+                    image: imgEl ? imgEl.src : '',
+                    isTarget: false
+                };
+            }
+        }
+    });
+
+    // Удаляем данные о снятых чекбоксах
+    Object.keys(selectedCardsData).forEach(nmId => {
+        const data = selectedCardsData[nmId];
+        if (!data.isTarget && !selectedMerges.has(nmId)) {
+            delete selectedCardsData[nmId];
+        }
+    });
 
     const selectionInfo = document.getElementById('selectionInfo');
     const targetCard = document.getElementById('targetCard');
@@ -367,9 +483,18 @@ function updateSelection() {
         selectionInfo.classList.remove('hidden');
         targetCard.textContent = selectedTarget ? `nmID: ${selectedTarget.nmId}` : 'не выбрана';
         mergeCount.textContent = selectedMerges.size;
+
+        // Показываем блок со списком, если есть выбранные
+        if (selectedMerges.size > 0 || selectedTarget) {
+            document.getElementById('selectedCardsList').classList.remove('hidden');
+        }
     } else {
         selectionInfo.classList.add('hidden');
+        document.getElementById('selectedCardsList').classList.add('hidden');
     }
+
+    saveSelectionToStorage();
+    updateCompactCardsList();
 }
 
 function clearSelection() {
@@ -377,8 +502,106 @@ function clearSelection() {
     document.querySelectorAll('.merge-checkbox').forEach(cb => cb.checked = false);
     selectedTarget = null;
     selectedMerges.clear();
+    selectedCardsData = {};
+    clearStoredSelection();
     updateSelection();
 }
+
+// === Compact Cards List ===
+function updateCompactCardsList() {
+    const listContent = document.getElementById('cardsListContent');
+    if (!listContent) return;
+
+    const totalSelected = (selectedTarget ? 1 : 0) + selectedMerges.size;
+
+    if (totalSelected === 0) {
+        listContent.innerHTML = '<p class="text-sm text-gray-500">Нет выбранных карточек</p>';
+        return;
+    }
+
+    let html = '<div class="grid grid-cols-1 gap-2">';
+
+    // Главная карточка
+    if (selectedTarget && selectedCardsData[selectedTarget.nmId]) {
+        const card = selectedCardsData[selectedTarget.nmId];
+        html += `
+            <div class="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200">
+                ${card.image ? `<img src="${card.image}" class="w-10 h-10 object-cover rounded" />` : ''}
+                <div class="flex-1 min-w-0">
+                    <div class="text-xs font-semibold text-blue-700 dark:text-blue-300">🎯 Главная</div>
+                    <div class="text-xs text-gray-700 dark:text-gray-300 truncate">${card.title || 'nmID: ' + card.nmId}</div>
+                    <div class="text-xs text-gray-500">nmID: ${card.nmId}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // Карточки для объединения
+    selectedMerges.forEach(nmId => {
+        const card = selectedCardsData[nmId];
+        if (card) {
+            html += `
+                <div class="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200">
+                    ${card.image ? `<img src="${card.image}" class="w-10 h-10 object-cover rounded" />` : ''}
+                    <div class="flex-1 min-w-0">
+                        <div class="text-xs text-gray-700 dark:text-gray-300 truncate">${card.title || 'nmID: ' + card.nmId}</div>
+                        <div class="text-xs text-gray-500">nmID: ${card.nmId}</div>
+                    </div>
+                </div>
+            `;
+        }
+    });
+
+    html += '</div>';
+    listContent.innerHTML = html;
+}
+
+function toggleSelectedCards() {
+    const listContent = document.getElementById('cardsListContent');
+    const toggleText = document.getElementById('toggleText');
+    const toggleIcon = document.getElementById('toggleIcon');
+
+    if (listContent.classList.contains('hidden')) {
+        listContent.classList.remove('hidden');
+        if (toggleText) toggleText.textContent = 'Скрыть список';
+        if (toggleIcon) toggleIcon.classList.add('rotate-180');
+    } else {
+        listContent.classList.add('hidden');
+        if (toggleText) toggleText.textContent = 'Показать выбранные карточки';
+        if (toggleIcon) toggleIcon.classList.remove('rotate-180');
+    }
+}
+
+// === Page Load: Restore Selection ===
+document.addEventListener('DOMContentLoaded', function() {
+    // Загружаем сохраненный выбор
+    const hasStored = loadSelectionFromStorage();
+
+    if (hasStored) {
+        // Восстанавливаем target radio button
+        if (selectedTarget) {
+            const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${selectedTarget.nmId}"]`);
+            if (targetRadio) {
+                targetRadio.checked = true;
+            }
+        }
+
+        // Восстанавливаем checkboxes
+        selectedMerges.forEach(nmId => {
+            const checkbox = document.querySelector(`.merge-checkbox[value="${nmId}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+            }
+        });
+
+        updateSelection();
+    }
+
+    // Добавляем обработчики для checkboxes
+    document.querySelectorAll('.merge-checkbox').forEach(cb => {
+        cb.addEventListener('change', updateSelection);
+    });
+});
 
 // Валидация перед отправкой
 document.getElementById('mergeForm').addEventListener('submit', function(e) {
