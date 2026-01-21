@@ -92,10 +92,6 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6) -> 
     # Группируем по категориям (можно объединять только карточки одной категории)
     by_category = defaultdict(list)
     for product in products:
-        # Пропускаем уже объединенные карточки
-        if product.get('imt_id'):
-            continue
-
         subject_id = product.get('subject_id')
         if subject_id:
             by_category[subject_id].append(product)
@@ -253,14 +249,32 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
         Список рекомендаций
     """
     from models import Product
+    from sqlalchemy import func
 
-    # Получаем только активные карточки без imt_id (не объединенные)
-    products = Product.query.filter_by(
+    # Получаем активные карточки
+    all_products = Product.query.filter_by(
         seller_id=seller_id,
         is_active=True
-    ).filter(
-        (Product.imt_id == None) | (Product.imt_id == 0)
     ).all()
+
+    # Группируем по imt_id
+    imt_groups = {}
+    for p in all_products:
+        if p.imt_id:
+            if p.imt_id not in imt_groups:
+                imt_groups[p.imt_id] = []
+            imt_groups[p.imt_id].append(p)
+
+    # Находим необъединенные карточки (группы размером 1)
+    # Это карточки с уникальным imt_id
+    single_products = []
+    for imt_id, products in imt_groups.items():
+        if len(products) == 1:
+            single_products.append(products[0])
+
+    # Если нет необъединенных карточек, возвращаем пустой список
+    if len(single_products) < 2:
+        return []
 
     # Преобразуем в dict для алгоритма
     products_data = [
@@ -273,7 +287,7 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
             'subject_id': p.subject_id,
             'subject_name': p.object_name
         }
-        for p in products
+        for p in single_products
     ]
 
     return find_merge_recommendations(products_data, min_score)
