@@ -15,8 +15,14 @@ echo "🚀 Инициализация seller-platform..."
 echo "📦 Создание базовой структуры базы данных..."
 python - <<'PYCODE'
 import os
+
+# ВАЖНО: Устанавливаем DATABASE_URL перед импортом, чтобы использовать правильный путь к БД
+os.environ.setdefault('DATABASE_URL', 'sqlite:////app/data/seller_platform.db')
+
 from seller_platform import app, db, ensure_storage_roots
 from models import User
+
+print(f"🗄️  Используется база данных: {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 ensure_storage_roots()
 with app.app_context():
@@ -54,14 +60,14 @@ PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
 echo "📦 Применение миграций базы данных..."
-python migrate_db.py --db-path data/seller_platform.db
-python migrate_add_characteristics.py data/seller_platform.db
-python migrate_add_history_and_logging.py --db-path data/seller_platform.db
-python migrate_add_subject_id.py data/seller_platform.db
+python migrate_db.py --db-path /app/data/seller_platform.db
+python migrate_add_characteristics.py /app/data/seller_platform.db
+python migrate_add_history_and_logging.py --db-path /app/data/seller_platform.db
+python migrate_add_subject_id.py /app/data/seller_platform.db
 python migrate_add_price_monitoring.py || echo "⚠️ Price monitoring migration skipped (already applied or error)"
 python migrate_add_product_sync_settings.py || echo "⚠️ Product sync settings migration skipped (already applied or error)"
 python migrate_add_admin_features.py || echo "⚠️ Admin features migration skipped (already applied or error)"
-python migrate_add_card_merge_history.py --db-path data/seller_platform.db || echo "⚠️ Card merge history migration skipped (already applied or error)"
+python migrate_add_card_merge_history.py --db-path /app/data/seller_platform.db || echo "⚠️ Card merge history migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
 else

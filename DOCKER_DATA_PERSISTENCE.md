@@ -104,7 +104,12 @@ df -h | grep /app/data
    ```
    (4 слеша для абсолютного пути!)
 
-2. Пересоздайте контейнер:
+2. **ВАЖНО:** Если .env файла нет, скопируйте из примера:
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Пересоздайте контейнер:
    ```bash
    docker-compose down
    docker-compose up -d
