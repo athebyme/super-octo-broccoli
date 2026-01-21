@@ -14,13 +14,42 @@ echo "🚀 Инициализация seller-platform..."
 # Сначала создаем базовую структуру БД через Flask/SQLAlchemy
 echo "📦 Создание базовой структуры базы данных..."
 python - <<'PYCODE'
+import os
 from seller_platform import app, db, ensure_storage_roots
+from models import User
 
 ensure_storage_roots()
 with app.app_context():
     # create_all() безопасно - создает только отсутствующие таблицы
     db.create_all()
     print("✅ Базовая структура БД создана")
+
+    # Проверяем, есть ли администратор
+    admin_exists = User.query.filter_by(is_admin=True).first()
+
+    if not admin_exists:
+        # Создаем дефолтного администратора
+        username = os.environ.get('ADMIN_USERNAME', 'admin')
+        email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
+        password = os.environ.get('ADMIN_PASSWORD', 'admin123')
+
+        admin = User(
+            username=username,
+            email=email,
+            is_admin=True,
+            is_active=True
+        )
+        admin.set_password(password)
+
+        db.session.add(admin)
+        db.session.commit()
+
+        print(f"✅ Создан администратор: {username}")
+        print(f"   Email: {email}")
+        print(f"   Пароль: {password}")
+        print(f"   ⚠️  ВАЖНО: Смените пароль после первого входа!")
+    else:
+        print(f"✅ Администратор уже существует: {admin_exists.username}")
 PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
