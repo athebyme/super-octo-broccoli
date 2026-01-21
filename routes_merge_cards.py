@@ -8,6 +8,8 @@ import json
 
 from models import db, Product, CardMergeHistory
 from wb_api_client import WildberriesAPIClient, WBAPIException
+from sqlalchemy import or_
+from merge_recommendations import get_merge_recommendations_for_seller
 
 
 def register_merge_routes(app):
@@ -16,33 +18,63 @@ def register_merge_routes(app):
     @app.route('/products/merge', methods=['GET'])
     @login_required
     def products_merge():
-        """Страница объединения карточек"""
+        """Страница объединения карточек с пагинацией и расширенными фильтрами"""
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             flash('Для объединения карточек необходимо настроить API ключ WB', 'warning')
             return redirect(url_for('settings'))
 
-        # Группировка карточек по imtID для показа уже объединенных
+        # Параметры фильтрации и пагинации
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 50, type=int)
+        subject_filter = request.args.get('subject_id', type=int)
+        brand_filter = request.args.get('brand', type=str)
+        search_query = request.args.get('search', type=str, default='').strip()
+
+        # Базовый запрос
         products_query = Product.query.filter_by(
             seller_id=current_user.seller.id,
             is_active=True
-        ).order_by(Product.subject_id, Product.imt_id, Product.vendor_code)
+        )
 
-        # Фильтры
-        subject_filter = request.args.get('subject_id', type=int)
+        # Применяем фильтры
         if subject_filter:
             products_query = products_query.filter_by(subject_id=subject_filter)
 
-        products = products_query.all()
+        if brand_filter:
+            products_query = products_query.filter_by(brand=brand_filter)
+
+        if search_query:
+            # Поиск по названию, артикулу, бренду
+            search_pattern = f"%{search_query}%"
+            products_query = products_query.filter(
+                or_(
+                    Product.title.ilike(search_pattern),
+                    Product.vendor_code.ilike(search_pattern),
+                    Product.brand.ilike(search_pattern)
+                )
+            )
+
+        # Сортировка
+        products_query = products_query.order_by(
+            Product.subject_id,
+            Product.imt_id,
+            Product.brand,
+            Product.vendor_code
+        )
+
+        # Получаем все подходящие товары (до пагинации) для группировки
+        all_products = products_query.all()
 
         # Группировка по imtID
         imt_groups = {}
-        for product in products:
+        for product in all_products:
             imt_id = product.imt_id or f"single_{product.nm_id}"
             if imt_id not in imt_groups:
                 imt_groups[imt_id] = {
                     'imt_id': product.imt_id,
                     'subject_id': product.subject_id,
                     'subject_name': product.object_name,
+                    'brand': product.brand,
                     'cards': []
                 }
             imt_groups[imt_id]['cards'].append({
@@ -54,20 +86,53 @@ def register_merge_routes(app):
                 'subject_id': product.subject_id
             })
 
-        # Список уникальных категорий
+        # Пагинация групп (не карточек)
+        groups_list = list(imt_groups.values())
+        total_groups = len(groups_list)
+        total_pages = (total_groups + per_page - 1) // per_page
+
+        # Корректируем номер страницы
+        if page < 1:
+            page = 1
+        elif page > total_pages and total_pages > 0:
+            page = total_pages
+
+        # Получаем группы для текущей страницы
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_groups = groups_list[start_idx:end_idx]
+
+        # Список уникальных категорий (для фильтра)
         subjects = db.session.query(
             Product.subject_id,
             Product.object_name
         ).filter_by(
             seller_id=current_user.seller.id,
             is_active=True
-        ).distinct().all()
+        ).distinct().order_by(Product.object_name).all()
+
+        # Список уникальных брендов (для фильтра)
+        brands = db.session.query(Product.brand).filter(
+            Product.seller_id == current_user.seller.id,
+            Product.is_active == True,
+            Product.brand != None,
+            Product.brand != ''
+        ).distinct().order_by(Product.brand).all()
+        brands_list = [b[0] for b in brands if b[0]]
 
         return render_template(
             'products_merge.html',
-            imt_groups=list(imt_groups.values()),
+            imt_groups=paginated_groups,
             subjects=[{'id': s[0], 'name': s[1]} for s in subjects],
-            selected_subject=subject_filter
+            brands=brands_list,
+            selected_subject=subject_filter,
+            selected_brand=brand_filter,
+            search_query=search_query,
+            page=page,
+            per_page=per_page,
+            total_groups=total_groups,
+            total_pages=total_pages,
+            total_cards=len(all_products)
         )
 
     @app.route('/products/merge/execute', methods=['POST'])
@@ -210,6 +275,47 @@ def register_merge_routes(app):
         ).first_or_404()
 
         return render_template('products_merge_detail.html', merge=merge)
+
+    @app.route('/products/merge/recommendations')
+    @login_required
+    def products_merge_recommendations():
+        """Автоматические рекомендации для объединения карточек"""
+        if not current_user.seller:
+            flash('Для просмотра рекомендаций необходим профиль продавца', 'warning')
+            return redirect(url_for('dashboard'))
+
+        # Параметры
+        min_score = request.args.get('min_score', 0.6, type=float)
+        show_top = request.args.get('show_top', 20, type=int)
+
+        # Получаем рекомендации
+        try:
+            all_recommendations = get_merge_recommendations_for_seller(
+                seller_id=current_user.seller.id,
+                db_session=db.session,
+                min_score=min_score
+            )
+
+            # Ограничиваем количество
+            recommendations = all_recommendations[:show_top]
+
+            # Статистика
+            total_recommendations = len(all_recommendations)
+            total_cards_to_merge = sum(len(r['cards']) for r in recommendations)
+
+            return render_template(
+                'products_merge_recommendations.html',
+                recommendations=recommendations,
+                total_recommendations=total_recommendations,
+                total_cards=total_cards_to_merge,
+                min_score=min_score,
+                show_top=show_top
+            )
+
+        except Exception as e:
+            app.logger.error(f"Error getting merge recommendations: {str(e)}")
+            flash('Ошибка при получении рекомендаций', 'danger')
+            return redirect(url_for('products_merge'))
 
     @app.route('/products/merge/revert/<int:id>', methods=['POST'])
     @login_required
