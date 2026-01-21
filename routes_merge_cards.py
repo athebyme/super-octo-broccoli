@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 
 from models import db, Product, CardMergeHistory
-from wb_api_client import WBAPIClient, WBAPIException
+from wb_api_client import WildberriesAPIClient, WBAPIException
 
 
 def register_merge_routes(app):
@@ -135,7 +135,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Выполняем объединение через API
-            client = WBAPIClient(current_user.seller.wb_api_key)
+            client = WildberriesAPIClient(current_user.seller.wb_api_key)
 
             try:
                 result = client.merge_cards(
@@ -245,7 +245,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API
-            client = WBAPIClient(current_user.seller.wb_api_key)
+            client = WildberriesAPIClient(current_user.seller.wb_api_key)
 
             try:
                 result = client.unmerge_cards(
