@@ -45,11 +45,20 @@ DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Получаем DATABASE_URL из переменной окружения или используем дефолт
 # ВАЖНО: для абсолютного пути в SQLite используем 4 слеша: sqlite:////path
-database_url = os.environ.get('DATABASE_URL')
-if not database_url:
+database_url_from_env = os.environ.get('DATABASE_URL')
+
+print(f"🔧 DEBUG: DATABASE_URL from env = {database_url_from_env}")
+print(f"🔧 DEBUG: DEFAULT_DB_PATH = {DEFAULT_DB_PATH}")
+print(f"🔧 DEBUG: DEFAULT_DB_PATH.absolute() = {DEFAULT_DB_PATH.absolute()}")
+
+if database_url_from_env:
+    database_url = database_url_from_env
+    print(f"✅ Using DATABASE_URL from environment")
+else:
     # Создаем URI с АБСОЛЮТНЫМ путем
     abs_path = DEFAULT_DB_PATH.absolute()
     database_url = f"sqlite:///{abs_path}"
+    print(f"⚠️ DATABASE_URL not set, using generated: {database_url}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
