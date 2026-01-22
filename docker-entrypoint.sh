@@ -30,6 +30,16 @@ with app.app_context():
     db.create_all()
     print("✅ Базовая структура БД создана")
 
+    # Включаем WAL mode для лучшей поддержки конкурентного доступа
+    try:
+        db.session.execute(db.text("PRAGMA journal_mode=WAL;"))
+        db.session.execute(db.text("PRAGMA synchronous=NORMAL;"))
+        db.session.execute(db.text("PRAGMA busy_timeout=30000;"))  # 30 секунд
+        db.session.commit()
+        print("✅ SQLite настроен: WAL mode включен, busy_timeout=30s")
+    except Exception as e:
+        print(f"⚠️  Не удалось настроить SQLite WAL mode: {e}")
+
     # Проверяем, есть ли администратор
     admin_exists = User.query.filter_by(is_admin=True).first()
 
