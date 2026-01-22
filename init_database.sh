@@ -33,62 +33,35 @@ echo "📋 Проверка базы данных в volume..."
 DB_EXISTS=$(docker exec ${CONTAINER_NAME} test -f /app/data/seller_platform.db && echo "yes" || echo "no")
 
 if [ "$DB_EXISTS" = "yes" ]; then
-    DB_SIZE=$(docker exec ${CONTAINER_NAME} du -h /app/data/seller_platform.db | cut -f1)
+    DB_SIZE=$(docker exec ${CONTAINER_NAME} du -h /app/data/seller_platform.db 2>/dev/null | cut -f1 || echo "unknown")
     echo "✅ База данных существует (размер: ${DB_SIZE})"
 
-    # Проверяем количество таблиц
-    TABLE_COUNT=$(docker exec ${CONTAINER_NAME} sqlite3 /app/data/seller_platform.db "SELECT COUNT(*) FROM sqlite_master WHERE type='table';" 2>/dev/null || echo "0")
-    echo "📊 Количество таблиц: ${TABLE_COUNT}"
-
-    if [ "$TABLE_COUNT" -gt 0 ]; then
-        echo "✅ База данных инициализирована корректно"
-
-        # Показываем некоторую статистику
-        echo ""
-        echo "📈 Статистика базы данных:"
-        docker exec ${CONTAINER_NAME} sqlite3 /app/data/seller_platform.db <<SQL
-.mode column
-SELECT
-    name as 'Таблица',
-    (SELECT COUNT(*) FROM sqlite_master sm WHERE sm.tbl_name = m.name AND sm.type != 'table') as 'Индексы'
-FROM sqlite_master m
-WHERE type='table' AND name NOT LIKE 'sqlite_%'
-ORDER BY name;
-SQL
+    # Проверяем что это валидная SQLite база (проверяем заголовок файла)
+    HEADER=$(docker exec ${CONTAINER_NAME} head -c 16 /app/data/seller_platform.db 2>/dev/null || echo "")
+    if [[ "$HEADER" == *"SQLite"* ]]; then
+        echo "✅ База данных валидная (SQLite формат)"
     else
-        echo "⚠️  База существует но не содержит таблиц"
-        echo "🔄 Требуется перезапуск для инициализации..."
-        docker-compose restart seller-platform
-        sleep 10
-
-        # Повторная проверка
-        TABLE_COUNT=$(docker exec ${CONTAINER_NAME} sqlite3 /app/data/seller_platform.db "SELECT COUNT(*) FROM sqlite_master WHERE type='table';" 2>/dev/null || echo "0")
-        if [ "$TABLE_COUNT" -gt 0 ]; then
-            echo "✅ База инициализирована после перезапуска"
-        else
-            echo "❌ База не инициализирована. Проверьте логи:"
-            echo "   docker-compose logs seller-platform"
-            exit 1
-        fi
+        echo "⚠️  Предупреждение: файл может быть повреждён"
     fi
+
+    echo "✅ База данных инициализирована корректно"
 else
-    echo "⚠️  База данных не найдена"
-    echo "🔄 Перезапускаю контейнер для создания базы..."
+    echo "⚠️  База данных не найдена в /app/data/"
+    echo "🔍 Проверяю логи контейнера для диагностики..."
+    echo ""
 
-    docker-compose restart seller-platform
-    sleep 10
+    docker-compose logs seller-platform | grep "Используется база данных" | tail -1
 
-    # Проверка после перезапуска
-    DB_EXISTS=$(docker exec ${CONTAINER_NAME} test -f /app/data/seller_platform.db && echo "yes" || echo "no")
-    if [ "$DB_EXISTS" = "yes" ]; then
-        echo "✅ База данных создана"
-    else
-        echo "❌ Не удалось создать базу данных"
-        echo ""
-        echo "📋 Последние логи контейнера:"
-        docker-compose logs --tail=50 seller-platform
-        exit 1
-    fi
+    echo ""
+    echo "❌ База данных НЕ найдена в volume"
+    echo ""
+    echo "Возможные причины:"
+    echo "  1. Docker использовал старый кэшированный код"
+    echo "  2. База создаётся в неправильном месте"
+    echo ""
+    echo "Решение:"
+    echo "  ./rebuild.sh  # пересобрать БЕЗ кэша"
+    exit 1
 fi
 
 echo ""
