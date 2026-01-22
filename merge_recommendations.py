@@ -102,6 +102,10 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max
         if subject_id:
             by_category[subject_id].append(product)
 
+    # Глобальный set для отслеживания уже использованных карточек
+    # Каждая карточка должна появиться только в одной рекомендации
+    used_nm_ids = set()
+
     # Анализируем каждую категорию отдельно
     for subject_id, category_products in by_category.items():
         if len(category_products) < 2:
@@ -133,10 +137,18 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max
                 if len(recommendations) >= 50:
                     break
 
+                # Пропускаем карточки, которые уже в других рекомендациях
+                if prod1['nm_id'] in used_nm_ids:
+                    continue
+
                 for prod2 in brand_products[i+1:]:
                     # Лимит сравнений
                     if comparisons_made >= max_comparisons:
                         break
+
+                    # Пропускаем карточки, которые уже в других рекомендациях
+                    if prod2['nm_id'] in used_nm_ids:
+                        continue
 
                     # Избегаем дубликатов
                     pair_key = tuple(sorted([prod1['nm_id'], prod2['nm_id']]))
@@ -180,6 +192,8 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max
 
                                 if compatible:
                                     rec['cards'].append(new_card)
+                                    # Отмечаем карточку как использованную
+                                    used_nm_ids.add(new_card['nm_id'])
                                     # Не пересчитываем score для производительности
                                     merged_into_existing = True
                                     break
@@ -194,6 +208,10 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max
                                 'subject_id': subject_id,
                                 'brand': brand
                             })
+
+                            # Отмечаем обе карточки как использованные
+                            used_nm_ids.add(prod1['nm_id'])
+                            used_nm_ids.add(prod2['nm_id'])
 
                             # ОПТИМИЗАЦИЯ: Прерываем если уже нашли достаточно
                             if len(recommendations) >= 50:
