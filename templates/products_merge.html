@@ -574,27 +574,93 @@ function toggleSelectedCards() {
 
 // === Page Load: Restore Selection ===
 document.addEventListener('DOMContentLoaded', function() {
-    // Загружаем сохраненный выбор
-    const hasStored = loadSelectionFromStorage();
+    // Проверяем URL параметры для автоматического выбора (из рекомендаций)
+    const urlParams = new URLSearchParams(window.location.search);
+    const autoSelectNmIds = urlParams.get('auto_select_nm_ids');
+    const autoTargetNmId = urlParams.get('auto_target_nm_id');
 
-    if (hasStored) {
-        // Восстанавливаем target radio button
-        if (selectedTarget) {
-            const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${selectedTarget.nmId}"]`);
-            if (targetRadio) {
-                targetRadio.checked = true;
-            }
+    let autoSelectionApplied = false;
+
+    if (autoSelectNmIds && autoTargetNmId) {
+        // Парсим nm_ids из URL
+        const nmIdsToSelect = autoSelectNmIds.split(',').map(id => id.trim());
+
+        // Очищаем существующий выбор из localStorage для этой автоматической рекомендации
+        clearStoredSelection();
+
+        // Устанавливаем target (главную карточку)
+        const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${autoTargetNmId}"]`);
+        if (targetRadio) {
+            targetRadio.checked = true;
+            selectTarget(targetRadio);
+            autoSelectionApplied = true;
         }
 
-        // Восстанавливаем checkboxes
-        selectedMerges.forEach(nmId => {
-            const checkbox = document.querySelector(`.merge-checkbox[value="${nmId}"]`);
-            if (checkbox) {
-                checkbox.checked = true;
+        // Отмечаем все карточки из рекомендации (кроме target)
+        nmIdsToSelect.forEach(nmId => {
+            if (nmId !== autoTargetNmId) {
+                const checkbox = document.querySelector(`.merge-checkbox[value="${nmId}"]`);
+                if (checkbox) {
+                    checkbox.checked = true;
+                    autoSelectionApplied = true;
+                }
             }
         });
 
-        updateSelection();
+        if (autoSelectionApplied) {
+            updateSelection();
+
+            // Показываем уведомление
+            const notification = document.createElement('div');
+            notification.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+            notification.innerHTML = `
+                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                </svg>
+                Карточки из рекомендации выбраны автоматически
+            `;
+            document.body.appendChild(notification);
+
+            // Убираем уведомление через 3 секунды
+            setTimeout(() => {
+                notification.style.transition = 'opacity 0.5s';
+                notification.style.opacity = '0';
+                setTimeout(() => notification.remove(), 500);
+            }, 3000);
+
+            // Прокручиваем к форме объединения
+            setTimeout(() => {
+                const selectionInfo = document.getElementById('selectionInfo');
+                if (selectionInfo) {
+                    selectionInfo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }, 500);
+        }
+    }
+
+    // Если автовыбор не применен, загружаем сохраненный выбор из localStorage
+    if (!autoSelectionApplied) {
+        const hasStored = loadSelectionFromStorage();
+
+        if (hasStored) {
+            // Восстанавливаем target radio button
+            if (selectedTarget) {
+                const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${selectedTarget.nmId}"]`);
+                if (targetRadio) {
+                    targetRadio.checked = true;
+                }
+            }
+
+            // Восстанавливаем checkboxes
+            selectedMerges.forEach(nmId => {
+                const checkbox = document.querySelector(`.merge-checkbox[value="${nmId}"]`);
+                if (checkbox) {
+                    checkbox.checked = true;
+                }
+            });
+
+            updateSelection();
+        }
     }
 
     // Добавляем обработчики для checkboxes

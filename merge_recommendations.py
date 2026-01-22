@@ -158,6 +158,11 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max
                                 # Проверяем что новая карточка совместима со всеми в группе
                                 new_card = prod2 if prod1['nm_id'] in rec_nm_ids else prod1
 
+                                # ВАЖНО: Проверяем что этой карточки еще нет в группе
+                                if new_card['nm_id'] in rec_nm_ids:
+                                    merged_into_existing = True  # Уже есть, пропускаем
+                                    break
+
                                 # ОПТИМИЗАЦИЯ: Упрощенная проверка совместимости для больших групп
                                 if len(rec['cards']) > 10:
                                     # Проверяем только с несколькими карточками из группы
