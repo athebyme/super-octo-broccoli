@@ -19,7 +19,7 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./processed:/app/processed
-      - ./data:/app/data
+      - seller_platform_data:/app/data
     restart: unless-stopped
 
   wb-calculator:
@@ -36,4 +36,8 @@ services:
       - ./processed:/app/processed
       - ./data:/app/data
     restart: unless-stopped
+
+volumes:
+  seller_platform_data:
+    driver: local
 
