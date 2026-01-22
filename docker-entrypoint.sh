@@ -16,8 +16,10 @@ echo "📦 Создание базовой структуры базы данн�
 python - <<'PYCODE'
 import os
 
-# ВАЖНО: Устанавливаем DATABASE_URL перед импортом, чтобы использовать правильный путь к БД
-os.environ.setdefault('DATABASE_URL', 'sqlite:////app/data/seller_platform.db')
+# DATABASE_URL уже установлен из docker-compose.yml
+# Проверяем что пришло
+db_url_from_env = os.environ.get('DATABASE_URL', 'NOT_SET')
+print(f"🔍 DATABASE_URL from environment: {db_url_from_env}")
 
 from seller_platform import app, db, ensure_storage_roots
 from models import User
