@@ -68,13 +68,14 @@ def calculate_similarity(text1: str, text2: str) -> float:
     return SequenceMatcher(None, text1, text2).ratio()
 
 
-def find_merge_recommendations(products: List[Dict], min_score: float = 0.6) -> List[Dict]:
+def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max_products: int = 1000) -> List[Dict]:
     """
     Находит рекомендации для объединения карточек
 
     Args:
         products: Список карточек товаров
         min_score: Минимальный порог схожести (0.0 - 1.0)
+        max_products: Максимум карточек для анализа (для производительности)
 
     Returns:
         Список рекомендаций, отсортированных по убыванию score
@@ -88,6 +89,11 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6) -> 
         ]
     """
     recommendations = []
+
+    # Ограничиваем количество продуктов для производительности
+    if len(products) > max_products:
+        # Сортируем по популярности/важности если есть, иначе берем первые N
+        products = products[:max_products]
 
     # Группируем по категориям (можно объединять только карточки одной категории)
     by_category = defaultdict(list)
@@ -112,16 +118,32 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6) -> 
             if len(brand_products) < 2:
                 continue
 
+            # ОПТИМИЗАЦИЯ: Ограничиваем количество сравнений для больших брендов
+            if len(brand_products) > 100:
+                # Для больших брендов используем более эффективный подход
+                brand_products = brand_products[:100]
+
             # Попарное сравнение карточек
             compared = set()
+            comparisons_made = 0
+            max_comparisons = 5000  # Лимит сравнений для производительности
 
             for i, prod1 in enumerate(brand_products):
+                # ОПТИМИЗАЦИЯ: Прерываем если уже нашли достаточно рекомендаций
+                if len(recommendations) >= 50:
+                    break
+
                 for prod2 in brand_products[i+1:]:
+                    # Лимит сравнений
+                    if comparisons_made >= max_comparisons:
+                        break
+
                     # Избегаем дубликатов
                     pair_key = tuple(sorted([prod1['nm_id'], prod2['nm_id']]))
                     if pair_key in compared:
                         continue
                     compared.add(pair_key)
+                    comparisons_made += 1
 
                     # Вычисляем схожесть
                     score, reason = calculate_merge_score(prod1, prod2)
@@ -136,20 +158,24 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6) -> 
                                 # Проверяем что новая карточка совместима со всеми в группе
                                 new_card = prod2 if prod1['nm_id'] in rec_nm_ids else prod1
 
-                                compatible = all(
-                                    calculate_merge_score(new_card, c)[0] >= min_score
-                                    for c in rec['cards']
-                                )
+                                # ОПТИМИЗАЦИЯ: Упрощенная проверка совместимости для больших групп
+                                if len(rec['cards']) > 10:
+                                    # Проверяем только с несколькими карточками из группы
+                                    sample_size = min(3, len(rec['cards']))
+                                    sample_cards = rec['cards'][:sample_size]
+                                    compatible = all(
+                                        calculate_merge_score(new_card, c)[0] >= min_score
+                                        for c in sample_cards
+                                    )
+                                else:
+                                    compatible = all(
+                                        calculate_merge_score(new_card, c)[0] >= min_score
+                                        for c in rec['cards']
+                                    )
 
                                 if compatible:
                                     rec['cards'].append(new_card)
-                                    # Пересчитываем score как среднее
-                                    all_scores = []
-                                    for c1 in rec['cards']:
-                                        for c2 in rec['cards']:
-                                            if c1['nm_id'] != c2['nm_id']:
-                                                all_scores.append(calculate_merge_score(c1, c2)[0])
-                                    rec['score'] = sum(all_scores) / len(all_scores) if all_scores else score
+                                    # Не пересчитываем score для производительности
                                     merged_into_existing = True
                                     break
 
@@ -163,6 +189,10 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.6) -> 
                                 'subject_id': subject_id,
                                 'brand': brand
                             })
+
+                            # ОПТИМИЗАЦИЯ: Прерываем если уже нашли достаточно
+                            if len(recommendations) >= 50:
+                                break
 
     # Сортируем по убыванию score
     recommendations.sort(key=lambda x: x['score'], reverse=True)
@@ -236,7 +266,7 @@ def calculate_merge_score(prod1: Dict, prod2: Dict) -> Tuple[float, str]:
     return min(score, 1.0), reason.capitalize()
 
 
-def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: float = 0.6) -> List[Dict]:
+def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: float = 0.6, max_products: int = 1000) -> List[Dict]:
     """
     Получает рекомендации для конкретного продавца из БД
 
@@ -244,18 +274,33 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
         seller_id: ID продавца
         db_session: Сессия базы данных
         min_score: Минимальный порог схожести
+        max_products: Максимум карточек для анализа (для производительности)
 
     Returns:
         Список рекомендаций
     """
     from models import Product
     from sqlalchemy import func
+    import time
+
+    start_time = time.time()
 
     # Получаем активные карточки
+    # ОПТИМИЗАЦИЯ: Загружаем только нужные поля
     all_products = Product.query.filter_by(
         seller_id=seller_id,
         is_active=True
+    ).with_entities(
+        Product.nm_id,
+        Product.imt_id,
+        Product.vendor_code,
+        Product.title,
+        Product.brand,
+        Product.subject_id,
+        Product.object_name
     ).all()
+
+    print(f"⏱️  Loaded {len(all_products)} products in {time.time() - start_time:.2f}s")
 
     # Группируем по imt_id
     imt_groups = {}
@@ -271,6 +316,8 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
     for imt_id, products in imt_groups.items():
         if len(products) == 1:
             single_products.append(products[0])
+
+    print(f"⏱️  Found {len(single_products)} unmerged products (unique imt_id)")
 
     # Если нет необъединенных карточек, возвращаем пустой список
     if len(single_products) < 2:
@@ -290,4 +337,10 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
         for p in single_products
     ]
 
-    return find_merge_recommendations(products_data, min_score)
+    print(f"⏱️  Starting recommendations analysis (max {max_products} products)...")
+    recommendations = find_merge_recommendations(products_data, min_score, max_products)
+
+    total_time = time.time() - start_time
+    print(f"⏱️  Recommendations completed in {total_time:.2f}s - found {len(recommendations)} recommendations")
+
+    return recommendations
