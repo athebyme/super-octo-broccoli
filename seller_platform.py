@@ -42,8 +42,16 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = BASE_DIR / 'data'
 DEFAULT_DB_PATH = DATA_ROOT / 'seller_platform.db'
 DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-default_db_uri = os.environ.get('DATABASE_URL') or f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
-app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
+
+# Получаем DATABASE_URL из переменной окружения или используем дефолт
+# ВАЖНО: для абсолютного пути в SQLite используем 4 слеша: sqlite:////path
+database_url = os.environ.get('DATABASE_URL')
+if not database_url:
+    # Создаем URI с АБСОЛЮТНЫМ путем
+    abs_path = DEFAULT_DB_PATH.absolute()
+    database_url = f"sqlite:///{abs_path}"
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # SQLite конфигурация для лучшей поддержки конкурентного доступа
