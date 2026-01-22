@@ -251,6 +251,96 @@ def register_merge_routes(app):
             flash('Произошла ошибка при объединении карточек', 'danger')
             return redirect(url_for('products_merge'))
 
+    @app.route('/products/merge/unmerge/<int:imt_id>', methods=['POST'])
+    @login_required
+    def products_merge_unmerge_group(imt_id):
+        """Разъединить группу карточек по imtID"""
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ не настроен'}), 400
+
+        try:
+            # Находим все карточки с этим imt_id
+            products = Product.query.filter_by(
+                imt_id=imt_id,
+                seller_id=current_user.seller.id,
+                is_active=True
+            ).all()
+
+            if not products:
+                flash('Карточки не найдены', 'warning')
+                return redirect(url_for('products_merge'))
+
+            if len(products) < 2:
+                flash('Эта карточка не объединена с другими', 'info')
+                return redirect(url_for('products_merge'))
+
+            # Собираем nm_ids
+            nm_ids = [p.nm_id for p in products]
+
+            # Создаем запись истории
+            start_time = datetime.utcnow()
+
+            # Снимок ДО
+            snapshot_before = {
+                str(p.nm_id): {
+                    'imt_id': p.imt_id,
+                    'vendor_code': p.vendor_code,
+                    'title': p.title,
+                    'subject_id': p.subject_id
+                } for p in products
+            }
+
+            unmerge_history = CardMergeHistory(
+                seller_id=current_user.seller.id,
+                operation_type='unmerge',
+                merged_nm_ids=nm_ids,
+                snapshot_before=snapshot_before,
+                status='in_progress',
+                user_comment=f"Разъединение группы imtID={imt_id}"
+            )
+            db.session.add(unmerge_history)
+            db.session.commit()
+
+            # Разъединяем через API
+            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+
+            try:
+                result = client.unmerge_cards(
+                    nm_ids=nm_ids,
+                    log_to_db=True,
+                    seller_id=current_user.seller.id
+                )
+
+                # Снимок ПОСЛЕ (каждая карточка получит новый imt_id от WB)
+                snapshot_after = snapshot_before.copy()  # WB изменит imt_id автоматически
+
+                unmerge_history.snapshot_after = snapshot_after
+                unmerge_history.status = 'completed'
+                unmerge_history.wb_synced = True
+                unmerge_history.wb_sync_status = 'success'
+                unmerge_history.completed_at = datetime.utcnow()
+                unmerge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
+
+                db.session.commit()
+
+                flash(f'Успешно разъединено {len(nm_ids)} карточек. Обновите список товаров для получения новых imtID', 'success')
+                return redirect(url_for('products_merge_history', id=unmerge_history.id))
+
+            except WBAPIException as e:
+                unmerge_history.status = 'failed'
+                unmerge_history.wb_synced = False
+                unmerge_history.wb_sync_status = 'failed'
+                unmerge_history.wb_error_message = str(e)
+                db.session.commit()
+
+                flash(f'Ошибка при разъединении карточек: {str(e)}', 'danger')
+                return redirect(url_for('products_merge'))
+
+        except Exception as e:
+            app.logger.error(f"Error in products_merge_unmerge_group: {str(e)}")
+            flash('Произошла ошибка при разъединении карточек', 'danger')
+            return redirect(url_for('products_merge'))
+
     @app.route('/products/merge/history')
     @login_required
     def products_merge_history_list():
