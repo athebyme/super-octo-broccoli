@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+
+{% block title %}История изменений цен - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="md:flex md:items-center md:justify-between mb-6">
+        <div class="flex-1 min-w-0">
+            <h1 class="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl">
+                История изменений цен
+            </h1>
+            <p class="mt-1 text-sm text-gray-500">
+                Все операции изменения цен с возможностью отката
+            </p>
+        </div>
+        <div class="mt-4 md:mt-0">
+            <a href="{{ url_for('prices.prices_change') }}"
+               class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                Новое изменение
+            </a>
+        </div>
+    </div>
+
+    <!-- Фильтры -->
+    <div class="bg-white shadow rounded-lg mb-6">
+        <div class="px-4 py-5 sm:p-6">
+            <form method="GET" class="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                <!-- Статус -->
+                <div>
+                    <label for="status" class="block text-sm font-medium text-gray-700 mb-1">Статус</label>
+                    <select name="status" id="status"
+                            class="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                        <option value="">Все</option>
+                        <option value="draft" {{ 'selected' if status == 'draft' }}>Черновик</option>
+                        <option value="pending_review" {{ 'selected' if status == 'pending_review' }}>Ожидает подтверждения</option>
+                        <option value="confirmed" {{ 'selected' if status == 'confirmed' }}>Подтверждено</option>
+                        <option value="applied" {{ 'selected' if status == 'applied' }}>Применено</option>
+                        <option value="partially_applied" {{ 'selected' if status == 'partially_applied' }}>Частично</option>
+                        <option value="failed" {{ 'selected' if status == 'failed' }}>Ошибка</option>
+                        <option value="cancelled" {{ 'selected' if status == 'cancelled' }}>Отменено</option>
+                    </select>
+                </div>
+
+                <!-- Дата от -->
+                <div>
+                    <label for="date_from" class="block text-sm font-medium text-gray-700 mb-1">От</label>
+                    <input type="date" name="date_from" id="date_from" value="{{ date_from or '' }}"
+                           class="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+
+                <!-- Дата до -->
+                <div>
+                    <label for="date_to" class="block text-sm font-medium text-gray-700 mb-1">До</label>
+                    <input type="date" name="date_to" id="date_to" value="{{ date_to or '' }}"
+                           class="w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                </div>
+
+                <!-- Кнопки -->
+                <div class="flex items-end space-x-2">
+                    <button type="submit"
+                            class="flex-1 px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700">
+                        Фильтр
+                    </button>
+                    <a href="{{ url_for('prices.prices_history') }}"
+                       class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                        Сброс
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Таблица -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        {% if batches.items %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Название</th>
+                        <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Товаров</th>
+                        <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Изменения</th>
+                        <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Статус</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Действия</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for batch in batches.items %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ batch.created_at.strftime('%d.%m.%Y') }}
+                            <br>
+                            <span class="text-xs">{{ batch.created_at.strftime('%H:%M') }}</span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <div class="text-sm font-medium text-gray-900">{{ batch.name or 'Без названия' }}</div>
+                            {% if batch.change_type == 'percent' %}
+                            <div class="text-xs text-gray-500">{{ '+' if batch.change_value >= 0 else '' }}{{ batch.change_value }}%</div>
+                            {% elif batch.change_type == 'fixed' %}
+                            <div class="text-xs text-gray-500">{{ '+' if batch.change_value >= 0 else '' }}{{ batch.change_value }} руб.</div>
+                            {% elif batch.change_type == 'revert' %}
+                            <div class="text-xs text-purple-500">Откат</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-center whitespace-nowrap">
+                            <span class="text-sm font-medium text-gray-900">{{ batch.total_items }}</span>
+                            {% if batch.applied_count > 0 %}
+                            <span class="text-xs text-green-600">({{ batch.applied_count }} ok)</span>
+                            {% endif %}
+                            {% if batch.failed_count > 0 %}
+                            <span class="text-xs text-red-600">({{ batch.failed_count }} err)</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-center">
+                            <div class="flex items-center justify-center space-x-1">
+                                {% if batch.safe_count > 0 %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                    {{ batch.safe_count }}
+                                </span>
+                                {% endif %}
+                                {% if batch.warning_count > 0 %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                                    {{ batch.warning_count }}
+                                </span>
+                                {% endif %}
+                                {% if batch.dangerous_count > 0 %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                    {{ batch.dangerous_count }}
+                                </span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 text-center whitespace-nowrap">
+                            {% if batch.status == 'applied' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                Применено
+                            </span>
+                            {% elif batch.status == 'pending_review' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                Ожидает
+                            </span>
+                            {% elif batch.status == 'confirmed' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                Готово
+                            </span>
+                            {% elif batch.status == 'partially_applied' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                                Частично
+                            </span>
+                            {% elif batch.status == 'failed' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                Ошибка
+                            </span>
+                            {% elif batch.status == 'cancelled' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                Отменено
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                {{ batch.status }}
+                            </span>
+                            {% endif %}
+
+                            {% if batch.reverted %}
+                            <span class="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                Откачено
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-right whitespace-nowrap text-sm font-medium">
+                            {% if batch.status == 'pending_review' %}
+                            <a href="{{ url_for('prices.batch_confirm', batch_id=batch.id) }}"
+                               class="text-yellow-600 hover:text-yellow-900 mr-3">
+                                Подтвердить
+                            </a>
+                            {% endif %}
+                            <a href="{{ url_for('prices.batch_detail', batch_id=batch.id) }}"
+                               class="text-indigo-600 hover:text-indigo-900">
+                                Подробнее
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Пагинация -->
+        {% if batches.pages > 1 %}
+        <div class="px-4 py-3 border-t border-gray-200 sm:px-6">
+            <div class="flex items-center justify-between">
+                <div class="text-sm text-gray-700">
+                    Показано {{ ((batches.page - 1) * batches.per_page) + 1 }} -
+                    {{ min(batches.page * batches.per_page, batches.total) }}
+                    из {{ batches.total }}
+                </div>
+                <nav class="flex space-x-1">
+                    {% if batches.has_prev %}
+                    <a href="{{ url_for('prices.prices_history', page=batches.prev_num, status=status, date_from=date_from, date_to=date_to) }}"
+                       class="px-3 py-1 border rounded text-sm hover:bg-gray-50">
+                        Назад
+                    </a>
+                    {% endif %}
+
+                    {% for p in range(max(1, batches.page - 2), min(batches.pages + 1, batches.page + 3)) %}
+                    <a href="{{ url_for('prices.prices_history', page=p, status=status, date_from=date_from, date_to=date_to) }}"
+                       class="px-3 py-1 border rounded text-sm {{ 'bg-indigo-50 border-indigo-500 text-indigo-600' if p == batches.page else 'hover:bg-gray-50' }}">
+                        {{ p }}
+                    </a>
+                    {% endfor %}
+
+                    {% if batches.has_next %}
+                    <a href="{{ url_for('prices.prices_history', page=batches.next_num, status=status, date_from=date_from, date_to=date_to) }}"
+                       class="px-3 py-1 border rounded text-sm hover:bg-gray-50">
+                        Вперед
+                    </a>
+                    {% endif %}
+                </nav>
+            </div>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="px-6 py-12 text-center">
+            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+            <h3 class="mt-2 text-sm font-medium text-gray-900">
+                {% if status or date_from or date_to %}
+                По заданным фильтрам ничего не найдено
+                {% else %}
+                История изменений пуста
+                {% endif %}
+            </h3>
+            <p class="mt-1 text-sm text-gray-500">
+                {% if status or date_from or date_to %}
+                Попробуйте изменить параметры фильтрации
+                {% else %}
+                Начните с изменения цен на ваши товары
+                {% endif %}
+            </p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

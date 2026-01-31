@@ -1201,6 +1201,323 @@ class AdminAuditLog(db.Model):
         }
 
 
+# ============= SAFE PRICE CHANGE MODELS =============
+
+class SafePriceChangeSettings(db.Model):
+    """Настройки безопасного изменения цен для продавца"""
+    __tablename__ = 'safe_price_change_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Основные настройки безопасности
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False)  # Включена ли защита
+
+    # Пороги изменения цены (в процентах)
+    safe_threshold_percent = db.Column(db.Float, default=10.0, nullable=False)  # До этого % - безопасно (зеленый)
+    warning_threshold_percent = db.Column(db.Float, default=20.0, nullable=False)  # До этого % - предупреждение (желтый)
+    # Выше warning_threshold_percent - опасно (красный), требует подтверждения
+
+    # Режим работы
+    # 'notify' - только уведомлять о больших изменениях
+    # 'confirm' - требовать подтверждения для опасных изменений
+    # 'block' - блокировать опасные изменения полностью
+    mode = db.Column(db.String(20), default='confirm', nullable=False)
+
+    # Дополнительные настройки
+    require_comment_for_dangerous = db.Column(db.Boolean, default=True, nullable=False)  # Требовать комментарий для опасных
+    allow_bulk_dangerous = db.Column(db.Boolean, default=False, nullable=False)  # Разрешить массовые опасные изменения
+    max_products_per_batch = db.Column(db.Integer, default=100, nullable=False)  # Макс. товаров в одном батче
+
+    # Уведомления
+    notify_on_dangerous = db.Column(db.Boolean, default=True, nullable=False)  # Уведомлять о попытках опасных изменений
+    notify_email = db.Column(db.String(200))  # Email для уведомлений
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с продавцом
+    seller = db.relationship('Seller', backref=db.backref('safe_price_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<SafePriceChangeSettings seller_id={self.seller_id} mode={self.mode}>'
+
+    def classify_change(self, old_price: float, new_price: float) -> str:
+        """
+        Классифицировать изменение цены
+
+        Returns:
+            'safe' - безопасное изменение (зеленый)
+            'warning' - предупреждение (желтый)
+            'dangerous' - опасное изменение (красный)
+        """
+        if old_price is None or old_price == 0:
+            return 'safe' if new_price and new_price > 0 else 'warning'
+
+        change_percent = abs((new_price - old_price) / old_price * 100)
+
+        if change_percent <= self.safe_threshold_percent:
+            return 'safe'
+        elif change_percent <= self.warning_threshold_percent:
+            return 'warning'
+        else:
+            return 'dangerous'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'safe_threshold_percent': self.safe_threshold_percent,
+            'warning_threshold_percent': self.warning_threshold_percent,
+            'mode': self.mode,
+            'require_comment_for_dangerous': self.require_comment_for_dangerous,
+            'allow_bulk_dangerous': self.allow_bulk_dangerous,
+            'max_products_per_batch': self.max_products_per_batch,
+            'notify_on_dangerous': self.notify_on_dangerous,
+            'notify_email': self.notify_email,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class PriceChangeBatch(db.Model):
+    """Пакет изменений цен (группа заявок)"""
+    __tablename__ = 'price_change_batches'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Описание операции
+    name = db.Column(db.String(200))  # Название операции (опционально)
+    description = db.Column(db.Text)  # Описание / причина изменения
+    change_type = db.Column(db.String(50), nullable=False)  # 'fixed', 'percent', 'formula'
+
+    # Параметры изменения
+    change_value = db.Column(db.Float)  # Значение изменения (число или процент)
+    change_formula = db.Column(db.String(500))  # Формула изменения (если type='formula')
+
+    # Статус
+    # 'draft' - черновик, можно редактировать
+    # 'pending_review' - ожидает подтверждения (есть опасные изменения)
+    # 'confirmed' - подтверждено, готово к применению
+    # 'applying' - применяется к WB
+    # 'applied' - успешно применено
+    # 'partially_applied' - частично применено (были ошибки)
+    # 'failed' - ошибка применения
+    # 'reverted' - откачено
+    # 'cancelled' - отменено пользователем
+    status = db.Column(db.String(30), default='draft', nullable=False, index=True)
+
+    # Классификация безопасности (агрегированная)
+    has_safe_changes = db.Column(db.Boolean, default=False)
+    has_warning_changes = db.Column(db.Boolean, default=False)
+    has_dangerous_changes = db.Column(db.Boolean, default=False)
+
+    # Статистика
+    total_items = db.Column(db.Integer, default=0)
+    safe_count = db.Column(db.Integer, default=0)
+    warning_count = db.Column(db.Integer, default=0)
+    dangerous_count = db.Column(db.Integer, default=0)
+    applied_count = db.Column(db.Integer, default=0)
+    failed_count = db.Column(db.Integer, default=0)
+
+    # Подтверждение
+    confirmed_at = db.Column(db.DateTime)
+    confirmed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    confirmation_comment = db.Column(db.Text)  # Комментарий при подтверждении
+
+    # Применение
+    applied_at = db.Column(db.DateTime)
+    wb_task_id = db.Column(db.String(100))  # ID задачи в WB API
+    apply_errors = db.Column(db.JSON)  # Ошибки применения
+
+    # Откат
+    reverted = db.Column(db.Boolean, default=False)
+    reverted_at = db.Column(db.DateTime)
+    reverted_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    revert_batch_id = db.Column(db.Integer, db.ForeignKey('price_change_batches.id'))
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    items = db.relationship('PriceChangeItem', backref='batch', lazy='dynamic', cascade='all, delete-orphan')
+    confirmed_by = db.relationship('User', foreign_keys=[confirmed_by_user_id], backref='confirmed_price_batches')
+    reverted_by = db.relationship('User', foreign_keys=[reverted_by_user_id], backref='reverted_price_batches')
+    revert_batch = db.relationship('PriceChangeBatch', remote_side=[id], foreign_keys=[revert_batch_id])
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_price_batch_seller_status', 'seller_id', 'status'),
+        db.Index('idx_price_batch_seller_created', 'seller_id', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<PriceChangeBatch id={self.id} status={self.status} items={self.total_items}>'
+
+    def can_confirm(self) -> bool:
+        """Можно ли подтвердить этот батч"""
+        return self.status == 'pending_review'
+
+    def can_apply(self) -> bool:
+        """Можно ли применить этот батч"""
+        return self.status in ('draft', 'confirmed') and self.total_items > 0
+
+    def can_revert(self) -> bool:
+        """Можно ли откатить этот батч"""
+        return self.status in ('applied', 'partially_applied') and not self.reverted
+
+    def can_cancel(self) -> bool:
+        """Можно ли отменить этот батч"""
+        return self.status in ('draft', 'pending_review', 'confirmed')
+
+    def get_safety_level(self) -> str:
+        """Получить общий уровень безопасности батча"""
+        if self.has_dangerous_changes:
+            return 'dangerous'
+        elif self.has_warning_changes:
+            return 'warning'
+        else:
+            return 'safe'
+
+    def to_dict(self, include_items: bool = False) -> dict:
+        """Конвертировать в словарь для JSON"""
+        result = {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'name': self.name,
+            'description': self.description,
+            'change_type': self.change_type,
+            'change_value': self.change_value,
+            'status': self.status,
+            'safety_level': self.get_safety_level(),
+            'has_dangerous_changes': self.has_dangerous_changes,
+            'has_warning_changes': self.has_warning_changes,
+            'total_items': self.total_items,
+            'safe_count': self.safe_count,
+            'warning_count': self.warning_count,
+            'dangerous_count': self.dangerous_count,
+            'applied_count': self.applied_count,
+            'failed_count': self.failed_count,
+            'confirmed_at': self.confirmed_at.isoformat() if self.confirmed_at else None,
+            'applied_at': self.applied_at.isoformat() if self.applied_at else None,
+            'reverted': self.reverted,
+            'reverted_at': self.reverted_at.isoformat() if self.reverted_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'can_confirm': self.can_confirm(),
+            'can_apply': self.can_apply(),
+            'can_revert': self.can_revert(),
+            'can_cancel': self.can_cancel()
+        }
+
+        if include_items:
+            result['items'] = [item.to_dict() for item in self.items.all()]
+
+        return result
+
+
+class PriceChangeItem(db.Model):
+    """Отдельный элемент изменения цены в батче"""
+    __tablename__ = 'price_change_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey('price_change_batches.id', ondelete='CASCADE'), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    # Идентификация товара (для WB API)
+    nm_id = db.Column(db.BigInteger, nullable=False, index=True)
+    vendor_code = db.Column(db.String(100))
+    product_title = db.Column(db.String(500))
+
+    # Текущие значения (до изменения)
+    old_price = db.Column(db.Numeric(10, 2))
+    old_discount = db.Column(db.Integer)  # Скидка в процентах
+    old_discount_price = db.Column(db.Numeric(10, 2))  # Цена со скидкой
+
+    # Новые значения (после изменения)
+    new_price = db.Column(db.Numeric(10, 2))
+    new_discount = db.Column(db.Integer)
+    new_discount_price = db.Column(db.Numeric(10, 2))
+
+    # Расчетные метрики
+    price_change_amount = db.Column(db.Numeric(10, 2))  # Абсолютное изменение
+    price_change_percent = db.Column(db.Float)  # Изменение в процентах
+
+    # Классификация безопасности
+    # 'safe' - безопасное изменение (зеленый)
+    # 'warning' - предупреждение (желтый)
+    # 'dangerous' - опасное изменение (красный)
+    safety_level = db.Column(db.String(20), default='safe', nullable=False, index=True)
+
+    # Статус элемента
+    # 'pending' - ожидает применения
+    # 'applied' - успешно применено
+    # 'failed' - ошибка применения
+    # 'skipped' - пропущено
+    # 'reverted' - откачено
+    status = db.Column(db.String(20), default='pending', nullable=False)
+    error_message = db.Column(db.Text)  # Сообщение об ошибке
+
+    # Результат от WB
+    wb_applied_at = db.Column(db.DateTime)
+    wb_status = db.Column(db.String(50))  # Статус от WB API
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связь с товаром
+    product = db.relationship('Product', backref=db.backref('price_change_items', lazy='dynamic'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_price_item_batch_safety', 'batch_id', 'safety_level'),
+        db.Index('idx_price_item_batch_status', 'batch_id', 'status'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<PriceChangeItem nm_id={self.nm_id} {self.old_price}->{self.new_price} ({self.safety_level})>'
+
+    def calculate_change(self):
+        """Рассчитать метрики изменения"""
+        if self.old_price and self.new_price:
+            self.price_change_amount = float(self.new_price) - float(self.old_price)
+            if float(self.old_price) > 0:
+                self.price_change_percent = (self.price_change_amount / float(self.old_price)) * 100
+            else:
+                self.price_change_percent = 100 if self.price_change_amount > 0 else 0
+        else:
+            self.price_change_amount = 0
+            self.price_change_percent = 0
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'batch_id': self.batch_id,
+            'product_id': self.product_id,
+            'nm_id': self.nm_id,
+            'vendor_code': self.vendor_code,
+            'product_title': self.product_title,
+            'old_price': float(self.old_price) if self.old_price else None,
+            'old_discount': self.old_discount,
+            'old_discount_price': float(self.old_discount_price) if self.old_discount_price else None,
+            'new_price': float(self.new_price) if self.new_price else None,
+            'new_discount': self.new_discount,
+            'new_discount_price': float(self.new_discount_price) if self.new_discount_price else None,
+            'price_change_amount': float(self.price_change_amount) if self.price_change_amount else None,
+            'price_change_percent': self.price_change_percent,
+            'safety_level': self.safety_level,
+            'status': self.status,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
 class SystemSettings(db.Model):
     """Глобальные настройки системы"""
     __tablename__ = 'system_settings'

@@ -25,6 +25,7 @@ from models import (
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
+    SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -4642,6 +4643,10 @@ register_auto_import_routes(app)
 # Регистрация роутов для объединения/разъединения карточек
 from routes_merge_cards import register_merge_routes
 register_merge_routes(app)
+
+# Регистрация роутов для безопасного изменения цен
+from routes_safe_prices import register_routes as register_safe_prices_routes
+register_safe_prices_routes(app)
 
 
 if __name__ == '__main__':
