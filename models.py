@@ -1037,6 +1037,89 @@ class SuspiciousPriceChange(db.Model):
         return result
 
 
+class CardMergeHistory(db.Model):
+    """История объединений и разъединений карточек товаров"""
+    __tablename__ = 'card_merge_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Тип операции
+    operation_type = db.Column(db.String(20), nullable=False)  # 'merge' или 'unmerge'
+
+    # Данные объединения (для merge)
+    target_imt_id = db.Column(db.BigInteger, index=True)  # Целевой imtID (к которому присоединяли)
+    merged_nm_ids = db.Column(db.JSON, nullable=False)  # Список nmID которые объединили/разъединили
+
+    # Снимок состояния ДО операции
+    snapshot_before = db.Column(db.JSON)  # {nmID: {imtID, vendor_code, title, ...}}
+
+    # Снимок состояния ПОСЛЕ операции
+    snapshot_after = db.Column(db.JSON)  # {nmID: {imtID, vendor_code, title, ...}}
+
+    # Статус выполнения
+    status = db.Column(db.String(50), default='pending')  # 'pending', 'in_progress', 'completed', 'failed'
+    wb_synced = db.Column(db.Boolean, default=False)  # Синхронизировано ли с WB
+    wb_sync_status = db.Column(db.String(50))  # 'success', 'failed'
+    wb_error_message = db.Column(db.Text)  # Сообщение об ошибке от WB
+
+    # Откат
+    reverted = db.Column(db.Boolean, default=False)  # Было ли отменено
+    reverted_at = db.Column(db.DateTime)  # Когда отменено
+    reverted_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # Кто откатил
+    revert_operation_id = db.Column(db.Integer, db.ForeignKey('card_merge_history.id'))  # ID операции отката
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at = db.Column(db.DateTime)  # Когда завершено
+    duration_seconds = db.Column(db.Float)  # Длительность выполнения
+
+    # Пользовательский комментарий
+    user_comment = db.Column(db.Text)
+
+    # Связи
+    reverted_by = db.relationship('User', foreign_keys=[reverted_by_user_id], backref='merge_reverts')
+    revert_operation = db.relationship('CardMergeHistory', remote_side=[id], foreign_keys=[revert_operation_id])
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_merge_seller_created', 'seller_id', 'created_at'),
+        db.Index('idx_merge_operation', 'operation_type', 'status'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<CardMergeHistory {self.operation_type} target_imt={self.target_imt_id} nm_count={len(self.merged_nm_ids) if self.merged_nm_ids else 0}>'
+
+    def can_revert(self) -> bool:
+        """Можно ли откатить эту операцию"""
+        return (
+            not self.reverted and
+            self.status == 'completed' and
+            self.wb_synced and
+            self.wb_sync_status == 'success'
+        )
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'operation_type': self.operation_type,
+            'target_imt_id': self.target_imt_id,
+            'merged_nm_ids': self.merged_nm_ids,
+            'status': self.status,
+            'wb_synced': self.wb_synced,
+            'wb_sync_status': self.wb_sync_status,
+            'wb_error_message': self.wb_error_message,
+            'reverted': self.reverted,
+            'reverted_at': self.reverted_at.isoformat() if self.reverted_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'duration_seconds': self.duration_seconds,
+            'user_comment': self.user_comment,
+            'can_revert': self.can_revert()
+        }
+
+
 # ============= ADMIN PANEL MODELS =============
 
 class UserActivity(db.Model):

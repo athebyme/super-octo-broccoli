@@ -42,9 +42,36 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = BASE_DIR / 'data'
 DEFAULT_DB_PATH = DATA_ROOT / 'seller_platform.db'
 DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-default_db_uri = os.environ.get('DATABASE_URL') or f"sqlite:///{DEFAULT_DB_PATH.as_posix()}"
-app.config['SQLALCHEMY_DATABASE_URI'] = default_db_uri
+
+# Получаем DATABASE_URL из переменной окружения или используем дефолт
+# ВАЖНО: для абсолютного пути в SQLite используем 4 слеша: sqlite:////path
+database_url_from_env = os.environ.get('DATABASE_URL')
+
+print(f"🔧 DEBUG: DATABASE_URL from env = {database_url_from_env}")
+print(f"🔧 DEBUG: DEFAULT_DB_PATH = {DEFAULT_DB_PATH}")
+print(f"🔧 DEBUG: DEFAULT_DB_PATH.absolute() = {DEFAULT_DB_PATH.absolute()}")
+
+if database_url_from_env:
+    database_url = database_url_from_env
+    print(f"✅ Using DATABASE_URL from environment")
+else:
+    # Создаем URI с АБСОЛЮТНЫМ путем
+    abs_path = DEFAULT_DB_PATH.absolute()
+    database_url = f"sqlite:///{abs_path}"
+    print(f"⚠️ DATABASE_URL not set, using generated: {database_url}")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# SQLite конфигурация для лучшей поддержки конкурентного доступа
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'connect_args': {
+        'timeout': 30,  # Увеличенный timeout до 30 секунд
+        'check_same_thread': False,  # Разрешить использование из разных потоков
+    },
+    'pool_pre_ping': True,  # Проверка соединений перед использованием
+    'pool_recycle': 3600,   # Переиспользование соединений каждый час
+}
 
 # Настройка логирования
 if not app.debug:
@@ -1311,6 +1338,41 @@ def bulk_products_action():
     return redirect(url_for('products_list'))
 
 
+def db_commit_with_retry(session, max_retries=3, initial_delay=0.5):
+    """
+    Выполняет commit с retry логикой для SQLite database locked ошибок
+
+    Args:
+        session: SQLAlchemy session
+        max_retries: Максимальное количество попыток
+        initial_delay: Начальная задержка в секундах
+
+    Raises:
+        Exception: После исчерпания всех попыток
+    """
+    import sqlite3
+    from sqlalchemy.exc import OperationalError
+
+    for attempt in range(max_retries):
+        try:
+            session.commit()
+            return  # Success
+        except OperationalError as e:
+            # Проверяем что это именно database locked error
+            if 'database is locked' in str(e).lower():
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)  # Экспоненциальная задержка
+                    app.logger.warning(f"⚠️ Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
+                    time.sleep(delay)
+                    session.rollback()
+                else:
+                    app.logger.error(f"❌ Database locked after {max_retries} retries")
+                    raise
+            else:
+                # Другая ошибка - пробрасываем сразу
+                raise
+
+
 def _perform_product_sync_task(seller_id: int, flask_app):
     """
     Фоновая задача синхронизации товаров
@@ -1328,7 +1390,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 return
 
             seller.api_sync_status = 'syncing'
-            db.session.commit()
+            db_commit_with_retry(db.session)
 
             start_time = time.time()
 
@@ -1341,6 +1403,8 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 # Статистика
                 created_count = 0
                 updated_count = 0
+                batch_size = 100  # Commit каждые 100 карточек для больших датасетов
+                processed_in_batch = 0
 
                 for card_data in all_cards:
                     nm_id = card_data.get('nmID')
@@ -1438,8 +1502,27 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         db.session.add(product)
                         created_count += 1
 
-                # Сохраняем все изменения
-                db.session.commit()
+                    processed_in_batch += 1
+
+                    # Batch commit для избежания длинных транзакций
+                    if processed_in_batch >= batch_size:
+                        try:
+                            db_commit_with_retry(db.session)
+                            app.logger.info(f"💾 Batch saved: {processed_in_batch} products ({created_count} new, {updated_count} updated so far)")
+                            processed_in_batch = 0
+                        except Exception as commit_error:
+                            app.logger.warning(f"⚠️ Batch commit failed, rolling back: {commit_error}")
+                            db.session.rollback()
+                            # Продолжаем со следующей batch
+
+                # Сохраняем оставшиеся изменения
+                try:
+                    db_commit_with_retry(db.session)
+                    if processed_in_batch > 0:
+                        app.logger.info(f"💾 Final batch saved: {processed_in_batch} products")
+                except Exception as commit_error:
+                    app.logger.warning(f"⚠️ Final commit failed: {commit_error}")
+                    db.session.rollback()
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 
@@ -1460,7 +1543,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     sync_settings.products_updated = updated_count
                     sync_settings.last_sync_error = None
 
-                db.session.commit()
+                db_commit_with_retry(db.session)
 
                 # Логируем успешный запрос
                 APILog.log_request(
@@ -1484,7 +1567,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     if sync_settings:
                         sync_settings.last_sync_status = 'auth_error'
                         sync_settings.last_sync_error = str(e)
-                    db.session.commit()
+                    db_commit_with_retry(db.session)
                 app.logger.error(f"❌ Background sync auth error: {str(e)}")
 
         except WBAPIException as e:
@@ -1497,7 +1580,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     if sync_settings:
                         sync_settings.last_sync_status = 'error'
                         sync_settings.last_sync_error = str(e)
-                    db.session.commit()
+                    db_commit_with_retry(db.session)
                 app.logger.error(f"❌ Background sync API error: {str(e)}")
 
         except Exception as e:
@@ -1510,7 +1593,7 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     if sync_settings:
                         sync_settings.last_sync_status = 'error'
                         sync_settings.last_sync_error = str(e)
-                    db.session.commit()
+                    db_commit_with_retry(db.session)
                 app.logger.exception(f"❌ Background sync unexpected error: {str(e)}")
 
 
@@ -1915,7 +1998,7 @@ def product_create():
         # Запускаем синхронизацию товаров, чтобы получить созданную карточку
         try:
             seller.api_sync_status = 'syncing'
-            db.session.commit()
+            db_commit_with_retry(db.session)
 
             # Запускаем синхронизацию в фоне
             import threading
@@ -2494,14 +2577,15 @@ def products_bulk_edit():
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
-                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
+                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
+                    # вызовет clean_characteristics_for_update для оборачивания в массив
                     app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
-                    # Для ID из справочника: "123" -> ["123"]
-                    # Для текста: "Россия" -> ["Россия"]
+                    # Форматируем как строку, позже автоматически обернется в массив
+                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
+                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
+                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
 
                     # ==================== БАТЧИНГ ====================
                     # Подготавливаем все карточки для обновления
@@ -2681,14 +2765,15 @@ def products_bulk_edit():
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
-                    # WB API ожидает строку, которую clean_characteristics_for_update обернет в массив
+                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
+                    # вызовет clean_characteristics_for_update для оборачивания в массив
                     app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    # Всегда отправляем как строку - clean_characteristics_for_update обернет в массив
-                    # Для ID из справочника: "123" -> ["123"]
-                    # Для текста: "Россия" -> ["Россия"]
+                    # Форматируем как строку, позже автоматически обернется в массив
+                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
+                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}'")
+                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
 
                     for product in products_to_update:
                         try:
@@ -4551,6 +4636,12 @@ def apply_migrations():
 # Регистрация роутов автоимпорта товаров
 from auto_import_routes import register_auto_import_routes
 register_auto_import_routes(app)
+
+
+# ============= РОУТЫ ОБЪЕДИНЕНИЯ КАРТОЧЕК =============
+# Регистрация роутов для объединения/разъединения карточек
+from routes_merge_cards import register_merge_routes
+register_merge_routes(app)
 
 
 if __name__ == '__main__':

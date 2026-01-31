@@ -8,14 +8,19 @@ services:
       - APP_MODULE=seller_platform:app
       - PORT=${SELLER_PORT:-5001}
       - SECRET_KEY=${SECRET_KEY:-wb-seller-platform-secret-key-change-in-production}
-      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/seller_platform.db}
+      # ЖЁСТКО ПРОПИСЫВАЕМ DATABASE_URL - НЕ полагаемся на .env
+      - DATABASE_URL=sqlite:////app/data/seller_platform.db
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # Credentials для первого администратора (создается автоматически при первом запуске)
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
     ports:
       - "${SELLER_PORT:-5001}:5001"
     volumes:
       - ./uploads:/app/uploads
       - ./processed:/app/processed
-      - ./data:/app/data
+      - seller_platform_data:/app/data
     restart: unless-stopped
 
   wb-calculator:
@@ -32,4 +37,8 @@ services:
       - ./processed:/app/processed
       - ./data:/app/data
     restart: unless-stopped
+
+volumes:
+  seller_platform_data:
+    driver: local
 

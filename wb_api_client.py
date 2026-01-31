@@ -878,6 +878,157 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get card nmID={nm_id}: {str(e)}")
             raise
 
+    def merge_cards(
+        self,
+        target_imt_id: int,
+        nm_ids: List[int],
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Объединить карточки товаров (Content API v2)
+
+        Карточки будут объединены под одним imtID (target_imt_id).
+        Можно объединять только карточки с одинаковым предметом (subject_id).
+
+        Args:
+            target_imt_id: Существующий imtID, под которым необходимо объединить карточки
+            nm_ids: Список nmID которые необходимо объединить (максимум 30)
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Результат объединения
+            {
+                "data": null,
+                "error": false,
+                "errorText": "",
+                "additionalErrors": {}
+            }
+
+        Raises:
+            WBAPIException: если слишком много карточек или другие ошибки
+
+        Note:
+            - Максимум 30 карточек за раз
+            - Объединить можно только карточки с одинаковым предметом
+        """
+        if len(nm_ids) > 30:
+            raise WBAPIException(
+                f"Too many cards ({len(nm_ids)}). "
+                f"Maximum 30 cards per request."
+            )
+
+        if not nm_ids:
+            logger.warning("⚠️ Empty nm_ids list provided to merge_cards")
+            return {'data': None, 'error': False, 'errorText': ''}
+
+        endpoint = "/content/v2/cards/moveNm"
+
+        body = {
+            "targetIMT": target_imt_id,
+            "nmIDs": nm_ids
+        }
+
+        logger.info(f"🔗 Merging {len(nm_ids)} cards to imtID={target_imt_id}")
+        logger.debug(f"  nmIDs: {nm_ids}")
+
+        try:
+            response = self._make_request(
+                'POST', 'content', endpoint,
+                log_to_db=log_to_db,
+                seller_id=seller_id,
+                json=body
+            )
+            result = response.json()
+
+            if result.get('error'):
+                logger.error(f"❌ WB API returned error: {result.get('errorText')}")
+                raise WBAPIException(f"API Error: {result.get('errorText')}")
+
+            logger.info(f"✅ Cards merged successfully to imtID={target_imt_id}")
+            return result
+        except WBAPIException as e:
+            logger.error(f"❌ WB API error in merge_cards: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in merge_cards: {str(e)}")
+            raise
+
+    def unmerge_cards(
+        self,
+        nm_ids: List[int],
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Разъединить карточки товаров (Content API v2)
+
+        Для разъединенных карточек будут сгенерированы новые imtID.
+
+        Args:
+            nm_ids: Список nmID которые необходимо разъединить (максимум 30)
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Результат разъединения
+            {
+                "data": null,
+                "error": false,
+                "errorText": "",
+                "additionalErrors": {}
+            }
+
+        Raises:
+            WBAPIException: если слишком много карточек или другие ошибки
+
+        Note:
+            - Максимум 30 карточек за раз
+            - Если разъединить несколько карточек одновременно, они объединятся в одну с новым imtID
+            - Чтобы присвоить каждой карточке уникальный imtID, передавайте по одной за запрос
+        """
+        if len(nm_ids) > 30:
+            raise WBAPIException(
+                f"Too many cards ({len(nm_ids)}). "
+                f"Maximum 30 cards per request."
+            )
+
+        if not nm_ids:
+            logger.warning("⚠️ Empty nm_ids list provided to unmerge_cards")
+            return {'data': None, 'error': False, 'errorText': ''}
+
+        endpoint = "/content/v2/cards/moveNm"
+
+        body = {
+            "nmIDs": nm_ids
+        }
+
+        logger.info(f"🔓 Unmerging {len(nm_ids)} cards")
+        logger.debug(f"  nmIDs: {nm_ids}")
+
+        try:
+            response = self._make_request(
+                'POST', 'content', endpoint,
+                log_to_db=log_to_db,
+                seller_id=seller_id,
+                json=body
+            )
+            result = response.json()
+
+            if result.get('error'):
+                logger.error(f"❌ WB API returned error: {result.get('errorText')}")
+                raise WBAPIException(f"API Error: {result.get('errorText')}")
+
+            logger.info(f"✅ Cards unmerged successfully")
+            return result
+        except WBAPIException as e:
+            logger.error(f"❌ WB API error in unmerge_cards: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in unmerge_cards: {str(e)}")
+            raise
+
     def get_subjects_list(
         self,
         name: Optional[str] = None,

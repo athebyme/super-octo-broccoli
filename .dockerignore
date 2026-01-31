@@ -5,7 +5,7 @@ __pycache__/
 *.pyo
 uploads/*
 processed/*
-data/state.json
+data/
 *.xlsx
 *.csv
 .idea/

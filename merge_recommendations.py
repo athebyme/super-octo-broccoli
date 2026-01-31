@@ -1,0 +1,369 @@
+"""
+Алгоритм автоматических рекомендаций для объединения карточек WB
+"""
+import re
+from difflib import SequenceMatcher
+from typing import List, Dict, Tuple
+from collections import defaultdict
+
+
+def normalize_text(text: str) -> str:
+    """
+    Нормализация текста для сравнения
+    Убирает размеры, цвета, лишние пробелы
+    """
+    if not text:
+        return ""
+
+    # Приводим к нижнему регистру
+    text = text.lower().strip()
+
+    # Убираем множественные пробелы
+    text = re.sub(r'\s+', ' ', text)
+
+    # Убираем типичные вариации (размеры, цвета в скобках)
+    text = re.sub(r'\([^)]*\)', '', text)
+    text = re.sub(r'\[[^\]]*\]', '', text)
+
+    # Убираем размеры типа XS, S, M, L, XL, XXL, XXXL
+    text = re.sub(r'\b(x{0,3}s|x{0,3}m|x{0,3}l)\b', '', text)
+
+    # Убираем числовые размеры
+    text = re.sub(r'\b\d{1,3}([\-/]\d{1,3})?\b', '', text)
+
+    # Убираем общие слова вариаций
+    variations = ['черный', 'белый', 'красный', 'синий', 'зеленый', 'желтый',
+                  'серый', 'розовый', 'оранжевый', 'фиолетовый', 'коричневый']
+    for var in variations:
+        text = text.replace(var, '')
+
+    # Очистка от лишних пробелов после удалений
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    return text
+
+
+def extract_base_vendor_code(vendor_code: str) -> str:
+    """
+    Извлекает базовую часть артикула без вариаций
+    Пример: "ABC-123-RED" -> "ABC-123"
+    """
+    if not vendor_code:
+        return ""
+
+    # Убираем суффиксы после последнего дефиса/подчеркивания
+    base = re.sub(r'[-_][^-_]*$', '', vendor_code)
+
+    # Если после удаления ничего не осталось, возвращаем оригинал
+    return base if base else vendor_code
+
+
+def calculate_similarity(text1: str, text2: str) -> float:
+    """
+    Вычисляет коэффициент схожести между двумя строками (0.0 - 1.0)
+    """
+    if not text1 or not text2:
+        return 0.0
+
+    return SequenceMatcher(None, text1, text2).ratio()
+
+
+def find_merge_recommendations(products: List[Dict], min_score: float = 0.6, max_products: int = 1000) -> List[Dict]:
+    """
+    Находит рекомендации для объединения карточек
+
+    Args:
+        products: Список карточек товаров
+        min_score: Минимальный порог схожести (0.0 - 1.0)
+        max_products: Максимум карточек для анализа (для производительности)
+
+    Returns:
+        Список рекомендаций, отсортированных по убыванию score
+        [
+            {
+                'cards': [card1, card2, ...],  # Карточки которые можно объединить
+                'score': 0.95,                   # Уровень уверенности (0-1)
+                'reason': 'Описание причины',
+                'suggested_target': card1        # Рекомендуемая главная карточка
+            }
+        ]
+    """
+    recommendations = []
+
+    # Ограничиваем количество продуктов для производительности
+    if len(products) > max_products:
+        # Сортируем по популярности/важности если есть, иначе берем первые N
+        products = products[:max_products]
+
+    # Группируем по категориям (можно объединять только карточки одной категории)
+    by_category = defaultdict(list)
+    for product in products:
+        subject_id = product.get('subject_id')
+        if subject_id:
+            by_category[subject_id].append(product)
+
+    # Глобальный set для отслеживания уже использованных карточек
+    # Каждая карточка должна появиться только в одной рекомендации
+    used_nm_ids = set()
+
+    # Анализируем каждую категорию отдельно
+    for subject_id, category_products in by_category.items():
+        if len(category_products) < 2:
+            continue
+
+        # Группируем по брендам (сильная связь)
+        by_brand = defaultdict(list)
+        for product in category_products:
+            brand = product.get('brand', '') or 'NO_BRAND'
+            by_brand[brand].append(product)
+
+        # Ищем похожие карточки внутри каждого бренда
+        for brand, brand_products in by_brand.items():
+            if len(brand_products) < 2:
+                continue
+
+            # ОПТИМИЗАЦИЯ: Ограничиваем количество сравнений для больших брендов
+            if len(brand_products) > 100:
+                # Для больших брендов используем более эффективный подход
+                brand_products = brand_products[:100]
+
+            # Попарное сравнение карточек
+            compared = set()
+            comparisons_made = 0
+            max_comparisons = 5000  # Лимит сравнений для производительности
+
+            for i, prod1 in enumerate(brand_products):
+                # ОПТИМИЗАЦИЯ: Прерываем если уже нашли достаточно рекомендаций
+                if len(recommendations) >= 50:
+                    break
+
+                # Пропускаем карточки, которые уже в других рекомендациях
+                if prod1['nm_id'] in used_nm_ids:
+                    continue
+
+                for prod2 in brand_products[i+1:]:
+                    # Лимит сравнений
+                    if comparisons_made >= max_comparisons:
+                        break
+
+                    # Пропускаем карточки, которые уже в других рекомендациях
+                    if prod2['nm_id'] in used_nm_ids:
+                        continue
+
+                    # Избегаем дубликатов
+                    pair_key = tuple(sorted([prod1['nm_id'], prod2['nm_id']]))
+                    if pair_key in compared:
+                        continue
+                    compared.add(pair_key)
+                    comparisons_made += 1
+
+                    # Вычисляем схожесть
+                    score, reason = calculate_merge_score(prod1, prod2)
+
+                    if score >= min_score:
+                        # Ищем существующую группу рекомендаций для расширения
+                        merged_into_existing = False
+                        for rec in recommendations:
+                            # Если одна из карточек уже в рекомендации
+                            rec_nm_ids = {c['nm_id'] for c in rec['cards']}
+                            if prod1['nm_id'] in rec_nm_ids or prod2['nm_id'] in rec_nm_ids:
+                                # Проверяем что новая карточка совместима со всеми в группе
+                                new_card = prod2 if prod1['nm_id'] in rec_nm_ids else prod1
+
+                                # ВАЖНО: Проверяем что этой карточки еще нет в группе
+                                if new_card['nm_id'] in rec_nm_ids:
+                                    merged_into_existing = True  # Уже есть, пропускаем
+                                    break
+
+                                # ОПТИМИЗАЦИЯ: Упрощенная проверка совместимости для больших групп
+                                if len(rec['cards']) > 10:
+                                    # Проверяем только с несколькими карточками из группы
+                                    sample_size = min(3, len(rec['cards']))
+                                    sample_cards = rec['cards'][:sample_size]
+                                    compatible = all(
+                                        calculate_merge_score(new_card, c)[0] >= min_score
+                                        for c in sample_cards
+                                    )
+                                else:
+                                    compatible = all(
+                                        calculate_merge_score(new_card, c)[0] >= min_score
+                                        for c in rec['cards']
+                                    )
+
+                                if compatible:
+                                    rec['cards'].append(new_card)
+                                    # Отмечаем карточку как использованную
+                                    used_nm_ids.add(new_card['nm_id'])
+                                    # Не пересчитываем score для производительности
+                                    merged_into_existing = True
+                                    break
+
+                        if not merged_into_existing:
+                            # Создаем новую рекомендацию
+                            recommendations.append({
+                                'cards': [prod1, prod2],
+                                'score': score,
+                                'reason': reason,
+                                'suggested_target': prod1,  # Первая карточка как целевая
+                                'subject_id': subject_id,
+                                'brand': brand
+                            })
+
+                            # Отмечаем обе карточки как использованные
+                            used_nm_ids.add(prod1['nm_id'])
+                            used_nm_ids.add(prod2['nm_id'])
+
+                            # ОПТИМИЗАЦИЯ: Прерываем если уже нашли достаточно
+                            if len(recommendations) >= 50:
+                                break
+
+    # Сортируем по убыванию score
+    recommendations.sort(key=lambda x: x['score'], reverse=True)
+
+    # Ограничиваем топ-50 рекомендаций
+    return recommendations[:50]
+
+
+def calculate_merge_score(prod1: Dict, prod2: Dict) -> Tuple[float, str]:
+    """
+    Вычисляет оценку схожести двух карточек для объединения
+
+    Returns:
+        (score, reason) - оценка от 0 до 1 и описание причины
+    """
+    score = 0.0
+    reasons = []
+
+    # 1. Одинаковый бренд (критично) - 20%
+    brand1 = (prod1.get('brand') or '').lower()
+    brand2 = (prod2.get('brand') or '').lower()
+
+    if brand1 and brand2 and brand1 == brand2:
+        score += 0.2
+        reasons.append(f"бренд {brand1}")
+    else:
+        # Разные бренды - большой штраф
+        return 0.0, "Разные бренды"
+
+    # 2. Похожесть названий (очень важно) - до 40%
+    title1 = normalize_text(prod1.get('title', ''))
+    title2 = normalize_text(prod2.get('title', ''))
+
+    if title1 and title2:
+        title_similarity = calculate_similarity(title1, title2)
+        score += title_similarity * 0.4
+
+        if title_similarity > 0.8:
+            reasons.append("очень похожие названия")
+        elif title_similarity > 0.6:
+            reasons.append("похожие названия")
+
+    # 3. Похожесть артикулов - до 30%
+    vendor1 = prod1.get('vendor_code', '')
+    vendor2 = prod2.get('vendor_code', '')
+
+    if vendor1 and vendor2:
+        # Сравниваем базовые артикулы
+        base1 = extract_base_vendor_code(vendor1)
+        base2 = extract_base_vendor_code(vendor2)
+
+        if base1 == base2 and base1:
+            score += 0.3
+            reasons.append(f"одинаковый базовый артикул {base1}")
+        else:
+            # Проверяем схожесть артикулов
+            vendor_similarity = calculate_similarity(base1.lower(), base2.lower())
+            if vendor_similarity > 0.7:
+                score += vendor_similarity * 0.2
+                reasons.append("похожие артикулы")
+
+    # 4. Одинаковая категория (обязательно)
+    if prod1.get('subject_id') != prod2.get('subject_id'):
+        return 0.0, "Разные категории"
+    else:
+        score += 0.1
+
+    # Формируем итоговое описание причины
+    reason = ", ".join(reasons) if reasons else "низкая схожесть"
+
+    return min(score, 1.0), reason.capitalize()
+
+
+def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: float = 0.6, max_products: int = 1000) -> List[Dict]:
+    """
+    Получает рекомендации для конкретного продавца из БД
+
+    Args:
+        seller_id: ID продавца
+        db_session: Сессия базы данных
+        min_score: Минимальный порог схожести
+        max_products: Максимум карточек для анализа (для производительности)
+
+    Returns:
+        Список рекомендаций
+    """
+    from models import Product
+    from sqlalchemy import func
+    import time
+
+    start_time = time.time()
+
+    # Получаем активные карточки
+    # ОПТИМИЗАЦИЯ: Загружаем только нужные поля
+    all_products = Product.query.filter_by(
+        seller_id=seller_id,
+        is_active=True
+    ).with_entities(
+        Product.nm_id,
+        Product.imt_id,
+        Product.vendor_code,
+        Product.title,
+        Product.brand,
+        Product.subject_id,
+        Product.object_name
+    ).all()
+
+    print(f"⏱️  Loaded {len(all_products)} products in {time.time() - start_time:.2f}s")
+
+    # Группируем по imt_id
+    imt_groups = {}
+    for p in all_products:
+        if p.imt_id:
+            if p.imt_id not in imt_groups:
+                imt_groups[p.imt_id] = []
+            imt_groups[p.imt_id].append(p)
+
+    # Находим необъединенные карточки (группы размером 1)
+    # Это карточки с уникальным imt_id
+    single_products = []
+    for imt_id, products in imt_groups.items():
+        if len(products) == 1:
+            single_products.append(products[0])
+
+    print(f"⏱️  Found {len(single_products)} unmerged products (unique imt_id)")
+
+    # Если нет необъединенных карточек, возвращаем пустой список
+    if len(single_products) < 2:
+        return []
+
+    # Преобразуем в dict для алгоритма
+    products_data = [
+        {
+            'nm_id': p.nm_id,
+            'imt_id': p.imt_id,
+            'vendor_code': p.vendor_code,
+            'title': p.title,
+            'brand': p.brand,
+            'subject_id': p.subject_id,
+            'subject_name': p.object_name
+        }
+        for p in single_products
+    ]
+
+    print(f"⏱️  Starting recommendations analysis (max {max_products} products)...")
+    recommendations = find_merge_recommendations(products_data, min_score, max_products)
+
+    total_time = time.time() - start_time
+    print(f"⏱️  Recommendations completed in {total_time:.2f}s - found {len(recommendations)} recommendations")
+
+    return recommendations
