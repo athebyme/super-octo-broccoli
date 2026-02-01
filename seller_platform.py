@@ -1564,6 +1564,96 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 
+                # ============ СИНХРОНИЗАЦИЯ ОСТАТКОВ ============
+                # Загружаем остатки из Statistics API
+                app.logger.info(f"📦 Background sync: fetching stocks from Statistics API...")
+                stocks_created = 0
+                stocks_updated = 0
+                try:
+                    from datetime import timedelta
+                    date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
+                    all_stocks = client.get_stocks(date_from=date_from)
+                    app.logger.info(f"✅ Background sync: got {len(all_stocks)} stock records from Statistics API")
+
+                    # Группируем остатки по nmId и складу
+                    stocks_by_product = {}
+                    for stock_data in all_stocks:
+                        nm_id = stock_data.get('nmId')
+                        warehouse_name = stock_data.get('warehouseName', 'Неизвестный склад')
+
+                        if not nm_id:
+                            continue
+
+                        key = (nm_id, warehouse_name)
+                        if key not in stocks_by_product:
+                            stocks_by_product[key] = {
+                                'nm_id': nm_id,
+                                'warehouse_name': warehouse_name,
+                                'quantity': 0,
+                                'quantity_full': 0,
+                                'in_way_to_client': 0,
+                                'in_way_from_client': 0,
+                            }
+
+                        # Суммируем количества (могут быть разные размеры)
+                        stocks_by_product[key]['quantity'] += stock_data.get('quantity', 0)
+                        stocks_by_product[key]['quantity_full'] += stock_data.get('quantityFull', 0)
+                        stocks_by_product[key]['in_way_to_client'] += stock_data.get('inWayToClient', 0)
+                        stocks_by_product[key]['in_way_from_client'] += stock_data.get('inWayFromClient', 0)
+
+                    app.logger.info(f"📊 Aggregated {len(stocks_by_product)} unique stock records")
+
+                    # Сохраняем остатки в БД
+                    for key, stock_data in stocks_by_product.items():
+                        nm_id = stock_data['nm_id']
+                        warehouse_name = stock_data['warehouse_name']
+
+                        # Находим товар по nm_id
+                        product = Product.query.filter_by(
+                            seller_id=seller.id,
+                            nm_id=nm_id
+                        ).first()
+
+                        if not product:
+                            continue
+
+                        # Генерируем warehouse_id из имени (для уникальности)
+                        warehouse_id = hash(warehouse_name) % 1000000
+
+                        # Ищем существующую запись об остатках
+                        stock = ProductStock.query.filter_by(
+                            product_id=product.id,
+                            warehouse_id=warehouse_id
+                        ).first()
+
+                        if stock:
+                            stock.warehouse_name = warehouse_name
+                            stock.quantity = stock_data['quantity']
+                            stock.quantity_full = stock_data['quantity_full']
+                            stock.in_way_to_client = stock_data['in_way_to_client']
+                            stock.in_way_from_client = stock_data['in_way_from_client']
+                            stock.updated_at = datetime.utcnow()
+                            stocks_updated += 1
+                        else:
+                            stock = ProductStock(
+                                product_id=product.id,
+                                warehouse_id=warehouse_id,
+                                warehouse_name=warehouse_name,
+                                quantity=stock_data['quantity'],
+                                quantity_full=stock_data['quantity_full'],
+                                in_way_to_client=stock_data['in_way_to_client'],
+                                in_way_from_client=stock_data['in_way_from_client']
+                            )
+                            db.session.add(stock)
+                            stocks_created += 1
+
+                    db_commit_with_retry(db.session)
+                    app.logger.info(f"💾 Stocks saved: {stocks_created} new, {stocks_updated} updated")
+
+                except Exception as stock_error:
+                    app.logger.warning(f"⚠️ Failed to fetch stocks from Statistics API: {stock_error}")
+                    # Не прерываем синхронизацию из-за ошибки остатков
+
                 # Обновляем статус синхронизации
                 seller.api_last_sync = datetime.utcnow()
                 seller.api_sync_status = 'success'
