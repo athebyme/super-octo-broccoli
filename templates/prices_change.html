@@ -3,7 +3,7 @@
 {% block title %}Изменить цены - WB Seller Platform{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()" x-init="init()">
     <!-- Хлебные крошки -->
     <nav class="mb-6 text-sm">
         <ol class="flex items-center space-x-2 text-gray-500">
@@ -21,272 +21,326 @@
         </p>
     </div>
 
-    <form method="POST" action="{{ url_for('prices.prices_change') }}" @submit="handleSubmit">
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- Левая колонка - Параметры изменения -->
-            <div class="lg:col-span-1 space-y-6">
-                <!-- Тип изменения -->
-                <div class="bg-white shadow rounded-lg p-6">
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">Параметры изменения</h2>
-
-                    <!-- Название операции -->
-                    <div class="mb-4">
-                        <label for="name" class="block text-sm font-medium text-gray-700 mb-1">
-                            Название операции
-                        </label>
-                        <input type="text" name="name" id="name" x-model="name"
-                               placeholder="Например: Новогодняя распродажа"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
-                    </div>
-
-                    <!-- Тип изменения -->
-                    <div class="mb-4">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">
-                            Тип изменения
-                        </label>
-                        <div class="space-y-2">
-                            <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
-                                   :class="changeType === 'percent' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
-                                <input type="radio" name="change_type" value="percent" x-model="changeType"
-                                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
-                                <span class="ml-3 text-sm text-gray-900">Процент от текущей цены</span>
-                            </label>
-                            <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
-                                   :class="changeType === 'fixed' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
-                                <input type="radio" name="change_type" value="fixed" x-model="changeType"
-                                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
-                                <span class="ml-3 text-sm text-gray-900">Фиксированная сумма</span>
-                            </label>
-                            <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
-                                   :class="changeType === 'set' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
-                                <input type="radio" name="change_type" value="set" x-model="changeType"
-                                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
-                                <span class="ml-3 text-sm text-gray-900">Установить конкретную цену</span>
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- Значение изменения -->
-                    <div class="mb-4">
-                        <label for="change_value" class="block text-sm font-medium text-gray-700 mb-1">
-                            <span x-text="changeType === 'percent' ? 'Процент изменения' : (changeType === 'set' ? 'Новая цена' : 'Сумма изменения')"></span>
-                        </label>
-                        <div class="relative">
-                            <input type="number" name="change_value" id="change_value" x-model="changeValue"
-                                   :step="changeType === 'percent' ? '0.1' : '1'"
-                                   class="w-full px-3 py-2 pr-12 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
-                            <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                                <span class="text-gray-500" x-text="changeType === 'percent' ? '%' : 'руб.'"></span>
-                            </div>
-                        </div>
-                        <p class="mt-1 text-xs text-gray-500" x-show="changeType === 'percent'">
-                            Положительное значение - повышение, отрицательное - понижение
-                        </p>
-                        <p class="mt-1 text-xs text-gray-500" x-show="changeType === 'fixed'">
-                            Например: +100 добавит 100 рублей, -50 уберет 50 рублей
-                        </p>
-                    </div>
-
-                    <!-- Описание -->
-                    <div>
-                        <label for="description" class="block text-sm font-medium text-gray-700 mb-1">
-                            Причина изменения
-                        </label>
-                        <textarea name="description" id="description" rows="3" x-model="description"
-                                  placeholder="Опишите причину изменения цен..."
-                                  class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"></textarea>
-                    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Левая колонка - Параметры изменения -->
+        <div class="lg:col-span-1 space-y-6">
+            <!-- Выбранные товары -->
+            <div class="bg-white shadow rounded-lg p-4" x-show="selectedIds.length > 0">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-medium text-gray-900">Выбрано товаров</h3>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800" x-text="selectedIds.length"></span>
                 </div>
-
-                <!-- Предпросмотр изменений -->
-                <div class="bg-white shadow rounded-lg p-6" x-show="selectedCount > 0">
-                    <h2 class="text-lg font-medium text-gray-900 mb-4">Предпросмотр</h2>
-
-                    <button type="button" @click="previewChanges"
-                            :disabled="loading"
-                            class="w-full mb-4 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50 flex items-center justify-center">
-                        <svg x-show="loading" class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span x-text="loading ? 'Расчет...' : 'Рассчитать изменения'"></span>
-                    </button>
-
-                    <!-- Статистика предпросмотра -->
-                    <template x-if="preview">
-                        <div class="space-y-3">
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-gray-500">Всего товаров:</span>
-                                <span class="font-medium" x-text="preview.stats.total"></span>
-                            </div>
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-green-600 flex items-center">
-                                    <span class="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
-                                    Безопасных:
-                                </span>
-                                <span class="font-medium text-green-600" x-text="preview.stats.safe"></span>
-                            </div>
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-yellow-600 flex items-center">
-                                    <span class="w-2 h-2 rounded-full bg-yellow-500 mr-2"></span>
-                                    С предупреждением:
-                                </span>
-                                <span class="font-medium text-yellow-600" x-text="preview.stats.warning"></span>
-                            </div>
-                            <div class="flex justify-between items-center text-sm">
-                                <span class="text-red-600 flex items-center">
-                                    <span class="w-2 h-2 rounded-full bg-red-500 mr-2"></span>
-                                    Опасных:
-                                </span>
-                                <span class="font-medium text-red-600" x-text="preview.stats.dangerous"></span>
-                            </div>
-
-                            <!-- Предупреждение об опасных изменениях -->
-                            <div x-show="preview.stats.dangerous > 0"
-                                 class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                                <div class="flex items-start">
-                                    <svg class="h-5 w-5 text-red-400 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                                    </svg>
-                                    <div class="ml-2">
-                                        <p class="text-sm text-red-700">
-                                            <strong x-text="preview.stats.dangerous"></strong> товаров с изменением более
-                                            <strong>{{ settings.warning_threshold_percent }}%</strong>
-                                        </p>
-                                        <p class="text-xs text-red-600 mt-1">
-                                            {% if settings.mode == 'confirm' %}
-                                            Потребуется подтверждение на отдельной странице
-                                            {% elif settings.mode == 'block' %}
-                                            Эти изменения будут заблокированы
-                                            {% endif %}
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </template>
-                </div>
-
-                <!-- Кнопка отправки -->
-                <button type="submit"
-                        :disabled="selectedCount === 0 || !changeValue"
-                        class="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition flex items-center justify-center">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    Создать изменение (<span x-text="selectedCount"></span> товаров)
+                <button @click="clearSelection" class="text-sm text-red-600 hover:text-red-800">
+                    Очистить выбор
                 </button>
             </div>
 
-            <!-- Правая колонка - Список товаров -->
-            <div class="lg:col-span-2">
-                <div class="bg-white shadow rounded-lg overflow-hidden">
-                    <!-- Заголовок и поиск -->
-                    <div class="px-6 py-4 border-b border-gray-200">
-                        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                            <h2 class="text-lg font-medium text-gray-900">
-                                Товары
-                                <span class="text-sm font-normal text-gray-500">
-                                    (выбрано <span x-text="selectedCount"></span> из {{ products|length }})
-                                </span>
-                            </h2>
-                            <div class="flex items-center space-x-2">
-                                <button type="button" @click="selectAll"
-                                        class="text-sm text-indigo-600 hover:text-indigo-800">
-                                    Выбрать все
-                                </button>
-                                <span class="text-gray-300">|</span>
-                                <button type="button" @click="deselectAll"
-                                        class="text-sm text-gray-600 hover:text-gray-800">
-                                    Снять выбор
-                                </button>
-                            </div>
+            <!-- Тип изменения -->
+            <div class="bg-white shadow rounded-lg p-6">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">Параметры изменения</h2>
+
+                <!-- Название операции -->
+                <div class="mb-4">
+                    <label for="name" class="block text-sm font-medium text-gray-700 mb-1">
+                        Название операции
+                    </label>
+                    <input type="text" id="name" x-model="name"
+                           placeholder="Например: Новогодняя распродажа"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                </div>
+
+                <!-- Тип изменения -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Тип изменения
+                    </label>
+                    <div class="space-y-2">
+                        <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
+                               :class="changeType === 'percent' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" value="percent" x-model="changeType"
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <span class="ml-3 text-gray-900">Процент от текущей цены</span>
+                        </label>
+                        <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
+                               :class="changeType === 'fixed' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" value="fixed" x-model="changeType"
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <span class="ml-3 text-gray-900">Фиксированная сумма (+/-)</span>
+                        </label>
+                        <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
+                               :class="changeType === 'set' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" value="set" x-model="changeType"
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <span class="ml-3 text-gray-900">Установить цену</span>
+                        </label>
+                        <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
+                               :class="changeType === 'formula' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" value="formula" x-model="changeType"
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <span class="ml-3 text-gray-900">Формула</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Значение изменения (не для формулы) -->
+                <div class="mb-4" x-show="changeType !== 'formula'">
+                    <label for="change_value" class="block text-sm font-medium text-gray-700 mb-1">
+                        <span x-text="changeType === 'percent' ? 'Процент изменения' : (changeType === 'set' ? 'Новая цена' : 'Сумма изменения')"></span>
+                    </label>
+                    <div class="relative">
+                        <input type="number" id="change_value" x-model.number="changeValue"
+                               :step="changeType === 'percent' ? '0.1' : '1'"
+                               class="w-full px-3 py-2 pr-12 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                        <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                            <span class="text-gray-500 text-sm" x-text="changeType === 'percent' ? '%' : 'руб.'"></span>
+                        </div>
+                    </div>
+                    <p class="mt-1 text-xs text-gray-500" x-show="changeType === 'percent'">
+                        Положительное - повышение, отрицательное - понижение
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500" x-show="changeType === 'fixed'">
+                        +100 добавит 100 руб., -50 уберет 50 руб.
+                    </p>
+                </div>
+
+                <!-- Формула -->
+                <div class="mb-4" x-show="changeType === 'formula'">
+                    <label for="formula" class="block text-sm font-medium text-gray-700 mb-1">
+                        Формула расчета
+                    </label>
+                    <textarea id="formula" x-model="formula" rows="3"
+                              placeholder="Например: P * 1.2 или (P + 100) * 1.15"
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm font-mono"></textarea>
+                    <div class="mt-2 text-xs text-gray-500">
+                        <p class="font-medium mb-1">Переменные:</p>
+                        <ul class="list-disc list-inside space-y-0.5">
+                            <li><code class="bg-gray-100 px-1">P</code> - текущая цена</li>
+                            <li><code class="bg-gray-100 px-1">min(a,b)</code>, <code class="bg-gray-100 px-1">max(a,b)</code> - мин/макс</li>
+                        </ul>
+                        <p class="mt-2 text-indigo-600">Пример: <code class="bg-gray-100 px-1">max(P * 1.2, P + 100)</code></p>
+                    </div>
+                </div>
+
+                <!-- Описание -->
+                <div>
+                    <label for="description" class="block text-sm font-medium text-gray-700 mb-1">
+                        Причина изменения
+                    </label>
+                    <textarea id="description" rows="2" x-model="description"
+                              placeholder="Опционально..."
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm"></textarea>
+                </div>
+            </div>
+
+            <!-- Предпросмотр -->
+            <div class="bg-white shadow rounded-lg p-6" x-show="selectedIds.length > 0 && (changeValue || formula)">
+                <h2 class="text-lg font-medium text-gray-900 mb-4">Предпросмотр</h2>
+
+                <template x-if="preview">
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center text-sm">
+                            <span class="text-gray-500">Всего товаров:</span>
+                            <span class="font-medium" x-text="preview.stats.total"></span>
+                        </div>
+                        <div class="flex justify-between items-center text-sm">
+                            <span class="text-green-600 flex items-center">
+                                <span class="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+                                Безопасных:
+                            </span>
+                            <span class="font-medium text-green-600" x-text="preview.stats.safe"></span>
+                        </div>
+                        <div class="flex justify-between items-center text-sm">
+                            <span class="text-yellow-600 flex items-center">
+                                <span class="w-2 h-2 rounded-full bg-yellow-500 mr-2"></span>
+                                Предупреждений:
+                            </span>
+                            <span class="font-medium text-yellow-600" x-text="preview.stats.warning"></span>
+                        </div>
+                        <div class="flex justify-between items-center text-sm">
+                            <span class="text-red-600 flex items-center">
+                                <span class="w-2 h-2 rounded-full bg-red-500 mr-2"></span>
+                                Опасных:
+                            </span>
+                            <span class="font-medium text-red-600" x-text="preview.stats.dangerous"></span>
                         </div>
 
+                        <div x-show="preview.stats.dangerous > 0" class="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs">
+                            <strong class="text-red-700">Внимание!</strong>
+                            <span class="text-red-600">Потребуется подтверждение.</span>
+                        </div>
+                    </div>
+                </template>
+
+                <button @click="loadPreview" :disabled="previewLoading"
+                        class="w-full mt-4 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 disabled:opacity-50 text-sm flex items-center justify-center">
+                    <svg x-show="previewLoading" class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span x-text="previewLoading ? 'Расчет...' : 'Рассчитать изменения'"></span>
+                </button>
+            </div>
+
+            <!-- Кнопка создания батча -->
+            <button @click="createBatch" :disabled="selectedIds.length === 0 || (!changeValue && !formula) || submitting"
+                    class="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition flex items-center justify-center">
+                <svg x-show="submitting" class="animate-spin h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <svg x-show="!submitting" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span x-text="submitting ? 'Создание...' : `Создать изменение (${selectedIds.length} товаров)`"></span>
+            </button>
+        </div>
+
+        <!-- Правая колонка - Список товаров -->
+        <div class="lg:col-span-2">
+            <div class="bg-white shadow rounded-lg overflow-hidden">
+                <!-- Фильтры -->
+                <div class="px-4 py-4 border-b border-gray-200 space-y-4">
+                    <div class="flex flex-col sm:flex-row gap-3">
                         <!-- Поиск -->
-                        <div class="mt-4">
-                            <input type="text" x-model="searchQuery"
-                                   placeholder="Поиск по названию, артикулу..."
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        <div class="flex-1">
+                            <input type="text" x-model="searchQuery" @input.debounce.300ms="loadProducts(1)"
+                                   placeholder="Поиск по названию, артикулу, NM ID..."
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                        </div>
+                        <!-- Бренд -->
+                        <select x-model="filterBrand" @change="loadProducts(1)"
+                                class="px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                            <option value="">Все бренды</option>
+                            {% for brand in brands %}
+                            <option value="{{ brand }}">{{ brand }}</option>
+                            {% endfor %}
+                        </select>
+                        <!-- Категория -->
+                        <select x-model="filterCategory" @change="loadProducts(1)"
+                                class="px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm">
+                            <option value="">Все категории</option>
+                            {% for cat in categories %}
+                            <option value="{{ cat }}">{{ cat }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Управление выбором -->
+                    <div class="flex items-center justify-between text-sm">
+                        <div class="flex items-center space-x-4">
+                            <button @click="selectAllOnPage" class="text-indigo-600 hover:text-indigo-800">
+                                Выбрать на странице
+                            </button>
+                            <button @click="deselectAllOnPage" class="text-gray-600 hover:text-gray-800">
+                                Снять на странице
+                            </button>
+                        </div>
+                        <div class="text-gray-500">
+                            Найдено: <span x-text="totalProducts"></span> товаров
                         </div>
                     </div>
+                </div>
 
-                    <!-- Таблица товаров -->
-                    <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50 sticky top-0">
-                                <tr>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
-                                        <input type="checkbox"
-                                               :checked="allSelected"
-                                               @change="toggleAll"
-                                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
-                                    </th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Товар
-                                    </th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Текущая цена
-                                    </th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Новая цена
-                                    </th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                        Изменение
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                {% for product in products %}
-                                <tr x-show="matchesSearch('{{ product.title }}', '{{ product.vendor_code }}')"
-                                    class="hover:bg-gray-50 transition"
-                                    :class="{ 'bg-indigo-50': selected.includes({{ product.id }}) }">
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <input type="checkbox"
-                                               name="selected_products"
-                                               value="{{ product.id }}"
-                                               :checked="selected.includes({{ product.id }})"
-                                               @change="toggleProduct({{ product.id }})"
-                                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <div class="text-sm">
-                                                <div class="font-medium text-gray-900">{{ product.vendor_code }}</div>
-                                                <div class="text-gray-500 truncate max-w-xs">{{ product.title[:50] }}{% if product.title|length > 50 %}...{% endif %}</div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm text-gray-900">
-                                        {{ product.price|round(2) if product.price else '—' }}
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium"
-                                        :class="getNewPriceClass({{ product.price or 0 }})">
-                                        <span x-text="formatPrice(calculateNewPrice({{ product.price or 0 }}))"></span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm"
-                                        :class="getChangeClass({{ product.price or 0 }})">
-                                        <span x-text="formatChange({{ product.price or 0 }})"></span>
-                                    </td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
+                <!-- Загрузка -->
+                <div x-show="loading" class="px-6 py-12 text-center">
+                    <svg class="animate-spin h-8 w-8 mx-auto text-indigo-600" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <p class="mt-2 text-gray-500">Загрузка товаров...</p>
+                </div>
 
-                    {% if not products %}
-                    <div class="px-6 py-12 text-center">
-                        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
-                        </svg>
-                        <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
-                        <p class="mt-1 text-sm text-gray-500">Сначала синхронизируйте товары с Wildberries</p>
+                <!-- Таблица товаров -->
+                <div x-show="!loading" class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-10">
+                                    <input type="checkbox" :checked="isPageSelected()" @change="togglePageSelection()"
+                                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                </th>
+                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                                    Товар
+                                </th>
+                                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                                    Текущая цена
+                                </th>
+                                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                                    Новая цена
+                                </th>
+                                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
+                                    Изменение
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <template x-for="product in products" :key="product.id">
+                                <tr class="hover:bg-gray-50 transition"
+                                    :class="{ 'bg-indigo-50': isSelected(product.id) }">
+                                    <td class="px-4 py-3 whitespace-nowrap">
+                                        <input type="checkbox"
+                                               :checked="isSelected(product.id)"
+                                               @change="toggleProduct(product.id)"
+                                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                    </td>
+                                    <td class="px-4 py-3">
+                                        <div class="text-sm font-medium text-gray-900" x-text="product.vendor_code"></div>
+                                        <div class="text-xs text-gray-500 truncate max-w-xs" x-text="product.title"></div>
+                                        <div class="text-xs text-gray-400" x-text="product.brand"></div>
+                                    </td>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-900">
+                                        <span x-text="product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '—'"></span>
+                                    </td>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm font-medium"
+                                        :class="getNewPriceClass(product.price)">
+                                        <span x-text="formatNewPrice(product.price)"></span>
+                                    </td>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm"
+                                        :class="getChangeClass(product.price)">
+                                        <span x-text="formatChange(product.price)"></span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Пустой список -->
+                <div x-show="!loading && products.length === 0" class="px-6 py-12 text-center">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                    </svg>
+                    <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
+                    <p class="mt-1 text-sm text-gray-500">Попробуйте изменить фильтры</p>
+                </div>
+
+                <!-- Пагинация -->
+                <div x-show="!loading && totalPages > 1" class="px-4 py-3 border-t border-gray-200">
+                    <div class="flex items-center justify-between">
+                        <div class="text-sm text-gray-700">
+                            Страница <span x-text="currentPage"></span> из <span x-text="totalPages"></span>
+                        </div>
+                        <nav class="flex space-x-1">
+                            <button @click="loadProducts(currentPage - 1)" :disabled="currentPage <= 1"
+                                    class="px-3 py-1 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Назад
+                            </button>
+                            <template x-for="p in getVisiblePages()" :key="p">
+                                <button @click="loadProducts(p)"
+                                        class="px-3 py-1 border rounded text-sm"
+                                        :class="p === currentPage ? 'bg-indigo-50 border-indigo-500 text-indigo-600' : 'hover:bg-gray-50'"
+                                        x-text="p"></button>
+                            </template>
+                            <button @click="loadProducts(currentPage + 1)" :disabled="currentPage >= totalPages"
+                                    class="px-3 py-1 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Вперед
+                            </button>
+                        </nav>
                     </div>
-                    {% endif %}
                 </div>
             </div>
         </div>
-    </form>
+    </div>
 </div>
 
 <script>
@@ -296,81 +350,161 @@ function priceChangeApp() {
         name: '',
         changeType: 'percent',
         changeValue: null,
+        formula: '',
         description: '',
 
-        // Выбранные товары
-        selected: [{% for id in selected_ids %}{{ id }},{% endfor %}],
+        // Товары и пагинация
+        products: [],
+        totalProducts: 0,
+        totalPages: 1,
+        currentPage: 1,
+        perPage: 50,
+        loading: false,
+
+        // Фильтры
         searchQuery: '',
+        filterBrand: '',
+        filterCategory: '',
+
+        // Выбранные товары (сохраняются в localStorage)
+        selectedIds: [],
 
         // Предпросмотр
         preview: null,
-        loading: false,
+        previewLoading: false,
+
+        // Отправка
+        submitting: false,
 
         // Настройки безопасности
         safeThreshold: {{ settings.safe_threshold_percent }},
         warningThreshold: {{ settings.warning_threshold_percent }},
 
-        get selectedCount() {
-            return this.selected.length;
+        init() {
+            // Загружаем сохраненный выбор из localStorage
+            const saved = localStorage.getItem('price_change_selected');
+            if (saved) {
+                try {
+                    this.selectedIds = JSON.parse(saved);
+                } catch (e) {
+                    this.selectedIds = [];
+                }
+            }
+
+            // Загружаем товары
+            this.loadProducts(1);
         },
 
-        get allSelected() {
-            const visibleCount = document.querySelectorAll('tbody tr:not([style*="display: none"]) input[type="checkbox"]').length;
-            return this.selected.length === visibleCount && visibleCount > 0;
+        async loadProducts(page) {
+            if (page < 1) return;
+
+            this.loading = true;
+            this.currentPage = page;
+
+            try {
+                const params = new URLSearchParams({
+                    page: page,
+                    per_page: this.perPage,
+                    search: this.searchQuery,
+                    brand: this.filterBrand,
+                    category: this.filterCategory
+                });
+
+                const response = await fetch(`{{ url_for('prices.api_get_products') }}?${params}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    this.products = data.products;
+                    this.totalProducts = data.total;
+                    this.totalPages = data.pages;
+                }
+            } catch (error) {
+                console.error('Error loading products:', error);
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        // Выбор товаров
+        isSelected(id) {
+            return this.selectedIds.includes(id);
         },
 
         toggleProduct(id) {
-            const idx = this.selected.indexOf(id);
+            const idx = this.selectedIds.indexOf(id);
             if (idx > -1) {
-                this.selected.splice(idx, 1);
+                this.selectedIds.splice(idx, 1);
             } else {
-                this.selected.push(id);
+                this.selectedIds.push(id);
             }
+            this.saveSelection();
             this.preview = null;
         },
 
-        selectAll() {
-            this.selected = [{% for product in products %}{{ product.id }},{% endfor %}];
-            this.preview = null;
+        selectAllOnPage() {
+            for (const product of this.products) {
+                if (!this.selectedIds.includes(product.id)) {
+                    this.selectedIds.push(product.id);
+                }
+            }
+            this.saveSelection();
         },
 
-        deselectAll() {
-            this.selected = [];
-            this.preview = null;
+        deselectAllOnPage() {
+            const pageIds = this.products.map(p => p.id);
+            this.selectedIds = this.selectedIds.filter(id => !pageIds.includes(id));
+            this.saveSelection();
         },
 
-        toggleAll() {
-            if (this.allSelected) {
-                this.deselectAll();
+        isPageSelected() {
+            if (this.products.length === 0) return false;
+            return this.products.every(p => this.selectedIds.includes(p.id));
+        },
+
+        togglePageSelection() {
+            if (this.isPageSelected()) {
+                this.deselectAllOnPage();
             } else {
-                this.selectAll();
+                this.selectAllOnPage();
             }
         },
 
-        matchesSearch(title, vendorCode) {
-            if (!this.searchQuery) return true;
-            const query = this.searchQuery.toLowerCase();
-            return title.toLowerCase().includes(query) ||
-                   vendorCode.toLowerCase().includes(query);
+        clearSelection() {
+            this.selectedIds = [];
+            this.saveSelection();
+            this.preview = null;
         },
 
+        saveSelection() {
+            localStorage.setItem('price_change_selected', JSON.stringify(this.selectedIds));
+        },
+
+        // Расчеты
         calculateNewPrice(oldPrice) {
-            if (!this.changeValue) return oldPrice;
+            if (!oldPrice) return 0;
 
-            let newPrice;
-            if (this.changeType === 'percent') {
-                newPrice = oldPrice * (1 + parseFloat(this.changeValue) / 100);
-            } else if (this.changeType === 'fixed') {
-                newPrice = oldPrice + parseFloat(this.changeValue);
-            } else {
-                newPrice = parseFloat(this.changeValue);
+            if (this.changeType === 'percent' && this.changeValue) {
+                return oldPrice * (1 + this.changeValue / 100);
+            } else if (this.changeType === 'fixed' && this.changeValue) {
+                return oldPrice + this.changeValue;
+            } else if (this.changeType === 'set' && this.changeValue) {
+                return this.changeValue;
+            } else if (this.changeType === 'formula' && this.formula) {
+                try {
+                    const P = oldPrice;
+                    // Безопасное вычисление простых формул
+                    const expr = this.formula.replace(/P/g, P);
+                    return Math.max(0, eval(expr));
+                } catch (e) {
+                    return oldPrice;
+                }
             }
-            return Math.max(0, newPrice);
+            return oldPrice;
         },
 
         calculateChangePercent(oldPrice) {
             const newPrice = this.calculateNewPrice(oldPrice);
-            if (oldPrice === 0) return newPrice > 0 ? 100 : 0;
+            if (!oldPrice || oldPrice === 0) return newPrice > 0 ? 100 : 0;
             return ((newPrice - oldPrice) / oldPrice) * 100;
         },
 
@@ -382,6 +516,7 @@ function priceChangeApp() {
         },
 
         getNewPriceClass(oldPrice) {
+            if (!this.changeValue && !this.formula) return 'text-gray-400';
             const level = this.getSafetyLevel(oldPrice);
             return {
                 'text-green-600': level === 'safe',
@@ -391,41 +526,53 @@ function priceChangeApp() {
         },
 
         getChangeClass(oldPrice) {
-            const change = this.calculateChangePercent(oldPrice);
+            if (!this.changeValue && !this.formula) return 'text-gray-400';
             const level = this.getSafetyLevel(oldPrice);
             return {
-                'text-green-600': level === 'safe' && change >= 0,
-                'text-green-700': level === 'safe' && change < 0,
+                'text-green-600': level === 'safe',
                 'text-yellow-600': level === 'warning',
                 'text-red-600': level === 'dangerous'
             };
         },
 
-        formatPrice(price) {
-            if (price === null || price === undefined) return '—';
-            return price.toFixed(2) + ' ';
+        formatNewPrice(oldPrice) {
+            if (!this.changeValue && !this.formula) return '—';
+            const newPrice = Math.round(this.calculateNewPrice(oldPrice));
+            return newPrice.toLocaleString('ru-RU') + ' ₽';
         },
 
         formatChange(oldPrice) {
+            if (!this.changeValue && !this.formula) return '—';
             const change = this.calculateChangePercent(oldPrice);
             const sign = change >= 0 ? '+' : '';
             return sign + change.toFixed(1) + '%';
         },
 
-        async previewChanges() {
-            if (this.selected.length === 0 || !this.changeValue) return;
+        // Пагинация
+        getVisiblePages() {
+            const pages = [];
+            const start = Math.max(1, this.currentPage - 2);
+            const end = Math.min(this.totalPages, this.currentPage + 2);
+            for (let i = start; i <= end; i++) {
+                pages.push(i);
+            }
+            return pages;
+        },
 
-            this.loading = true;
+        // Предпросмотр
+        async loadPreview() {
+            if (this.selectedIds.length === 0) return;
+
+            this.previewLoading = true;
             try {
                 const response = await fetch('{{ url_for("prices.api_preview_changes") }}', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        product_ids: this.selected,
+                        product_ids: this.selectedIds,
                         change_type: this.changeType,
-                        change_value: parseFloat(this.changeValue)
+                        change_value: this.changeValue,
+                        formula: this.formula
                     })
                 });
 
@@ -436,22 +583,53 @@ function priceChangeApp() {
             } catch (error) {
                 console.error('Preview error:', error);
             } finally {
-                this.loading = false;
+                this.previewLoading = false;
             }
         },
 
-        handleSubmit(e) {
-            if (this.selected.length === 0) {
-                e.preventDefault();
+        // Создание батча
+        async createBatch() {
+            if (this.selectedIds.length === 0) {
                 alert('Выберите хотя бы один товар');
-                return false;
+                return;
             }
-            if (!this.changeValue) {
-                e.preventDefault();
+
+            if (!this.changeValue && !this.formula) {
                 alert('Укажите значение изменения');
-                return false;
+                return;
             }
-            return true;
+
+            this.submitting = true;
+            try {
+                const response = await fetch('{{ url_for("prices.create_batch") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        product_ids: this.selectedIds,
+                        change_type: this.changeType,
+                        change_value: this.changeValue,
+                        formula: this.formula,
+                        name: this.name,
+                        description: this.description
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Очищаем выбор после успешного создания
+                    this.clearSelection();
+                    // Переходим на страницу батча
+                    window.location.href = data.redirect;
+                } else {
+                    alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+                }
+            } catch (error) {
+                console.error('Create batch error:', error);
+                alert('Ошибка сети');
+            } finally {
+                this.submitting = false;
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ Endpoints:
 - GET  /prices - главная страница управления ценами
 - GET  /prices/settings - настройки безопасности
 - POST /prices/settings - сохранить настройки
+- GET  /prices/change - форма изменения цен с пагинацией
 - POST /prices/create-batch - создать батч изменений
 - GET  /prices/batch/<id> - просмотр батча
 - POST /prices/batch/<id>/confirm - подтвердить опасные изменения
@@ -12,14 +13,17 @@ Endpoints:
 - POST /prices/batch/<id>/revert - откатить изменения
 - POST /prices/batch/<id>/cancel - отменить батч
 - GET  /prices/history - история изменений
+- GET  /prices/formulas - управление формулами
 
 API Endpoints:
-- GET  /api/prices/goods - получить цены товаров
+- GET  /api/prices/products - получить товары с пагинацией
 - POST /api/prices/preview - предпросмотр изменений
 - GET  /api/prices/batch/<id>/status - статус батча
 """
 
 import logging
+import re
+import math
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Dict, Any, Optional, Tuple
@@ -56,20 +60,106 @@ def get_or_create_settings(seller_id: int) -> SafePriceChangeSettings:
     return settings
 
 
+class FormulaEvaluator:
+    """
+    Безопасный вычислитель формул для расчета цен.
+
+    Поддерживаемые переменные:
+    - P: закупочная цена (price)
+    - Q: желаемая прибыль (profit)
+    - A: процент прибыли из диапазона
+    - S: стоимость доставки
+    - R, T, U: промежуточные переменные
+    - Z: финальная цена
+    - X: премиум цена
+    - Y: завышенная цена
+
+    Поддерживаемые операции: +, -, *, /, (), min(), max(), if условия
+    """
+
+    ALLOWED_NAMES = {
+        'min': min,
+        'max': max,
+        'abs': abs,
+        'round': round,
+    }
+
+    def __init__(self, formula: str, variables: Dict[str, float] = None):
+        self.formula = formula
+        self.variables = variables or {}
+
+    def evaluate(self) -> float:
+        """Безопасно вычислить формулу"""
+        try:
+            # Заменяем переменные на значения
+            expr = self.formula
+            for var, value in self.variables.items():
+                expr = re.sub(rf'\b{var}\b', str(value), expr)
+
+            # Проверяем на безопасность - только разрешенные символы
+            allowed_chars = set('0123456789.+-*/() ,<>=!')
+            allowed_words = {'min', 'max', 'abs', 'round', 'if', 'else', 'and', 'or'}
+
+            # Удаляем разрешенные слова для проверки
+            check_expr = expr
+            for word in allowed_words:
+                check_expr = re.sub(rf'\b{word}\b', '', check_expr)
+
+            # Проверяем что остались только разрешенные символы
+            remaining = set(check_expr.replace(' ', ''))
+            if not remaining.issubset(allowed_chars):
+                raise ValueError(f"Недопустимые символы в формуле: {remaining - allowed_chars}")
+
+            # Вычисляем
+            result = eval(expr, {"__builtins__": {}}, self.ALLOWED_NAMES)
+            return float(result)
+        except Exception as e:
+            logger.error(f"Formula evaluation error: {e}, formula: {self.formula}")
+            return 0.0
+
+
+def calculate_price_with_formula(
+    old_price: float,
+    formula: str,
+    variables: Dict[str, float] = None
+) -> float:
+    """
+    Рассчитать новую цену по формуле
+
+    Args:
+        old_price: Текущая цена
+        formula: Формула расчета
+        variables: Дополнительные переменные
+
+    Returns:
+        Новая цена
+    """
+    vars_dict = {'P': old_price}
+    if variables:
+        vars_dict.update(variables)
+
+    evaluator = FormulaEvaluator(formula, vars_dict)
+    return evaluator.evaluate()
+
+
 def calculate_price_changes(
     products: List[Product],
     change_type: str,
     change_value: float,
-    settings: SafePriceChangeSettings
+    settings: SafePriceChangeSettings,
+    formula: str = None,
+    formula_variables: Dict[str, float] = None
 ) -> Tuple[List[Dict], Dict]:
     """
     Рассчитать изменения цен и классифицировать их по безопасности
 
     Args:
         products: Список товаров
-        change_type: Тип изменения ('fixed', 'percent', 'set')
+        change_type: Тип изменения ('fixed', 'percent', 'set', 'formula')
         change_value: Значение изменения
         settings: Настройки безопасности
+        formula: Формула для расчета (если change_type='formula')
+        formula_variables: Переменные для формулы
 
     Returns:
         (items, stats) - список изменений и статистика
@@ -95,11 +185,14 @@ def calculate_price_changes(
         elif change_type == 'set':
             # Установить конкретную цену
             new_price = change_value
+        elif change_type == 'formula' and formula:
+            # Расчет по формуле
+            new_price = calculate_price_with_formula(old_price, formula, formula_variables)
         else:
             new_price = old_price
 
-        # Округляем до 2 знаков
-        new_price = round(max(0, new_price), 2)
+        # Округляем до целого (WB требует целые цены)
+        new_price = round(max(0, new_price))
 
         # Рассчитываем изменение
         if old_price > 0:
@@ -117,6 +210,7 @@ def calculate_price_changes(
             'nm_id': product.nm_id,
             'vendor_code': product.vendor_code,
             'title': product.title,
+            'brand': product.brand,
             'old_price': old_price,
             'new_price': new_price,
             'change_amount': round(change_amount, 2),
@@ -200,10 +294,10 @@ def prices_settings():
     return render_template('prices_settings.html', settings=settings)
 
 
-@prices_bp.route('/change', methods=['GET', 'POST'])
+@prices_bp.route('/change', methods=['GET'])
 @login_required
 def prices_change():
-    """Форма изменения цен"""
+    """Форма изменения цен с пагинацией"""
     seller = get_current_seller()
     if not seller:
         flash('Необходимо быть продавцом для доступа к этой странице', 'warning')
@@ -211,117 +305,141 @@ def prices_change():
 
     settings = get_or_create_settings(seller.id)
 
-    # Получаем товары для изменения
-    product_ids = request.args.getlist('product_ids', type=int)
-    if product_ids:
-        products = Product.query.filter(
-            Product.id.in_(product_ids),
-            Product.seller_id == seller.id
-        ).all()
-    else:
-        # Если не указаны конкретные товары, показываем все
-        products = Product.query.filter_by(
-            seller_id=seller.id,
-            is_active=True
-        ).order_by(Product.title).all()
+    # Получаем уникальные бренды и категории для фильтров
+    brands = db.session.query(Product.brand).filter(
+        Product.seller_id == seller.id,
+        Product.is_active == True,
+        Product.brand.isnot(None),
+        Product.brand != ''
+    ).distinct().order_by(Product.brand).all()
+    brands = [b[0] for b in brands if b[0]]
 
-    if request.method == 'POST':
-        # Создаем батч изменений
-        try:
-            change_type = request.form.get('change_type', 'percent')
-            change_value = float(request.form.get('change_value', 0))
-            name = request.form.get('name', '').strip()
-            description = request.form.get('description', '').strip()
-            selected_ids = request.form.getlist('selected_products', type=int)
-
-            if not selected_ids:
-                flash('Выберите хотя бы один товар', 'warning')
-                return redirect(request.url)
-
-            # Проверяем лимит товаров
-            if len(selected_ids) > settings.max_products_per_batch:
-                flash(
-                    f'Превышен лимит товаров в одном батче ({settings.max_products_per_batch}). '
-                    f'Выбрано: {len(selected_ids)}',
-                    'warning'
-                )
-                return redirect(request.url)
-
-            # Получаем выбранные товары
-            selected_products = Product.query.filter(
-                Product.id.in_(selected_ids),
-                Product.seller_id == seller.id
-            ).all()
-
-            # Рассчитываем изменения
-            items, stats = calculate_price_changes(
-                selected_products, change_type, change_value, settings
-            )
-
-            # Создаем батч
-            batch = PriceChangeBatch(
-                seller_id=seller.id,
-                name=name or f'Изменение цен ({datetime.now().strftime("%d.%m.%Y %H:%M")})',
-                description=description,
-                change_type=change_type,
-                change_value=change_value,
-                total_items=stats['total'],
-                safe_count=stats['safe'],
-                warning_count=stats['warning'],
-                dangerous_count=stats['dangerous'],
-                has_safe_changes=stats['safe'] > 0,
-                has_warning_changes=stats['warning'] > 0,
-                has_dangerous_changes=stats['dangerous'] > 0
-            )
-
-            # Определяем статус батча
-            if stats['dangerous'] > 0 and settings.mode == 'confirm':
-                batch.status = 'pending_review'
-            elif stats['dangerous'] > 0 and settings.mode == 'block':
-                flash('Обнаружены опасные изменения. Изменение заблокировано настройками безопасности.', 'danger')
-                return redirect(request.url)
-            else:
-                batch.status = 'confirmed'
-
-            db.session.add(batch)
-            db.session.flush()  # Получаем ID батча
-
-            # Создаем элементы батча
-            for item in items:
-                price_item = PriceChangeItem(
-                    batch_id=batch.id,
-                    product_id=item['product_id'],
-                    nm_id=item['nm_id'],
-                    vendor_code=item['vendor_code'],
-                    product_title=item['title'],
-                    old_price=item['old_price'],
-                    new_price=item['new_price'],
-                    price_change_amount=item['change_amount'],
-                    price_change_percent=item['change_percent'],
-                    safety_level=item['safety_level']
-                )
-                db.session.add(price_item)
-
-            db.session.commit()
-
-            # Перенаправляем на страницу батча
-            if batch.status == 'pending_review':
-                flash('Батч создан и требует подтверждения из-за опасных изменений', 'warning')
-                return redirect(url_for('prices.batch_confirm', batch_id=batch.id))
-            else:
-                return redirect(url_for('prices.batch_detail', batch_id=batch.id))
-
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Error creating price batch: {e}")
-            flash(f'Ошибка создания батча: {str(e)}', 'danger')
+    categories = db.session.query(Product.object_name).filter(
+        Product.seller_id == seller.id,
+        Product.is_active == True,
+        Product.object_name.isnot(None),
+        Product.object_name != ''
+    ).distinct().order_by(Product.object_name).all()
+    categories = [c[0] for c in categories if c[0]]
 
     return render_template(
         'prices_change.html',
-        products=products,
         settings=settings,
-        selected_ids=product_ids
+        brands=brands,
+        categories=categories
     )
+
+
+@prices_bp.route('/create-batch', methods=['POST'])
+@login_required
+def create_batch():
+    """Создать батч изменений из выбранных товаров"""
+    seller = get_current_seller()
+    if not seller:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    settings = get_or_create_settings(seller.id)
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    try:
+        change_type = data.get('change_type', 'percent')
+        change_value = float(data.get('change_value', 0)) if data.get('change_value') else 0
+        name = data.get('name', '').strip()
+        description = data.get('description', '').strip()
+        selected_ids = data.get('product_ids', [])
+        formula = data.get('formula', '').strip()
+        formula_variables = data.get('formula_variables', {})
+
+        if not selected_ids:
+            return jsonify({'error': 'Выберите хотя бы один товар'}), 400
+
+        # Проверяем лимит товаров
+        if len(selected_ids) > settings.max_products_per_batch:
+            return jsonify({
+                'error': f'Превышен лимит товаров ({settings.max_products_per_batch}). Выбрано: {len(selected_ids)}'
+            }), 400
+
+        # Получаем выбранные товары
+        selected_products = Product.query.filter(
+            Product.id.in_(selected_ids),
+            Product.seller_id == seller.id
+        ).all()
+
+        if not selected_products:
+            return jsonify({'error': 'Товары не найдены'}), 404
+
+        # Рассчитываем изменения
+        items, stats = calculate_price_changes(
+            selected_products, change_type, change_value, settings,
+            formula=formula, formula_variables=formula_variables
+        )
+
+        # Проверяем режим блокировки
+        if stats['dangerous'] > 0 and settings.mode == 'block':
+            return jsonify({
+                'error': 'Обнаружены опасные изменения. Операция заблокирована настройками безопасности.',
+                'stats': stats
+            }), 403
+
+        # Создаем батч
+        batch = PriceChangeBatch(
+            seller_id=seller.id,
+            name=name or f'Изменение цен ({datetime.now().strftime("%d.%m.%Y %H:%M")})',
+            description=description,
+            change_type=change_type,
+            change_value=change_value if change_type != 'formula' else None,
+            change_formula=formula if change_type == 'formula' else None,
+            total_items=stats['total'],
+            safe_count=stats['safe'],
+            warning_count=stats['warning'],
+            dangerous_count=stats['dangerous'],
+            has_safe_changes=stats['safe'] > 0,
+            has_warning_changes=stats['warning'] > 0,
+            has_dangerous_changes=stats['dangerous'] > 0
+        )
+
+        # Определяем статус батча
+        if stats['dangerous'] > 0 and settings.mode == 'confirm':
+            batch.status = 'pending_review'
+        else:
+            batch.status = 'confirmed'
+
+        db.session.add(batch)
+        db.session.flush()
+
+        # Создаем элементы батча
+        for item in items:
+            price_item = PriceChangeItem(
+                batch_id=batch.id,
+                product_id=item['product_id'],
+                nm_id=item['nm_id'],
+                vendor_code=item['vendor_code'],
+                product_title=item['title'],
+                old_price=item['old_price'],
+                new_price=item['new_price'],
+                price_change_amount=item['change_amount'],
+                price_change_percent=item['change_percent'],
+                safety_level=item['safety_level']
+            )
+            db.session.add(price_item)
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'batch_id': batch.id,
+            'status': batch.status,
+            'stats': stats,
+            'redirect': url_for('prices.batch_confirm', batch_id=batch.id) if batch.status == 'pending_review' else url_for('prices.batch_detail', batch_id=batch.id)
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error creating price batch: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @prices_bp.route('/batch/<int:batch_id>')
@@ -365,7 +483,7 @@ def batch_confirm(batch_id: int):
 
     settings = get_or_create_settings(seller.id)
 
-    # Получаем опасные изменения
+    # Получаем изменения по категориям
     dangerous_items = batch.items.filter_by(safety_level='dangerous').all()
     warning_items = batch.items.filter_by(safety_level='warning').all()
     safe_items = batch.items.filter_by(safety_level='safe').all()
@@ -571,8 +689,8 @@ def batch_revert(batch_id: int):
                 nm_id=item.nm_id,
                 vendor_code=item.vendor_code,
                 product_title=item.product_title,
-                old_price=item.new_price,  # Текущая цена = новая цена из оригинального батча
-                new_price=item.old_price,  # Откатываем к старой цене
+                old_price=item.new_price,
+                new_price=item.old_price,
                 safety_level='safe'
             )
             revert_item.calculate_change()
@@ -680,32 +798,72 @@ def prices_history():
 
 # ==================== API ROUTES ====================
 
-@prices_bp.route('/api/goods')
+@prices_bp.route('/api/products')
 @login_required
-def api_get_goods():
-    """API: Получить цены товаров из WB"""
+def api_get_products():
+    """API: Получить товары с пагинацией и фильтрами"""
     seller = get_current_seller()
     if not seller:
         return jsonify({'error': 'Unauthorized'}), 401
 
-    if not seller.has_valid_api_key():
-        return jsonify({'error': 'API ключ не настроен'}), 400
+    # Параметры пагинации
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(per_page, 100)  # Максимум 100 на страницу
 
-    try:
-        api_client = WildberriesAPIClient(seller.wb_api_key)
-        goods = api_client.get_all_goods_prices(
-            log_to_db=True,
-            seller_id=seller.id
+    # Фильтры
+    search = request.args.get('search', '').strip()
+    brand = request.args.get('brand', '').strip()
+    category = request.args.get('category', '').strip()
+
+    # Базовый запрос
+    query = Product.query.filter_by(seller_id=seller.id, is_active=True)
+
+    # Применяем фильтры
+    if search:
+        search_term = f'%{search}%'
+        query = query.filter(
+            db.or_(
+                Product.title.ilike(search_term),
+                Product.vendor_code.ilike(search_term),
+                Product.nm_id.cast(db.String).ilike(search_term)
+            )
         )
-        api_client.close()
 
-        return jsonify({
-            'success': True,
-            'goods': goods,
-            'total': len(goods)
+    if brand:
+        query = query.filter(Product.brand == brand)
+
+    if category:
+        query = query.filter(Product.object_name == category)
+
+    # Общее количество
+    total = query.count()
+
+    # Пагинация
+    products = query.order_by(Product.title).offset((page - 1) * per_page).limit(per_page).all()
+
+    # Формируем ответ
+    products_data = []
+    for p in products:
+        products_data.append({
+            'id': p.id,
+            'nm_id': p.nm_id,
+            'vendor_code': p.vendor_code,
+            'title': p.title[:80] if p.title else '',
+            'brand': p.brand or '',
+            'category': p.object_name or '',
+            'price': float(p.price) if p.price else 0,
+            'discount_price': float(p.discount_price) if p.discount_price else None
         })
-    except WBAPIException as e:
-        return jsonify({'error': str(e)}), 500
+
+    return jsonify({
+        'success': True,
+        'products': products_data,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'pages': math.ceil(total / per_page)
+    })
 
 
 @prices_bp.route('/api/preview', methods=['POST'])
@@ -722,7 +880,9 @@ def api_preview_changes():
 
     product_ids = data.get('product_ids', [])
     change_type = data.get('change_type', 'percent')
-    change_value = float(data.get('change_value', 0))
+    change_value = float(data.get('change_value', 0)) if data.get('change_value') else 0
+    formula = data.get('formula', '')
+    formula_variables = data.get('formula_variables', {})
 
     if not product_ids:
         return jsonify({'error': 'No products selected'}), 400
@@ -734,7 +894,10 @@ def api_preview_changes():
         Product.seller_id == seller.id
     ).all()
 
-    items, stats = calculate_price_changes(products, change_type, change_value, settings)
+    items, stats = calculate_price_changes(
+        products, change_type, change_value, settings,
+        formula=formula, formula_variables=formula_variables
+    )
 
     return jsonify({
         'success': True,
