@@ -341,6 +341,103 @@ def register_merge_routes(app):
             flash('Произошла ошибка при разъединении карточек', 'danger')
             return redirect(url_for('products_merge'))
 
+    @app.route('/products/merge/unmerge-single/<int:nm_id>', methods=['GET', 'POST'])
+    @login_required
+    def products_merge_unmerge_single(nm_id):
+        """Разъединить одну карточку из группы"""
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            flash('API ключ не настроен', 'danger')
+            return redirect(url_for('products_merge'))
+
+        try:
+            # Находим карточку
+            product = Product.query.filter_by(
+                nm_id=nm_id,
+                seller_id=current_user.seller.id,
+                is_active=True
+            ).first()
+
+            if not product:
+                flash('Карточка не найдена', 'warning')
+                return redirect(url_for('products_merge'))
+
+            if not product.imt_id:
+                flash('Карточка не имеет imtID', 'warning')
+                return redirect(url_for('products_merge'))
+
+            # Проверяем, что карточка действительно в группе
+            group_count = Product.query.filter_by(
+                imt_id=product.imt_id,
+                seller_id=current_user.seller.id,
+                is_active=True
+            ).count()
+
+            if group_count < 2:
+                flash('Эта карточка не объединена с другими', 'info')
+                return redirect(url_for('products_merge'))
+
+            # Создаем запись истории
+            start_time = datetime.utcnow()
+
+            snapshot_before = {
+                str(product.nm_id): {
+                    'imt_id': product.imt_id,
+                    'vendor_code': product.vendor_code,
+                    'title': product.title,
+                    'subject_id': product.subject_id
+                }
+            }
+
+            unmerge_history = CardMergeHistory(
+                seller_id=current_user.seller.id,
+                operation_type='unmerge',
+                merged_nm_ids=[nm_id],
+                snapshot_before=snapshot_before,
+                status='in_progress',
+                user_comment=f"Отсоединение карточки nmID={nm_id} от группы imtID={product.imt_id}"
+            )
+            db.session.add(unmerge_history)
+            db.session.commit()
+
+            # Разъединяем через API (только одну карточку)
+            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+
+            try:
+                result = client.unmerge_cards(
+                    nm_ids=[nm_id],
+                    log_to_db=True,
+                    seller_id=current_user.seller.id
+                )
+
+                snapshot_after = snapshot_before.copy()
+
+                unmerge_history.snapshot_after = snapshot_after
+                unmerge_history.status = 'completed'
+                unmerge_history.wb_synced = True
+                unmerge_history.wb_sync_status = 'success'
+                unmerge_history.completed_at = datetime.utcnow()
+                unmerge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
+
+                db.session.commit()
+
+                flash(f'Карточка {product.vendor_code} отсоединена от группы. Синхронизируйте товары для обновления imtID', 'success')
+                return redirect(url_for('products_merge'))
+
+            except WBAPIException as e:
+                unmerge_history.status = 'failed'
+                unmerge_history.wb_synced = False
+                unmerge_history.wb_sync_status = 'failed'
+                unmerge_history.wb_error_message = str(e)
+                db.session.commit()
+
+                flash(f'Ошибка при отсоединении карточки: {str(e)}', 'danger')
+                return redirect(url_for('products_merge'))
+
+        except Exception as e:
+            app.logger.error(f"Error in products_merge_unmerge_single: {str(e)}")
+            flash('Произошла ошибка при отсоединении карточки', 'danger')
+            return redirect(url_for('products_merge'))
+
     @app.route('/products/merge/history')
     @login_required
     def products_merge_history_list():
