@@ -16,9 +16,20 @@ import os
 from datetime import datetime
 
 # Путь к базе данных
-DB_PATH = os.environ.get('DATABASE_URL', 'seller_platform.db')
-if DB_PATH.startswith('sqlite:///'):
-    DB_PATH = DB_PATH.replace('sqlite:///', '')
+def get_db_path():
+    """Получить путь к базе данных"""
+    # Сначала проверяем DATABASE_PATH
+    db_path = os.environ.get('DATABASE_PATH')
+    if db_path:
+        return db_path
+    # Затем DATABASE_URL
+    db_url = os.environ.get('DATABASE_URL', '')
+    if db_url.startswith('sqlite:///'):
+        return db_url.replace('sqlite:///', '')
+    # По умолчанию
+    return 'data/seller_platform.db'
+
+DB_PATH = get_db_path()
 
 
 def get_connection():
@@ -61,7 +72,8 @@ def migrate():
                 -- Дополнительные настройки
                 require_comment_for_dangerous BOOLEAN DEFAULT 1 NOT NULL,
                 allow_bulk_dangerous BOOLEAN DEFAULT 0 NOT NULL,
-                max_products_per_batch INTEGER DEFAULT 100 NOT NULL,
+                max_products_per_batch INTEGER DEFAULT 1000 NOT NULL,
+                allow_unlimited_batch BOOLEAN DEFAULT 1 NOT NULL,
 
                 -- Уведомления
                 notify_on_dangerous BOOLEAN DEFAULT 1 NOT NULL,

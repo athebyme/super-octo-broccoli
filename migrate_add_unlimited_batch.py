@@ -11,7 +11,16 @@ import os
 
 def get_db_path():
     """Получить путь к базе данных"""
-    return os.environ.get('DATABASE_PATH', 'data/seller_platform.db')
+    # Сначала проверяем DATABASE_PATH
+    db_path = os.environ.get('DATABASE_PATH')
+    if db_path:
+        return db_path
+    # Затем DATABASE_URL
+    db_url = os.environ.get('DATABASE_URL', '')
+    if db_url.startswith('sqlite:///'):
+        return db_url.replace('sqlite:///', '')
+    # По умолчанию
+    return 'data/seller_platform.db'
 
 def migrate():
     """Добавить колонку allow_unlimited_batch"""
