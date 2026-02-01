@@ -201,16 +201,19 @@ def migrate():
 
     # Создание настроек по умолчанию для существующих продавцов
     print("\n📝 Создание настроек по умолчанию для продавцов...")
-    cursor.execute("""
-        INSERT INTO safe_price_change_settings (seller_id, is_enabled)
-        SELECT id, 1 FROM sellers
-        WHERE id NOT IN (SELECT seller_id FROM safe_price_change_settings)
-    """)
-    created_settings = cursor.rowcount
-    if created_settings > 0:
-        print(f"   ✅ Создано настроек: {created_settings}")
+    if table_exists(cursor, 'sellers'):
+        cursor.execute("""
+            INSERT INTO safe_price_change_settings (seller_id, is_enabled)
+            SELECT id, 1 FROM sellers
+            WHERE id NOT IN (SELECT seller_id FROM safe_price_change_settings)
+        """)
+        created_settings = cursor.rowcount
+        if created_settings > 0:
+            print(f"   ✅ Создано настроек: {created_settings}")
+        else:
+            print("   ⏭️  Все продавцы уже имеют настройки")
     else:
-        print("   ⏭️  Все продавцы уже имеют настройки")
+        print("   ⏭️  Таблица sellers не существует (будет создана при запуске приложения)")
 
     # Сохранение изменений
     conn.commit()
