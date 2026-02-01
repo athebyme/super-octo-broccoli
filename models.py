@@ -1227,7 +1227,8 @@ class SafePriceChangeSettings(db.Model):
     # Дополнительные настройки
     require_comment_for_dangerous = db.Column(db.Boolean, default=True, nullable=False)  # Требовать комментарий для опасных
     allow_bulk_dangerous = db.Column(db.Boolean, default=False, nullable=False)  # Разрешить массовые опасные изменения
-    max_products_per_batch = db.Column(db.Integer, default=100, nullable=False)  # Макс. товаров в одном батче
+    max_products_per_batch = db.Column(db.Integer, default=1000, nullable=False)  # Макс. товаров в одном батче (увеличен до 1000)
+    allow_unlimited_batch = db.Column(db.Boolean, default=True, nullable=False)  # Разрешить выбор всех товаров (игнорировать лимит)
 
     # Уведомления
     notify_on_dangerous = db.Column(db.Boolean, default=True, nullable=False)  # Уведомлять о попытках опасных изменений

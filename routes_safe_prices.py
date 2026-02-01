@@ -356,10 +356,12 @@ def create_batch():
         if not selected_ids:
             return jsonify({'error': 'Выберите хотя бы один товар'}), 400
 
-        # Проверяем лимит товаров
-        if len(selected_ids) > settings.max_products_per_batch:
+        # Проверяем лимит товаров (если не разрешен безлимитный режим)
+        allow_unlimited = getattr(settings, 'allow_unlimited_batch', True)
+        if not allow_unlimited and len(selected_ids) > settings.max_products_per_batch:
             return jsonify({
-                'error': f'Превышен лимит товаров ({settings.max_products_per_batch}). Выбрано: {len(selected_ids)}'
+                'error': f'Превышен лимит товаров ({settings.max_products_per_batch}). Выбрано: {len(selected_ids)}. '
+                         f'Включите "Разрешить массовые операции" в настройках.'
             }), 400
 
         # Получаем выбранные товары
@@ -920,6 +922,88 @@ def api_batch_status(batch_id: int):
     ).first_or_404()
 
     return jsonify(batch.to_dict())
+
+
+@prices_bp.route('/api/products/all-ids')
+@login_required
+def api_get_all_product_ids():
+    """
+    API: Получить все ID товаров (для кнопки "Выбрать все")
+
+    Query params:
+    - search: поиск по названию/артикулу
+    - brand: фильтр по бренду
+    - category: фильтр по категории
+
+    Returns:
+    {
+        "success": true,
+        "ids": [1, 2, 3, ...],
+        "total": 1234
+    }
+    """
+    seller = get_current_seller()
+    if not seller:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    # Те же фильтры что и в api_get_products
+    search = request.args.get('search', '').strip()
+    brand = request.args.get('brand', '').strip()
+    category = request.args.get('category', '').strip()
+
+    # Базовый запрос - только ID
+    query = db.session.query(Product.id).filter(
+        Product.seller_id == seller.id,
+        Product.is_active == True
+    )
+
+    # Применяем фильтры
+    if search:
+        search_term = f'%{search}%'
+        query = query.filter(
+            db.or_(
+                Product.title.ilike(search_term),
+                Product.vendor_code.ilike(search_term),
+                Product.nm_id.cast(db.String).ilike(search_term)
+            )
+        )
+
+    if brand:
+        query = query.filter(Product.brand == brand)
+
+    if category:
+        query = query.filter(Product.object_name == category)
+
+    # Получаем все ID
+    product_ids = [row[0] for row in query.all()]
+
+    return jsonify({
+        'success': True,
+        'ids': product_ids,
+        'total': len(product_ids)
+    })
+
+
+@prices_bp.route('/api/settings')
+@login_required
+def api_get_settings():
+    """API: Получить текущие настройки безопасности"""
+    seller = get_current_seller()
+    if not seller:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    settings = get_or_create_settings(seller.id)
+
+    return jsonify({
+        'success': True,
+        'settings': {
+            'max_products_per_batch': settings.max_products_per_batch,
+            'allow_unlimited_batch': getattr(settings, 'allow_unlimited_batch', False),
+            'safe_threshold_percent': settings.safe_threshold_percent,
+            'warning_threshold_percent': settings.warning_threshold_percent,
+            'mode': settings.mode
+        }
+    })
 
 
 def register_routes(app):

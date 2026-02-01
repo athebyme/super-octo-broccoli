@@ -231,6 +231,14 @@
                             <button @click="selectAllOnPage" class="text-indigo-600 hover:text-indigo-800">
                                 Выбрать на странице
                             </button>
+                            <button @click="selectAllProducts" :disabled="selectingAll"
+                                    class="text-indigo-600 hover:text-indigo-800 font-medium flex items-center disabled:opacity-50">
+                                <svg x-show="selectingAll" class="animate-spin h-3 w-3 mr-1" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                <span x-text="selectingAll ? 'Загрузка...' : `Выбрать ВСЕ (${totalProducts})`"></span>
+                            </button>
                             <button @click="deselectAllOnPage" class="text-gray-600 hover:text-gray-800">
                                 Снять на странице
                             </button>
@@ -369,6 +377,9 @@ function priceChangeApp() {
         // Выбранные товары (сохраняются в localStorage)
         selectedIds: [],
 
+        // Загрузка всех товаров
+        selectingAll: false,
+
         // Предпросмотр
         preview: null,
         previewLoading: false,
@@ -454,6 +465,43 @@ function priceChangeApp() {
             const pageIds = this.products.map(p => p.id);
             this.selectedIds = this.selectedIds.filter(id => !pageIds.includes(id));
             this.saveSelection();
+        },
+
+        async selectAllProducts() {
+            if (this.selectingAll) return;
+
+            // Подтверждение для большого количества товаров
+            if (this.totalProducts > 100) {
+                if (!confirm(`Вы уверены, что хотите выбрать ВСЕ ${this.totalProducts} товаров?\n\nЭто может занять некоторое время.`)) {
+                    return;
+                }
+            }
+
+            this.selectingAll = true;
+            try {
+                // Используем те же фильтры, что и при загрузке
+                const params = new URLSearchParams({
+                    search: this.searchQuery,
+                    brand: this.filterBrand,
+                    category: this.filterCategory
+                });
+
+                const response = await fetch(`{{ url_for('prices.api_get_all_product_ids') }}?${params}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    this.selectedIds = data.ids;
+                    this.saveSelection();
+                    this.preview = null;
+                } else {
+                    alert('Ошибка: ' + (data.error || 'Не удалось загрузить список товаров'));
+                }
+            } catch (error) {
+                console.error('Select all error:', error);
+                alert('Ошибка сети при загрузке товаров');
+            } finally {
+                this.selectingAll = false;
+            }
         },
 
         isPageSelected() {
