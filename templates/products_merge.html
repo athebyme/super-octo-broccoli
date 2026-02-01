@@ -411,8 +411,8 @@
 <form id="unmergeGroupForm" method="POST" style="display: none;">
 </form>
 
-<!-- Скрытая форма для разъединения карточки -->
-<form id="unmergeCardForm" method="POST" action="{{ url_for('products_merge_unmerge_single') if 'products_merge_unmerge_single' in url_for.__globals__.get('current_app', {}).view_functions|default({}) else '#' }}" style="display: none;">
+<!-- Скрытая форма для разъединения карточки (action устанавливается через JS) -->
+<form id="unmergeCardForm" method="POST" action="#" style="display: none;">
     <input type="hidden" name="nm_id" id="form_unmerge_nm_id">
 </form>
 
