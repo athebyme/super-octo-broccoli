@@ -1095,8 +1095,12 @@ def register_auto_import_routes(app):
         seller = current_user.seller
         settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
 
-        if not settings or not settings.ai_api_key:
-            return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
+        if not settings:
+            return jsonify({'success': False, 'error': 'Настройки не найдены'}), 400
+
+        # Все провайдеры используют API ключ
+        if not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'API ключ не настроен. Сохраните настройки перед тестированием.'}), 400
 
         try:
             from ai_service import get_ai_service, reset_ai_service
@@ -1115,6 +1119,8 @@ def register_auto_import_routes(app):
                 'message': message
             })
         except Exception as e:
+            import traceback
+            app.logger.error(f"AI test error: {traceback.format_exc()}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
     @app.route('/auto-import/ai/instructions', methods=['GET'])

@@ -317,44 +317,21 @@
                     </div>
                 </div>
 
-                <!-- Cloud.ru OAuth2 credentials -->
-                <div id="cloudru_credentials_block" class="mb-4">
-                    <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-3">
+                <!-- API ключ (для всех провайдеров) -->
+                <div id="api_key_block" class="mb-4">
+                    <div id="cloudru_hint" class="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-3">
                         <div class="flex items-start">
-                            <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                             </svg>
                             <div class="text-sm text-blue-700">
-                                <strong>Cloud.ru использует OAuth2</strong><br>
-                                Получите Client ID и Client Secret в личном кабинете Cloud.ru.
-                                Токен будет автоматически обновляться.
+                                <strong>Cloud.ru API ключ</strong><br>
+                                1. Создайте сервисный аккаунт в <a href="https://console.cloud.ru" target="_blank" class="underline">консоли Cloud.ru</a><br>
+                                2. Сгенерируйте API ключ с ролью <code>ml_inference_ai_marketplace</code><br>
+                                3. Скопируйте Key Secret сразу - он показывается только один раз
                             </div>
                         </div>
                     </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label for="ai_client_id" class="block text-sm font-medium text-gray-700 mb-1">
-                                Client ID <span class="text-red-500">*</span>
-                            </label>
-                            <input type="text" id="ai_client_id" name="ai_client_id"
-                                   value="{{ settings.ai_client_id or '' }}"
-                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                                   placeholder="Введите Client ID">
-                        </div>
-                        <div>
-                            <label for="ai_client_secret" class="block text-sm font-medium text-gray-700 mb-1">
-                                Client Secret <span class="text-red-500">*</span>
-                            </label>
-                            <input type="password" id="ai_client_secret" name="ai_client_secret"
-                                   value="{{ settings.ai_client_secret or '' }}"
-                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                                   placeholder="Введите Client Secret">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- API ключ (для OpenAI/Custom) -->
-                <div id="api_key_block" class="mb-4 hidden">
                     <label for="ai_api_key" class="block text-sm font-medium text-gray-700 mb-1">
                         API ключ <span class="text-red-500">*</span>
                     </label>
@@ -563,28 +540,22 @@ function updateAIProviderSettings() {
     const provider = document.getElementById('ai_provider').value;
     const baseUrlBlock = document.getElementById('ai_base_url_block');
     const baseUrlInput = document.getElementById('ai_api_base_url');
-    const cloudruCredentialsBlock = document.getElementById('cloudru_credentials_block');
-    const apiKeyBlock = document.getElementById('api_key_block');
+    const cloudruHint = document.getElementById('cloudru_hint');
 
-    // Показываем/скрываем блоки в зависимости от провайдера
+    // Показываем/скрываем подсказку для Cloud.ru
     if (provider === 'cloudru') {
-        // Cloud.ru - показываем Client ID / Client Secret
-        cloudruCredentialsBlock.classList.remove('hidden');
-        apiKeyBlock.classList.add('hidden');
+        cloudruHint.classList.remove('hidden');
         baseUrlBlock.classList.remove('hidden');
         if (!baseUrlInput.value || baseUrlInput.value === 'https://api.openai.com/v1') {
             baseUrlInput.value = 'https://foundation-models.api.cloud.ru/v1';
         }
     } else if (provider === 'openai') {
-        // OpenAI - показываем API key, скрываем base URL
-        cloudruCredentialsBlock.classList.add('hidden');
-        apiKeyBlock.classList.remove('hidden');
+        cloudruHint.classList.add('hidden');
         baseUrlBlock.classList.add('hidden');
         baseUrlInput.value = '';
     } else {
-        // Custom - показываем API key и base URL
-        cloudruCredentialsBlock.classList.add('hidden');
-        apiKeyBlock.classList.remove('hidden');
+        // Custom - скрываем подсказку Cloud.ru, показываем base URL
+        cloudruHint.classList.add('hidden');
         baseUrlBlock.classList.remove('hidden');
     }
 

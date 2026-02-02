@@ -275,22 +275,19 @@ DEFAULT_INSTRUCTIONS = {
 class AIConfig:
     """Конфигурация AI провайдера"""
     provider: AIProvider
-    api_key: str = ""  # Для OpenAI/Custom
+    api_key: str = ""  # API ключ (Bearer token) для всех провайдеров
     api_base_url: str = "https://foundation-models.api.cloud.ru/v1"
     model: str = "openai/gpt-oss-120b"
     temperature: float = 0.3
     max_tokens: int = 2000
     timeout: int = 60
-    # Дополнительные параметры для Cloud.ru
+    # Дополнительные параметры
     top_p: float = 0.95
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
     # Кастомные инструкции
     custom_category_instruction: str = ""
     custom_size_instruction: str = ""
-    # Cloud.ru OAuth2 credentials
-    client_id: str = ""
-    client_secret: str = ""
 
     @classmethod
     def from_settings(cls, settings) -> Optional['AIConfig']:
@@ -300,23 +297,10 @@ class AIConfig:
 
         provider = AIProvider(settings.ai_provider or 'cloudru')
 
-        # Проверяем наличие credentials в зависимости от провайдера
-        if provider == AIProvider.CLOUDRU:
-            # Cloud.ru использует client_id + client_secret
-            client_id = getattr(settings, 'ai_client_id', '') or ''
-            client_secret = getattr(settings, 'ai_client_secret', '') or ''
-            if not client_id or not client_secret:
-                logger.warning("Cloud.ru AI включен, но client_id/client_secret не указаны")
-                return None
-            api_key = ""  # Не используется для Cloud.ru
-        else:
-            # OpenAI/Custom используют API key
-            if not settings.ai_api_key:
-                logger.warning("AI включен, но API ключ не указан")
-                return None
-            api_key = settings.ai_api_key
-            client_id = ""
-            client_secret = ""
+        # Все провайдеры используют API ключ (Bearer token)
+        if not settings.ai_api_key:
+            logger.warning("AI включен, но API ключ не указан")
+            return None
 
         # Определяем базовый URL в зависимости от провайдера
         if provider == AIProvider.CLOUDRU:
@@ -331,7 +315,7 @@ class AIConfig:
 
         return cls(
             provider=provider,
-            api_key=api_key,
+            api_key=settings.ai_api_key,
             api_base_url=api_base,
             model=settings.ai_model or default_model,
             temperature=getattr(settings, 'ai_temperature', 0.3) or 0.3,
@@ -341,48 +325,23 @@ class AIConfig:
             presence_penalty=getattr(settings, 'ai_presence_penalty', 0.0) or 0.0,
             frequency_penalty=getattr(settings, 'ai_frequency_penalty', 0.0) or 0.0,
             custom_category_instruction=getattr(settings, 'ai_category_instruction', '') or '',
-            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or '',
-            client_id=client_id,
-            client_secret=client_secret
+            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or ''
         )
 
 
 class AIClient:
     """
     Клиент для работы с AI API
-    Поддерживает OpenAI-совместимые API (включая Cloud.ru с OAuth2)
+    Поддерживает OpenAI-совместимые API (Cloud.ru, OpenAI, Custom)
     """
 
     def __init__(self, config: AIConfig):
         self.config = config
         self._session = requests.Session()
         self._session.headers.update({
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {config.api_key}'
         })
-
-        # Для Cloud.ru используем TokenManager
-        self._token_manager: Optional[CloudRuTokenManager] = None
-        if config.provider == AIProvider.CLOUDRU and config.client_id and config.client_secret:
-            self._token_manager = get_cloudru_token_manager(config.client_id, config.client_secret)
-        elif config.api_key:
-            # Для OpenAI/Custom используем статичный API key
-            self._session.headers['Authorization'] = f'Bearer {config.api_key}'
-
-    def _get_auth_header(self) -> Optional[str]:
-        """
-        Получает актуальный Authorization header
-
-        Для Cloud.ru получает токен через OAuth2 с автоматической ротацией
-        Для OpenAI/Custom возвращает статичный API key
-        """
-        if self._token_manager:
-            token = self._token_manager.get_access_token()
-            if token:
-                return f'Bearer {token}'
-            return None
-        elif self.config.api_key:
-            return f'Bearer {self.config.api_key}'
-        return None
 
     def chat_completion(
         self,
@@ -424,18 +383,9 @@ class AIClient:
             logger.debug(f"Messages: {messages}")
             logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
-            # Получаем актуальный Authorization header (с ротацией токена для Cloud.ru)
-            auth_header = self._get_auth_header()
-            if not auth_header:
-                logger.error("❌ Не удалось получить Authorization header")
-                return None
-
-            headers = {'Authorization': auth_header}
-
             response = self._session.post(
                 url,
                 json=payload,
-                headers=headers,
                 timeout=self.config.timeout
             )
 
