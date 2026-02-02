@@ -1,27 +1,89 @@
 {% extends "base.html" %}
 
-{% block content %}
-<div class="container mx-auto px-4 py-8">
-    <!-- Навигация назад -->
-    <div class="mb-6 flex items-center justify-between">
-        <a href="{{ url_for('products_list') }}"
-           class="inline-flex items-center text-blue-600 hover:text-blue-700 dark:text-blue-400">
-            <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
-            </svg>
-            Назад к списку товаров
-        </a>
+{% block title %}{{ product.title or product.vendor_code }} - Карточка товара{% endblock %}
 
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Хлебные крошки -->
+    <nav class="mb-6 text-sm">
+        <ol class="flex items-center space-x-2 text-gray-500">
+            <li><a href="{{ url_for('products_list') }}" class="hover:text-indigo-600 transition">Товары</a></li>
+            <li>/</li>
+            <li class="text-gray-900 font-medium">{{ product.vendor_code }}</li>
+        </ol>
+    </nav>
+
+    <!-- Заголовок с кнопками -->
+    <div class="mb-8 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div class="flex items-start space-x-4">
+            <!-- Статус -->
+            <div class="flex-shrink-0">
+                {% if product.is_active %}
+                <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
+                    <svg class="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                </div>
+                {% else %}
+                <div class="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
+                    <svg class="w-6 h-6 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                    </svg>
+                </div>
+                {% endif %}
+            </div>
+
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">{{ product.title or 'Без названия' }}</h1>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                    {% if product.brand %}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                        {{ product.brand }}
+                    </span>
+                    {% endif %}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 font-mono">
+                        {{ product.vendor_code }}
+                    </span>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 font-mono">
+                        NM: {{ product.nm_id }}
+                    </span>
+                    {% if product.is_active %}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        Активна
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                        Неактивна
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Кнопки действий -->
         <div class="flex items-center space-x-3">
+            <a href="https://www.wildberries.ru/catalog/{{ product.nm_id }}/detail.aspx"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="inline-flex items-center px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition font-medium group"
+               x-data="{ show: false }" @mouseenter="show = true" @mouseleave="show = false">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                </svg>
+                На WB
+                <div x-show="show" x-transition class="absolute top-full mt-2 right-0 z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded shadow-lg whitespace-nowrap">
+                    Открыть карточку на Wildberries
+                </div>
+            </a>
             <a href="{{ url_for('product_edit_history', product_id=product.id) }}"
-               class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
+               class="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
                 История
             </a>
             <a href="{{ url_for('product_edit', product_id=product.id) }}"
-               class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+               class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium shadow-sm hover:shadow-md">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                 </svg>
@@ -30,392 +92,372 @@
         </div>
     </div>
 
-    <!-- Основная информация -->
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
-            <!-- Фотографии -->
-            <div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <!-- Левая колонка - Фото -->
+        <div class="lg:col-span-1">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden sticky top-4">
                 {% if photos and photos|length > 0 %}
-                <div id="photoGallery" class="mb-4">
+                <div class="aspect-square bg-gray-50">
                     <img id="mainPhoto"
                          src="{{ wb_photo_url(product.nm_id, photos[0], 'big') }}"
                          alt="{{ product.title }}"
                          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex'"
-                         class="w-full h-96 object-contain bg-gray-100 dark:bg-gray-700 rounded-lg">
-                    <!-- Fallback если фото не загрузилось -->
-                    <div class="w-full h-96 bg-gray-200 dark:bg-gray-700 rounded-lg items-center justify-center" style="display:none;">
+                         class="w-full h-full object-contain">
+                    <div class="w-full h-full bg-gray-100 items-center justify-center" style="display:none;">
                         <div class="text-center text-gray-400">
-                            <svg class="w-24 h-24 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg class="w-16 h-16 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                             </svg>
-                            <p>Фото недоступно</p>
+                            <p class="text-sm">Фото недоступно</p>
                         </div>
                     </div>
                 </div>
-                <!-- Миниатюры -->
                 {% if photos|length > 1 %}
-                <div class="grid grid-cols-4 gap-2">
-                    {% for photo_index in photos[:8] %}
-                    {% set photo_url = wb_photo_url(product.nm_id, photo_index, 'c246x328') %}
-                    <img src="{{ photo_url }}"
-                         alt="Фото {{ loop.index }}"
-                         onclick="changeMainPhoto('{{ wb_photo_url(product.nm_id, photo_index, 'big') }}')"
-                         onerror="this.style.opacity='0.3'"
-                         class="w-full h-20 object-cover rounded cursor-pointer hover:opacity-75 transition-opacity">
-                    {% endfor %}
+                <div class="p-3 border-t border-gray-100">
+                    <div class="grid grid-cols-4 gap-2">
+                        {% for photo_index in photos[:8] %}
+                        <button onclick="changeMainPhoto('{{ wb_photo_url(product.nm_id, photo_index, 'big') }}')"
+                                class="aspect-square rounded-lg overflow-hidden border-2 border-transparent hover:border-indigo-500 transition focus:outline-none focus:border-indigo-500">
+                            <img src="{{ wb_photo_url(product.nm_id, photo_index, 'c246x328') }}"
+                                 alt="Фото {{ loop.index }}"
+                                 onerror="this.parentElement.style.display='none'"
+                                 class="w-full h-full object-cover">
+                        </button>
+                        {% endfor %}
+                    </div>
                 </div>
                 {% endif %}
                 {% else %}
-                <div class="w-full h-96 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+                <div class="aspect-square bg-gray-100 flex items-center justify-center">
                     <div class="text-center text-gray-400">
-                        <svg class="w-24 h-24 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg class="w-16 h-16 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                         </svg>
-                        <p>Нет фотографий</p>
+                        <p class="text-sm">Нет фотографий</p>
                     </div>
                 </div>
                 {% endif %}
 
                 {% if product.video_url %}
-                <div class="mt-4">
+                <div class="p-3 border-t border-gray-100">
                     <video controls class="w-full rounded-lg">
                         <source src="{{ product.video_url }}" type="video/mp4">
-                        Ваш браузер не поддерживает видео.
                     </video>
                 </div>
                 {% endif %}
             </div>
+        </div>
 
-            <!-- Информация о товаре -->
-            <div>
-                <div class="mb-6">
-                    <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-                        {{ product.title or 'Без названия' }}
-                    </h1>
-                    {% if product.brand %}
-                    <p class="text-lg text-gray-600 dark:text-gray-400">
-                        {{ product.brand }}
-                    </p>
-                    {% endif %}
+        <!-- Правая колонка - Информация -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Основные данные -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Основная информация
+                    </h2>
                 </div>
-
-                <!-- Основные характеристики -->
-                <div class="space-y-4 mb-6">
-                    <div class="grid grid-cols-2 gap-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                        <div>
-                            <span class="text-sm text-gray-600 dark:text-gray-400">Артикул поставщика</span>
-                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.vendor_code }}</p>
+                <div class="p-6">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Артикул поставщика</span>
+                            <p class="mt-1 text-lg font-semibold text-gray-900 font-mono">{{ product.vendor_code }}</p>
                         </div>
-                        <div>
-                            <span class="text-sm text-gray-600 dark:text-gray-400">Артикул WB</span>
-                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.nm_id }}</p>
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Артикул WB</span>
+                            <p class="mt-1 text-lg font-semibold text-gray-900 font-mono">{{ product.nm_id }}</p>
                         </div>
                         {% if product.imt_id %}
-                        <div>
-                            <span class="text-sm text-gray-600 dark:text-gray-400">IMT ID</span>
-                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.imt_id }}</p>
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">IMT ID</span>
+                            <p class="mt-1 text-lg font-semibold text-gray-900 font-mono">{{ product.imt_id }}</p>
                         </div>
                         {% endif %}
                         {% if product.object_name %}
-                        <div>
-                            <span class="text-sm text-gray-600 dark:text-gray-400">Тип товара</span>
-                            <p class="font-semibold text-gray-900 dark:text-white">{{ product.object_name }}</p>
-                        </div>
-                        {% endif %}
-                    </div>
-
-                    <!-- Цены -->
-                    {% if product.price or product.discount_price %}
-                    <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg">
-                        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Цены</h3>
-                        <div class="flex items-center gap-4">
-                            {% if product.discount_price %}
-                            <div>
-                                <span class="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                                    {{ "{:,.2f}".format(product.discount_price) }} ₽
-                                </span>
-                                {% if product.price %}
-                                <span class="text-sm text-gray-500 line-through ml-2">
-                                    {{ "{:,.2f}".format(product.price) }} ₽
-                                </span>
-                                {% endif %}
-                            </div>
-                            {% elif product.price %}
-                            <div>
-                                <span class="text-2xl font-bold text-gray-900 dark:text-white">
-                                    {{ "{:,.2f}".format(product.price) }} ₽
-                                </span>
-                            </div>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <!-- Остатки -->
-                    {% if product.quantity is not none %}
-                    <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Остатки</h3>
-                        <div class="flex items-center gap-2">
-                            {% if product.quantity > 0 %}
-                            <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                            </svg>
-                            <span class="text-lg font-semibold text-gray-900 dark:text-white">
-                                {{ product.quantity }} шт.
-                            </span>
-                            {% else %}
-                            <svg class="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
-                            </svg>
-                            <span class="text-lg font-semibold text-red-600 dark:text-red-400">
-                                Нет в наличии
-                            </span>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <!-- Статус -->
-                    <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                        <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Статус</h3>
-                        <div class="flex items-center gap-2">
-                            {% if product.is_active %}
-                            <span class="px-3 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-sm font-medium rounded-full">
-                                Активна
-                            </span>
-                            {% else %}
-                            <span class="px-3 py-1 bg-gray-100 dark:bg-gray-600 text-gray-800 dark:text-gray-200 text-sm font-medium rounded-full">
-                                Неактивна
-                            </span>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Метаданные -->
-                <div class="pt-4 border-t border-gray-200 dark:border-gray-600 text-sm text-gray-600 dark:text-gray-400">
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <span>Создано:</span>
-                            <span class="font-medium">{{ product.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
-                        </div>
-                        <div>
-                            <span>Обновлено:</span>
-                            <span class="font-medium">{{ product.updated_at.strftime('%d.%m.%Y %H:%M') }}</span>
-                        </div>
-                        {% if product.last_sync %}
-                        <div class="col-span-2">
-                            <span>Последняя синхронизация:</span>
-                            <span class="font-medium">{{ product.last_sync.strftime('%d.%m.%Y %H:%M') }}</span>
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Тип товара</span>
+                            <p class="mt-1 text-lg font-semibold text-gray-900">{{ product.object_name }}</p>
                         </div>
                         {% endif %}
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Размеры и баркоды -->
-        {% if sizes %}
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Размеры и баркоды</h2>
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                    <thead class="bg-gray-50 dark:bg-gray-900">
-                        <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Размер
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Баркод
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Артикул WB
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                        {% for size in sizes %}
-                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
-                            <td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
-                                {{ size.techSize or '—' }}
-                            </td>
-                            <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-                                {{ size.skus[0] if size.skus else '—' }}
-                            </td>
-                            <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-                                {{ size.chrtID or '—' }}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Описание товара -->
-        {% if product.description %}
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Описание</h2>
-            <div class="prose dark:prose-invert max-w-none">
-                <p class="text-gray-700 dark:text-gray-300 whitespace-pre-line">{{ product.description }}</p>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Характеристики товара -->
-        {% if characteristics %}
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Характеристики</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {% for char in characteristics %}
-                <div class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                        {{ (char.name or char.get('Наименование', '—')) | format_char_value }}
-                    </div>
-                    <div class="font-medium text-gray-900 dark:text-white">
-                        {{ (char.value or char.get('Значение', '—')) | format_char_value }}
+            <!-- Цены -->
+            {% if product.price or product.discount_price %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-blue-50 to-white border-b border-blue-100">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Цены
+                    </h2>
+                </div>
+                <div class="p-6">
+                    <div class="flex items-center gap-6">
+                        {% if product.discount_price %}
+                        <div>
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Цена со скидкой</span>
+                            <p class="mt-1 text-3xl font-bold text-blue-600">{{ "{:,.0f}".format(product.discount_price) }} ₽</p>
+                        </div>
+                        {% endif %}
+                        {% if product.price %}
+                        <div>
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">{% if product.discount_price %}Базовая цена{% else %}Цена{% endif %}</span>
+                            <p class="mt-1 text-2xl font-semibold {% if product.discount_price %}text-gray-400 line-through{% else %}text-gray-900{% endif %}">
+                                {{ "{:,.0f}".format(product.price) }} ₽
+                            </p>
+                        </div>
+                        {% endif %}
+                        {% if product.discount_price and product.price and product.price > 0 %}
+                        <div class="ml-auto">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-green-100 text-green-800">
+                                -{{ ((1 - product.discount_price / product.price) * 100)|int }}%
+                            </span>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
-                {% endfor %}
             </div>
-        </div>
-        {% endif %}
+            {% endif %}
 
-        <!-- Габариты -->
-        {% if dimensions %}
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Габариты и вес</h2>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {% if dimensions.length %}
-                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Длина</div>
-                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.length }} см</div>
+            <!-- Остатки -->
+            {% if warehouse_stocks %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-green-50 to-white border-b border-green-100">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                        </svg>
+                        Остатки по складам
+                    </h2>
                 </div>
-                {% endif %}
-                {% if dimensions.width %}
-                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Ширина</div>
-                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.width }} см</div>
+                <div class="p-6">
+                    <!-- Общие остатки -->
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <div class="p-4 bg-green-50 rounded-xl text-center">
+                            <span class="text-xs font-medium text-green-600 uppercase tracking-wider">Всего доступно</span>
+                            <p class="mt-1 text-3xl font-bold text-green-700">{{ total_quantity }}</p>
+                        </div>
+                        <div class="p-4 bg-blue-50 rounded-xl text-center">
+                            <span class="text-xs font-medium text-blue-600 uppercase tracking-wider">Полное количество</span>
+                            <p class="mt-1 text-3xl font-bold text-blue-700">{{ total_quantity_full }}</p>
+                        </div>
+                    </div>
+
+                    <!-- Таблица по складам -->
+                    <div class="overflow-x-auto rounded-lg border border-gray-200">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Склад</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Доступно</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Всего</th>
+                                    <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">В пути</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                {% for stock in warehouse_stocks %}
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm font-medium text-gray-900">
+                                        {{ stock.warehouse_name or 'Склад ' + stock.warehouse_id|string }}
+                                    </td>
+                                    <td class="px-4 py-3 text-sm text-right">
+                                        <span class="{% if stock.quantity > 0 %}text-green-600 font-semibold{% else %}text-red-500{% endif %}">
+                                            {{ stock.quantity }}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3 text-sm text-right text-gray-600">{{ stock.quantity_full }}</td>
+                                    <td class="px-4 py-3 text-sm text-right text-gray-600">{{ (stock.in_way_to_client or 0) + (stock.in_way_from_client or 0) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-                {% endif %}
-                {% if dimensions.height %}
-                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Высота</div>
-                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.height }} см</div>
-                </div>
-                {% endif %}
-                {% if dimensions.weight %}
-                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg text-center">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Вес</div>
-                    <div class="text-xl font-bold text-gray-900 dark:text-white">{{ dimensions.weight }} кг</div>
-                </div>
-                {% endif %}
             </div>
-        </div>
-        {% endif %}
-
-        <!-- Остатки по складам -->
-        {% if warehouse_stocks %}
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">Остатки по складам</h2>
-
-            <!-- Общие остатки -->
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div class="p-4 bg-green-50 dark:bg-green-900 rounded-lg">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Всего доступно</div>
-                    <div class="text-3xl font-bold text-green-600 dark:text-green-400">{{ total_quantity }} шт.</div>
+            {% elif product.quantity is not none %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                        </svg>
+                        Остатки
+                    </h2>
                 </div>
-                <div class="p-4 bg-blue-50 dark:bg-blue-900 rounded-lg">
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mb-1">Полное количество</div>
-                    <div class="text-3xl font-bold text-blue-600 dark:text-blue-400">{{ total_quantity_full }} шт.</div>
+                <div class="p-6">
+                    <div class="flex items-center gap-3">
+                        {% if product.quantity > 0 %}
+                        <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                            <svg class="w-5 h-5 text-green-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <p class="text-2xl font-bold text-gray-900">{{ product.quantity }} шт.</p>
+                            <p class="text-sm text-green-600">В наличии</p>
+                        </div>
+                        {% else %}
+                        <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                            <svg class="w-5 h-5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <p class="text-lg font-semibold text-red-600">Нет в наличии</p>
+                        </div>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
+            {% endif %}
 
-            <!-- Таблица остатков по складам -->
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                    <thead class="bg-gray-50 dark:bg-gray-900">
-                        <tr>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Склад
-                            </th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Доступно
-                            </th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Полное кол-во
-                            </th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                В пути к клиенту
-                            </th>
-                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                В пути от клиента
-                            </th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                                Обновлено
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                        {% for stock in warehouse_stocks %}
-                        <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
-                            <td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
-                                {{ stock.warehouse_name or 'Склад ' + stock.warehouse_id|string }}
-                            </td>
-                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
-                                <span class="{% if stock.quantity > 0 %}text-green-600 dark:text-green-400 font-semibold{% else %}text-red-600 dark:text-red-400{% endif %}">
-                                    {{ stock.quantity }}
-                                </span>
-                            </td>
-                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
-                                {{ stock.quantity_full }}
-                            </td>
-                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
-                                {{ stock.in_way_to_client or 0 }}
-                            </td>
-                            <td class="px-6 py-4 text-sm text-right text-gray-600 dark:text-gray-400">
-                                {{ stock.in_way_from_client or 0 }}
-                            </td>
-                            <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-                                {{ stock.updated_at.strftime('%d.%m.%Y %H:%M') if stock.updated_at else '—' }}
-                            </td>
-                        </tr>
+            <!-- Размеры и баркоды -->
+            {% if sizes %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path>
+                        </svg>
+                        Размеры и баркоды
+                    </h2>
+                    <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{{ sizes|length }} размеров</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Размер</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Баркод</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU (chrtID)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200">
+                            {% for size in sizes %}
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-6 py-3 text-sm font-medium text-gray-900">{{ size.techSize or size.wbSize or '—' }}</td>
+                                <td class="px-6 py-3 text-sm text-gray-600 font-mono">{{ size.skus[0] if size.skus else '—' }}</td>
+                                <td class="px-6 py-3 text-sm text-gray-600 font-mono">{{ size.chrtID or '—' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Описание -->
+            {% if product.description %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"></path>
+                        </svg>
+                        Описание
+                    </h2>
+                </div>
+                <div class="p-6">
+                    <p class="text-gray-700 whitespace-pre-line leading-relaxed">{{ product.description }}</p>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Характеристики -->
+            {% if characteristics %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                        Характеристики
+                    </h2>
+                    <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{{ characteristics|length }} характеристик</span>
+                </div>
+                <div class="p-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {% for char in characteristics %}
+                        <div class="p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                {{ (char.name or char.get('Наименование', '—')) | format_char_value }}
+                            </span>
+                            <p class="mt-1 text-sm font-medium text-gray-900">
+                                {{ (char.value or char.get('Значение', '—')) | format_char_value }}
+                            </p>
+                        </div>
                         {% endfor %}
-                    </tbody>
-                </table>
+                    </div>
+                </div>
             </div>
-        </div>
-        {% elif product %}
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6">
-            <div class="text-center py-8">
-                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
-                </svg>
-                <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">Нет данных об остатках</h3>
-                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    Синхронизируйте остатки через кнопку "Синхронизировать остатки" на странице списка товаров.
-                </p>
-            </div>
-        </div>
-        {% endif %}
+            {% endif %}
 
-        <!-- Действия -->
-        <div class="border-t border-gray-200 dark:border-gray-700 p-6 bg-gray-50 dark:bg-gray-900">
-            <div class="flex gap-4">
-                <a href="https://www.wildberries.ru/catalog/{{ product.nm_id }}/detail.aspx"
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                    </svg>
-                    Открыть на WB
-                </a>
-                <a href="{{ url_for('products_list') }}"
-                   class="px-6 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">
-                    Вернуться к списку
-                </a>
+            <!-- Габариты -->
+            {% if dimensions %}
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path>
+                        </svg>
+                        Габариты и вес
+                    </h2>
+                </div>
+                <div class="p-6">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {% if dimensions.length %}
+                        <div class="p-4 bg-blue-50 rounded-xl text-center">
+                            <span class="text-xs font-medium text-blue-600 uppercase tracking-wider">Длина</span>
+                            <p class="mt-1 text-xl font-bold text-blue-700">{{ dimensions.length }} <span class="text-sm font-normal">см</span></p>
+                        </div>
+                        {% endif %}
+                        {% if dimensions.width %}
+                        <div class="p-4 bg-blue-50 rounded-xl text-center">
+                            <span class="text-xs font-medium text-blue-600 uppercase tracking-wider">Ширина</span>
+                            <p class="mt-1 text-xl font-bold text-blue-700">{{ dimensions.width }} <span class="text-sm font-normal">см</span></p>
+                        </div>
+                        {% endif %}
+                        {% if dimensions.height %}
+                        <div class="p-4 bg-blue-50 rounded-xl text-center">
+                            <span class="text-xs font-medium text-blue-600 uppercase tracking-wider">Высота</span>
+                            <p class="mt-1 text-xl font-bold text-blue-700">{{ dimensions.height }} <span class="text-sm font-normal">см</span></p>
+                        </div>
+                        {% endif %}
+                        {% if dimensions.weight %}
+                        <div class="p-4 bg-indigo-50 rounded-xl text-center">
+                            <span class="text-xs font-medium text-indigo-600 uppercase tracking-wider">Вес</span>
+                            <p class="mt-1 text-xl font-bold text-indigo-700">{{ dimensions.weight }} <span class="text-sm font-normal">кг</span></p>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Метаданные -->
+            <div class="bg-gray-50 rounded-xl border border-gray-200 p-4">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                        <span class="text-gray-500">Создано</span>
+                        <p class="font-medium text-gray-900">{{ product.created_at.strftime('%d.%m.%Y %H:%M') }}</p>
+                    </div>
+                    <div>
+                        <span class="text-gray-500">Обновлено</span>
+                        <p class="font-medium text-gray-900">{{ product.updated_at.strftime('%d.%m.%Y %H:%M') }}</p>
+                    </div>
+                    {% if product.last_sync %}
+                    <div>
+                        <span class="text-gray-500">Синхронизация</span>
+                        <p class="font-medium text-gray-900">{{ product.last_sync.strftime('%d.%m.%Y %H:%M') }}</p>
+                    </div>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </div>
