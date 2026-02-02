@@ -710,6 +710,13 @@ class AutoImportSettings(db.Model):
     ai_use_for_categories = db.Column(db.Boolean, default=True, nullable=False)  # Использовать AI для категорий
     ai_use_for_sizes = db.Column(db.Boolean, default=True, nullable=False)  # Использовать AI для размеров
     ai_category_confidence_threshold = db.Column(db.Float, default=0.7)  # Минимальная уверенность AI для принятия категории
+    # Дополнительные параметры AI для Cloud.ru
+    ai_top_p = db.Column(db.Float, default=0.95)  # Top P для семплирования
+    ai_presence_penalty = db.Column(db.Float, default=0.0)  # Штраф за присутствие
+    ai_frequency_penalty = db.Column(db.Float, default=0.0)  # Штраф за частоту
+    # Кастомные инструкции AI
+    ai_category_instruction = db.Column(db.Text)  # Кастомная инструкция для определения категорий
+    ai_size_instruction = db.Column(db.Text)  # Кастомная инструкция для парсинга размеров
 
     # Частота автоимпорта (в часах)
     auto_import_interval_hours = db.Column(db.Integer, default=24, nullable=False)  # По умолчанию раз в сутки
@@ -765,6 +772,11 @@ class AutoImportSettings(db.Model):
             'ai_use_for_categories': self.ai_use_for_categories,
             'ai_use_for_sizes': self.ai_use_for_sizes,
             'ai_category_confidence_threshold': self.ai_category_confidence_threshold,
+            'ai_top_p': self.ai_top_p,
+            'ai_presence_penalty': self.ai_presence_penalty,
+            'ai_frequency_penalty': self.ai_frequency_penalty,
+            'ai_category_instruction': self.ai_category_instruction,
+            'ai_size_instruction': self.ai_size_instruction,
             # Не отдаем ai_api_key в JSON из соображений безопасности
             'auto_import_interval_hours': self.auto_import_interval_hours,
             'last_import_at': self.last_import_at.isoformat() if self.last_import_at else None,

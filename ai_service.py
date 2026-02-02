@@ -3,16 +3,17 @@
 AI Service - Универсальный модуль для интеграции с AI провайдерами
 
 Поддерживает:
-- OpenAI-совместимые API (GPT, Cloud.ru Foundation Models, etc.)
+- Cloud.ru Foundation Models (основной провайдер)
+- OpenAI-совместимые API
+- Кастомные инструкции для разных задач
 - Валидацию ответов AI
-- Абстракцию для разных задач (категории, размеры, и т.д.)
 """
 import json
 import re
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List, Any, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import requests
 
@@ -26,16 +27,138 @@ class AIProvider(Enum):
     CUSTOM = "custom"  # Любой OpenAI-совместимый API
 
 
+# Доступные модели для Cloud.ru Foundation Models
+CLOUDRU_MODELS = {
+    "openai/gpt-oss-120b": {
+        "name": "GPT OSS 120B",
+        "description": "Универсальная модель для большинства задач",
+        "recommended": True
+    },
+    "deepseek/DeepSeek-R1-Distill-Llama-70B": {
+        "name": "DeepSeek R1 Distill Llama 70B",
+        "description": "Высокая точность на уровне state-of-the-art решений",
+        "recommended": True
+    },
+    "deepseek/DeepSeek-V3": {
+        "name": "DeepSeek V3",
+        "description": "Продвинутая модель DeepSeek",
+        "recommended": False
+    },
+    "qwen/Qwen2.5-72B-Instruct": {
+        "name": "Qwen 2.5 72B Instruct",
+        "description": "Модель от Alibaba для инструкций",
+        "recommended": False
+    },
+    "meta-llama/Llama-3.3-70B-Instruct": {
+        "name": "Llama 3.3 70B Instruct",
+        "description": "Модель от Meta",
+        "recommended": False
+    }
+}
+
+# Модели OpenAI
+OPENAI_MODELS = {
+    "gpt-4o-mini": {
+        "name": "GPT-4o Mini",
+        "description": "Баланс цены и качества",
+        "recommended": True
+    },
+    "gpt-4o": {
+        "name": "GPT-4o",
+        "description": "Лучшее качество",
+        "recommended": False
+    },
+    "gpt-4-turbo": {
+        "name": "GPT-4 Turbo",
+        "description": "Быстрая версия GPT-4",
+        "recommended": False
+    }
+}
+
+
+# ============================================================================
+# СИСТЕМНЫЕ ИНСТРУКЦИИ ПО УМОЛЧАНИЮ
+# ============================================================================
+
+DEFAULT_INSTRUCTIONS = {
+    "category_detection": {
+        "name": "Определение категорий WB",
+        "description": "Инструкция для определения категории товара на Wildberries",
+        "template": """Ты эксперт по классификации товаров для маркетплейса Wildberries.
+
+Твоя задача - определить наиболее подходящую категорию WB для товара на основе его данных.
+
+ДОСТУПНЫЕ КАТЕГОРИИ WB:
+{categories_list}
+
+ПРАВИЛА:
+1. Выбирай ТОЛЬКО из предоставленного списка категорий
+2. Если товар может относиться к нескольким категориям - выбирай наиболее специфичную
+3. Учитывай название товара, категорию из источника и характеристики
+4. Для интим-товаров используй специализированные категории (Вибраторы, Фаллоимитаторы и т.д.)
+5. Если не уверен - выбирай более общую категорию
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{{
+    "category_id": <число - ID категории из списка>,
+    "category_name": "<название категории>",
+    "confidence": <число от 0.0 до 1.0 - уверенность>,
+    "reasoning": "<краткое объяснение выбора>"
+}}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON без дополнительного текста."""
+    },
+
+    "size_parsing": {
+        "name": "Парсинг размеров",
+        "description": "Инструкция для извлечения размеров и характеристик товара",
+        "template": """Ты эксперт по парсингу размеров и характеристик товаров.
+
+Твоя задача - извлечь структурированные данные о размерах из текстового описания.
+
+ВОЗМОЖНЫЕ ХАРАКТЕРИСТИКИ:
+{characteristics_list}
+
+ПРАВИЛА:
+1. Извлекай только те характеристики, которые явно указаны в тексте
+2. Преобразуй единицы измерения в стандартные (см, г, мл)
+3. Если указан диапазон (например, "длина 15-18 см") - используй максимальное значение
+4. Для размеров одежды используй стандартные обозначения (S, M, L, XL или числовые)
+5. Если характеристика не найдена - не включай её в ответ
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{{
+    "characteristics": {{
+        "Название характеристики": "значение с единицей измерения",
+        ...
+    }},
+    "raw_sizes": ["исходный текст размеров если есть"],
+    "has_clothing_sizes": true/false,
+    "confidence": <число от 0.0 до 1.0>
+}}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON без дополнительного текста."""
+    }
+}
+
+
 @dataclass
 class AIConfig:
     """Конфигурация AI провайдера"""
     provider: AIProvider
     api_key: str
-    api_base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o-mini"
+    api_base_url: str = "https://foundation-models.api.cloud.ru/v1"
+    model: str = "openai/gpt-oss-120b"
     temperature: float = 0.3
     max_tokens: int = 2000
     timeout: int = 60
+    # Дополнительные параметры для Cloud.ru
+    top_p: float = 0.95
+    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.0
+    # Кастомные инструкции
+    custom_category_instruction: str = ""
+    custom_size_instruction: str = ""
 
     @classmethod
     def from_settings(cls, settings) -> Optional['AIConfig']:
@@ -47,31 +170,39 @@ class AIConfig:
             logger.warning("AI включен, но API ключ не указан")
             return None
 
-        provider = AIProvider(settings.ai_provider or 'openai')
+        provider = AIProvider(settings.ai_provider or 'cloudru')
 
         # Определяем базовый URL в зависимости от провайдера
         if provider == AIProvider.CLOUDRU:
-            api_base = settings.ai_api_base_url or "https://api.cloudru.ru/v1"
+            api_base = settings.ai_api_base_url or "https://foundation-models.api.cloud.ru/v1"
+            default_model = "openai/gpt-oss-120b"
         elif provider == AIProvider.CUSTOM:
             api_base = settings.ai_api_base_url or "https://api.openai.com/v1"
+            default_model = "gpt-4o-mini"
         else:  # OpenAI
             api_base = "https://api.openai.com/v1"
+            default_model = "gpt-4o-mini"
 
         return cls(
             provider=provider,
             api_key=settings.ai_api_key,
             api_base_url=api_base,
-            model=settings.ai_model or "gpt-4o-mini",
-            temperature=settings.ai_temperature or 0.3,
-            max_tokens=settings.ai_max_tokens or 2000,
-            timeout=settings.ai_timeout or 60
+            model=settings.ai_model or default_model,
+            temperature=getattr(settings, 'ai_temperature', 0.3) or 0.3,
+            max_tokens=getattr(settings, 'ai_max_tokens', 2000) or 2000,
+            timeout=getattr(settings, 'ai_timeout', 60) or 60,
+            top_p=getattr(settings, 'ai_top_p', 0.95) or 0.95,
+            presence_penalty=getattr(settings, 'ai_presence_penalty', 0.0) or 0.0,
+            frequency_penalty=getattr(settings, 'ai_frequency_penalty', 0.0) or 0.0,
+            custom_category_instruction=getattr(settings, 'ai_category_instruction', '') or '',
+            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or ''
         )
 
 
 class AIClient:
     """
     Клиент для работы с AI API
-    Поддерживает OpenAI-совместимые API
+    Поддерживает OpenAI-совместимые API (включая Cloud.ru)
     """
 
     def __init__(self, config: AIConfig):
@@ -107,21 +238,31 @@ class AIClient:
             "model": self.config.model,
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
-            "max_tokens": max_tokens or self.config.max_tokens
+            "max_tokens": max_tokens or self.config.max_tokens,
+            "top_p": self.config.top_p,
+            "presence_penalty": self.config.presence_penalty,
+            "frequency_penalty": self.config.frequency_penalty
         }
 
-        if response_format:
+        # response_format не все модели поддерживают, добавляем опционально
+        if response_format and self.config.provider != AIProvider.CLOUDRU:
             payload["response_format"] = response_format
 
         try:
             logger.info(f"🤖 AI запрос к {self.config.provider.value}: модель={self.config.model}")
             logger.debug(f"Messages: {messages}")
+            logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
             response = self._session.post(
                 url,
                 json=payload,
                 timeout=self.config.timeout
             )
+
+            # Логируем ответ для отладки
+            if response.status_code != 200:
+                logger.error(f"❌ AI HTTP {response.status_code}: {response.text[:500]}")
+
             response.raise_for_status()
 
             data = response.json()
@@ -140,6 +281,8 @@ class AIClient:
             return None
         except Exception as e:
             logger.error(f"❌ AI ошибка: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
 
     def close(self):
@@ -150,8 +293,9 @@ class AIClient:
 class AITask(ABC):
     """Абстрактный базовый класс для AI задач"""
 
-    def __init__(self, client: AIClient):
+    def __init__(self, client: AIClient, custom_instruction: str = ""):
         self.client = client
+        self.custom_instruction = custom_instruction
 
     @abstractmethod
     def get_system_prompt(self) -> str:
@@ -176,27 +320,28 @@ class AITask(ABC):
             Tuple[success, result, error_message]
         """
         try:
+            system_prompt = self.custom_instruction if self.custom_instruction else self.get_system_prompt()
+
             messages = [
-                {"role": "system", "content": self.get_system_prompt()},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self.build_user_prompt(**kwargs)}
             ]
 
-            response = self.client.chat_completion(
-                messages,
-                response_format={"type": "json_object"}
-            )
+            response = self.client.chat_completion(messages)
 
             if not response:
                 return False, None, "Не удалось получить ответ от AI"
 
             result = self.parse_response(response)
             if result is None:
-                return False, None, "Не удалось распарсить ответ AI"
+                return False, None, f"Не удалось распарсить ответ AI: {response[:200]}"
 
             return True, result, None
 
         except Exception as e:
             logger.error(f"❌ Ошибка выполнения AI задачи: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False, None, str(e)
 
 
@@ -205,13 +350,14 @@ class CategoryDetectionTask(AITask):
     Задача определения категории товара с помощью AI
     """
 
-    def __init__(self, client: AIClient, categories: Dict[int, str]):
+    def __init__(self, client: AIClient, categories: Dict[int, str], custom_instruction: str = ""):
         """
         Args:
             client: AI клиент
             categories: Словарь {subject_id: category_name} всех доступных категорий WB
+            custom_instruction: Кастомная инструкция (если пусто - используется дефолтная)
         """
-        super().__init__(client)
+        super().__init__(client, custom_instruction)
         self.categories = categories
 
     def get_system_prompt(self) -> str:
@@ -221,29 +367,8 @@ class CategoryDetectionTask(AITask):
             for cat_id, cat_name in sorted(self.categories.items(), key=lambda x: x[1])
         ])
 
-        return f"""Ты эксперт по классификации товаров для маркетплейса Wildberries.
-
-Твоя задача - определить наиболее подходящую категорию WB для товара на основе его данных.
-
-ДОСТУПНЫЕ КАТЕГОРИИ WB:
-{categories_list}
-
-ПРАВИЛА:
-1. Выбирай ТОЛЬКО из предоставленного списка категорий
-2. Если товар может относиться к нескольким категориям - выбирай наиболее специфичную
-3. Учитывай название товара, категорию из источника и характеристики
-4. Для интим-товаров используй специализированные категории (Вибраторы, Фаллоимитаторы и т.д.)
-5. Если не уверен - выбирай более общую категорию
-
-ФОРМАТ ОТВЕТА (СТРОГО JSON):
-{{
-    "category_id": <число - ID категории из списка>,
-    "category_name": "<название категории>",
-    "confidence": <число от 0.0 до 1.0 - уверенность>,
-    "reasoning": "<краткое объяснение выбора>"
-}}
-
-ВАЖНО: Отвечай ТОЛЬКО валидным JSON без дополнительного текста."""
+        template = DEFAULT_INSTRUCTIONS["category_detection"]["template"]
+        return template.format(categories_list=categories_list)
 
     def build_user_prompt(self, **kwargs) -> str:
         product_title = kwargs.get('product_title', '')
@@ -278,8 +403,20 @@ class CategoryDetectionTask(AITask):
             или None если ответ невалиден
         """
         try:
-            # Пробуем распарсить JSON
-            data = json.loads(response)
+            # Пробуем извлечь JSON из ответа
+            json_str = response.strip()
+
+            # Убираем markdown code blocks если есть
+            if json_str.startswith("```"):
+                json_str = re.sub(r'^```(?:json)?\n?', '', json_str)
+                json_str = re.sub(r'\n?```$', '', json_str)
+
+            # Ищем JSON объект в тексте
+            json_match = re.search(r'\{[^{}]*"category_id"[^{}]*\}', json_str, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+
+            data = json.loads(json_str)
 
             category_id = data.get('category_id')
             category_name = data.get('category_name')
@@ -287,9 +424,13 @@ class CategoryDetectionTask(AITask):
             reasoning = data.get('reasoning', '')
 
             # Валидация
-            if not category_id or not isinstance(category_id, int):
-                logger.warning(f"AI вернул невалидный category_id: {category_id}")
+            if not category_id:
+                logger.warning(f"AI вернул пустой category_id")
                 return None
+
+            # Преобразуем в int если строка
+            if isinstance(category_id, str):
+                category_id = int(category_id)
 
             # Проверяем, что категория существует
             if category_id not in self.categories:
@@ -314,13 +455,7 @@ class CategoryDetectionTask(AITask):
 
         except json.JSONDecodeError as e:
             logger.error(f"AI вернул невалидный JSON: {e}")
-            # Пробуем извлечь JSON из текста
-            try:
-                json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-                if json_match:
-                    return self.parse_response(json_match.group())
-            except:
-                pass
+            logger.error(f"Response: {response[:500]}")
             return None
         except Exception as e:
             logger.error(f"Ошибка парсинга ответа AI: {e}")
@@ -332,13 +467,15 @@ class SizeParsingTask(AITask):
     Задача парсинга размеров товара с помощью AI
     """
 
-    def __init__(self, client: AIClient, category_characteristics: Optional[List[str]] = None):
+    def __init__(self, client: AIClient, category_characteristics: Optional[List[str]] = None,
+                 custom_instruction: str = ""):
         """
         Args:
             client: AI клиент
             category_characteristics: Список возможных характеристик для категории
+            custom_instruction: Кастомная инструкция
         """
-        super().__init__(client)
+        super().__init__(client, custom_instruction)
         self.category_characteristics = category_characteristics or []
 
     def get_system_prompt(self) -> str:
@@ -348,33 +485,8 @@ class SizeParsingTask(AITask):
         ]
 
         chars_list = "\n".join([f"- {c}" for c in characteristics])
-
-        return f"""Ты эксперт по парсингу размеров и характеристик товаров.
-
-Твоя задача - извлечь структурированные данные о размерах из текстового описания.
-
-ВОЗМОЖНЫЕ ХАРАКТЕРИСТИКИ:
-{chars_list}
-
-ПРАВИЛА:
-1. Извлекай только те характеристики, которые явно указаны в тексте
-2. Преобразуй единицы измерения в стандартные (см, г, мл)
-3. Если указан диапазон (например, "длина 15-18 см") - используй максимальное значение
-4. Для размеров одежды используй стандартные обозначения (S, M, L, XL или числовые)
-5. Если характеристика не найдена - не включай её в ответ
-
-ФОРМАТ ОТВЕТА (СТРОГО JSON):
-{{
-    "characteristics": {{
-        "Название характеристики": "значение с единицей измерения",
-        ...
-    }},
-    "raw_sizes": ["исходный текст размеров если есть"],
-    "has_clothing_sizes": true/false,
-    "confidence": <число от 0.0 до 1.0>
-}}
-
-ВАЖНО: Отвечай ТОЛЬКО валидным JSON без дополнительного текста."""
+        template = DEFAULT_INSTRUCTIONS["size_parsing"]["template"]
+        return template.format(characteristics_list=chars_list)
 
     def build_user_prompt(self, **kwargs) -> str:
         sizes_text = kwargs.get('sizes_text', '')
@@ -404,7 +516,19 @@ class SizeParsingTask(AITask):
             }
         """
         try:
-            data = json.loads(response)
+            json_str = response.strip()
+
+            # Убираем markdown code blocks
+            if json_str.startswith("```"):
+                json_str = re.sub(r'^```(?:json)?\n?', '', json_str)
+                json_str = re.sub(r'\n?```$', '', json_str)
+
+            # Ищем JSON объект
+            json_match = re.search(r'\{[^{}]*"characteristics"[^{}]*\}', json_str, re.DOTALL)
+            if json_match:
+                json_str = json_match.group()
+
+            data = json.loads(json_str)
 
             characteristics = data.get('characteristics', {})
             raw_sizes = data.get('raw_sizes', [])
@@ -419,13 +543,7 @@ class SizeParsingTask(AITask):
             }
 
         except json.JSONDecodeError:
-            # Пробуем извлечь JSON
-            try:
-                json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-                if json_match:
-                    return self.parse_response(json_match.group())
-            except:
-                pass
+            logger.error(f"AI вернул невалидный JSON для размеров: {response[:500]}")
             return None
         except Exception as e:
             logger.error(f"Ошибка парсинга ответа AI (размеры): {e}")
@@ -465,7 +583,11 @@ class AIService:
             logger.warning("Категории не установлены для AI сервиса")
             return None, None, 0.0, "Категории не настроены"
 
-        task = CategoryDetectionTask(self.client, self._categories)
+        task = CategoryDetectionTask(
+            self.client,
+            self._categories,
+            custom_instruction=self.config.custom_category_instruction
+        )
         success, result, error = task.execute(
             product_title=product_title,
             source_category=source_category,
@@ -497,7 +619,11 @@ class AIService:
         Returns:
             Tuple[success, parsed_data, error_message]
         """
-        task = SizeParsingTask(self.client, category_characteristics)
+        task = SizeParsingTask(
+            self.client,
+            category_characteristics,
+            custom_instruction=self.config.custom_size_instruction
+        )
         success, result, error = task.execute(
             sizes_text=sizes_text,
             product_title=product_title,
@@ -508,6 +634,24 @@ class AIService:
             return True, result, ""
 
         return False, {}, error or "Ошибка AI"
+
+    def test_connection(self) -> Tuple[bool, str]:
+        """
+        Тестирует подключение к AI API
+
+        Returns:
+            Tuple[success, message]
+        """
+        try:
+            messages = [
+                {"role": "user", "content": "Ответь одним словом: работает"}
+            ]
+            response = self.client.chat_completion(messages, max_tokens=50)
+            if response:
+                return True, f"Подключение успешно. Модель: {self.config.model}"
+            return False, "Пустой ответ от API"
+        except Exception as e:
+            return False, str(e)
 
     def close(self):
         """Закрывает клиент"""
@@ -556,3 +700,27 @@ def reset_ai_service():
     if _ai_service_instance:
         _ai_service_instance.close()
     _ai_service_instance = None
+
+
+def get_available_models(provider: str) -> Dict[str, Dict]:
+    """
+    Возвращает доступные модели для провайдера
+
+    Args:
+        provider: Провайдер (cloudru, openai, custom)
+
+    Returns:
+        Словарь моделей {model_id: {name, description, recommended}}
+    """
+    if provider == 'cloudru':
+        return CLOUDRU_MODELS
+    elif provider == 'openai':
+        return OPENAI_MODELS
+    else:
+        # Для custom возвращаем объединенный список
+        return {**CLOUDRU_MODELS, **OPENAI_MODELS}
+
+
+def get_default_instructions() -> Dict[str, Dict]:
+    """Возвращает дефолтные инструкции для редактирования"""
+    return DEFAULT_INSTRUCTIONS
