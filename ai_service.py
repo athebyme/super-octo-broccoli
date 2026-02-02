@@ -32,14 +32,16 @@ import base64
 
 def parse_cloudru_key_secret(key_secret: str) -> Tuple[str, str]:
     """
-    Парсит Key Secret от Cloud.ru в формате {base64(key_id)}.{secret}
+    Парсит Key Secret от Cloud.ru в формате {key_id}.{secret}
+
+    Cloud.ru ожидает key_id как есть (base64-подобный формат)
 
     Args:
         key_secret: Полный Key Secret, например:
             ZWVjYjQwYmItMTgwOS00OTcwLWIwYjctZmI2ZmIzOWRlZDM3.8edb891f1fec4eda94c4242e96ff5e13
 
     Returns:
-        Tuple[key_id, secret] - распарсенные части
+        Tuple[key_id, secret] - обе части как есть
     """
     if '.' not in key_secret:
         # Если нет точки, возможно это уже просто key_id или ошибка
@@ -50,15 +52,10 @@ def parse_cloudru_key_secret(key_secret: str) -> Tuple[str, str]:
     if len(parts) != 2:
         return key_secret, key_secret
 
-    base64_key_id, secret = parts
+    key_id, secret = parts
 
-    # Декодируем Key ID из base64
-    try:
-        key_id = base64.b64decode(base64_key_id).decode('utf-8')
-        logger.info(f"✅ Распарсен Cloud.ru Key ID: {key_id[:8]}...")
-    except Exception as e:
-        logger.warning(f"Не удалось декодировать Key ID из base64: {e}")
-        key_id = base64_key_id
+    # НЕ декодируем - Cloud.ru ожидает key_id как есть
+    logger.info(f"✅ Распарсен Cloud.ru Key: key_id={key_id[:12]}..., secret={secret[:8]}...")
 
     return key_id, secret
 
