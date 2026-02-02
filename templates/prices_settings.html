@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки безопасности цен - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Хлебные крошки -->
+    <nav class="mb-6 text-sm">
+        <ol class="flex items-center space-x-2 text-gray-500">
+            <li><a href="{{ url_for('prices.prices_dashboard') }}" class="hover:text-indigo-600">Управление ценами</a></li>
+            <li>/</li>
+            <li class="text-gray-900">Настройки безопасности</li>
+        </ol>
+    </nav>
+
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold text-gray-900 flex items-center">
+            <svg class="w-8 h-8 mr-3 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+            </svg>
+            Настройки безопасности
+        </h1>
+        <p class="mt-2 text-sm text-gray-500">
+            Настройте пороги и режим защиты от случайных изменений цен
+        </p>
+    </div>
+
+    <form method="POST" action="{{ url_for('prices.prices_settings') }}" x-data="settingsForm()">
+        <!-- Основные настройки -->
+        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                <h2 class="text-lg font-medium text-gray-900">Основные настройки</h2>
+            </div>
+            <div class="px-6 py-6 space-y-6">
+                <!-- Включение защиты -->
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="is_enabled" id="is_enabled"
+                               {{ 'checked' if settings.is_enabled else '' }}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3">
+                        <label for="is_enabled" class="text-sm font-medium text-gray-900">
+                            Включить защиту от случайных изменений
+                        </label>
+                        <p class="text-sm text-gray-500">
+                            При включении система будет проверять все изменения цен на соответствие установленным порогам
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Режим работы -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Режим работы при опасных изменениях
+                    </label>
+                    <div class="space-y-3">
+                        <label class="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50"
+                               :class="mode === 'notify' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" name="mode" value="notify" x-model="mode"
+                                   {{ 'checked' if settings.mode == 'notify' else '' }}
+                                   class="mt-0.5 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <div class="ml-3">
+                                <span class="block text-sm font-medium text-gray-900">Только уведомлять</span>
+                                <span class="block text-sm text-gray-500">Показывать предупреждение, но разрешать изменения</span>
+                            </div>
+                        </label>
+                        <label class="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50"
+                               :class="mode === 'confirm' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" name="mode" value="confirm" x-model="mode"
+                                   {{ 'checked' if settings.mode == 'confirm' else '' }}
+                                   class="mt-0.5 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <div class="ml-3">
+                                <span class="block text-sm font-medium text-gray-900">Требовать подтверждения</span>
+                                <span class="block text-sm text-gray-500">Опасные изменения нужно подтвердить на отдельной странице</span>
+                            </div>
+                        </label>
+                        <label class="flex items-start p-4 border rounded-lg cursor-pointer hover:bg-gray-50"
+                               :class="mode === 'block' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
+                            <input type="radio" name="mode" value="block" x-model="mode"
+                                   {{ 'checked' if settings.mode == 'block' else '' }}
+                                   class="mt-0.5 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                            <div class="ml-3">
+                                <span class="block text-sm font-medium text-gray-900">Блокировать</span>
+                                <span class="block text-sm text-gray-500">Полностью запретить опасные изменения</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Пороги изменений -->
+        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                <h2 class="text-lg font-medium text-gray-900">Пороги изменений</h2>
+            </div>
+            <div class="px-6 py-6 space-y-6">
+                <!-- Безопасный порог -->
+                <div>
+                    <label for="safe_threshold_percent" class="block text-sm font-medium text-gray-700 mb-1">
+                        Безопасный порог (%)
+                    </label>
+                    <div class="flex items-center space-x-4">
+                        <input type="range" x-model="safeThreshold" min="1" max="50"
+                               class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-green-500">
+                        <input type="number" name="safe_threshold_percent" id="safe_threshold_percent"
+                               x-model="safeThreshold"
+                               min="1" max="50" step="1"
+                               class="w-20 px-3 py-2 border border-gray-300 rounded-md text-center focus:ring-green-500 focus:border-green-500">
+                    </div>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Изменения до этого порога считаются <span class="text-green-600 font-medium">безопасными</span> и применяются сразу
+                    </p>
+                </div>
+
+                <!-- Порог предупреждения -->
+                <div>
+                    <label for="warning_threshold_percent" class="block text-sm font-medium text-gray-700 mb-1">
+                        Порог предупреждения (%)
+                    </label>
+                    <div class="flex items-center space-x-4">
+                        <input type="range" x-model="warningThreshold" min="5" max="100"
+                               class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-red-500">
+                        <input type="number" name="warning_threshold_percent" id="warning_threshold_percent"
+                               x-model="warningThreshold"
+                               min="5" max="100" step="1"
+                               class="w-20 px-3 py-2 border border-gray-300 rounded-md text-center focus:ring-red-500 focus:border-red-500">
+                    </div>
+                    <p class="mt-1 text-sm text-gray-500">
+                        Изменения выше этого порога считаются <span class="text-red-600 font-medium">опасными</span>
+                    </p>
+                </div>
+
+                <!-- Визуализация -->
+                <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                    <h4 class="text-sm font-medium text-gray-700 mb-3">Предпросмотр классификации:</h4>
+                    <div class="flex h-6 rounded-lg overflow-hidden">
+                        <div class="bg-green-500 transition-all duration-300"
+                             :style="`width: ${safeThreshold}%`"></div>
+                        <div class="bg-yellow-500 transition-all duration-300"
+                             :style="`width: ${warningThreshold - safeThreshold}%`"></div>
+                        <div class="bg-red-500 flex-1"></div>
+                    </div>
+                    <div class="flex justify-between mt-2 text-xs text-gray-600">
+                        <span>0%</span>
+                        <span x-text="`${safeThreshold}%`" class="text-green-600 font-medium"></span>
+                        <span x-text="`${warningThreshold}%`" class="text-red-600 font-medium"></span>
+                        <span>100%+</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Дополнительные настройки -->
+        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                <h2 class="text-lg font-medium text-gray-900">Дополнительные настройки</h2>
+            </div>
+            <div class="px-6 py-6 space-y-6">
+                <!-- Требовать комментарий -->
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="require_comment_for_dangerous" id="require_comment_for_dangerous"
+                               {{ 'checked' if settings.require_comment_for_dangerous else '' }}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3">
+                        <label for="require_comment_for_dangerous" class="text-sm font-medium text-gray-900">
+                            Требовать комментарий для опасных изменений
+                        </label>
+                        <p class="text-sm text-gray-500">
+                            Пользователь должен объяснить причину большого изменения цены
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Разрешить массовые опасные -->
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="allow_bulk_dangerous" id="allow_bulk_dangerous"
+                               {{ 'checked' if settings.allow_bulk_dangerous else '' }}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3">
+                        <label for="allow_bulk_dangerous" class="text-sm font-medium text-gray-900">
+                            Разрешить массовые опасные изменения
+                        </label>
+                        <p class="text-sm text-gray-500">
+                            Позволить изменять цены более чем на пороговое значение для нескольких товаров сразу
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Макс. товаров в батче -->
+                <div>
+                    <label for="max_products_per_batch" class="block text-sm font-medium text-gray-700 mb-1">
+                        Максимум товаров в одной операции
+                    </label>
+                    <input type="number" name="max_products_per_batch" id="max_products_per_batch"
+                           value="{{ settings.max_products_per_batch }}"
+                           min="1" max="1000"
+                           class="w-32 px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                    <p class="mt-1 text-sm text-gray-500">
+                        Ограничивает количество товаров, цены которых можно изменить за раз (1-1000)
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Уведомления -->
+        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
+                <h2 class="text-lg font-medium text-gray-900">Уведомления</h2>
+            </div>
+            <div class="px-6 py-6 space-y-6">
+                <!-- Уведомлять об опасных -->
+                <div class="flex items-start">
+                    <div class="flex items-center h-5">
+                        <input type="checkbox" name="notify_on_dangerous" id="notify_on_dangerous"
+                               {{ 'checked' if settings.notify_on_dangerous else '' }}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    </div>
+                    <div class="ml-3">
+                        <label for="notify_on_dangerous" class="text-sm font-medium text-gray-900">
+                            Уведомлять о попытках опасных изменений
+                        </label>
+                        <p class="text-sm text-gray-500">
+                            Получать уведомления когда кто-то пытается сделать большое изменение цены
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Email для уведомлений -->
+                <div>
+                    <label for="notify_email" class="block text-sm font-medium text-gray-700 mb-1">
+                        Email для уведомлений
+                    </label>
+                    <input type="email" name="notify_email" id="notify_email"
+                           value="{{ settings.notify_email or '' }}"
+                           placeholder="example@email.com"
+                           class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                    <p class="mt-1 text-sm text-gray-500">
+                        Оставьте пустым для отключения email уведомлений
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Кнопки -->
+        <div class="flex items-center justify-between">
+            <a href="{{ url_for('prices.prices_dashboard') }}"
+               class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                Отмена
+            </a>
+            <button type="submit"
+                    class="px-6 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                Сохранить настройки
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+function settingsForm() {
+    return {
+        mode: '{{ settings.mode }}',
+        safeThreshold: {{ settings.safe_threshold_percent }},
+        warningThreshold: {{ settings.warning_threshold_percent }},
+
+        init() {
+            this.$watch('safeThreshold', (value) => {
+                if (parseInt(value) >= this.warningThreshold) {
+                    this.warningThreshold = parseInt(value) + 5;
+                }
+            });
+            this.$watch('warningThreshold', (value) => {
+                if (parseInt(value) <= this.safeThreshold) {
+                    this.safeThreshold = parseInt(value) - 5;
+                }
+            });
+        }
+    }
+}
+</script>
+{% endblock %}

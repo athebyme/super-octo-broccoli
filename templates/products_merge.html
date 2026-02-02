@@ -1,73 +1,108 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
+<div class="container mx-auto px-4 py-8" x-data="mergeApp()">
     <!-- Заголовок -->
     <div class="mb-6 flex items-center justify-between">
         <div>
-            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+            <h1 class="text-2xl font-bold text-gray-900">
                 Объединение карточек товаров
             </h1>
-            <p class="text-gray-600 dark:text-gray-400 mt-1">
+            <p class="text-gray-600 mt-1">
                 Объедините карточки с одинаковой категорией под одним imtID
             </p>
         </div>
         <div class="flex gap-3">
             <a href="{{ url_for('products_merge_recommendations') }}"
-               class="inline-flex items-center px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition shadow-lg">
+               class="inline-flex items-center px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg hover:from-purple-700 hover:to-indigo-700 transition shadow-lg group relative">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
                 </svg>
                 Умные рекомендации
+                <!-- Tooltip -->
+                <span class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 text-xs text-white bg-gray-900 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+                    ИИ найдет похожие карточки для объединения
+                </span>
             </a>
             <a href="{{ url_for('products_merge_history_list') }}"
                class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
-                История объединений
+                История
             </a>
         </div>
     </div>
 
-    <!-- Инфо-панель -->
-    <div class="bg-blue-50 dark:bg-blue-900/20 border-l-4 border-blue-500 p-4 mb-6">
-        <div class="flex">
-            <div class="flex-shrink-0">
-                <svg class="h-5 w-5 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
+    <!-- Инструкции с tooltips -->
+    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5 mb-6">
+        <div class="flex items-start gap-4">
+            <div class="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             </div>
-            <div class="ml-3">
-                <p class="text-sm text-blue-700 dark:text-blue-300">
-                    <strong>Как объединить:</strong> Выберите главную карточку (radio button), затем отметьте карточки для объединения (checkbox). Можно объединять только карточки с одинаковой категорией (максимум 30 карточек).
-                </p>
+            <div class="flex-1">
+                <h3 class="font-semibold text-gray-900 mb-2">Как использовать</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <div class="flex items-start gap-2">
+                        <span class="flex-shrink-0 w-6 h-6 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                        <div>
+                            <span class="font-medium text-gray-900">Выберите главную</span>
+                            <p class="text-gray-600">Нажмите ○ у карточки, которая станет основной</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-2">
+                        <span class="flex-shrink-0 w-6 h-6 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                        <div>
+                            <span class="font-medium text-gray-900">Отметьте для слияния</span>
+                            <p class="text-gray-600">Поставьте ☑ у карточек для объединения</p>
+                        </div>
+                    </div>
+                    <div class="flex items-start gap-2">
+                        <span class="flex-shrink-0 w-6 h-6 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                        <div>
+                            <span class="font-medium text-gray-900">Объедините</span>
+                            <p class="text-gray-600">Нажмите кнопку внизу страницы</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span class="px-2 py-1 bg-yellow-100 text-yellow-800 rounded">⚠️ Только одна категория</span>
+                    <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded">📦 Макс. 30 карточек</span>
+                    <span class="px-2 py-1 bg-green-100 text-green-800 rounded">✅ Выбор сохраняется между страницами</span>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Расширенные фильтры -->
-    <div class="mb-6 bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            <svg class="w-5 h-5 inline-block mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
-            </svg>
-            Фильтры и поиск
-        </h3>
+    <div class="mb-6 bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold text-gray-900 flex items-center">
+                <svg class="w-5 h-5 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+                </svg>
+                Фильтры
+            </h3>
+            <!-- Быстрый выбор -->
+            <div class="flex gap-2" x-show="Object.keys(selectedCards).length > 0">
+                <span class="text-sm text-gray-500">Выбрано: <strong x-text="Object.keys(selectedCards).length"></strong></span>
+                <button type="button" @click="clearAllSelection()" class="text-sm text-red-600 hover:text-red-800">
+                    Очистить выбор
+                </button>
+            </div>
+        </div>
 
         <form method="GET" action="{{ url_for('products_merge') }}" class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <!-- Поиск -->
             <div class="md:col-span-2">
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Поиск по названию, артикулу или бренду
-                </label>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Поиск</label>
                 <div class="relative">
-                    <input type="text"
-                           name="search"
-                           value="{{ search_query or '' }}"
-                           placeholder="Введите текст для поиска..."
-                           class="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white">
-                    <svg class="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <input type="text" name="search" value="{{ search_query or '' }}"
+                           placeholder="Название, артикул или бренд..."
+                           class="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                    <svg class="absolute left-3 top-3 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
                 </div>
@@ -75,11 +110,8 @@
 
             <!-- Категория -->
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Категория
-                </label>
-                <select name="subject_id"
-                        class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Категория</label>
+                <select name="subject_id" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
                     <option value="">Все категории</option>
                     {% for subject in subjects %}
                     <option value="{{ subject.id }}" {% if selected_subject == subject.id %}selected{% endif %}>
@@ -91,283 +123,225 @@
 
             <!-- Бренд -->
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Бренд
-                </label>
-                <select name="brand"
-                        class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Бренд</label>
+                <select name="brand" class="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
                     <option value="">Все бренды</option>
                     {% for brand in brands %}
-                    <option value="{{ brand }}" {% if selected_brand == brand %}selected{% endif %}>
-                        {{ brand }}
-                    </option>
+                    <option value="{{ brand }}" {% if selected_brand == brand %}selected{% endif %}>{{ brand }}</option>
                     {% endfor %}
                 </select>
             </div>
 
-            <!-- Кнопки -->
+            <!-- Кнопки фильтра -->
             <div class="md:col-span-4 flex gap-3">
-                <button type="submit"
-                        class="inline-flex items-center px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+                <button type="submit" class="inline-flex items-center px-5 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                     </svg>
-                    Применить фильтры
+                    Найти
                 </button>
-                <a href="{{ url_for('products_merge') }}"
-                   class="inline-flex items-center px-6 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
+                <a href="{{ url_for('products_merge') }}" class="inline-flex items-center px-5 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium">
                     Сбросить
                 </a>
             </div>
         </form>
 
         <!-- Статистика -->
-        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <div class="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400">
-                <div class="flex items-center">
-                    <svg class="w-4 h-4 mr-1 text-indigo-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V4z"></path>
-                    </svg>
-                    <strong>{{ total_groups }}</strong>&nbsp;групп
+        <div class="mt-4 pt-4 border-t border-gray-200 flex flex-wrap gap-4 text-sm text-gray-600">
+            <span class="flex items-center"><strong class="text-indigo-600 mr-1">{{ total_groups }}</strong> групп</span>
+            <span class="flex items-center"><strong class="text-purple-600 mr-1">{{ total_cards }}</strong> карточек</span>
+            {% if total_pages > 1 %}
+            <span class="flex items-center">Страница <strong class="mx-1">{{ page }}</strong> из <strong class="ml-1">{{ total_pages }}</strong></span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Список групп -->
+    {% if imt_groups %}
+    <div class="space-y-4 mb-6">
+        {% for group in imt_groups %}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <!-- Заголовок группы -->
+            <div class="bg-gradient-to-r from-slate-700 to-slate-800 px-6 py-3">
+                <div class="flex items-center justify-between text-white">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-5 h-5 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
+                        </svg>
+                        <span class="font-medium">{{ group.subject_name }}</span>
+                        {% if group.brand %}
+                        <span class="text-slate-400">•</span>
+                        <span class="text-slate-300">{{ group.brand }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="flex items-center gap-2">
+                        {% if group.imt_id %}
+                        <span class="px-2.5 py-1 text-xs bg-white/10 rounded-full">imtID: {{ group.imt_id }}</span>
+                        {% if group.cards|length > 1 %}
+                        <span class="px-2.5 py-1 text-xs bg-green-500/80 rounded-full">✓ Объединено</span>
+                        <!-- Кнопка разъединения группы -->
+                        <button type="button"
+                                @click="unmergeGroup({{ group.imt_id }}, {{ group.cards|length }})"
+                                class="px-2.5 py-1 text-xs bg-amber-500 hover:bg-amber-600 rounded-full transition flex items-center gap-1 group relative">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                            </svg>
+                            Разъединить всё
+                        </button>
+                        {% endif %}
+                        {% else %}
+                        <span class="px-2.5 py-1 text-xs bg-white/10 rounded-full">Не объединены</span>
+                        {% endif %}
+                        <span class="px-2.5 py-1 text-xs bg-white/20 rounded-full">{{ group.cards|length }} шт.</span>
+                    </div>
                 </div>
-                <div class="flex items-center">
-                    <svg class="w-4 h-4 mr-1 text-purple-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"></path>
-                    </svg>
-                    <strong>{{ total_cards }}</strong>&nbsp;карточек
+            </div>
+
+            <!-- Карточки группы -->
+            <div class="divide-y divide-gray-100">
+                {% for card in group.cards %}
+                <div class="flex items-center gap-4 p-4 hover:bg-gray-50 transition"
+                     :class="{'bg-indigo-50 border-l-4 border-indigo-500': selectedTarget == '{{ card.nm_id }}', 'bg-purple-50': selectedCards['{{ card.nm_id }}'] && selectedTarget != '{{ card.nm_id }}'}"
+                     data-nm-id="{{ card.nm_id }}"
+                     data-subject-id="{{ card.subject_id }}">
+
+                    <!-- Radio: Главная карточка -->
+                    <div class="relative group/radio">
+                        <input type="radio"
+                               name="target_nm_id"
+                               value="{{ card.nm_id }}"
+                               id="target_{{ card.nm_id }}"
+                               class="w-5 h-5 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                               data-subject="{{ card.subject_id }}"
+                               data-title="{{ card.title }}"
+                               data-vendor="{{ card.vendor_code }}"
+                               @change="setTarget('{{ card.nm_id }}', '{{ card.subject_id }}', '{{ card.vendor_code }}', '{{ card.title|e }}')"
+                               :checked="selectedTarget == '{{ card.nm_id }}'">
+                        <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover/radio:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                            Сделать главной
+                        </span>
+                    </div>
+
+                    <!-- Checkbox: Для объединения -->
+                    <div class="relative group/check">
+                        <input type="checkbox"
+                               name="merge_checkbox"
+                               value="{{ card.nm_id }}"
+                               id="merge_{{ card.nm_id }}"
+                               class="w-5 h-5 text-purple-600 focus:ring-purple-500 cursor-pointer rounded"
+                               data-subject="{{ card.subject_id }}"
+                               data-title="{{ card.title }}"
+                               data-vendor="{{ card.vendor_code }}"
+                               @change="toggleCard('{{ card.nm_id }}', '{{ card.subject_id }}', '{{ card.vendor_code }}', '{{ card.title|e }}')"
+                               :checked="selectedCards['{{ card.nm_id }}']">
+                        <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover/check:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                            Выбрать для слияния
+                        </span>
+                    </div>
+
+                    <!-- Информация о карточке -->
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="font-semibold text-gray-900">{{ card.vendor_code }}</span>
+                            <span class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">nmID: {{ card.nm_id }}</span>
+                            {% if card.imt_id %}
+                            <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">imtID: {{ card.imt_id }}</span>
+                            {% endif %}
+                        </div>
+                        <p class="text-sm text-gray-600 truncate">{{ card.title }}</p>
+                    </div>
+
+                    <!-- Действие: Отсоединить эту карточку -->
+                    {% if group.cards|length > 1 and group.imt_id %}
+                    <button type="button"
+                            @click="unmergeCard({{ card.nm_id }}, '{{ card.vendor_code }}')"
+                            class="px-3 py-1.5 text-xs bg-gray-100 hover:bg-amber-100 text-gray-600 hover:text-amber-700 rounded-lg transition group relative">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                        </svg>
+                        <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                            Отсоединить эту карточку
+                        </span>
+                    </button>
+                    {% endif %}
                 </div>
-                {% if page > 1 or total_pages > 1 %}
-                <div class="flex items-center">
-                    <svg class="w-4 h-4 mr-1 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"></path>
-                    </svg>
-                    Страница <strong>{{ page }}</strong> из <strong>{{ total_pages }}</strong>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Плавающая панель выбора -->
+    <div x-show="selectedTarget || Object.keys(selectedCards).length > 0"
+         x-transition:enter="transition ease-out duration-300"
+         x-transition:enter-start="opacity-0 transform translate-y-4"
+         x-transition:enter-end="opacity-100 transform translate-y-0"
+         class="fixed bottom-6 left-1/2 transform -translate-x-1/2 w-full max-w-3xl px-4 z-40">
+        <div class="bg-white rounded-2xl shadow-2xl border border-gray-200 p-4">
+            <div class="flex items-center justify-between gap-4">
+                <div class="flex-1">
+                    <div class="flex items-center gap-4 text-sm">
+                        <div class="flex items-center gap-2">
+                            <span class="w-3 h-3 bg-indigo-500 rounded-full"></span>
+                            <span class="text-gray-600">Главная:</span>
+                            <strong x-text="selectedTarget ? 'nmID ' + selectedTarget : 'не выбрана'" class="text-gray-900"></strong>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="w-3 h-3 bg-purple-500 rounded-full"></span>
+                            <span class="text-gray-600">Для слияния:</span>
+                            <strong x-text="Object.keys(selectedCards).length" class="text-gray-900"></strong>
+                        </div>
+                    </div>
+                    <p x-show="!canMerge()" class="text-xs text-red-500 mt-1" x-text="getMergeError()"></p>
                 </div>
-                {% endif %}
+                <div class="flex gap-2">
+                    <button type="button" @click="clearAllSelection()"
+                            class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition">
+                        Очистить
+                    </button>
+                    <button type="button" @click="executeMerge()"
+                            :disabled="!canMerge()"
+                            :class="canMerge() ? 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700' : 'bg-gray-300 cursor-not-allowed'"
+                            class="px-6 py-2 text-sm text-white rounded-lg transition font-medium flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        Объединить
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Форма объединения -->
-    {% if imt_groups %}
-    <form method="POST" action="{{ url_for('products_merge_execute') }}" id="mergeForm">
-        <div class="space-y-4 mb-6">
-            {% for group in imt_groups %}
-            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
-                <div class="bg-gradient-to-r from-indigo-500 to-purple-600 px-6 py-3">
-                    <div class="flex items-center justify-between text-white">
-                        <div class="flex items-center space-x-3">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
-                            </svg>
-                            <h3 class="text-lg font-semibold">
-                                {{ group.subject_name }}
-                            </h3>
-                        </div>
-                        <div class="flex items-center space-x-2">
-                            {% if group.imt_id %}
-                            <span class="px-3 py-1 text-xs bg-white/20 rounded-full">
-                                imtID: {{ group.imt_id }}
-                            </span>
-                            <span class="px-3 py-1 text-xs bg-green-500 rounded-full">
-                                Объединено
-                            </span>
-                            {% if group.cards|length > 1 %}
-                            <form method="POST" action="{{ url_for('products_merge_unmerge_group', imt_id=group.imt_id) }}" class="inline" onsubmit="return confirm('Разъединить {{ group.cards|length }} карточек? Каждая получит новый imtID.');">
-                                <button type="submit"
-                                        class="px-3 py-1 text-xs bg-yellow-500 hover:bg-yellow-600 text-white rounded-full transition flex items-center gap-1">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
-                                    </svg>
-                                    Разъединить
-                                </button>
-                            </form>
-                            {% endif %}
-                            {% else %}
-                            <span class="px-3 py-1 text-xs bg-white/20 rounded-full">
-                                Не объединены
-                            </span>
-                            {% endif %}
-                            <span class="px-3 py-1 text-xs bg-white/30 rounded-full">
-                                {{ group.cards|length }} карточек
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="p-6 space-y-3">
-                    {% for card in group.cards %}
-                    <div class="flex items-start space-x-4 p-4 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition group" data-subject="{{ card.subject_id }}">
-                        <!-- Radio button (главная карточка) -->
-                        <div class="flex items-center">
-                            <input type="radio"
-                                   name="target_nm_id"
-                                   value="{{ card.nm_id }}"
-                                   id="target_{{ card.nm_id }}"
-                                   class="w-5 h-5 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                                   data-subject="{{ card.subject_id }}"
-                                   onclick="selectTarget(this)">
-                            <label for="target_{{ card.nm_id }}" class="ml-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
-                                Главная
-                            </label>
-                        </div>
-
-                        <!-- Checkbox (для объединения) -->
-                        <div class="flex items-center">
-                            <input type="checkbox"
-                                   name="merge_checkbox"
-                                   value="{{ card.nm_id }}"
-                                   id="merge_{{ card.nm_id }}"
-                                   class="w-5 h-5 text-purple-600 focus:ring-purple-500 cursor-pointer merge-checkbox"
-                                   data-subject="{{ card.subject_id }}"
-                                   onclick="updateSelection()">
-                        </div>
-
-                        <!-- Информация о карточке -->
-                        <div class="flex-1 min-w-0">
-                            <div class="flex items-center space-x-2 mb-1">
-                                <span class="font-semibold text-gray-900 dark:text-white">
-                                    {{ card.vendor_code }}
-                                </span>
-                                <span class="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
-                                    nmID: {{ card.nm_id }}
-                                </span>
-                                {% if card.imt_id %}
-                                <span class="text-xs px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                                    imtID: {{ card.imt_id }}
-                                </span>
-                                {% endif %}
-                            </div>
-                            <p class="text-sm text-gray-600 dark:text-gray-400 truncate">
-                                {{ card.title }}
-                            </p>
-                            {% if card.brand %}
-                            <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                                Бренд: {{ card.brand }}
-                            </p>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-
-        <!-- Скрытое поле для передачи nmIDs -->
-        <input type="hidden" name="nm_ids" id="nm_ids_input">
-
-        <!-- Компактная панель выбора -->
-        <div id="selectionInfo" class="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border-l-4 border-indigo-500 rounded-r-lg shadow-lg p-4 mb-6 hidden">
-            <div class="flex items-center justify-between">
-                <div class="flex-1">
-                    <div class="flex items-center gap-4 mb-2">
-                        <h3 class="text-base font-semibold text-gray-900 dark:text-white flex items-center">
-                            <svg class="w-5 h-5 mr-2 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            Выбор сохранен
-                        </h3>
-                        <button type="button"
-                                onclick="clearSelection()"
-                                class="px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-900/50 transition">
-                            Очистить
-                        </button>
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                        <div class="flex items-start">
-                            <svg class="w-4 h-4 mr-2 mt-0.5 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-                            </svg>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">Главная:</span>
-                                <span id="targetCard" class="font-semibold text-gray-900 dark:text-white">не выбрана</span>
-                            </div>
-                        </div>
-                        <div class="flex items-start">
-                            <svg class="w-4 h-4 mr-2 mt-0.5 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"></path>
-                            </svg>
-                            <div>
-                                <span class="text-gray-600 dark:text-gray-400">Для объединения:</span>
-                                <span id="mergeCount" class="font-semibold text-gray-900 dark:text-white">0</span>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Список выбранных карточек (компактный) -->
-                    <div id="selectedCardsList" class="mt-3 hidden">
-                        <button type="button"
-                                onclick="toggleSelectedCards()"
-                                class="flex items-center text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300">
-                            <svg id="toggleIcon" class="w-4 h-4 mr-1 transform transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                            </svg>
-                            <span id="toggleText">Показать выбранные карточки</span>
-                        </button>
-                        <div id="cardsListContent" class="mt-2 hidden max-h-40 overflow-y-auto space-y-1">
-                            <!-- Список будет заполнен JS -->
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Кнопка отправки -->
-        <div class="flex justify-end">
-            <button type="submit"
-                    class="inline-flex items-center px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium rounded-lg hover:from-indigo-700 hover:to-purple-700 transition shadow-lg">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                </svg>
-                Объединить карточки
-            </button>
-        </div>
-    </form>
-
     <!-- Пагинация -->
     {% if total_pages > 1 %}
-    <div class="mt-6 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div class="flex items-center justify-between">
-            <div class="text-sm text-gray-600 dark:text-gray-400">
-                Показано групп {{ ((page - 1) * per_page + 1) }} - {{ [page * per_page, total_groups]|min }} из {{ total_groups }}
+            <div class="text-sm text-gray-600">
+                Показано {{ ((page - 1) * per_page + 1) }} - {{ [page * per_page, total_groups]|min }} из {{ total_groups }} групп
             </div>
-            <div class="flex gap-2">
+            <div class="flex gap-1">
                 {% if page > 1 %}
                 <a href="{{ url_for('products_merge', page=1, subject_id=selected_subject, brand=selected_brand, search=search_query) }}"
-                   class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">
-                    Первая
-                </a>
+                   class="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">«</a>
                 <a href="{{ url_for('products_merge', page=page-1, subject_id=selected_subject, brand=selected_brand, search=search_query) }}"
-                   class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">
-                    ← Назад
-                </a>
+                   class="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">‹</a>
                 {% endif %}
 
                 {% for p in range([1, page - 2]|max, [total_pages, page + 2]|min + 1) %}
                     {% if p == page %}
-                    <span class="px-3 py-2 text-sm bg-indigo-600 text-white rounded font-semibold">
-                        {{ p }}
-                    </span>
+                    <span class="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg font-medium">{{ p }}</span>
                     {% else %}
                     <a href="{{ url_for('products_merge', page=p, subject_id=selected_subject, brand=selected_brand, search=search_query) }}"
-                       class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">
-                        {{ p }}
-                    </a>
+                       class="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">{{ p }}</a>
                     {% endif %}
                 {% endfor %}
 
                 {% if page < total_pages %}
                 <a href="{{ url_for('products_merge', page=page+1, subject_id=selected_subject, brand=selected_brand, search=search_query) }}"
-                   class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">
-                    Вперед →
-                </a>
+                   class="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">›</a>
                 <a href="{{ url_for('products_merge', page=total_pages, subject_id=selected_subject, brand=selected_brand, search=search_query) }}"
-                   class="px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition">
-                    Последняя
-                </a>
+                   class="px-3 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">»</a>
                 {% endif %}
             </div>
         </div>
@@ -375,351 +349,283 @@
     {% endif %}
 
     {% else %}
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center">
-        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+    <!-- Пустое состояние -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+        <svg class="mx-auto h-16 w-16 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
         </svg>
-        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">Нет товаров</h3>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Нет активных товаров для объединения. Синхронизируйте товары с WB API.
-        </p>
+        <h3 class="mt-4 text-lg font-medium text-gray-900">Нет товаров</h3>
+        <p class="mt-2 text-gray-500">Синхронизируйте товары с Wildberries для начала работы</p>
+        <a href="{{ url_for('product_sync_status_page') }}" class="mt-4 inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            Синхронизировать
+        </a>
     </div>
     {% endif %}
-</div>
 
-<script>
-let selectedTarget = null;
-let selectedMerges = new Set();
-let selectedCardsData = {}; // Храним данные о выбранных карточках
-
-// === LocalStorage Functions ===
-function saveSelectionToStorage() {
-    const selectionData = {
-        target: selectedTarget,
-        merges: Array.from(selectedMerges),
-        cardsData: selectedCardsData
-    };
-    localStorage.setItem('merge_selection', JSON.stringify(selectionData));
-}
-
-function loadSelectionFromStorage() {
-    try {
-        const stored = localStorage.getItem('merge_selection');
-        if (stored) {
-            const data = JSON.parse(stored);
-            selectedTarget = data.target;
-            selectedMerges = new Set(data.merges || []);
-            selectedCardsData = data.cardsData || {};
-            return true;
-        }
-    } catch (e) {
-        console.error('Error loading selection:', e);
-    }
-    return false;
-}
-
-function clearStoredSelection() {
-    localStorage.removeItem('merge_selection');
-}
-
-// === Selection Functions ===
-function selectTarget(radio) {
-    selectedTarget = {
-        nmId: radio.value,
-        subjectId: radio.dataset.subject
-    };
-
-    // Сохраняем данные карточки
-    const card = radio.closest('.bg-white, .dark\\:bg-gray-700');
-    if (card) {
-        const titleEl = card.querySelector('h3');
-        const imgEl = card.querySelector('img');
-        selectedCardsData[radio.value] = {
-            nmId: radio.value,
-            title: titleEl ? titleEl.textContent.trim() : '',
-            image: imgEl ? imgEl.src : '',
-            isTarget: true
-        };
-    }
-
-    saveSelectionToStorage();
-    updateSelection();
-}
-
-function updateSelection() {
-    const checkboxes = document.querySelectorAll('.merge-checkbox:checked');
-    selectedMerges = new Set(Array.from(checkboxes).map(cb => cb.value));
-
-    // Сохраняем данные о выбранных карточках
-    checkboxes.forEach(cb => {
-        if (!selectedCardsData[cb.value]) {
-            const card = cb.closest('.bg-white, .dark\\:bg-gray-700');
-            if (card) {
-                const titleEl = card.querySelector('h3');
-                const imgEl = card.querySelector('img');
-                selectedCardsData[cb.value] = {
-                    nmId: cb.value,
-                    title: titleEl ? titleEl.textContent.trim() : '',
-                    image: imgEl ? imgEl.src : '',
-                    isTarget: false
-                };
-            }
-        }
-    });
-
-    // Удаляем данные о снятых чекбоксах
-    Object.keys(selectedCardsData).forEach(nmId => {
-        const data = selectedCardsData[nmId];
-        if (!data.isTarget && !selectedMerges.has(nmId)) {
-            delete selectedCardsData[nmId];
-        }
-    });
-
-    const selectionInfo = document.getElementById('selectionInfo');
-    const targetCard = document.getElementById('targetCard');
-    const mergeCount = document.getElementById('mergeCount');
-
-    if (selectedTarget || selectedMerges.size > 0) {
-        selectionInfo.classList.remove('hidden');
-        targetCard.textContent = selectedTarget ? `nmID: ${selectedTarget.nmId}` : 'не выбрана';
-        mergeCount.textContent = selectedMerges.size;
-
-        // Показываем блок со списком, если есть выбранные
-        if (selectedMerges.size > 0 || selectedTarget) {
-            document.getElementById('selectedCardsList').classList.remove('hidden');
-        }
-    } else {
-        selectionInfo.classList.add('hidden');
-        document.getElementById('selectedCardsList').classList.add('hidden');
-    }
-
-    saveSelectionToStorage();
-    updateCompactCardsList();
-}
-
-function clearSelection() {
-    document.querySelectorAll('input[name="target_nm_id"]').forEach(r => r.checked = false);
-    document.querySelectorAll('.merge-checkbox').forEach(cb => cb.checked = false);
-    selectedTarget = null;
-    selectedMerges.clear();
-    selectedCardsData = {};
-    clearStoredSelection();
-    updateSelection();
-}
-
-// === Compact Cards List ===
-function updateCompactCardsList() {
-    const listContent = document.getElementById('cardsListContent');
-    if (!listContent) return;
-
-    const totalSelected = (selectedTarget ? 1 : 0) + selectedMerges.size;
-
-    if (totalSelected === 0) {
-        listContent.innerHTML = '<p class="text-sm text-gray-500">Нет выбранных карточек</p>';
-        return;
-    }
-
-    let html = '<div class="grid grid-cols-1 gap-2">';
-
-    // Главная карточка
-    if (selectedTarget && selectedCardsData[selectedTarget.nmId]) {
-        const card = selectedCardsData[selectedTarget.nmId];
-        html += `
-            <div class="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200">
-                ${card.image ? `<img src="${card.image}" class="w-10 h-10 object-cover rounded" />` : ''}
-                <div class="flex-1 min-w-0">
-                    <div class="text-xs font-semibold text-blue-700 dark:text-blue-300">🎯 Главная</div>
-                    <div class="text-xs text-gray-700 dark:text-gray-300 truncate">${card.title || 'nmID: ' + card.nmId}</div>
-                    <div class="text-xs text-gray-500">nmID: ${card.nmId}</div>
+    <!-- Модальное окно подтверждения -->
+    <div x-show="showConfirmModal" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" @click.away="showConfirmModal = false">
+            <div class="text-center">
+                <div class="w-16 h-16 mx-auto bg-indigo-100 rounded-full flex items-center justify-center mb-4">
+                    <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                </div>
+                <h3 class="text-xl font-semibold text-gray-900 mb-2">Подтвердите объединение</h3>
+                <p class="text-gray-600 mb-4">
+                    Вы собираетесь объединить <strong x-text="Object.keys(selectedCards).length"></strong> карточек
+                    с главной карточкой <strong x-text="'nmID ' + selectedTarget"></strong>.
+                </p>
+                <p class="text-sm text-gray-500 mb-6">
+                    Все выбранные карточки получат imtID главной карточки.
+                </p>
+                <div class="flex gap-3">
+                    <button @click="showConfirmModal = false"
+                            class="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium">
+                        Отмена
+                    </button>
+                    <button @click="submitMerge()"
+                            class="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium">
+                        Объединить
+                    </button>
                 </div>
             </div>
-        `;
-    }
+        </div>
+    </div>
+</div>
 
-    // Карточки для объединения
-    selectedMerges.forEach(nmId => {
-        const card = selectedCardsData[nmId];
-        if (card) {
-            html += `
-                <div class="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200">
-                    ${card.image ? `<img src="${card.image}" class="w-10 h-10 object-cover rounded" />` : ''}
-                    <div class="flex-1 min-w-0">
-                        <div class="text-xs text-gray-700 dark:text-gray-300 truncate">${card.title || 'nmID: ' + card.nmId}</div>
-                        <div class="text-xs text-gray-500">nmID: ${card.nmId}</div>
-                    </div>
-                </div>
-            `;
-        }
-    });
+<!-- Скрытая форма для отправки -->
+<form id="mergeForm" method="POST" action="{{ url_for('products_merge_execute') }}" style="display: none;">
+    <input type="hidden" name="target_nm_id" id="form_target_nm_id">
+    <input type="hidden" name="nm_ids" id="form_nm_ids">
+</form>
 
-    html += '</div>';
-    listContent.innerHTML = html;
-}
+<!-- Скрытая форма для разъединения группы -->
+<form id="unmergeGroupForm" method="POST" style="display: none;">
+</form>
 
-function toggleSelectedCards() {
-    const listContent = document.getElementById('cardsListContent');
-    const toggleText = document.getElementById('toggleText');
-    const toggleIcon = document.getElementById('toggleIcon');
+<!-- Скрытая форма для разъединения карточки (action устанавливается через JS) -->
+<form id="unmergeCardForm" method="POST" action="#" style="display: none;">
+    <input type="hidden" name="nm_id" id="form_unmerge_nm_id">
+</form>
 
-    if (listContent.classList.contains('hidden')) {
-        listContent.classList.remove('hidden');
-        if (toggleText) toggleText.textContent = 'Скрыть список';
-        if (toggleIcon) toggleIcon.classList.add('rotate-180');
-    } else {
-        listContent.classList.add('hidden');
-        if (toggleText) toggleText.textContent = 'Показать выбранные карточки';
-        if (toggleIcon) toggleIcon.classList.remove('rotate-180');
-    }
-}
+<script>
+function mergeApp() {
+    return {
+        selectedTarget: null,
+        selectedTargetSubject: null,
+        selectedCards: {},
+        showConfirmModal: false,
 
-// === Page Load: Restore Selection ===
-document.addEventListener('DOMContentLoaded', function() {
-    // Проверяем URL параметры для автоматического выбора (из рекомендаций)
-    const urlParams = new URLSearchParams(window.location.search);
-    const autoSelectNmIds = urlParams.get('auto_select_nm_ids');
-    const autoTargetNmId = urlParams.get('auto_target_nm_id');
+        init() {
+            this.loadFromStorage();
+            this.restoreUIState();
+            this.handleAutoSelect();
+        },
 
-    let autoSelectionApplied = false;
+        // Загрузка из localStorage
+        loadFromStorage() {
+            try {
+                const stored = localStorage.getItem('merge_selection_v2');
+                if (stored) {
+                    const data = JSON.parse(stored);
+                    this.selectedTarget = data.target || null;
+                    this.selectedTargetSubject = data.targetSubject || null;
+                    this.selectedCards = data.cards || {};
+                }
+            } catch (e) {
+                console.error('Error loading selection:', e);
+            }
+        },
 
-    if (autoSelectNmIds && autoTargetNmId) {
-        // Парсим nm_ids из URL
-        const nmIdsToSelect = autoSelectNmIds.split(',').map(id => id.trim());
+        // Сохранение в localStorage
+        saveToStorage() {
+            const data = {
+                target: this.selectedTarget,
+                targetSubject: this.selectedTargetSubject,
+                cards: this.selectedCards
+            };
+            localStorage.setItem('merge_selection_v2', JSON.stringify(data));
+        },
 
-        // Очищаем существующий выбор из localStorage для этой автоматической рекомендации
-        clearStoredSelection();
+        // Восстановление состояния UI
+        restoreUIState() {
+            // Восстанавливаем radio
+            if (this.selectedTarget) {
+                const radio = document.querySelector(`input[name="target_nm_id"][value="${this.selectedTarget}"]`);
+                if (radio) radio.checked = true;
+            }
+            // Восстанавливаем checkboxes
+            Object.keys(this.selectedCards).forEach(nmId => {
+                const checkbox = document.querySelector(`input[name="merge_checkbox"][value="${nmId}"]`);
+                if (checkbox) checkbox.checked = true;
+            });
+        },
 
-        // Устанавливаем target (главную карточку)
-        const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${autoTargetNmId}"]`);
-        if (targetRadio) {
-            targetRadio.checked = true;
-            selectTarget(targetRadio);
-            autoSelectionApplied = true;
-        }
+        // Автовыбор из рекомендаций
+        handleAutoSelect() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const autoNmIds = urlParams.get('auto_select_nm_ids');
+            const autoTarget = urlParams.get('auto_target_nm_id');
 
-        // Отмечаем все карточки из рекомендации (кроме target)
-        nmIdsToSelect.forEach(nmId => {
-            if (nmId !== autoTargetNmId) {
-                const checkbox = document.querySelector(`.merge-checkbox[value="${nmId}"]`);
-                if (checkbox) {
-                    checkbox.checked = true;
-                    autoSelectionApplied = true;
+            if (autoNmIds && autoTarget) {
+                // Очищаем старый выбор
+                this.clearAllSelection();
+
+                // Устанавливаем target
+                const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${autoTarget}"]`);
+                if (targetRadio) {
+                    targetRadio.checked = true;
+                    this.selectedTarget = autoTarget;
+                    this.selectedTargetSubject = targetRadio.dataset.subject;
+                }
+
+                // Выбираем карточки
+                autoNmIds.split(',').forEach(nmId => {
+                    nmId = nmId.trim();
+                    if (nmId && nmId !== autoTarget) {
+                        const checkbox = document.querySelector(`input[name="merge_checkbox"][value="${nmId}"]`);
+                        if (checkbox) {
+                            checkbox.checked = true;
+                            this.selectedCards[nmId] = {
+                                subject: checkbox.dataset.subject,
+                                vendor: checkbox.dataset.vendor,
+                                title: checkbox.dataset.title
+                            };
+                        }
+                    }
+                });
+
+                this.saveToStorage();
+
+                // Уведомление
+                this.showNotification('Карточки из рекомендации выбраны автоматически', 'success');
+            }
+        },
+
+        // Установить главную карточку
+        setTarget(nmId, subjectId, vendor, title) {
+            this.selectedTarget = nmId;
+            this.selectedTargetSubject = subjectId;
+            this.saveToStorage();
+        },
+
+        // Переключить выбор карточки
+        toggleCard(nmId, subjectId, vendor, title) {
+            if (this.selectedCards[nmId]) {
+                delete this.selectedCards[nmId];
+            } else {
+                this.selectedCards[nmId] = { subject: subjectId, vendor, title };
+            }
+            this.saveToStorage();
+        },
+
+        // Очистить весь выбор
+        clearAllSelection() {
+            this.selectedTarget = null;
+            this.selectedTargetSubject = null;
+            this.selectedCards = {};
+
+            document.querySelectorAll('input[name="target_nm_id"]').forEach(r => r.checked = false);
+            document.querySelectorAll('input[name="merge_checkbox"]').forEach(c => c.checked = false);
+
+            localStorage.removeItem('merge_selection_v2');
+        },
+
+        // Проверка возможности объединения
+        canMerge() {
+            if (!this.selectedTarget) return false;
+            if (Object.keys(this.selectedCards).length === 0) return false;
+            if (Object.keys(this.selectedCards).length > 30) return false;
+
+            // Проверка категорий
+            const targetSubject = this.selectedTargetSubject;
+            for (const nmId in this.selectedCards) {
+                if (this.selectedCards[nmId].subject !== targetSubject) {
+                    return false;
                 }
             }
-        });
+            return true;
+        },
 
-        if (autoSelectionApplied) {
-            updateSelection();
+        // Получить текст ошибки
+        getMergeError() {
+            if (!this.selectedTarget) return 'Выберите главную карточку';
+            if (Object.keys(this.selectedCards).length === 0) return 'Выберите карточки для слияния';
+            if (Object.keys(this.selectedCards).length > 30) return 'Максимум 30 карточек за раз';
 
-            // Показываем уведомление
+            const targetSubject = this.selectedTargetSubject;
+            for (const nmId in this.selectedCards) {
+                if (this.selectedCards[nmId].subject !== targetSubject) {
+                    return 'Все карточки должны быть одной категории';
+                }
+            }
+            return '';
+        },
+
+        // Показать модальное окно
+        executeMerge() {
+            if (this.canMerge()) {
+                this.showConfirmModal = true;
+            }
+        },
+
+        // Отправить форму
+        submitMerge() {
+            document.getElementById('form_target_nm_id').value = this.selectedTarget;
+            document.getElementById('form_nm_ids').value = Object.keys(this.selectedCards).join(',');
+            document.getElementById('mergeForm').submit();
+        },
+
+        // Разъединить группу
+        unmergeGroup(imtId, cardCount) {
+            if (confirm(`Разъединить все ${cardCount} карточек из группы imtID=${imtId}?\n\nКаждая карточка получит новый уникальный imtID.`)) {
+                const form = document.getElementById('unmergeGroupForm');
+                form.action = `/products/merge/unmerge/${imtId}`;
+                form.submit();
+            }
+        },
+
+        // Разъединить одну карточку
+        unmergeCard(nmId, vendorCode) {
+            if (confirm(`Отсоединить карточку ${vendorCode} (nmID: ${nmId}) от группы?\n\nОна получит новый уникальный imtID.`)) {
+                // Используем API или отдельный роут
+                window.location.href = `/products/merge/unmerge-single/${nmId}`;
+            }
+        },
+
+        // Показать уведомление
+        showNotification(message, type = 'info') {
+            const colors = {
+                success: 'bg-green-500',
+                error: 'bg-red-500',
+                info: 'bg-blue-500'
+            };
+
             const notification = document.createElement('div');
-            notification.className = 'fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+            notification.className = `fixed top-4 right-4 ${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center`;
             notification.innerHTML = `
                 <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                 </svg>
-                Карточки из рекомендации выбраны автоматически
+                ${message}
             `;
             document.body.appendChild(notification);
 
-            // Убираем уведомление через 3 секунды
             setTimeout(() => {
                 notification.style.transition = 'opacity 0.5s';
                 notification.style.opacity = '0';
                 setTimeout(() => notification.remove(), 500);
             }, 3000);
-
-            // Прокручиваем к форме объединения
-            setTimeout(() => {
-                const selectionInfo = document.getElementById('selectionInfo');
-                if (selectionInfo) {
-                    selectionInfo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }
-            }, 500);
         }
-    }
-
-    // Если автовыбор не применен, загружаем сохраненный выбор из localStorage
-    if (!autoSelectionApplied) {
-        const hasStored = loadSelectionFromStorage();
-
-        if (hasStored) {
-            // Восстанавливаем target radio button
-            if (selectedTarget) {
-                const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${selectedTarget.nmId}"]`);
-                if (targetRadio) {
-                    targetRadio.checked = true;
-                }
-            }
-
-            // Восстанавливаем checkboxes
-            selectedMerges.forEach(nmId => {
-                const checkbox = document.querySelector(`.merge-checkbox[value="${nmId}"]`);
-                if (checkbox) {
-                    checkbox.checked = true;
-                }
-            });
-
-            updateSelection();
-        }
-    }
-
-    // Добавляем обработчики для checkboxes
-    document.querySelectorAll('.merge-checkbox').forEach(cb => {
-        cb.addEventListener('change', updateSelection);
-    });
-});
-
-// Валидация перед отправкой
-document.getElementById('mergeForm').addEventListener('submit', function(e) {
-    const target = document.querySelector('input[name="target_nm_id"]:checked');
-    const checks = document.querySelectorAll('.merge-checkbox:checked');
-
-    if (!target) {
-        e.preventDefault();
-        alert('❌ Выберите главную карточку (radio button)');
-        return false;
-    }
-
-    if (checks.length === 0) {
-        e.preventDefault();
-        alert('❌ Выберите хотя бы одну карточку для объединения (checkbox)');
-        return false;
-    }
-
-    if (checks.length > 30) {
-        e.preventDefault();
-        alert('❌ Можно объединить максимум 30 карточек за раз');
-        return false;
-    }
-
-    // Проверка что все карточки имеют одинаковый subject_id
-    const targetSubject = target.dataset.subject;
-    const allSameSubject = Array.from(checks).every(cb => cb.dataset.subject === targetSubject);
-
-    if (!allSameSubject) {
-        e.preventDefault();
-        alert('❌ Можно объединять только карточки с одинаковой категорией');
-        return false;
-    }
-
-    // Собираем nmIDs
-    const nmIds = Array.from(checks).map(c => c.value);
-    document.getElementById('nm_ids_input').value = nmIds.join(',');
-
-    const confirmed = confirm(`Объединить ${checks.length} карточек к главной карточке (nmID: ${target.value})?\n\nВсе выбранные карточки получат imtID главной карточки.`);
-
-    if (!confirmed) {
-        e.preventDefault();
-        return false;
-    }
-});
-</script>
-
-<style>
-.form-select:focus {
-    outline: none;
-    ring: 2px;
-    ring-color: rgb(99, 102, 241);
+    };
 }
-</style>
+</script>
 {% endblock %}

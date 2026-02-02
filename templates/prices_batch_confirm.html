@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+
+{% block title %}Подтверждение изменений - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Предупреждающий баннер -->
+    <div class="bg-red-50 border-l-4 border-red-400 p-4 mb-8">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-6 w-6 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <h3 class="text-lg font-medium text-red-800">
+                    Требуется подтверждение опасных изменений
+                </h3>
+                <p class="mt-2 text-sm text-red-700">
+                    Обнаружено <strong>{{ dangerous_items|length }}</strong> товаров с изменением цены более чем на
+                    <strong>{{ settings.warning_threshold_percent }}%</strong>.
+                    Пожалуйста, внимательно проверьте изменения перед подтверждением.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Заголовок батча -->
+    <div class="bg-white shadow rounded-lg p-6 mb-6">
+        <div class="flex items-start justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">{{ batch.name or 'Изменение цен' }}</h1>
+                <p class="mt-1 text-sm text-gray-500">
+                    Создано: {{ batch.created_at.strftime('%d.%m.%Y %H:%M') }}
+                </p>
+                {% if batch.description %}
+                <p class="mt-2 text-gray-700">{{ batch.description }}</p>
+                {% endif %}
+            </div>
+            <div class="text-right">
+                {% if batch.change_type == 'percent' %}
+                <div class="text-2xl font-bold {{ 'text-green-600' if batch.change_value >= 0 else 'text-red-600' }}">
+                    {{ '+' if batch.change_value >= 0 else '' }}{{ batch.change_value }}%
+                </div>
+                {% elif batch.change_type == 'fixed' %}
+                <div class="text-2xl font-bold {{ 'text-green-600' if batch.change_value >= 0 else 'text-red-600' }}">
+                    {{ '+' if batch.change_value >= 0 else '' }}{{ batch.change_value }} руб.
+                </div>
+                {% endif %}
+                <div class="text-sm text-gray-500">изменение</div>
+            </div>
+        </div>
+
+        <!-- Статистика -->
+        <div class="mt-6 grid grid-cols-4 gap-4">
+            <div class="text-center p-3 bg-gray-50 rounded-lg">
+                <div class="text-2xl font-bold text-gray-900">{{ batch.total_items }}</div>
+                <div class="text-xs text-gray-500">Всего товаров</div>
+            </div>
+            <div class="text-center p-3 bg-green-50 rounded-lg">
+                <div class="text-2xl font-bold text-green-600">{{ batch.safe_count }}</div>
+                <div class="text-xs text-green-600">Безопасных</div>
+            </div>
+            <div class="text-center p-3 bg-yellow-50 rounded-lg">
+                <div class="text-2xl font-bold text-yellow-600">{{ batch.warning_count }}</div>
+                <div class="text-xs text-yellow-600">Предупреждений</div>
+            </div>
+            <div class="text-center p-3 bg-red-50 rounded-lg">
+                <div class="text-2xl font-bold text-red-600">{{ batch.dangerous_count }}</div>
+                <div class="text-xs text-red-600">Опасных</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Опасные изменения -->
+    {% if dangerous_items %}
+    <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div class="px-6 py-4 border-b border-red-200 bg-red-50">
+            <h2 class="text-lg font-medium text-red-800 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+                Опасные изменения ({{ dangerous_items|length }})
+            </h2>
+            <p class="mt-1 text-sm text-red-600">
+                Эти товары имеют изменение цены более {{ settings.warning_threshold_percent }}%
+            </p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая цена</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая цена</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for item in dangerous_items %}
+                    <tr class="hover:bg-red-50">
+                        <td class="px-6 py-4">
+                            <div class="text-sm font-medium text-gray-900">{{ item.vendor_code }}</div>
+                            <div class="text-sm text-gray-500 truncate max-w-xs">{{ item.product_title[:50] }}{% if item.product_title|length > 50 %}...{% endif %}</div>
+                        </td>
+                        <td class="px-6 py-4 text-right whitespace-nowrap">
+                            <span class="text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</span>
+                        </td>
+                        <td class="px-6 py-4 text-right whitespace-nowrap">
+                            <span class="text-sm font-medium text-red-600">{{ item.new_price|round(2) if item.new_price else '—' }}</span>
+                        </td>
+                        <td class="px-6 py-4 text-right whitespace-nowrap">
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Предупреждения -->
+    {% if warning_items %}
+    <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div class="px-6 py-4 border-b border-yellow-200 bg-yellow-50">
+            <h2 class="text-lg font-medium text-yellow-800 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92z" clip-rule="evenodd"/>
+                </svg>
+                Изменения с предупреждением ({{ warning_items|length }})
+            </h2>
+        </div>
+        <div class="overflow-x-auto max-h-64 overflow-y-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50 sticky top-0">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for item in warning_items %}
+                    <tr class="hover:bg-yellow-50">
+                        <td class="px-6 py-3">
+                            <div class="text-sm text-gray-900">{{ item.vendor_code }}</div>
+                        </td>
+                        <td class="px-6 py-3 text-right text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</td>
+                        <td class="px-6 py-3 text-right text-sm font-medium text-yellow-600">{{ item.new_price|round(2) if item.new_price else '—' }}</td>
+                        <td class="px-6 py-3 text-right">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                                {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Безопасные изменения (свернуты) -->
+    {% if safe_items %}
+    <div class="bg-white shadow rounded-lg overflow-hidden mb-6" x-data="{ open: false }">
+        <button @click="open = !open" type="button"
+                class="w-full px-6 py-4 border-b border-green-200 bg-green-50 flex items-center justify-between">
+            <h2 class="text-lg font-medium text-green-800 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                Безопасные изменения ({{ safe_items|length }})
+            </h2>
+            <svg class="w-5 h-5 text-green-600 transform transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        <div x-show="open" x-collapse class="overflow-x-auto max-h-64 overflow-y-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50 sticky top-0">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for item in safe_items %}
+                    <tr class="hover:bg-green-50">
+                        <td class="px-6 py-3">
+                            <div class="text-sm text-gray-900">{{ item.vendor_code }}</div>
+                        </td>
+                        <td class="px-6 py-3 text-right text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</td>
+                        <td class="px-6 py-3 text-right text-sm font-medium text-green-600">{{ item.new_price|round(2) if item.new_price else '—' }}</td>
+                        <td class="px-6 py-3 text-right">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Форма подтверждения -->
+    <form method="POST" action="{{ url_for('prices.batch_confirm', batch_id=batch.id) }}"
+          class="bg-white shadow rounded-lg p-6">
+        <h2 class="text-lg font-medium text-gray-900 mb-4">Принять решение</h2>
+
+        {% if settings.require_comment_for_dangerous %}
+        <div class="mb-6">
+            <label for="comment" class="block text-sm font-medium text-gray-700 mb-1">
+                Причина подтверждения опасных изменений <span class="text-red-500">*</span>
+            </label>
+            <textarea name="comment" id="comment" rows="3" required
+                      placeholder="Укажите причину, почему эти изменения цен необходимы..."
+                      class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+            <p class="mt-1 text-xs text-gray-500">
+                Комментарий будет сохранен в истории изменений для аудита
+            </p>
+        </div>
+        {% else %}
+        <input type="hidden" name="comment" value="">
+        {% endif %}
+
+        <!-- Чекбокс подтверждения -->
+        <div class="mb-6 p-4 bg-gray-50 rounded-lg">
+            <label class="flex items-start cursor-pointer" x-data="{ confirmed: false }">
+                <input type="checkbox" x-model="confirmed" required
+                       class="mt-1 h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded">
+                <span class="ml-3 text-sm text-gray-700">
+                    Я понимаю, что <strong class="text-red-600">{{ dangerous_items|length }} товаров</strong>
+                    будут иметь изменение цены более чем на <strong>{{ settings.warning_threshold_percent }}%</strong>,
+                    и подтверждаю, что это сделано намеренно.
+                </span>
+            </label>
+        </div>
+
+        <!-- Кнопки -->
+        <div class="flex items-center justify-between">
+            <button type="submit" name="action" value="reject"
+                    class="px-6 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500">
+                Отклонить изменения
+            </button>
+
+            <button type="submit" name="action" value="confirm"
+                    class="px-6 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Подтвердить изменения
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

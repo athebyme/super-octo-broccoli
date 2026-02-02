@@ -3,47 +3,567 @@
 {% block title %}Редактирование карточки - {{ product.vendor_code }}{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="productEditApp()">
     <!-- Хлебные крошки -->
     <nav class="mb-6 text-sm">
         <ol class="flex items-center space-x-2 text-gray-500">
-            <li><a href="{{ url_for('products_list') }}" class="hover:text-indigo-600">Товары</a></li>
+            <li><a href="{{ url_for('products_list') }}" class="hover:text-indigo-600 transition">Товары</a></li>
             <li>/</li>
-            <li><a href="{{ url_for('product_detail', product_id=product.id) }}" class="hover:text-indigo-600">{{ product.vendor_code }}</a></li>
+            <li><a href="{{ url_for('product_detail', product_id=product.id) }}" class="hover:text-indigo-600 transition">{{ product.vendor_code }}</a></li>
             <li>/</li>
-            <li class="text-gray-900">Редактирование</li>
+            <li class="text-gray-900 font-medium">Редактирование</li>
         </ol>
     </nav>
 
-    <!-- Заголовок -->
+    <!-- Заголовок с индикатором изменений -->
     <div class="mb-8 flex items-start justify-between">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900">Редактирование карточки</h1>
-            <p class="mt-2 text-sm text-gray-600">
-                NM ID: {{ product.nm_id }} | Артикул: {{ product.vendor_code }}
-            </p>
+        <div class="flex items-center space-x-4">
+            <!-- Фото товара -->
+            {% set photos = product.photos_json|from_json if product.photos_json else [] %}
+            {% if photos or product.nm_id %}
+            <img src="{{ wb_photo_url(product.nm_id, photos[0] if photos else 1, 'tm') }}"
+                 alt="{{ product.title }}"
+                 class="w-16 h-16 rounded-lg object-cover shadow-sm border border-gray-200"
+                 onerror="this.onerror=null; this.src=''; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+            <div class="w-16 h-16 bg-gray-100 rounded-lg items-center justify-center border border-gray-200" style="display: none;">
+                <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                </svg>
+            </div>
+            {% endif %}
+
+            <div>
+                <div class="flex items-center space-x-3">
+                    <h1 class="text-2xl font-bold text-gray-900">Редактирование карточки</h1>
+                    <!-- Индикатор несохранённых изменений -->
+                    <span x-show="hasChanges"
+                          x-transition:enter="transition ease-out duration-200"
+                          x-transition:enter-start="opacity-0 scale-95"
+                          x-transition:enter-end="opacity-100 scale-100"
+                          class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                        <span class="w-1.5 h-1.5 rounded-full bg-yellow-500 mr-1.5 animate-pulse"></span>
+                        Есть изменения
+                    </span>
+                </div>
+                <p class="mt-1 text-sm text-gray-600 flex items-center space-x-4">
+                    <span class="inline-flex items-center" x-data="{ show: false }" @mouseenter="show = true" @mouseleave="show = false">
+                        <span class="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-xs">NM ID: {{ product.nm_id }}</span>
+                        <div x-show="show" x-transition class="absolute mt-8 z-50 px-2 py-1 text-xs bg-gray-900 text-white rounded shadow-lg whitespace-nowrap">
+                            Идентификатор карточки в Wildberries
+                        </div>
+                    </span>
+                    <span class="text-gray-400">|</span>
+                    <span>{{ product.vendor_code }}</span>
+                    {% if product.brand %}
+                    <span class="text-gray-400">|</span>
+                    <span class="text-gray-500">{{ product.brand }}</span>
+                    {% endif %}
+                </p>
+            </div>
         </div>
-        <a href="{{ url_for('product_edit_history', product_id=product.id) }}"
-           class="inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition border border-gray-300">
-            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-            История изменений
-        </a>
+
+        <div class="flex items-center space-x-3">
+            <!-- Кнопка истории -->
+            <a href="{{ url_for('product_edit_history', product_id=product.id) }}"
+               class="relative inline-flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition border border-gray-300 group"
+               x-data="{ show: false }" @mouseenter="show = true" @mouseleave="show = false">
+                <svg class="w-5 h-5 mr-2 text-gray-500 group-hover:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                История
+                <div x-show="show" x-transition class="absolute top-full mt-2 right-0 z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded shadow-lg whitespace-nowrap">
+                    Просмотр истории изменений карточки
+                </div>
+            </a>
+        </div>
     </div>
 
-    <form method="POST" class="space-y-8" x-data="{
+    <form method="POST"
+          class="space-y-6"
+          @submit="handleSubmit($event)"
+          @input="markAsChanged()"
+          @change="markAsChanged()">
+
+        <!-- Ошибки валидации -->
+        <div x-show="validationErrors.length > 0"
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 transform -translate-y-2"
+             x-transition:enter-end="opacity-100 transform translate-y-0"
+             id="validation-errors"
+             class="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm">
+            <div class="flex items-start">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                    </svg>
+                </div>
+                <div class="ml-3 flex-1">
+                    <h3 class="text-sm font-semibold text-red-800">Ошибки валидации</h3>
+                    <ul class="mt-2 text-sm text-red-700 list-disc list-inside space-y-1">
+                        <template x-for="error in validationErrors" :key="error">
+                            <li x-text="error"></li>
+                        </template>
+                    </ul>
+                </div>
+                <button type="button" @click="validationErrors = []" class="ml-3 text-red-400 hover:text-red-600">
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Основная информация -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    Основная информация
+                </h2>
+            </div>
+
+            <div class="p-6 space-y-6">
+                <!-- Артикул продавца -->
+                <div class="relative" x-data="{ focused: false, showTooltip: false }">
+                    <label for="vendor_code" class="flex items-center text-sm font-medium text-gray-700 mb-2">
+                        Артикул продавца
+                        <button type="button"
+                                class="ml-1.5 text-gray-400 hover:text-gray-600"
+                                @mouseenter="showTooltip = true"
+                                @mouseleave="showTooltip = false">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+                            </svg>
+                        </button>
+                        <div x-show="showTooltip" x-transition
+                             class="absolute left-0 top-full mt-1 z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded-lg shadow-lg max-w-xs">
+                            Уникальный артикул товара от поставщика. Используется для идентификации товара в вашей системе.
+                        </div>
+                    </label>
+                    <input type="text"
+                           name="vendor_code"
+                           id="vendor_code"
+                           value="{{ product.vendor_code }}"
+                           @focus="focused = true"
+                           @blur="focused = false"
+                           class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200"
+                           :class="focused ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400'">
+                </div>
+
+                <!-- Название -->
+                <div class="relative" x-data="{ focused: false, showTooltip: false }">
+                    <label for="title" class="flex items-center text-sm font-medium text-gray-700 mb-2">
+                        Название товара
+                        <span class="ml-2 text-xs font-normal px-1.5 py-0.5 bg-gray-100 rounded text-gray-500">макс. 60 символов</span>
+                        <button type="button"
+                                class="ml-1.5 text-gray-400 hover:text-gray-600"
+                                @mouseenter="showTooltip = true"
+                                @mouseleave="showTooltip = false">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+                            </svg>
+                        </button>
+                        <div x-show="showTooltip" x-transition
+                             class="absolute left-0 top-full mt-1 z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded-lg shadow-lg max-w-xs">
+                            Название товара, которое видят покупатели на Wildberries. Рекомендуется использовать ключевые слова.
+                        </div>
+                    </label>
+                    <input type="text"
+                           name="title"
+                           id="title"
+                           value="{{ product.title }}"
+                           maxlength="60"
+                           @input="titleLength = $event.target.value.length"
+                           @focus="focused = true"
+                           @blur="focused = false"
+                           class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200"
+                           :class="[
+                               focused ? 'ring-2' : '',
+                               titleLength > 55 ? 'border-yellow-400 ring-yellow-400/20' : (focused ? 'border-indigo-500 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400')
+                           ]">
+                    <div class="mt-2 flex items-center justify-between">
+                        <div class="h-1.5 flex-1 bg-gray-200 rounded-full overflow-hidden mr-4">
+                            <div class="h-full transition-all duration-300 rounded-full"
+                                 :class="titleLength > 55 ? 'bg-yellow-500' : (titleLength > 40 ? 'bg-green-500' : 'bg-indigo-500')"
+                                 :style="`width: ${Math.min(titleLength / 60 * 100, 100)}%`"></div>
+                        </div>
+                        <span class="text-xs font-medium"
+                              :class="titleLength > 55 ? 'text-yellow-600' : 'text-gray-500'">
+                            <span x-text="titleLength"></span>/60
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Бренд -->
+                <div class="relative" x-data="{ focused: false, showTooltip: false }">
+                    <label for="brand" class="flex items-center text-sm font-medium text-gray-700 mb-2">
+                        Бренд
+                        <button type="button"
+                                class="ml-1.5 text-gray-400 hover:text-gray-600"
+                                @mouseenter="showTooltip = true"
+                                @mouseleave="showTooltip = false">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+                            </svg>
+                        </button>
+                        <div x-show="showTooltip" x-transition
+                             class="absolute left-0 top-full mt-1 z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded-lg shadow-lg max-w-xs">
+                            Название бренда товара. Изменение бренда может требовать модерации.
+                        </div>
+                    </label>
+                    <input type="text"
+                           name="brand"
+                           id="brand"
+                           value="{{ product.brand }}"
+                           @focus="focused = true"
+                           @blur="focused = false"
+                           class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200"
+                           :class="focused ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400'">
+                </div>
+
+                <!-- Описание -->
+                <div class="relative" x-data="{ focused: false, showTooltip: false }">
+                    <label for="description" class="flex items-center text-sm font-medium text-gray-700 mb-2">
+                        Описание
+                        <span class="ml-2 text-xs font-normal px-1.5 py-0.5 bg-gray-100 rounded text-gray-500">макс. 5000 символов</span>
+                        <button type="button"
+                                class="ml-1.5 text-gray-400 hover:text-gray-600"
+                                @mouseenter="showTooltip = true"
+                                @mouseleave="showTooltip = false">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+                            </svg>
+                        </button>
+                        <div x-show="showTooltip" x-transition
+                             class="absolute left-0 top-full mt-1 z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded-lg shadow-lg max-w-xs">
+                            Подробное описание товара для покупателей. Используйте ключевые слова для SEO.
+                        </div>
+                    </label>
+                    <textarea name="description"
+                              id="description"
+                              rows="6"
+                              @input="descLength = $event.target.value.length"
+                              @focus="focused = true"
+                              @blur="focused = false"
+                              class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200 resize-y"
+                              :class="[
+                                  focused ? 'ring-2' : '',
+                                  descLength > 5000 ? 'border-red-500 ring-red-500/20' : (focused ? 'border-indigo-500 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400')
+                              ]">{{ product.description }}</textarea>
+                    <div class="mt-2 flex items-center justify-between">
+                        <div class="h-1.5 flex-1 bg-gray-200 rounded-full overflow-hidden mr-4">
+                            <div class="h-full transition-all duration-300 rounded-full"
+                                 :class="descLength > 5000 ? 'bg-red-500' : (descLength > 4000 ? 'bg-yellow-500' : 'bg-indigo-500')"
+                                 :style="`width: ${Math.min(descLength / 5000 * 100, 100)}%`"></div>
+                        </div>
+                        <span class="text-xs font-medium"
+                              :class="{
+                                  'text-red-600': descLength > 5000,
+                                  'text-yellow-600': descLength > 4000 && descLength <= 5000,
+                                  'text-gray-500': descLength <= 4000
+                              }">
+                            <span x-text="descLength"></span>/5000
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Характеристики -->
+        {% if characteristics or characteristics_config %}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
+                    </svg>
+                    Характеристики
+                </h2>
+                <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                    {{ characteristics|length }} из {{ characteristics_config|length if characteristics_config else '?' }}
+                </span>
+            </div>
+
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {% for char in characteristics %}
+                    {% set char_value = char.value|format_char_value if char.value else '' %}
+                    {% set char_config = characteristics_config|selectattr('id', 'equalto', char.id)|first if characteristics_config else none %}
+
+                    <div class="relative group" x-data="{ focused: false, expanded: false }">
+                        <label for="char_{{ char.id }}" class="flex items-center text-sm font-medium text-gray-700 mb-2">
+                            {{ char.name or char.name_en }}
+                            {% if char_config and char_config.required %}
+                            <span class="ml-1 text-red-500">*</span>
+                            {% endif %}
+                            {% if char_config and char_config.unit_name %}
+                            <span class="ml-2 text-xs text-gray-400">({{ char_config.unit_name }})</span>
+                            {% endif %}
+                        </label>
+
+                        <!-- Текущее значение (сворачиваемое) -->
+                        {% if char_value %}
+                        <div class="mb-2 overflow-hidden transition-all duration-200"
+                             :class="expanded ? 'max-h-96' : 'max-h-12'">
+                            <div class="px-3 py-2 bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-lg">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex-1 min-w-0">
+                                        <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Текущее:</span>
+                                        <p class="mt-0.5 text-sm text-gray-700 break-words"
+                                           :class="expanded ? '' : 'line-clamp-1'">{{ char_value }}</p>
+                                    </div>
+                                    {% if char_value|length > 50 %}
+                                    <button type="button"
+                                            @click="expanded = !expanded"
+                                            class="ml-2 text-xs text-indigo-600 hover:text-indigo-800 whitespace-nowrap">
+                                        <span x-text="expanded ? 'Свернуть' : 'Показать'"></span>
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Поле ввода -->
+                        {% if char_config and char_config.dictionary %}
+                        <select name="char_{{ char.id }}"
+                                id="char_{{ char.id }}"
+                                @focus="focused = true"
+                                @blur="focused = false"
+                                class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200 bg-white"
+                                :class="focused ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400'">
+                            <option value="">-- Выберите значение --</option>
+                            {% for dict_val in char_config.dictionary %}
+                            <option value="{{ dict_val.id }}" {% if char_value and dict_val.value in char_value %}selected{% endif %}>
+                                {{ dict_val.value }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1.5 text-xs text-gray-500 flex items-center">
+                            <svg class="w-3.5 h-3.5 mr-1 text-indigo-400" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/>
+                            </svg>
+                            Справочник WB ({{ char_config.dictionary|length }} вариантов)
+                        </p>
+                        {% else %}
+                            {% if char_value|length > 100 %}
+                            <textarea name="char_{{ char.id }}"
+                                      id="char_{{ char.id }}"
+                                      rows="3"
+                                      placeholder="Введите новое значение..."
+                                      @focus="focused = true"
+                                      @blur="focused = false"
+                                      class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200 resize-y"
+                                      :class="focused ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400'">{{ char_value }}</textarea>
+                            {% else %}
+                            <input type="text"
+                                   name="char_{{ char.id }}"
+                                   id="char_{{ char.id }}"
+                                   value="{{ char_value }}"
+                                   placeholder="Введите новое значение..."
+                                   @focus="focused = true"
+                                   @blur="focused = false"
+                                   class="w-full px-4 py-2.5 border rounded-lg transition-all duration-200"
+                                   :class="focused ? 'border-indigo-500 ring-2 ring-indigo-500/20' : 'border-gray-300 hover:border-gray-400'">
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Информация о размерах (только для просмотра) -->
+        {% if sizes %}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path>
+                    </svg>
+                    Размеры и SKU
+                    <span class="ml-2 text-xs font-normal text-gray-400">(только просмотр)</span>
+                </h2>
+                <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                    {{ sizes|length }} размеров
+                </span>
+            </div>
+
+            <div class="p-4">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full">
+                        <thead>
+                            <tr class="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                <th class="px-4 py-3 text-left bg-gray-50 rounded-l-lg">Размер</th>
+                                <th class="px-4 py-3 text-left bg-gray-50">Баркод</th>
+                                <th class="px-4 py-3 text-left bg-gray-50 rounded-r-lg">SKU</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            {% for size in sizes %}
+                            <tr class="hover:bg-gray-50 transition-colors">
+                                <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ size.techSize or size.wbSize or '—' }}</td>
+                                <td class="px-4 py-3 text-sm text-gray-600 font-mono">
+                                    {% if size.skus %}
+                                        {% for sku in size.skus %}
+                                        <span class="inline-block bg-gray-100 px-1.5 py-0.5 rounded text-xs">{{ sku }}</span>
+                                        {% if not loop.last %} {% endif %}
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-gray-400">—</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-600 font-mono">{{ size.chrtID or '—' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <p class="mt-3 text-xs text-gray-500 flex items-center">
+                    <svg class="w-4 h-4 mr-1.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    Размеры редактируются через личный кабинет Wildberries
+                </p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Индикатор процесса -->
+        <div x-show="isSubmitting"
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 transform translate-y-2"
+             x-transition:enter-end="opacity-100 transform translate-y-0"
+             class="bg-blue-50 rounded-xl border border-blue-200 p-5 shadow-sm">
+            <div class="flex items-center">
+                <div class="flex-shrink-0">
+                    <svg class="w-6 h-6 text-blue-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </div>
+                <div class="ml-4 flex-1">
+                    <h3 class="text-sm font-semibold text-blue-800">Обновление карточки...</h3>
+                    <p class="mt-1 text-sm text-blue-600" x-text="submitStatus">Отправка данных в Wildberries API...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Предупреждение о WB API -->
+        <div class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-xl border border-yellow-200 p-5">
+            <div class="flex items-start">
+                <div class="flex-shrink-0">
+                    <svg class="h-5 w-5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                    </svg>
+                </div>
+                <div class="ml-3 flex-1">
+                    <h3 class="text-sm font-semibold text-yellow-800">Важно о Wildberries API</h3>
+                    <ul class="mt-2 text-sm text-yellow-700 space-y-1.5">
+                        <li class="flex items-start">
+                            <span class="mr-2">•</span>
+                            <span>Модерация может занять от нескольких минут до нескольких часов</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="mr-2">•</span>
+                            <span>Некоторые поля могут быть защищены от редактирования</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="mr-2">•</span>
+                            <span>Рекомендуется проверить на одном товаре перед массовым редактированием</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sticky кнопки действий -->
+        <div class="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-gray-200 -mx-4 px-4 py-4 mt-8 shadow-lg rounded-t-xl z-40">
+            <div class="max-w-7xl mx-auto flex items-center justify-between">
+                <a href="{{ url_for('product_detail', product_id=product.id) }}"
+                   class="px-5 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition font-medium flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    Отмена
+                </a>
+
+                <div class="flex items-center space-x-3">
+                    <!-- Индикатор изменений -->
+                    <span x-show="hasChanges" class="text-sm text-gray-500 hidden sm:inline-flex items-center">
+                        <span class="w-2 h-2 rounded-full bg-yellow-400 mr-2 animate-pulse"></span>
+                        Несохранённые изменения
+                    </span>
+
+                    <button type="submit"
+                            :disabled="isSubmitting"
+                            class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium flex items-center disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md">
+                        <template x-if="!isSubmitting">
+                            <span class="flex items-center">
+                                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                                Сохранить изменения
+                            </span>
+                        </template>
+                        <template x-if="isSubmitting">
+                            <span class="flex items-center">
+                                <svg class="w-5 h-5 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Сохранение...
+                            </span>
+                        </template>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function productEditApp() {
+    return {
         descLength: {{ product.description|length if product.description else 0 }},
         titleLength: {{ product.title|length if product.title else 0 }},
         validationErrors: [],
+        hasChanges: false,
+        isSubmitting: false,
+        submitStatus: 'Отправка данных в Wildberries API...',
+        initialFormData: null,
 
-        validateForm(e) {
+        init() {
+            // Сохраняем начальное состояние формы
+            this.$nextTick(() => {
+                const form = this.$el.querySelector('form');
+                if (form) {
+                    this.initialFormData = new FormData(form);
+                }
+            });
+
+            // Предупреждение при уходе со страницы
+            window.addEventListener('beforeunload', (e) => {
+                if (this.hasChanges && !this.isSubmitting) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                }
+            });
+        },
+
+        markAsChanged() {
+            this.hasChanges = true;
+        },
+
+        handleSubmit(e) {
             this.validationErrors = [];
 
             // Валидация описания
             const desc = document.getElementById('description').value;
             this.descLength = desc.length;
-            // Убрали минимум 1000 символов - теперь описание может быть любой длины до 5000
             if (desc && desc.length > 5000) {
                 this.validationErrors.push('Описание слишком длинное (' + desc.length + ' символов, максимум 5000)');
             }
@@ -58,336 +578,38 @@
             // Если есть ошибки - отменяем отправку
             if (this.validationErrors.length > 0) {
                 e.preventDefault();
-                // Скроллим к блоку ошибок
                 setTimeout(() => {
                     document.getElementById('validation-errors').scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }, 100);
                 return false;
             }
 
+            // Показываем индикатор загрузки
+            this.isSubmitting = true;
+            this.submitStatus = 'Получение полной карточки из WB API...';
+
+            setTimeout(() => {
+                this.submitStatus = 'Обновление данных карточки...';
+            }, 1000);
+
+            setTimeout(() => {
+                this.submitStatus = 'Отправка изменений в Wildberries...';
+            }, 2000);
+
+            this.hasChanges = false;
             return true;
         }
-    }" @submit="validateForm($event)">
-        <!-- Ошибки валидации -->
-        <div x-show="validationErrors.length > 0"
-             id="validation-errors"
-             class="bg-red-50 border border-red-200 rounded-lg p-4">
-            <div class="flex items-start">
-                <svg class="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
-                </svg>
-                <div class="ml-3 flex-1">
-                    <h3 class="text-sm font-medium text-red-800">Ошибки валидации</h3>
-                    <div class="mt-2 text-sm text-red-700">
-                        <ul class="list-disc list-inside space-y-1">
-                            <template x-for="error in validationErrors" :key="error">
-                                <li x-text="error"></li>
-                            </template>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Основная информация -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Основная информация</h2>
-
-            <div class="grid grid-cols-1 gap-6">
-                <!-- Артикул продавца -->
-                <div>
-                    <label for="vendor_code" class="block text-sm font-medium text-gray-700 mb-2">
-                        Артикул продавца
-                    </label>
-                    <input type="text"
-                           name="vendor_code"
-                           id="vendor_code"
-                           value="{{ product.vendor_code }}"
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                    <p class="mt-1 text-xs text-gray-500">Уникальный артикул товара от поставщика</p>
-                </div>
-
-                <!-- Название -->
-                <div>
-                    <label for="title" class="block text-sm font-medium text-gray-700 mb-2">
-                        Название товара
-                        <span class="text-xs text-gray-500 font-normal">(максимум 60 символов)</span>
-                    </label>
-                    <input type="text"
-                           name="title"
-                           id="title"
-                           value="{{ product.title }}"
-                           maxlength="60"
-                           @input="titleLength = $event.target.value.length"
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                    <p class="mt-1 text-xs text-gray-500">
-                        Символов: <span x-text="titleLength"></span> / 60
-                    </p>
-                </div>
-
-                <!-- Бренд -->
-                <div>
-                    <label for="brand" class="block text-sm font-medium text-gray-700 mb-2">
-                        Бренд
-                    </label>
-                    <input type="text"
-                           name="brand"
-                           id="brand"
-                           value="{{ product.brand }}"
-                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                </div>
-
-                <!-- Описание -->
-                <div>
-                    <label for="description" class="block text-sm font-medium text-gray-700 mb-2">
-                        Описание
-                        <span class="text-xs text-gray-500 font-normal">(максимум 5000 символов)</span>
-                    </label>
-                    <textarea name="description"
-                              id="description"
-                              rows="6"
-                              @input="descLength = $event.target.value.length"
-                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                              :class="{
-                                  'border-green-300': descLength > 0 && descLength <= 5000,
-                                  'border-red-300': descLength > 5000
-                              }">{{ product.description }}</textarea>
-                    <div class="mt-1 flex items-center justify-between text-xs">
-                        <span class="text-gray-500">Подробное описание товара для покупателей</span>
-                        <span :class="{
-                            'text-red-600': descLength > 5000,
-                            'text-green-600': descLength > 0 && descLength <= 5000,
-                            'text-gray-500': descLength === 0
-                        }">
-                            Символов: <strong x-text="descLength"></strong> / 5000
-                        </span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Характеристики -->
-        {% if characteristics or characteristics_config %}
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Характеристики</h2>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {% for char in characteristics %}
-                {% set char_value = char.value|format_char_value if char.value else '' %}
-                {% set char_config = characteristics_config|selectattr('id', 'equalto', char.id)|first if characteristics_config else none %}
-
-                <div>
-                    <label for="char_{{ char.id }}" class="block text-sm font-medium text-gray-700 mb-2">
-                        {{ char.name or char.name_en }}
-                        {% if char_config and char_config.required %}<span class="text-red-500">*</span>{% endif %}
-                    </label>
-
-                    <!-- Текущее значение -->
-                    {% if char_value %}
-                    <div class="mb-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                        <div class="flex items-start justify-between">
-                            <div class="flex-1">
-                                <span class="text-xs font-medium text-gray-500 uppercase">Текущее:</span>
-                                <p class="mt-1 text-sm text-gray-900 break-words">{{ char_value }}</p>
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <!-- Если есть справочник значений - показываем select -->
-                    {% if char_config and char_config.dictionary %}
-                    <select name="char_{{ char.id }}"
-                            id="char_{{ char.id }}"
-                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        <option value="">-- Выберите значение --</option>
-                        {% for dict_val in char_config.dictionary %}
-                        <option value="{{ dict_val.id }}" {% if char_value and dict_val.value in char_value %}selected{% endif %}>
-                            {{ dict_val.value }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                    <p class="mt-1 text-xs text-gray-500">
-                        💡 Выберите из справочника WB ({{ char_config.dictionary|length }} вариантов)
-                    </p>
-
-                    <!-- Иначе - текстовое поле -->
-                    {% else %}
-                        {% if char_value|length > 100 %}
-                        <textarea name="char_{{ char.id }}"
-                                  id="char_{{ char.id }}"
-                                  rows="3"
-                                  placeholder="Введите новое значение..."
-                                  class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">{{ char_value }}</textarea>
-                        {% else %}
-                        <input type="text"
-                               name="char_{{ char.id }}"
-                               id="char_{{ char.id }}"
-                               value="{{ char_value }}"
-                               placeholder="Введите новое значение..."
-                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                        {% endif %}
-
-                        {% if char_config and char_config.unit_name %}
-                        <p class="mt-1 text-xs text-gray-500">Единица: {{ char_config.unit_name }}</p>
-                        {% endif %}
-                    {% endif %}
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Предопределенные характеристики (если доступны) -->
-        {% if characteristics_config %}
-        <div class="bg-blue-50 rounded-lg border border-blue-200 p-6">
-            <div class="flex items-start">
-                <svg class="h-5 w-5 text-blue-400 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
-                </svg>
-                <div class="ml-3">
-                    <h3 class="text-sm font-medium text-blue-800">Доступные характеристики</h3>
-                    <div class="mt-2 text-sm text-blue-700">
-                        <p>Для категории "{{ product.object_name }}" доступны следующие характеристики:</p>
-                        <ul class="list-disc list-inside mt-2 space-y-1">
-                            {% for config in characteristics_config[:5] %}
-                            <li>{{ config.name }} {% if config.required %}<span class="text-red-600">(обязательно)</span>{% endif %}</li>
-                            {% endfor %}
-                            {% if characteristics_config|length > 5 %}
-                            <li class="text-blue-600">И еще {{ characteristics_config|length - 5 }}...</li>
-                            {% endif %}
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Информация о размерах (только для просмотра) -->
-        {% if sizes %}
-        <div class="bg-gray-50 rounded-lg border border-gray-200 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-4">Размеры и SKU</h2>
-            <p class="text-sm text-gray-600 mb-4">
-                Размеры редактируются через личный кабинет Wildberries
-            </p>
-
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-100">
-                        <tr>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Размер</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Баркод</th>
-                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">SKU</th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                        {% for size in sizes %}
-                        <tr>
-                            <td class="px-4 py-3 text-sm text-gray-900">{{ size.techSize or size.wbSize or '—' }}</td>
-                            <td class="px-4 py-3 text-sm text-gray-600">
-                                {% if size.skus %}
-                                    {% for sku in size.skus %}
-                                    {{ sku }}{% if not loop.last %}, {% endif %}
-                                    {% endfor %}
-                                {% else %}
-                                    —
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 text-sm text-gray-600">{{ size.chrtID or '—' }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Кнопки действий -->
-        <div class="flex items-center justify-between pt-6 border-t border-gray-200">
-            <a href="{{ url_for('product_detail', product_id=product.id) }}"
-               class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition">
-                Отмена
-            </a>
-
-            <div class="flex space-x-4">
-                <button type="submit"
-                        id="saveButton"
-                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center">
-                    <svg id="saveIcon" class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                    </svg>
-                    <svg id="loadingIcon" class="w-5 h-5 mr-2 animate-spin hidden" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span id="saveText">Сохранить изменения</span>
-                </button>
-            </div>
-        </div>
-    </form>
-
-    <!-- Индикатор процесса -->
-    <div id="processIndicator" class="mt-6 bg-blue-50 rounded-lg border border-blue-200 p-4 hidden">
-        <div class="flex items-start">
-            <svg class="w-5 h-5 text-blue-400 mt-0.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <div class="ml-3">
-                <h3 class="text-sm font-medium text-blue-800">Обновление карточки...</h3>
-                <p class="mt-1 text-sm text-blue-700" id="processStatus">
-                    Получение полной карточки из WB API...
-                </p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Предупреждение -->
-    <div class="mt-6 bg-yellow-50 rounded-lg border border-yellow-200 p-4">
-        <div class="flex items-start">
-            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-            </svg>
-            <div class="ml-3">
-                <h3 class="text-sm font-medium text-yellow-800">Важно о Wildberries API</h3>
-                <div class="mt-2 text-sm text-yellow-700 space-y-2">
-                    <p><strong>Изменения отправляются в Wildberries API:</strong></p>
-                    <ul class="list-disc list-inside ml-2 space-y-1">
-                        <li>Модерация может занять от нескольких минут до нескольких часов</li>
-                        <li>Некоторые поля могут быть защищены от редактирования в зависимости от категории</li>
-                        <li>Если получаете ошибку 404 - эндпоинт API может быть недоступен или требуется другой формат запроса</li>
-                        <li>WB API v2 может требовать полную карточку вместо частичных изменений</li>
-                    </ul>
-                    <p class="mt-2"><strong>Рекомендация:</strong> Сначала проверьте на одном товаре перед массовым редактированием</p>
-                    <p class="text-xs mt-2">Логи запросов доступны в разделе "API Логи"</p>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<script>
-// Обработка отправки формы
-document.querySelector('form').addEventListener('submit', function(e) {
-    const saveButton = document.getElementById('saveButton');
-    const saveIcon = document.getElementById('saveIcon');
-    const loadingIcon = document.getElementById('loadingIcon');
-    const saveText = document.getElementById('saveText');
-    const processIndicator = document.getElementById('processIndicator');
-
-    // Показываем индикатор загрузки
-    saveIcon.classList.add('hidden');
-    loadingIcon.classList.remove('hidden');
-    saveText.textContent = 'Сохранение...';
-    saveButton.disabled = true;
-    saveButton.classList.add('opacity-75', 'cursor-not-allowed');
-
-    // Показываем индикатор процесса
-    processIndicator.classList.remove('hidden');
-
-    // Плавная прокрутка к индикатору
-    setTimeout(() => {
-        processIndicator.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
-});
+    };
+}
 </script>
+
+<style>
+    [x-cloak] { display: none !important; }
+    .line-clamp-1 {
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+</style>
 {% endblock %}

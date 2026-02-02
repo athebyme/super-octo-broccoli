@@ -15,10 +15,22 @@
 
     <!-- Заголовок -->
     <div class="mb-8">
-        <h1 class="text-3xl font-bold text-gray-900">Массовое редактирование</h1>
-        <p class="mt-2 text-sm text-gray-600">
-            Выбрано товаров: {{ products|length }}
-        </p>
+        <div class="flex items-center space-x-3">
+            <div class="p-2 bg-indigo-100 rounded-lg">
+                <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">Массовое редактирование</h1>
+                <p class="mt-1 text-sm text-gray-600 flex items-center">
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 mr-2">
+                        {{ products|length }} товаров
+                    </span>
+                    Изменения применятся ко всем выбранным товарам
+                </p>
+            </div>
+        </div>
         {% if filter_type %}
         <div class="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
             <div class="flex items-center">
@@ -51,10 +63,18 @@
     </div>
 
     <!-- Выбранные товары -->
-    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Выбранные товары</h2>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+        <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+                </svg>
+                Выбранные товары
+            </h2>
+            <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{{ products|length }} шт.</span>
+        </div>
 
-        <div class="space-y-2 max-h-64 overflow-y-auto">
+        <div class="p-4 space-y-2 max-h-64 overflow-y-auto">
             {% for product in products %}
             <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <div class="flex items-center space-x-4">
@@ -117,6 +137,7 @@
         loading: false,
         loadError: null,
         products: [],
+        isSubmitting: false,
 
         init() {
             // Загружаем данные товаров из JSON
@@ -367,39 +388,84 @@
         clearCategoryFilter() {
             this.selectedCategory = null;
             this.loadCharacteristics();
+        },
+
+        handleSubmit() {
+            if (!this.validateForm()) {
+                return false;
+            }
+            this.isSubmitting = true;
+            return true;
         }
         };
     }
     </script>
 
     <!-- Форма массового редактирования -->
-    <form method="POST" @submit="if (!validateForm()) { $event.preventDefault(); }" x-data="bulkEditFormData()">
+    <form method="POST" @submit="if (!handleSubmit()) { $event.preventDefault(); }" x-data="bulkEditFormData()">
         <!-- Выбор операции -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Выберите операцию</h2>
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+            <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                    </svg>
+                    Выберите операцию
+                </h2>
+            </div>
 
-            <div class="space-y-4">
-                {% for op in edit_operations %}
-                <label class="flex items-start p-4 border-2 rounded-lg cursor-pointer transition"
-                       :class="operation === '{{ op.id }}' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300'">
-                    <input type="radio"
-                           name="operation"
-                           value="{{ op.id }}"
-                           x-model="operation"
-                           @change="clearFields(); if (categories && categories.length > 0 && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
-                           class="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500">
-                    <div class="ml-3">
-                        <div class="font-medium text-gray-900">{{ op.name }}</div>
-                        <div class="text-sm text-gray-600 mt-1">{{ op.description }}</div>
-                    </div>
-                </label>
-                {% endfor %}
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {% for op in edit_operations %}
+                    <label class="relative flex items-start p-4 border-2 rounded-xl cursor-pointer transition-all duration-200 group"
+                           :class="operation === '{{ op.id }}' ? 'border-indigo-500 bg-indigo-50 shadow-md ring-2 ring-indigo-500/20' : 'border-gray-200 hover:border-indigo-300 hover:shadow-sm'">
+                        <input type="radio"
+                               name="operation"
+                               value="{{ op.id }}"
+                               x-model="operation"
+                               @change="clearFields(); if (categories && categories.length > 0 && (operation === 'update_characteristic' || operation === 'add_characteristic')) { loadCharacteristics(); }"
+                               class="mt-0.5 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                        <div class="ml-3 flex-1">
+                            <div class="flex items-center justify-between">
+                                <span class="font-medium text-gray-900 group-hover:text-indigo-700 transition">{{ op.name }}</span>
+                                {% if op.id == 'update_characteristic' or op.id == 'add_characteristic' %}
+                                <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">WB API</span>
+                                {% endif %}
+                            </div>
+                            <p class="text-sm text-gray-600 mt-1">{{ op.description }}</p>
+                        </div>
+                        <!-- Индикатор выбора -->
+                        <div x-show="operation === '{{ op.id }}'"
+                             x-transition:enter="transition ease-out duration-200"
+                             x-transition:enter-start="opacity-0 scale-50"
+                             x-transition:enter-end="opacity-100 scale-100"
+                             class="absolute top-2 right-2">
+                            <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                    </label>
+                    {% endfor %}
+                </div>
             </div>
         </div>
 
         <!-- Параметры операции -->
-        <div x-show="operation" class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Параметры операции</h2>
+        <div x-show="operation"
+             x-transition:enter="transition ease-out duration-300"
+             x-transition:enter-start="opacity-0 transform -translate-y-4"
+             x-transition:enter-end="opacity-100 transform translate-y-0"
+             class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+            <div class="px-6 py-4 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                    Параметры операции
+                </h2>
+            </div>
+            <div class="p-6">
 
             <!-- Обновить бренд -->
             <div x-show="operation === 'update_brand'">
@@ -891,22 +957,56 @@
                     Характеристика будет добавлена только к товарам, у которых её ещё нет
                 </p>
             </div>
+            </div>
         </div>
 
-        <!-- Кнопки действий -->
-        <div x-show="operation" class="flex items-center justify-between pt-6 border-t border-gray-200">
-            <a href="{{ url_for('products_list') }}"
-               class="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition">
-                Отмена
-            </a>
+        <!-- Sticky кнопки действий -->
+        <div x-show="operation"
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 transform translate-y-4"
+             x-transition:enter-end="opacity-100 transform translate-y-0"
+             class="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-gray-200 -mx-6 px-6 py-4 mt-8 shadow-lg rounded-t-xl z-40">
+            <div class="flex items-center justify-between">
+                <a href="{{ url_for('products_list') }}"
+                   class="px-5 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition font-medium flex items-center">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                    Отмена
+                </a>
 
-            <button type="submit"
-                    class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition flex items-center">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                </svg>
-                Применить к {{ products|length }} товарам
-            </button>
+                <div class="flex items-center space-x-4">
+                    <!-- Краткая информация о выбранных товарах -->
+                    <div class="hidden sm:flex items-center text-sm text-gray-500">
+                        <svg class="w-4 h-4 mr-1.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                        </svg>
+                        <span>{{ products|length }} товаров</span>
+                    </div>
+
+                    <button type="submit"
+                            :disabled="isSubmitting"
+                            class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium flex items-center disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md">
+                        <template x-if="!isSubmitting">
+                            <span class="flex items-center">
+                                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                </svg>
+                                Применить к {{ products|length }} товарам
+                            </span>
+                        </template>
+                        <template x-if="isSubmitting">
+                            <span class="flex items-center">
+                                <svg class="w-5 h-5 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Применение...
+                            </span>
+                        </template>
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Общие скрытые поля для характеристик (используются обеими операциями) -->
@@ -920,23 +1020,47 @@
     </form>
 
     <!-- Предупреждение -->
-    <div class="mt-8 bg-yellow-50 rounded-lg border border-yellow-200 p-4">
+    <div class="mt-8 bg-gradient-to-r from-amber-50 to-yellow-50 rounded-xl border border-yellow-200 p-5 shadow-sm">
         <div class="flex items-start">
-            <svg class="h-5 w-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-            </svg>
-            <div class="ml-3">
-                <h3 class="text-sm font-medium text-yellow-800">Важная информация</h3>
-                <div class="mt-2 text-sm text-yellow-700 space-y-2">
-                    <p>• Изменения будут отправлены в Wildberries API для каждого товара</p>
-                    <p>• Процесс может занять время в зависимости от количества товаров</p>
-                    <p>• Модерация изменений на стороне WB может занять от нескольких минут до нескольких часов</p>
-                    <p>• Некоторые товары могут не обновиться из-за ограничений API или категории</p>
-                    <p>• Рекомендуется начать с небольшого количества товаров для проверки</p>
-                </div>
+            <div class="flex-shrink-0">
+                <svg class="h-6 w-6 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-4 flex-1">
+                <h3 class="text-sm font-semibold text-yellow-800">Важно о Wildberries API</h3>
+                <ul class="mt-3 text-sm text-yellow-700 space-y-2">
+                    <li class="flex items-start">
+                        <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+                        </svg>
+                        <span>Модерация изменений может занять от нескольких минут до нескольких часов</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                        </svg>
+                        <span>Изменения отправляются в WB API для каждого товара отдельно</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/>
+                        </svg>
+                        <span>Некоторые поля могут быть защищены от редактирования</span>
+                    </li>
+                    <li class="flex items-start">
+                        <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM5 10a1 1 0 01-1 1H3a1 1 0 110-2h1a1 1 0 011 1zM8 16v-1h4v1a2 2 0 11-4 0zM12 14c.015-.34.208-.646.477-.859a4 4 0 10-4.954 0c.27.213.462.519.476.859h4.002z"/>
+                        </svg>
+                        <span>Рекомендуется сначала проверить на небольшом количестве товаров</span>
+                    </li>
+                </ul>
             </div>
         </div>
     </div>
+
+    <!-- Отступ для sticky кнопок -->
+    <div class="h-20"></div>
 </div>
 
 <style>

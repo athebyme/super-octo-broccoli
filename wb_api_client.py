@@ -102,6 +102,7 @@ class WildberriesAPIClient:
     CONTENT_API_URL = "https://content-api.wildberries.ru"
     STATISTICS_API_URL = "https://statistics-api.wildberries.ru"
     MARKETPLACE_API_URL = "https://marketplace-api.wildberries.ru"
+    DISCOUNTS_API_URL = "https://discounts-prices-api.wildberries.ru"  # Prices API v2
 
     # Sandbox URLs для тестирования
     CONTENT_API_SANDBOX = "https://content-api-sandbox.wildberries.ru"
@@ -173,7 +174,8 @@ class WildberriesAPIClient:
         urls = {
             'content': self.CONTENT_API_SANDBOX if self.sandbox else self.CONTENT_API_URL,
             'statistics': self.STATISTICS_API_SANDBOX if self.sandbox else self.STATISTICS_API_URL,
-            'marketplace': self.MARKETPLACE_API_URL  # Нет sandbox для marketplace
+            'marketplace': self.MARKETPLACE_API_URL,  # Нет sandbox для marketplace
+            'discounts': self.DISCOUNTS_API_URL  # Prices API v2
         }
         return urls.get(api_type, self.CONTENT_API_URL)
 
@@ -823,7 +825,7 @@ class WildberriesAPIClient:
         prices: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Обновить цены товаров (Prices API)
+        Обновить цены товаров (Prices API) - DEPRECATED, используйте upload_prices_v2
 
         Args:
             prices: Список обновлений цен
@@ -838,6 +840,408 @@ class WildberriesAPIClient:
 
         response = self._make_request('POST', 'content', endpoint, json=body)
         return response.json()
+
+    # ==================== PRICES API v2 ====================
+
+    def get_goods_prices(
+        self,
+        limit: int = 1000,
+        offset: int = 0,
+        filter_nm_id: Optional[int] = None,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Получить информацию о ценах товаров (Prices API v2)
+
+        Args:
+            limit: Количество записей (макс 1000)
+            offset: Смещение для пагинации
+            filter_nm_id: Фильтр по конкретному nmID
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            {
+                "data": {
+                    "listGoods": [
+                        {
+                            "nmID": 12345,
+                            "vendorCode": "ABC-123",
+                            "sizes": [
+                                {
+                                    "sizeID": 0,
+                                    "price": 1500,
+                                    "discountedPrice": 1200,
+                                    "techSizeName": "0"
+                                }
+                            ],
+                            "currencyIsoCode4217": "RUB",
+                            "discount": 20,
+                            "editableSizePrice": false
+                        }
+                    ]
+                }
+            }
+        """
+        endpoint = "/api/v2/list/goods/filter"
+
+        params = {
+            'limit': min(limit, 1000),
+            'offset': offset
+        }
+
+        if filter_nm_id:
+            params['filterNmID'] = filter_nm_id
+
+        logger.info(f"📋 Getting goods prices (limit={limit}, offset={offset})")
+
+        try:
+            response = self._make_request(
+                'GET', 'discounts', endpoint,
+                params=params,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            goods_count = len(result.get('data', {}).get('listGoods', []))
+            logger.info(f"✅ Goods prices loaded: {goods_count} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get goods prices: {str(e)}")
+            raise
+
+    def get_all_goods_prices(
+        self,
+        batch_size: int = 1000,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить цены всех товаров с автоматической пагинацией
+
+        Args:
+            batch_size: Размер пачки для одного запроса (макс 1000)
+            log_to_db: Логировать запросы в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Список всех товаров с ценами
+        """
+        all_goods = []
+        offset = 0
+
+        while True:
+            data = self.get_goods_prices(
+                limit=batch_size,
+                offset=offset,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+
+            goods = data.get('data', {}).get('listGoods', [])
+
+            if not goods:
+                logger.info(f"No more goods to load. Total: {len(all_goods)}")
+                break
+
+            all_goods.extend(goods)
+            logger.info(f"Loaded {len(all_goods)} goods so far...")
+
+            # Если получили меньше чем лимит, значит это последняя пачка
+            if len(goods) < batch_size:
+                break
+
+            offset += len(goods)
+
+        logger.info(f"Total goods prices loaded: {len(all_goods)}")
+        return all_goods
+
+    def upload_prices_v2(
+        self,
+        prices: List[Dict[str, Any]],
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Загрузить цены и скидки (Prices API v2)
+
+        Args:
+            prices: Список обновлений цен
+                Формат: [
+                    {
+                        "nmID": 12345,
+                        "price": 1500,      # Цена до скидки
+                        "discount": 20      # Скидка в процентах (опционально)
+                    },
+                    ...
+                ]
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            {
+                "data": null,
+                "error": false,
+                "errorText": "",
+                "additionalErrors": {}
+            }
+
+        Note:
+            - Макс 1000 товаров за запрос
+            - Цена должна быть в копейках (целое число) или в рублях (число с плавающей точкой)
+            - Скидка указывается в процентах (0-99)
+        """
+        if len(prices) > 1000:
+            raise WBAPIException(
+                f"Too many prices ({len(prices)}). "
+                f"Maximum 1000 items per request. Use chunking."
+            )
+
+        if not prices:
+            logger.warning("⚠️ Empty prices list provided to upload_prices_v2")
+            return {'data': None, 'error': False, 'errorText': ''}
+
+        endpoint = "/api/v2/upload/task"
+
+        # Преобразуем формат для API
+        body = {
+            "data": prices
+        }
+
+        logger.info(f"📤 Uploading {len(prices)} prices to WB")
+
+        try:
+            response = self._make_request(
+                'POST', 'discounts', endpoint,
+                json=body,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+
+            if result.get('error'):
+                logger.error(f"❌ WB API returned error: {result.get('errorText')}")
+                additional_errors = result.get('additionalErrors', {})
+                if additional_errors:
+                    logger.error(f"   Additional errors: {additional_errors}")
+                raise WBAPIException(f"API Error: {result.get('errorText')}")
+
+            logger.info(f"✅ Prices uploaded successfully")
+            return result
+
+        except WBAPIException as e:
+            logger.error(f"❌ WB API error in upload_prices_v2: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in upload_prices_v2: {str(e)}")
+            raise
+
+    def upload_prices_batch(
+        self,
+        prices: List[Dict[str, Any]],
+        batch_size: int = 1000,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Загрузить цены пачками (для больших списков)
+
+        Args:
+            prices: Полный список обновлений цен
+            batch_size: Размер одной пачки (макс 1000)
+            log_to_db: Логировать запросы в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            {
+                "total": 1500,
+                "success": 1490,
+                "failed": 10,
+                "errors": [...]
+            }
+        """
+        result = {
+            'total': len(prices),
+            'success': 0,
+            'failed': 0,
+            'errors': []
+        }
+
+        batches = chunk_list(prices, batch_size)
+        logger.info(f"📦 Uploading {len(prices)} prices in {len(batches)} batches")
+
+        for i, batch in enumerate(batches):
+            logger.info(f"  Batch {i+1}/{len(batches)}: {len(batch)} items")
+            try:
+                self.upload_prices_v2(
+                    batch,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id
+                )
+                result['success'] += len(batch)
+            except WBAPIException as e:
+                result['failed'] += len(batch)
+                result['errors'].append({
+                    'batch': i + 1,
+                    'error': str(e),
+                    'nm_ids': [p.get('nmID') for p in batch]
+                })
+                logger.error(f"  ❌ Batch {i+1} failed: {str(e)}")
+
+        logger.info(f"📊 Upload complete: {result['success']}/{result['total']} success")
+        return result
+
+    def get_price_upload_status(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Получить статус обработанных загрузок цен (Prices API v2)
+
+        Args:
+            limit: Количество записей (макс 100)
+            offset: Смещение для пагинации
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            {
+                "data": {
+                    "uploadID": 123,
+                    "status": 3,  # 3 = processed
+                    "uploadDate": "2024-01-15T10:30:00Z",
+                    "activationDate": "2024-01-15T10:35:00Z",
+                    "overAllGoodsNumber": 100,
+                    "successGoodsNumber": 98,
+                    "failedGoods": [...]
+                }
+            }
+        """
+        endpoint = "/api/v2/history/tasks"
+
+        params = {
+            'limit': min(limit, 100),
+            'offset': offset
+        }
+
+        logger.info(f"📋 Getting price upload status (limit={limit})")
+
+        try:
+            response = self._make_request(
+                'GET', 'discounts', endpoint,
+                params=params,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            logger.info(f"✅ Price upload status loaded")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get price upload status: {str(e)}")
+            raise
+
+    def get_price_buffer_status(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Получить статус необработанных (буферных) загрузок цен (Prices API v2)
+
+        Args:
+            limit: Количество записей (макс 100)
+            offset: Смещение для пагинации
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Список загрузок в буфере ожидающих обработки
+        """
+        endpoint = "/api/v2/buffer/tasks"
+
+        params = {
+            'limit': min(limit, 100),
+            'offset': offset
+        }
+
+        logger.info(f"📋 Getting price buffer status (limit={limit})")
+
+        try:
+            response = self._make_request(
+                'GET', 'discounts', endpoint,
+                params=params,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            logger.info(f"✅ Price buffer status loaded")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get price buffer status: {str(e)}")
+            raise
+
+    def get_quarantine_goods(
+        self,
+        limit: int = 1000,
+        offset: int = 0,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Получить товары в карантине (Prices API v2)
+
+        Карантин - это товары с потенциально ошибочными ценами,
+        которые требуют проверки перед публикацией.
+
+        Args:
+            limit: Количество записей (макс 1000)
+            offset: Смещение для пагинации
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            {
+                "data": {
+                    "listGoods": [
+                        {
+                            "nmID": 12345,
+                            "vendorCode": "ABC-123",
+                            "sizes": [...],
+                            "quarantineReason": "Цена ниже минимальной"
+                        }
+                    ]
+                }
+            }
+        """
+        endpoint = "/api/v2/quarantine/goods"
+
+        params = {
+            'limit': min(limit, 1000),
+            'offset': offset
+        }
+
+        logger.info(f"📋 Getting quarantine goods (limit={limit})")
+
+        try:
+            response = self._make_request(
+                'GET', 'discounts', endpoint,
+                params=params,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            goods_count = len(result.get('data', {}).get('listGoods', []))
+            logger.info(f"✅ Quarantine goods loaded: {goods_count} items")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to get quarantine goods: {str(e)}")
+            raise
 
     def get_card_by_nm_id(
         self,

@@ -1,49 +1,61 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <!-- Заголовок и кнопка синхронизации -->
-    <div class="flex justify-between items-center mb-6">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Карточки товаров</h1>
-            <p class="text-gray-600 dark:text-gray-400 mt-1">
-                Всего: {{ total_products }} | Активных: {{ active_products }}
-            </p>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="flex flex-col lg:flex-row lg:justify-between lg:items-start gap-6 mb-8">
+        <div class="flex items-start space-x-4">
+            <div class="p-3 bg-indigo-100 rounded-xl">
+                <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">Карточки товаров</h1>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        Всего: {{ total_products }}
+                    </span>
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        Активных: {{ active_products }}
+                    </span>
+                </div>
+            </div>
         </div>
-        <div class="flex gap-3">
+        <div class="flex flex-wrap gap-3">
             {% if seller.has_valid_api_key() %}
             <a href="{{ url_for('product_create') }}"
-               class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2">
+               class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                 </svg>
-                Создать карточку
+                <span class="hidden sm:inline">Создать карточку</span>
             </a>
             <form action="{{ url_for('sync_products') }}" method="POST">
                 <button type="submit"
-                        class="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                         {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
                     {% if seller.api_sync_status == 'syncing' %}
-                        <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        Синхронизация...
+                        <span class="hidden sm:inline">Синхронизация...</span>
                     {% else %}
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                         </svg>
-                        Синхронизировать товары
+                        <span class="hidden sm:inline">Синхронизировать</span>
                     {% endif %}
                 </button>
             </form>
             <form action="{{ url_for('sync_warehouse_stocks') }}" method="POST">
                 <button type="submit"
-                        class="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2">
+                        class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
                     </svg>
-                    Синхронизировать остатки
+                    <span class="hidden sm:inline">Остатки</span>
                 </button>
             </form>
             {% else %}
@@ -74,24 +86,32 @@
     {% endif %}
 
     <!-- Поиск и расширенные фильтры -->
-    <div class="mb-6 bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
-        <form method="GET" action="{{ url_for('products_list') }}" class="space-y-4">
+    <div class="mb-6 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <form method="GET" action="{{ url_for('products_list') }}" class="p-6 space-y-4">
             <!-- Поиск -->
-            <div class="flex gap-4">
-                <div class="flex-1">
+            <div class="flex gap-3">
+                <div class="flex-1 relative">
+                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                    </div>
                     <input type="text"
                            name="search"
                            value="{{ search }}"
                            placeholder="Поиск по артикулу, названию, бренду..."
-                           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                           class="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
                 </div>
                 <button type="submit"
-                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                        class="px-5 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+                    </svg>
                     Применить
                 </button>
                 {% if search or filter_brand or filter_category or filter_has_stock or active_only %}
                 <a href="{{ url_for('products_list') }}"
-                   class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                   class="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium">
                     Сбросить
                 </a>
                 {% endif %}
@@ -226,32 +246,40 @@
     </div>
     {% endif %}
 
-    <!-- Панель массовых действий -->
-    <div id="bulkActionBar" class="hidden mb-4 bg-blue-50 dark:bg-blue-900 p-4 rounded-lg shadow">
-        <form method="POST" action="{{ url_for('bulk_products_action') }}" id="bulkActionForm" class="flex items-center gap-4">
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Выбрано: <span id="selectedCount">0</span> товаров
-            </span>
+    <!-- Sticky панель массовых действий -->
+    <div id="bulkActionBar" class="hidden sticky top-0 z-40 mb-4 bg-indigo-600 p-4 rounded-xl shadow-lg">
+        <form method="POST" action="{{ url_for('bulk_products_action') }}" id="bulkActionForm" class="flex flex-wrap items-center gap-4">
+            <div class="flex items-center gap-2 text-white">
+                <div class="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                    </svg>
+                </div>
+                <span class="text-sm font-medium">
+                    Выбрано: <span id="selectedCount" class="font-bold">0</span> товаров
+                </span>
+            </div>
+            <div class="flex-1"></div>
             <select name="action" required
-                    class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
-                <option value="">Выберите действие...</option>
-                <option value="activate">Активировать</option>
-                <option value="deactivate">Деактивировать</option>
-                <option value="export">Экспорт в CSV</option>
+                    class="px-4 py-2 border-0 rounded-lg focus:ring-2 focus:ring-white/50 bg-white/10 text-white placeholder-white/70 font-medium">
+                <option value="" class="text-gray-900">Выберите действие...</option>
+                <option value="activate" class="text-gray-900">Активировать</option>
+                <option value="deactivate" class="text-gray-900">Деактивировать</option>
+                <option value="export" class="text-gray-900">Экспорт в CSV</option>
             </select>
             <button type="submit"
-                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    class="px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors font-medium">
                 Применить
             </button>
             <button type="button" onclick="bulkEdit()"
-                    class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center">
+                    class="px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors flex items-center font-medium">
                 <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                 </svg>
                 Редактировать
             </button>
             <button type="button" onclick="clearSelection()"
-                    class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors">
+                    class="px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 rounded-lg transition-colors font-medium">
                 Отменить выбор
             </button>
         </form>
@@ -259,98 +287,107 @@
 
     <!-- Таблица товаров -->
     {% if products %}
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead class="bg-gray-50 dark:bg-gray-900">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gradient-to-r from-gray-50 to-white">
                     <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left">
                             <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)"
-                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                                   class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300">
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Фото
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Артикул / NM ID
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Название
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Бренд
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Тип
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Обновлено
                         </th>
-                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Действия
                         </th>
                     </tr>
                 </thead>
-                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                <tbody class="divide-y divide-gray-100">
                     {% for product in products %}
-                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-                        <td class="px-6 py-4">
+                    <tr class="hover:bg-indigo-50/50 transition-colors group">
+                        <td class="px-4 py-3">
                             <input type="checkbox" class="product-checkbox" value="{{ product.id }}" onchange="updateSelection()"
-                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                                   class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300">
                         </td>
-                        <td class="px-6 py-4">
+                        <td class="px-4 py-3">
                             {% if product.photos_json %}
                                 {% set photo_indices = product.photos_json|safe|from_json %}
                                 {% if photo_indices and photo_indices|length > 0 %}
                                 <img src="{{ wb_photo_url(product.nm_id, photo_indices[0], 'c246x328') }}"
                                      alt="{{ product.title }}"
                                      onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2264%22 height=%2264%22%3E%3Crect width=%22100%25%22 height=%22100%25%22 fill=%22%23e5e7eb%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2216%22 fill=%22%239ca3af%22%3ENo photo%3C/text%3E%3C/svg%3E'"
-                                     class="w-16 h-16 object-cover rounded-lg">
+                                     class="w-14 h-14 object-cover rounded-lg border border-gray-200 group-hover:border-indigo-300 transition">
                                 {% else %}
-                                <div class="w-16 h-16 bg-gray-200 dark:bg-gray-600 rounded-lg flex items-center justify-center">
-                                    <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <div class="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
+                                    <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                                     </svg>
                                 </div>
                                 {% endif %}
                             {% else %}
-                            <div class="w-16 h-16 bg-gray-200 dark:bg-gray-600 rounded-lg flex items-center justify-center">
-                                <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div class="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
+                                <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                                 </svg>
                             </div>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4">
-                            <div class="text-sm font-medium text-gray-900 dark:text-white">
+                        <td class="px-4 py-3">
+                            <div class="text-sm font-semibold text-gray-900 font-mono">
                                 {{ product.vendor_code }}
                             </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400">
+                            <div class="text-xs text-gray-500 font-mono mt-0.5">
                                 NM: {{ product.nm_id }}
                             </div>
                         </td>
-                        <td class="px-6 py-4">
-                            <div class="text-sm text-gray-900 dark:text-white max-w-xs truncate" title="{{ product.title }}">
+                        <td class="px-4 py-3">
+                            <div class="text-sm text-gray-900 max-w-xs truncate group-hover:text-indigo-700 transition" title="{{ product.title }}">
                                 {{ product.title or '—' }}
                             </div>
                         </td>
-                        <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
-                            {{ product.brand or '—' }}
+                        <td class="px-4 py-3">
+                            {% if product.brand %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                                {{ product.brand }}
+                            </span>
+                            {% else %}
+                            <span class="text-sm text-gray-400">—</span>
+                            {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
+                        <td class="px-4 py-3 text-sm text-gray-500">
                             {{ product.object_name or '—' }}
                         </td>
-                        <td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
+                        <td class="px-4 py-3 text-sm text-gray-500">
                             {% if product.last_sync %}
                                 {{ product.last_sync.strftime('%d.%m.%y %H:%M') }}
                             {% else %}
                                 —
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-right text-sm font-medium">
+                        <td class="px-4 py-3 text-right">
                             <a href="{{ url_for('product_detail', product_id=product.id) }}"
-                               class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">
+                               class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition">
                                 Подробнее
+                                <svg class="w-4 h-4 ml-1 opacity-0 group-hover:opacity-100 transition" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                                </svg>
                             </a>
                         </td>
                     </tr>

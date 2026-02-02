@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+
+{% block title %}Управление ценами - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="md:flex md:items-center md:justify-between mb-8">
+        <div class="flex-1 min-w-0">
+            <h1 class="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate flex items-center">
+                <svg class="w-8 h-8 mr-3 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Безопасное изменение цен
+            </h1>
+            <p class="mt-2 text-sm text-gray-500">
+                Управляйте ценами с защитой от случайных изменений
+            </p>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-3 md:mt-0 md:ml-4">
+            <a href="{{ url_for('prices.prices_change') }}"
+               class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                Изменить цены
+            </a>
+            <a href="{{ url_for('prices.prices_settings') }}"
+               class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                <svg class="w-5 h-5 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
+                Настройки
+            </a>
+        </div>
+    </div>
+
+    <!-- Оповещение о статусе защиты -->
+    {% if settings.is_enabled %}
+    <div class="bg-green-50 border-l-4 border-green-400 p-4 mb-6">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm text-green-700">
+                    <strong>Защита активна.</strong>
+                    Изменения более чем на {{ settings.warning_threshold_percent }}%
+                    {% if settings.mode == 'confirm' %}требуют подтверждения{% elif settings.mode == 'block' %}заблокированы{% else %}будут отмечены{% endif %}.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm text-yellow-700">
+                    <strong>Защита отключена.</strong>
+                    <a href="{{ url_for('prices.prices_settings') }}" class="font-medium underline hover:text-yellow-800">
+                        Включить защиту
+                    </a>
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Статистика -->
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+        <!-- Всего товаров -->
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Товаров</dt>
+                            <dd class="text-2xl font-semibold text-gray-900">{{ products_count }}</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ожидают подтверждения -->
+        <div class="bg-white overflow-hidden shadow rounded-lg {{ 'ring-2 ring-yellow-400' if pending_batches > 0 else '' }}">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-12 h-12 {{ 'bg-yellow-100' if pending_batches > 0 else 'bg-gray-100' }} rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6 {{ 'text-yellow-600' if pending_batches > 0 else 'text-gray-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Ожидают подтверждения</dt>
+                            <dd class="text-2xl font-semibold {{ 'text-yellow-600' if pending_batches > 0 else 'text-gray-900' }}">{{ pending_batches }}</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Безопасный порог -->
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Безопасный порог</dt>
+                            <dd class="text-2xl font-semibold text-gray-900">{{ settings.safe_threshold_percent }}%</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Опасный порог -->
+        <div class="bg-white overflow-hidden shadow rounded-lg">
+            <div class="p-5">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <div class="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="ml-5 w-0 flex-1">
+                        <dl>
+                            <dt class="text-sm font-medium text-gray-500 truncate">Опасный порог</dt>
+                            <dd class="text-2xl font-semibold text-gray-900">{{ settings.warning_threshold_percent }}%</dd>
+                        </dl>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Визуализация порогов -->
+    <div class="bg-white shadow rounded-lg p-6 mb-8">
+        <h2 class="text-lg font-medium text-gray-900 mb-4">Классификация изменений</h2>
+        <div class="relative">
+            <!-- Шкала -->
+            <div class="flex h-8 rounded-lg overflow-hidden">
+                <div class="bg-green-500 flex items-center justify-center text-white text-sm font-medium"
+                     style="width: {{ settings.safe_threshold_percent }}%">
+                    Безопасно
+                </div>
+                <div class="bg-yellow-500 flex items-center justify-center text-white text-sm font-medium"
+                     style="width: {{ settings.warning_threshold_percent - settings.safe_threshold_percent }}%">
+                    Внимание
+                </div>
+                <div class="bg-red-500 flex items-center justify-center text-white text-sm font-medium flex-1">
+                    Опасно
+                </div>
+            </div>
+            <!-- Метки -->
+            <div class="flex justify-between mt-2 text-sm text-gray-600">
+                <span>0%</span>
+                <span style="margin-left: {{ settings.safe_threshold_percent - 5 }}%">{{ settings.safe_threshold_percent }}%</span>
+                <span style="margin-left: {{ settings.warning_threshold_percent - settings.safe_threshold_percent - 10 }}%">{{ settings.warning_threshold_percent }}%</span>
+                <span>100%+</span>
+            </div>
+        </div>
+        <p class="mt-4 text-sm text-gray-500">
+            <span class="inline-flex items-center mr-4">
+                <span class="w-3 h-3 rounded-full bg-green-500 mr-1"></span>
+                Применяется сразу
+            </span>
+            <span class="inline-flex items-center mr-4">
+                <span class="w-3 h-3 rounded-full bg-yellow-500 mr-1"></span>
+                Предупреждение
+            </span>
+            <span class="inline-flex items-center">
+                <span class="w-3 h-3 rounded-full bg-red-500 mr-1"></span>
+                {% if settings.mode == 'confirm' %}Требует подтверждения{% elif settings.mode == 'block' %}Заблокировано{% else %}Только уведомление{% endif %}
+            </span>
+        </p>
+    </div>
+
+    <!-- Последние операции -->
+    <div class="bg-white shadow rounded-lg overflow-hidden">
+        <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-medium text-gray-900">Последние операции</h2>
+            <a href="{{ url_for('prices.prices_history') }}" class="text-sm text-indigo-600 hover:text-indigo-800">
+                Вся история
+            </a>
+        </div>
+
+        {% if recent_batches %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Дата
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Название
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Товаров
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Изменения
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Статус
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Действия
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for batch in recent_batches %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ batch.created_at.strftime('%d.%m.%Y %H:%M') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">{{ batch.name or 'Без названия' }}</div>
+                            {% if batch.change_type == 'percent' %}
+                            <div class="text-sm text-gray-500">{{ '+' if batch.change_value >= 0 else '' }}{{ batch.change_value }}%</div>
+                            {% elif batch.change_type == 'fixed' %}
+                            <div class="text-sm text-gray-500">{{ '+' if batch.change_value >= 0 else '' }}{{ batch.change_value }} руб.</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {{ batch.total_items }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center space-x-1">
+                                {% if batch.safe_count > 0 %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                    {{ batch.safe_count }}
+                                </span>
+                                {% endif %}
+                                {% if batch.warning_count > 0 %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                                    {{ batch.warning_count }}
+                                </span>
+                                {% endif %}
+                                {% if batch.dangerous_count > 0 %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                    {{ batch.dangerous_count }}
+                                </span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            {% if batch.status == 'applied' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                Применено
+                            </span>
+                            {% elif batch.status == 'pending_review' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                Ожидает подтверждения
+                            </span>
+                            {% elif batch.status == 'confirmed' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                Подтверждено
+                            </span>
+                            {% elif batch.status == 'partially_applied' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                                Частично
+                            </span>
+                            {% elif batch.status == 'failed' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                Ошибка
+                            </span>
+                            {% elif batch.status == 'cancelled' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                Отменено
+                            </span>
+                            {% elif batch.reverted %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                Откачено
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                {{ batch.status }}
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            {% if batch.status == 'pending_review' %}
+                            <a href="{{ url_for('prices.batch_confirm', batch_id=batch.id) }}"
+                               class="text-yellow-600 hover:text-yellow-900 mr-3">
+                                Подтвердить
+                            </a>
+                            {% endif %}
+                            <a href="{{ url_for('prices.batch_detail', batch_id=batch.id) }}"
+                               class="text-indigo-600 hover:text-indigo-900">
+                                Подробнее
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="px-6 py-12 text-center">
+            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
+            <h3 class="mt-2 text-sm font-medium text-gray-900">Нет операций</h3>
+            <p class="mt-1 text-sm text-gray-500">Начните с изменения цен на ваши товары</p>
+            <div class="mt-6">
+                <a href="{{ url_for('prices.prices_change') }}"
+                   class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                    </svg>
+                    Изменить цены
+                </a>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

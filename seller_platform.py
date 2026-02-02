@@ -25,6 +25,7 @@ from models import (
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
+    SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -1400,6 +1401,31 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 all_cards = client.get_all_cards(batch_size=100)
                 app.logger.info(f"✅ Background sync: got {len(all_cards)} cards from WB API")
 
+                # Получаем цены из Prices API (отдельный endpoint!)
+                app.logger.info(f"💰 Background sync: fetching prices from Prices API...")
+                try:
+                    all_prices = client.get_all_goods_prices(batch_size=1000)
+                    app.logger.info(f"✅ Background sync: got {len(all_prices)} price records from Prices API")
+
+                    # Создаем словарь цен по nmID для быстрого поиска
+                    prices_by_nm_id = {}
+                    for price_item in all_prices:
+                        nm_id = price_item.get('nmID')
+                        if nm_id:
+                            sizes = price_item.get('sizes', [])
+                            if sizes:
+                                # Берем первый размер для базовой цены
+                                first_size = sizes[0]
+                                prices_by_nm_id[nm_id] = {
+                                    'price': first_size.get('price'),
+                                    'discountedPrice': first_size.get('discountedPrice'),
+                                    'discount': price_item.get('discount', 0),
+                                    'sizes': sizes
+                                }
+                except Exception as price_error:
+                    app.logger.warning(f"⚠️ Failed to fetch prices from Prices API: {price_error}")
+                    prices_by_nm_id = {}
+
                 # Статистика
                 created_count = 0
                 updated_count = 0
@@ -1462,6 +1488,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     sizes = card_data.get('sizes', [])
                     sizes_json = json.dumps(sizes, ensure_ascii=False) if sizes else None
 
+                    # Получаем цены из словаря цен (из Prices API)
+                    price_data = prices_by_nm_id.get(nm_id, {})
+                    current_price = price_data.get('price')
+                    current_discounted_price = price_data.get('discountedPrice')
+
                     if product:
                         # Обновление существующей карточки
                         product.vendor_code = vendor_code
@@ -1477,6 +1508,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         product.sizes_json = sizes_json
                         product.last_sync = datetime.utcnow()
                         product.is_active = True
+                        # Обновляем цены если они есть
+                        if current_price is not None:
+                            product.price = current_price
+                        if current_discounted_price is not None:
+                            product.discount_price = current_discounted_price
                         updated_count += 1
                     else:
                         # Создание новой карточки
@@ -1497,7 +1533,9 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                             video_url=video,
                             sizes_json=sizes_json,
                             last_sync=datetime.utcnow(),
-                            is_active=True
+                            is_active=True,
+                            price=current_price,
+                            discount_price=current_discounted_price
                         )
                         db.session.add(product)
                         created_count += 1
@@ -1525,6 +1563,96 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     db.session.rollback()
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
+
+                # ============ СИНХРОНИЗАЦИЯ ОСТАТКОВ ============
+                # Загружаем остатки из Statistics API
+                app.logger.info(f"📦 Background sync: fetching stocks from Statistics API...")
+                stocks_created = 0
+                stocks_updated = 0
+                try:
+                    from datetime import timedelta
+                    date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
+                    all_stocks = client.get_stocks(date_from=date_from)
+                    app.logger.info(f"✅ Background sync: got {len(all_stocks)} stock records from Statistics API")
+
+                    # Группируем остатки по nmId и складу
+                    stocks_by_product = {}
+                    for stock_data in all_stocks:
+                        nm_id = stock_data.get('nmId')
+                        warehouse_name = stock_data.get('warehouseName', 'Неизвестный склад')
+
+                        if not nm_id:
+                            continue
+
+                        key = (nm_id, warehouse_name)
+                        if key not in stocks_by_product:
+                            stocks_by_product[key] = {
+                                'nm_id': nm_id,
+                                'warehouse_name': warehouse_name,
+                                'quantity': 0,
+                                'quantity_full': 0,
+                                'in_way_to_client': 0,
+                                'in_way_from_client': 0,
+                            }
+
+                        # Суммируем количества (могут быть разные размеры)
+                        stocks_by_product[key]['quantity'] += stock_data.get('quantity', 0)
+                        stocks_by_product[key]['quantity_full'] += stock_data.get('quantityFull', 0)
+                        stocks_by_product[key]['in_way_to_client'] += stock_data.get('inWayToClient', 0)
+                        stocks_by_product[key]['in_way_from_client'] += stock_data.get('inWayFromClient', 0)
+
+                    app.logger.info(f"📊 Aggregated {len(stocks_by_product)} unique stock records")
+
+                    # Сохраняем остатки в БД
+                    for key, stock_data in stocks_by_product.items():
+                        nm_id = stock_data['nm_id']
+                        warehouse_name = stock_data['warehouse_name']
+
+                        # Находим товар по nm_id
+                        product = Product.query.filter_by(
+                            seller_id=seller.id,
+                            nm_id=nm_id
+                        ).first()
+
+                        if not product:
+                            continue
+
+                        # Генерируем warehouse_id из имени (для уникальности)
+                        warehouse_id = hash(warehouse_name) % 1000000
+
+                        # Ищем существующую запись об остатках
+                        stock = ProductStock.query.filter_by(
+                            product_id=product.id,
+                            warehouse_id=warehouse_id
+                        ).first()
+
+                        if stock:
+                            stock.warehouse_name = warehouse_name
+                            stock.quantity = stock_data['quantity']
+                            stock.quantity_full = stock_data['quantity_full']
+                            stock.in_way_to_client = stock_data['in_way_to_client']
+                            stock.in_way_from_client = stock_data['in_way_from_client']
+                            stock.updated_at = datetime.utcnow()
+                            stocks_updated += 1
+                        else:
+                            stock = ProductStock(
+                                product_id=product.id,
+                                warehouse_id=warehouse_id,
+                                warehouse_name=warehouse_name,
+                                quantity=stock_data['quantity'],
+                                quantity_full=stock_data['quantity_full'],
+                                in_way_to_client=stock_data['in_way_to_client'],
+                                in_way_from_client=stock_data['in_way_from_client']
+                            )
+                            db.session.add(stock)
+                            stocks_created += 1
+
+                    db_commit_with_retry(db.session)
+                    app.logger.info(f"💾 Stocks saved: {stocks_created} new, {stocks_updated} updated")
+
+                except Exception as stock_error:
+                    app.logger.warning(f"⚠️ Failed to fetch stocks from Statistics API: {stock_error}")
+                    # Не прерываем синхронизацию из-за ошибки остатков
 
                 # Обновляем статус синхронизации
                 seller.api_last_sync = datetime.utcnow()
@@ -4338,6 +4466,36 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         if not isinstance(cards, list):
             raise Exception(f'Expected cards to be a list, got {type(cards).__name__}')
 
+        # Получаем цены из Prices API (важно! Content API НЕ возвращает цены)
+        msg = f"💰 Fetching prices from Prices API for seller {seller.id}..."
+        app.logger.info(msg)
+        print(msg, flush=True)
+
+        prices_by_nm_id = {}
+        try:
+            all_prices = wb_client.get_all_goods_prices(batch_size=1000)
+            msg = f"✅ Loaded {len(all_prices)} price records from Prices API"
+            app.logger.info(msg)
+            print(msg, flush=True)
+
+            # Создаем словарь цен по nmID
+            for price_item in all_prices:
+                nm_id = price_item.get('nmID')
+                if nm_id:
+                    sizes = price_item.get('sizes', [])
+                    if sizes:
+                        first_size = sizes[0]
+                        prices_by_nm_id[nm_id] = {
+                            'price': first_size.get('price'),
+                            'discountedPrice': first_size.get('discountedPrice'),
+                            'discount': price_item.get('discount', 0)
+                        }
+        except Exception as price_error:
+            msg = f"⚠️ Failed to fetch prices from Prices API: {price_error}"
+            app.logger.warning(msg)
+            print(msg, flush=True)
+            # Продолжаем без цен - будем использовать только данные карточек
+
         changes_detected = 0
         suspicious_changes = 0
         products_checked = 0
@@ -4355,6 +4513,9 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
             # Если товара нет в БД - создаем его
             if not product:
                 try:
+                    # Получаем цены из Prices API
+                    price_data = prices_by_nm_id.get(nm_id, {})
+
                     # Создаем новый товар из данных WB API
                     product = Product(
                         seller_id=seller.id,
@@ -4366,15 +4527,10 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
                         object_name=card.get('object'),
                         is_active=True,
                         created_at=datetime.utcnow(),
-                        last_sync=datetime.utcnow()
+                        last_sync=datetime.utcnow(),
+                        price=price_data.get('price'),
+                        discount_price=price_data.get('discountedPrice')
                     )
-
-                    # Устанавливаем цену и остатки
-                    sizes = card.get('sizes', [])
-                    if sizes:
-                        size = sizes[0]
-                        product.price = size.get('price')
-                        product.discount_price = size.get('discountedPrice', product.price)
 
                     # Остатки
                     stocks = card.get('stocks', [])
@@ -4398,15 +4554,14 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
 
             products_checked += 1
 
-            # Получаем цены из API
-            sizes = card.get('sizes', [])
-            if not sizes:
+            # Получаем цены из Prices API (не из Content API!)
+            price_data = prices_by_nm_id.get(nm_id, {})
+            if not price_data:
+                # Если нет данных о ценах, пропускаем
                 continue
 
-            # Берем первый размер для получения цены
-            size = sizes[0]
-            new_price = size.get('price')
-            new_discount_price = size.get('discountedPrice', new_price)
+            new_price = price_data.get('price')
+            new_discount_price = price_data.get('discountedPrice', new_price)
 
             # Получаем остатки если нужно
             new_quantity = None
@@ -4642,6 +4797,10 @@ register_auto_import_routes(app)
 # Регистрация роутов для объединения/разъединения карточек
 from routes_merge_cards import register_merge_routes
 register_merge_routes(app)
+
+# Регистрация роутов для безопасного изменения цен
+from routes_safe_prices import register_routes as register_safe_prices_routes
+register_safe_prices_routes(app)
 
 
 if __name__ == '__main__':
