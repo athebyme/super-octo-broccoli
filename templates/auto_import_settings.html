@@ -246,47 +246,75 @@
         </div>
 
         <!-- AI Настройки -->
-        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-            <div class="flex items-center mb-4">
-                <svg class="h-6 w-6 text-purple-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                <h3 class="text-lg font-medium text-gray-900">AI-помощник (опционально)</h3>
+        <div class="bg-gradient-to-br from-purple-50 to-indigo-50 shadow-sm rounded-lg border border-purple-200 p-6">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center">
+                    <div class="p-2 bg-purple-100 rounded-lg mr-3">
+                        <svg class="h-6 w-6 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">AI-помощник</h3>
+                        <p class="text-xs text-gray-500">Cloud.ru Foundation Models / OpenAI</p>
+                    </div>
+                </div>
+                <!-- Быстрая ссылка на AI обновление -->
+                <a href="{{ url_for('auto_import_ai_update') }}"
+                   class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-purple-700 bg-purple-100 rounded-lg hover:bg-purple-200 transition-colors">
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                    AI Обновление
+                </a>
             </div>
-            <p class="text-sm text-gray-600 mb-4">
-                Используйте AI для улучшения определения категорий и парсинга размеров товаров.
-                Поддерживаются OpenAI-совместимые API (OpenAI, Cloud.ru Foundation Models и др.).
-            </p>
 
             <!-- Включить AI -->
             <div class="mb-4">
-                <label class="flex items-center">
+                <label class="flex items-center p-3 bg-white rounded-lg border border-purple-200 cursor-pointer hover:bg-purple-50 transition-colors">
                     <input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if settings.ai_enabled else '' }}
-                           class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                           class="h-5 w-5 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
                            onchange="toggleAISettings()">
-                    <span class="ml-2 text-sm text-gray-700">Включить AI-помощник</span>
+                    <span class="ml-3 text-sm font-medium text-gray-900">Включить AI-помощник</span>
                 </label>
             </div>
 
             <div id="ai_settings_block" class="{{ '' if settings.ai_enabled else 'hidden' }}">
-                <!-- Провайдер AI -->
-                <div class="mb-4">
-                    <label for="ai_provider" class="block text-sm font-medium text-gray-700 mb-1">
-                        Провайдер AI
-                    </label>
-                    <select id="ai_provider" name="ai_provider"
-                            class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                            onchange="updateAIProviderSettings()">
-                        <option value="openai" {{ 'selected' if settings.ai_provider == 'openai' else '' }}>
-                            OpenAI
-                        </option>
-                        <option value="cloudru" {{ 'selected' if settings.ai_provider == 'cloudru' else '' }}>
-                            Cloud.ru Foundation Models
-                        </option>
-                        <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
-                            Другой (OpenAI-совместимый)
-                        </option>
-                    </select>
+                <!-- Провайдер и модель в одной строке -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <!-- Провайдер AI -->
+                    <div>
+                        <label for="ai_provider" class="block text-sm font-medium text-gray-700 mb-1">
+                            Провайдер AI
+                        </label>
+                        <select id="ai_provider" name="ai_provider"
+                                class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                onchange="updateAIProviderSettings()">
+                            <option value="cloudru" {{ 'selected' if settings.ai_provider == 'cloudru' else '' }}>
+                                Cloud.ru Foundation Models
+                            </option>
+                            <option value="openai" {{ 'selected' if settings.ai_provider == 'openai' else '' }}>
+                                OpenAI
+                            </option>
+                            <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
+                                Другой (OpenAI-совместимый)
+                            </option>
+                        </select>
+                    </div>
+
+                    <!-- Модель -->
+                    <div>
+                        <label for="ai_model" class="block text-sm font-medium text-gray-700 mb-1">
+                            Модель AI
+                        </label>
+                        <select id="ai_model" name="ai_model"
+                                class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <option value="{{ settings.ai_model or 'openai/gpt-oss-120b' }}">{{ settings.ai_model or 'openai/gpt-oss-120b' }}</option>
+                        </select>
+                        <p id="model_description" class="mt-1 text-xs text-gray-500">
+                            Загрузка моделей...
+                        </p>
+                    </div>
                 </div>
 
                 <!-- API ключ -->
@@ -294,121 +322,171 @@
                     <label for="ai_api_key" class="block text-sm font-medium text-gray-700 mb-1">
                         API ключ <span class="text-red-500">*</span>
                     </label>
-                    <input type="password" id="ai_api_key" name="ai_api_key"
-                           value="{{ settings.ai_api_key or '' }}"
-                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                           placeholder="sk-...">
-                    <p class="mt-1 text-xs text-gray-500">
-                        API ключ для доступа к AI сервису
-                    </p>
+                    <div class="flex gap-2">
+                        <input type="password" id="ai_api_key" name="ai_api_key"
+                               value="{{ settings.ai_api_key or '' }}"
+                               class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                               placeholder="sk-...">
+                        <button type="button" onclick="testAIConnection()"
+                                class="inline-flex items-center px-3 py-2 border border-purple-300 shadow-sm text-sm font-medium rounded-md text-purple-700 bg-white hover:bg-purple-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 whitespace-nowrap">
+                            <svg id="test_icon" class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            Тест
+                        </button>
+                    </div>
+                    <p id="test_result" class="mt-1 text-xs text-gray-500"></p>
                 </div>
 
-                <!-- Базовый URL (для custom) -->
+                <!-- Базовый URL (для custom/cloudru) -->
                 <div class="mb-4" id="ai_base_url_block">
                     <label for="ai_api_base_url" class="block text-sm font-medium text-gray-700 mb-1">
                         Базовый URL API
                     </label>
                     <input type="url" id="ai_api_base_url" name="ai_api_base_url"
-                           value="{{ settings.ai_api_base_url or '' }}"
+                           value="{{ settings.ai_api_base_url or 'https://foundation-models.api.cloud.ru/v1' }}"
                            class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                           placeholder="https://api.openai.com/v1">
-                    <p class="mt-1 text-xs text-gray-500">
-                        Укажите для custom провайдера или Cloud.ru
-                    </p>
+                           placeholder="https://foundation-models.api.cloud.ru/v1">
                 </div>
 
-                <!-- Модель -->
-                <div class="mb-4">
-                    <label for="ai_model" class="block text-sm font-medium text-gray-700 mb-1">
-                        Модель AI
-                    </label>
-                    <input type="text" id="ai_model" name="ai_model"
-                           value="{{ settings.ai_model or 'gpt-4o-mini' }}"
-                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                           placeholder="gpt-4o-mini">
-                    <p class="mt-1 text-xs text-gray-500">
-                        Рекомендуется: gpt-4o-mini (баланс цены/качества) или gpt-4o (лучшее качество)
-                    </p>
+                <!-- Опции использования -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div class="p-3 bg-white rounded-lg border border-gray-200">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="ai_use_for_categories" {{ 'checked' if settings.ai_use_for_categories else '' }}
+                                   class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
+                            <span class="ml-2 text-sm text-gray-700">Определение категорий</span>
+                        </label>
+                        <p class="ml-6 mt-1 text-xs text-gray-500">AI определит категорию WB</p>
+                    </div>
+                    <div class="p-3 bg-white rounded-lg border border-gray-200">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="ai_use_for_sizes" {{ 'checked' if settings.ai_use_for_sizes else '' }}
+                                   class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
+                            <span class="ml-2 text-sm text-gray-700">Парсинг размеров</span>
+                        </label>
+                        <p class="ml-6 mt-1 text-xs text-gray-500">Извлечение характеристик</p>
+                    </div>
                 </div>
 
-                <!-- Использовать для категорий -->
-                <div class="mb-4">
-                    <label class="flex items-center">
-                        <input type="checkbox" name="ai_use_for_categories" {{ 'checked' if settings.ai_use_for_categories else '' }}
-                               class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
-                        <span class="ml-2 text-sm text-gray-700">Использовать AI для определения категорий</span>
-                    </label>
-                    <p class="ml-6 mt-1 text-xs text-gray-500">
-                        AI будет помогать определять категорию WB когда обычный алгоритм не уверен
-                    </p>
-                </div>
-
-                <!-- Использовать для размеров -->
-                <div class="mb-4">
-                    <label class="flex items-center">
-                        <input type="checkbox" name="ai_use_for_sizes" {{ 'checked' if settings.ai_use_for_sizes else '' }}
-                               class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
-                        <span class="ml-2 text-sm text-gray-700">Использовать AI для парсинга размеров</span>
-                    </label>
-                    <p class="ml-6 mt-1 text-xs text-gray-500">
-                        AI будет извлекать характеристики (длина, диаметр и т.д.) из текстовых описаний
-                    </p>
-                </div>
-
-                <!-- Порог уверенности для AI категорий -->
+                <!-- Порог уверенности -->
                 <div class="mb-4">
                     <label for="ai_category_confidence_threshold" class="block text-sm font-medium text-gray-700 mb-1">
-                        Порог уверенности для AI (категории)
+                        Порог уверенности для AI ({{ ((settings.ai_category_confidence_threshold or 0.7) * 100)|int }}%)
                     </label>
-                    <input type="number" id="ai_category_confidence_threshold" name="ai_category_confidence_threshold"
+                    <input type="range" id="ai_category_confidence_threshold" name="ai_category_confidence_threshold"
                            value="{{ settings.ai_category_confidence_threshold or 0.7 }}"
                            min="0" max="1" step="0.05"
-                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                           oninput="this.previousElementSibling.textContent = 'Порог уверенности для AI (' + Math.round(this.value * 100) + '%)'">
                     <p class="mt-1 text-xs text-gray-500">
-                        AI будет использоваться если уверенность обычного алгоритма ниже этого значения (0-1)
+                        AI используется если уверенность обычного алгоритма ниже этого значения
                     </p>
                 </div>
 
-                <!-- Расширенные настройки (свернутые) -->
+                <!-- Расширенные настройки -->
                 <details class="mb-4">
-                    <summary class="text-sm font-medium text-gray-700 cursor-pointer hover:text-purple-600">
-                        Расширенные настройки AI
+                    <summary class="text-sm font-medium text-purple-700 cursor-pointer hover:text-purple-800 flex items-center">
+                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                        Расширенные настройки
                     </summary>
-                    <div class="mt-3 pl-4 border-l-2 border-gray-200 space-y-4">
-                        <!-- Температура -->
-                        <div>
-                            <label for="ai_temperature" class="block text-sm font-medium text-gray-700 mb-1">
-                                Температура
-                            </label>
-                            <input type="number" id="ai_temperature" name="ai_temperature"
-                                   value="{{ settings.ai_temperature or 0.3 }}"
-                                   min="0" max="2" step="0.1"
-                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
-                            <p class="mt-1 text-xs text-gray-500">
-                                Низкая (0.1-0.3) = более точные ответы, высокая (0.7-1.0) = более креативные
-                            </p>
+                    <div class="mt-3 p-4 bg-white rounded-lg border border-gray-200 space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label for="ai_temperature" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Температура
+                                </label>
+                                <input type="number" id="ai_temperature" name="ai_temperature"
+                                       value="{{ settings.ai_temperature or 0.3 }}"
+                                       min="0" max="2" step="0.1"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_max_tokens" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Макс. токенов
+                                </label>
+                                <input type="number" id="ai_max_tokens" name="ai_max_tokens"
+                                       value="{{ settings.ai_max_tokens or 2000 }}"
+                                       min="100" max="8000"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_timeout" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Таймаут (сек)
+                                </label>
+                                <input type="number" id="ai_timeout" name="ai_timeout"
+                                       value="{{ settings.ai_timeout or 60 }}"
+                                       min="10" max="300"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
                         </div>
-
-                        <!-- Макс токенов -->
-                        <div>
-                            <label for="ai_max_tokens" class="block text-sm font-medium text-gray-700 mb-1">
-                                Максимум токенов
-                            </label>
-                            <input type="number" id="ai_max_tokens" name="ai_max_tokens"
-                                   value="{{ settings.ai_max_tokens or 2000 }}"
-                                   min="100" max="8000"
-                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label for="ai_top_p" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Top P
+                                </label>
+                                <input type="number" id="ai_top_p" name="ai_top_p"
+                                       value="{{ settings.ai_top_p or 0.95 }}"
+                                       min="0" max="1" step="0.05"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_presence_penalty" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Presence Penalty
+                                </label>
+                                <input type="number" id="ai_presence_penalty" name="ai_presence_penalty"
+                                       value="{{ settings.ai_presence_penalty or 0.0 }}"
+                                       min="-2" max="2" step="0.1"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_frequency_penalty" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Frequency Penalty
+                                </label>
+                                <input type="number" id="ai_frequency_penalty" name="ai_frequency_penalty"
+                                       value="{{ settings.ai_frequency_penalty or 0.0 }}"
+                                       min="-2" max="2" step="0.1"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
                         </div>
+                    </div>
+                </details>
 
-                        <!-- Таймаут -->
+                <!-- Кастомные инструкции -->
+                <details class="mb-4">
+                    <summary class="text-sm font-medium text-purple-700 cursor-pointer hover:text-purple-800 flex items-center">
+                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        </svg>
+                        Кастомные инструкции AI
+                    </summary>
+                    <div class="mt-3 p-4 bg-white rounded-lg border border-gray-200 space-y-4">
                         <div>
-                            <label for="ai_timeout" class="block text-sm font-medium text-gray-700 mb-1">
-                                Таймаут запроса (секунды)
+                            <label for="ai_category_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Инструкция для категорий
                             </label>
-                            <input type="number" id="ai_timeout" name="ai_timeout"
-                                   value="{{ settings.ai_timeout or 60 }}"
-                                   min="10" max="300"
-                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <textarea id="ai_category_instruction" name="ai_category_instruction" rows="4"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Оставьте пустым для использования стандартной инструкции">{{ settings.ai_category_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('category')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">
+                                Загрузить стандартную инструкцию
+                            </button>
+                        </div>
+                        <div>
+                            <label for="ai_size_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Инструкция для размеров
+                            </label>
+                            <textarea id="ai_size_instruction" name="ai_size_instruction" rows="4"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Оставьте пустым для использования стандартной инструкции">{{ settings.ai_size_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('size')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">
+                                Загрузить стандартную инструкцию
+                            </button>
                         </div>
                     </div>
                 </details>
@@ -430,11 +508,14 @@
 </div>
 
 <script>
+let modelsCache = {};
+
 function toggleAISettings() {
     const checkbox = document.getElementById('ai_enabled');
     const settingsBlock = document.getElementById('ai_settings_block');
     if (checkbox.checked) {
         settingsBlock.classList.remove('hidden');
+        loadModels();
     } else {
         settingsBlock.classList.add('hidden');
     }
@@ -444,28 +525,142 @@ function updateAIProviderSettings() {
     const provider = document.getElementById('ai_provider').value;
     const baseUrlBlock = document.getElementById('ai_base_url_block');
     const baseUrlInput = document.getElementById('ai_api_base_url');
-    const modelInput = document.getElementById('ai_model');
 
-    // Показываем/скрываем блок базового URL
+    // Показываем/скрываем блок базового URL и устанавливаем дефолтные значения
     if (provider === 'openai') {
         baseUrlBlock.classList.add('hidden');
         baseUrlInput.value = '';
-        if (!modelInput.value || modelInput.value === 'gpt-4o-mini') {
-            modelInput.placeholder = 'gpt-4o-mini';
-        }
     } else {
         baseUrlBlock.classList.remove('hidden');
-        if (provider === 'cloudru') {
-            baseUrlInput.placeholder = 'https://api.cloudru.ru/v1';
-        } else {
-            baseUrlInput.placeholder = 'https://your-api.com/v1';
+        if (provider === 'cloudru' && !baseUrlInput.value) {
+            baseUrlInput.value = 'https://foundation-models.api.cloud.ru/v1';
         }
+    }
+
+    // Загружаем модели для выбранного провайдера
+    loadModels();
+}
+
+async function loadModels() {
+    const provider = document.getElementById('ai_provider').value;
+    const modelSelect = document.getElementById('ai_model');
+    const modelDescription = document.getElementById('model_description');
+    const currentValue = modelSelect.value;
+
+    // Проверяем кэш
+    if (modelsCache[provider]) {
+        populateModels(modelsCache[provider], currentValue);
+        return;
+    }
+
+    modelDescription.textContent = 'Загрузка моделей...';
+
+    try {
+        const response = await fetch(`{{ url_for('auto_import_ai_models') }}?provider=${provider}`);
+        const data = await response.json();
+
+        if (data.success && data.models) {
+            modelsCache[provider] = data.models;
+            populateModels(data.models, currentValue);
+        } else {
+            modelDescription.textContent = 'Не удалось загрузить список моделей';
+        }
+    } catch (e) {
+        console.error('Error loading models:', e);
+        modelDescription.textContent = 'Ошибка загрузки моделей';
+    }
+}
+
+function populateModels(models, currentValue) {
+    const modelSelect = document.getElementById('ai_model');
+    const modelDescription = document.getElementById('model_description');
+
+    modelSelect.innerHTML = '';
+
+    for (const [modelId, modelInfo] of Object.entries(models)) {
+        const option = document.createElement('option');
+        option.value = modelId;
+        option.textContent = modelInfo.name + (modelInfo.recommended ? ' (рекомендуется)' : '');
+        option.dataset.description = modelInfo.description || '';
+
+        if (modelId === currentValue || (!currentValue && modelInfo.recommended)) {
+            option.selected = true;
+            modelDescription.textContent = modelInfo.description || '';
+        }
+
+        modelSelect.appendChild(option);
+    }
+
+    // Обновляем описание при смене модели
+    modelSelect.onchange = function() {
+        const selectedOption = this.options[this.selectedIndex];
+        modelDescription.textContent = selectedOption.dataset.description || '';
+    };
+}
+
+async function testAIConnection() {
+    const testIcon = document.getElementById('test_icon');
+    const testResult = document.getElementById('test_result');
+
+    // Анимация загрузки
+    testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>';
+    testIcon.classList.add('animate-spin');
+    testResult.textContent = 'Тестирование подключения...';
+    testResult.className = 'mt-1 text-xs text-gray-500';
+
+    try {
+        const response = await fetch('{{ url_for("auto_import_ai_test") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+
+        const data = await response.json();
+
+        testIcon.classList.remove('animate-spin');
+
+        if (data.success) {
+            testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+            testResult.textContent = data.message;
+            testResult.className = 'mt-1 text-xs text-green-600';
+        } else {
+            testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+            testResult.textContent = data.error || 'Ошибка подключения';
+            testResult.className = 'mt-1 text-xs text-red-600';
+        }
+    } catch (e) {
+        testIcon.classList.remove('animate-spin');
+        testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+        testResult.textContent = 'Ошибка сети: ' + e.message;
+        testResult.className = 'mt-1 text-xs text-red-600';
+    }
+}
+
+async function loadDefaultInstruction(type) {
+    try {
+        const response = await fetch('{{ url_for("auto_import_ai_instructions") }}');
+        const data = await response.json();
+
+        if (data.success && data.instructions) {
+            if (type === 'category' && data.instructions.category_detection) {
+                document.getElementById('ai_category_instruction').value = data.instructions.category_detection.template;
+            } else if (type === 'size' && data.instructions.size_parsing) {
+                document.getElementById('ai_size_instruction').value = data.instructions.size_parsing.template;
+            }
+        }
+    } catch (e) {
+        console.error('Error loading instructions:', e);
+        alert('Не удалось загрузить инструкцию');
     }
 }
 
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', function() {
     updateAIProviderSettings();
+    if (document.getElementById('ai_enabled').checked) {
+        loadModels();
+    }
 });
 </script>
 {% endblock %}

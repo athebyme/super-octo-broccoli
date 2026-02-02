@@ -133,6 +133,26 @@ def register_auto_import_routes(app):
             except ValueError:
                 settings.ai_category_confidence_threshold = 0.7
 
+            # Дополнительные AI параметры
+            try:
+                settings.ai_top_p = float(request.form.get('ai_top_p', 0.95))
+            except ValueError:
+                settings.ai_top_p = 0.95
+
+            try:
+                settings.ai_presence_penalty = float(request.form.get('ai_presence_penalty', 0.0))
+            except ValueError:
+                settings.ai_presence_penalty = 0.0
+
+            try:
+                settings.ai_frequency_penalty = float(request.form.get('ai_frequency_penalty', 0.0))
+            except ValueError:
+                settings.ai_frequency_penalty = 0.0
+
+            # Кастомные инструкции AI
+            settings.ai_category_instruction = request.form.get('ai_category_instruction', '').strip() or None
+            settings.ai_size_instruction = request.form.get('ai_size_instruction', '').strip() or None
+
             # Сбрасываем AI сервис при изменении настроек
             if settings.ai_enabled:
                 try:
@@ -828,6 +848,285 @@ def register_auto_import_routes(app):
                 'details': error_trace.split('\n')[-2] if error_trace else str(e),
                 'url': photo_url
             }), 500
+
+
+    @app.route('/auto-import/ai-update', methods=['GET'])
+    @login_required
+    def auto_import_ai_update():
+        """Страница AI обновления товаров"""
+        if not current_user.seller:
+            flash('Для работы с автоимпортом обратитесь к администратору.', 'warning')
+            return redirect(url_for('dashboard'))
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        # Проверяем, настроен ли AI
+        ai_enabled = settings and settings.ai_enabled and settings.ai_api_key
+
+        # Пагинация
+        page = request.args.get('page', 1, type=int)
+        per_page = 50
+
+        # Получаем товары (исключаем уже импортированные)
+        query = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status.in_(['pending', 'validated', 'failed'])
+        )
+
+        pagination = query.order_by(ImportedProduct.created_at.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+
+        return render_template(
+            'auto_import_ai_update.html',
+            products=pagination.items,
+            pagination=pagination,
+            ai_enabled=ai_enabled,
+            settings=settings
+        )
+
+    @app.route('/auto-import/ai-process', methods=['POST'])
+    @login_required
+    def auto_import_ai_process_single():
+        """
+        Обработка одного товара с AI
+
+        POST JSON:
+        {
+            "product_id": int,
+            "operations": ["category", "dimensions", "description", "sizes"]
+        }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled or not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        data = request.get_json()
+        product_id = data.get('product_id')
+        operations = data.get('operations', [])
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'Product ID is required'}), 400
+
+        if not operations:
+            return jsonify({'success': False, 'error': 'No operations specified'}), 400
+
+        # Получаем товар
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        try:
+            from ai_service import get_ai_service, AIConfig
+            ai_service = get_ai_service(settings)
+
+            if not ai_service:
+                return jsonify({'success': False, 'error': 'Не удалось инициализировать AI сервис'}), 500
+
+            results = {}
+            updated_fields = []
+
+            # Парсим JSON поля товара
+            try:
+                all_categories = json.loads(product.all_categories) if product.all_categories else []
+            except:
+                all_categories = []
+
+            # Определение категории
+            if 'category' in operations:
+                try:
+                    cat_id, cat_name, confidence, reasoning = ai_service.detect_category(
+                        product_title=product.title or '',
+                        source_category=product.category or '',
+                        all_categories=all_categories,
+                        brand=product.brand or '',
+                        description=product.description or ''
+                    )
+
+                    if cat_id:
+                        product.wb_subject_id = cat_id
+                        product.mapped_wb_category = cat_name
+                        product.category_confidence = confidence
+                        updated_fields.append('category')
+                        results['category'] = {
+                            'id': cat_id,
+                            'name': cat_name,
+                            'confidence': confidence,
+                            'reasoning': reasoning
+                        }
+                        logger.info(f"AI определил категорию для {product.id}: {cat_name} ({confidence*100:.0f}%)")
+                except Exception as e:
+                    logger.error(f"Ошибка AI определения категории: {e}")
+                    results['category_error'] = str(e)
+
+            # Парсинг размеров и габаритов
+            if 'dimensions' in operations or 'sizes' in operations:
+                try:
+                    # Собираем текст для парсинга
+                    sizes_text = ''
+                    try:
+                        sizes_list = json.loads(product.sizes) if product.sizes else []
+                        sizes_text = ', '.join(str(s) for s in sizes_list)
+                    except:
+                        pass
+
+                    success, parsed_data, error = ai_service.parse_sizes(
+                        sizes_text=sizes_text,
+                        product_title=product.title or '',
+                        description=product.description or ''
+                    )
+
+                    if success and parsed_data:
+                        # Сохраняем характеристики
+                        existing_chars = {}
+                        try:
+                            existing_chars = json.loads(product.characteristics) if product.characteristics else {}
+                        except:
+                            existing_chars = {}
+
+                        # Обновляем характеристики из AI
+                        if parsed_data.get('characteristics'):
+                            existing_chars.update(parsed_data['characteristics'])
+                            product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                            updated_fields.append('characteristics')
+
+                        results['sizes'] = parsed_data
+                        logger.info(f"AI распарсил размеры для {product.id}: {parsed_data}")
+                except Exception as e:
+                    logger.error(f"Ошибка AI парсинга размеров: {e}")
+                    results['sizes_error'] = str(e)
+
+            # Генерация описания (TODO: отдельная задача в ai_service)
+            if 'description' in operations:
+                try:
+                    # Простая генерация описания через chat completion
+                    from ai_service import AIClient, AIConfig as AIC
+                    config = AIC.from_settings(settings)
+                    if config:
+                        client = AIClient(config)
+                        prompt = f"""Напиши краткое SEO-оптимизированное описание товара для маркетплейса Wildberries.
+
+Название: {product.title}
+Категория: {product.mapped_wb_category or product.category}
+Бренд: {product.brand or 'Не указан'}
+
+Требования:
+- 2-3 предложения
+- Без воды и общих фраз
+- Упомяни ключевые особенности товара
+- Подходит для карточки товара на Wildberries
+
+Ответь ТОЛЬКО текстом описания, без заголовков и пояснений."""
+
+                        response = client.chat_completion([
+                            {"role": "user", "content": prompt}
+                        ], max_tokens=500)
+
+                        if response:
+                            product.description = response.strip()
+                            updated_fields.append('description')
+                            results['description'] = response.strip()[:200] + '...' if len(response) > 200 else response.strip()
+                            logger.info(f"AI сгенерировал описание для {product.id}")
+
+                        client.close()
+                except Exception as e:
+                    logger.error(f"Ошибка AI генерации описания: {e}")
+                    results['description_error'] = str(e)
+
+            # Сохраняем изменения
+            if updated_fields:
+                db.session.commit()
+                return jsonify({
+                    'success': True,
+                    'updated_fields': updated_fields,
+                    'results': results
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'skipped': True,
+                    'message': 'Нет данных для обновления',
+                    'results': results
+                })
+
+        except Exception as e:
+            import traceback
+            logger.error(f"Ошибка AI обработки товара {product_id}: {traceback.format_exc()}")
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/models', methods=['GET'])
+    @login_required
+    def auto_import_ai_models():
+        """Возвращает список доступных AI моделей для провайдера"""
+        provider = request.args.get('provider', 'cloudru')
+
+        try:
+            from ai_service import get_available_models
+            models = get_available_models(provider)
+            return jsonify({
+                'success': True,
+                'provider': provider,
+                'models': models
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/test', methods=['POST'])
+    @login_required
+    def auto_import_ai_test():
+        """Тестирует подключение к AI API"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
+
+        try:
+            from ai_service import get_ai_service, reset_ai_service
+
+            # Сбрасываем кэш чтобы использовать свежие настройки
+            reset_ai_service()
+            ai_service = get_ai_service(settings)
+
+            if not ai_service:
+                return jsonify({'success': False, 'error': 'Не удалось инициализировать AI сервис'}), 500
+
+            success, message = ai_service.test_connection()
+
+            return jsonify({
+                'success': success,
+                'message': message
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/instructions', methods=['GET'])
+    @login_required
+    def auto_import_ai_instructions():
+        """Возвращает дефолтные инструкции для редактирования"""
+        try:
+            from ai_service import get_default_instructions
+            instructions = get_default_instructions()
+            return jsonify({
+                'success': True,
+                'instructions': instructions
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # Пример использования:
