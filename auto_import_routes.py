@@ -106,12 +106,15 @@ def register_auto_import_routes(app):
 
             # AI настройки
             settings.ai_enabled = request.form.get('ai_enabled') == 'on'
-            settings.ai_provider = request.form.get('ai_provider', 'openai')
+            settings.ai_provider = request.form.get('ai_provider', 'cloudru')
             settings.ai_api_key = request.form.get('ai_api_key', '').strip()
             settings.ai_api_base_url = request.form.get('ai_api_base_url', '').strip()
-            settings.ai_model = request.form.get('ai_model', 'gpt-4o-mini').strip()
+            settings.ai_model = request.form.get('ai_model', 'openai/gpt-oss-120b').strip()
             settings.ai_use_for_categories = request.form.get('ai_use_for_categories') == 'on'
             settings.ai_use_for_sizes = request.form.get('ai_use_for_sizes') == 'on'
+            # Cloud.ru OAuth2 credentials
+            settings.ai_client_id = request.form.get('ai_client_id', '').strip()
+            settings.ai_client_secret = request.form.get('ai_client_secret', '').strip()
 
             try:
                 settings.ai_temperature = float(request.form.get('ai_temperature', 0.3))

@@ -225,9 +225,9 @@
                                 </td>
                                 <td class="px-4 py-3">
                                     <div class="flex items-center">
-                                        {% set photo_urls = product.photo_urls|default('[]')|tojson|safe %}
-                                        {% if photo_urls != '[]' %}
-                                        <img src="{{ url_for('auto_import_photo_padded', url=(photo_urls|from_json)[0] if photo_urls != '[]' else '') }}"
+                                        {% set photos = (product.photo_urls or '[]')|from_json if product.photo_urls else [] %}
+                                        {% if photos and photos|length > 0 and photos[0] %}
+                                        <img src="{{ url_for('auto_import_photo_padded', url=photos[0]) }}"
                                              class="w-12 h-12 object-cover rounded-lg mr-3"
                                              onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect fill=%22%23e5e7eb%22 width=%2248%22 height=%2248%22/></svg>'">
                                         {% else %}

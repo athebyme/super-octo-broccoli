@@ -3,14 +3,17 @@
 AI Service - Универсальный модуль для интеграции с AI провайдерами
 
 Поддерживает:
-- Cloud.ru Foundation Models (основной провайдер)
+- Cloud.ru Foundation Models (основной провайдер с OAuth2)
 - OpenAI-совместимые API
 - Кастомные инструкции для разных задач
 - Валидацию ответов AI
+- Автоматическую ротацию токенов для Cloud.ru
 """
 import json
 import re
 import logging
+import threading
+import time
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List, Any, Tuple
 from dataclasses import dataclass, field
@@ -18,6 +21,132 @@ from enum import Enum
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# CLOUD.RU OAUTH2 TOKEN MANAGER
+# ============================================================================
+
+class CloudRuTokenManager:
+    """
+    Менеджер токенов для Cloud.ru Foundation Models API
+    Использует OAuth2 Client Credentials flow
+
+    Cloud.ru требует:
+    - client_id и client_secret для получения access_token
+    - Токены имеют ограниченное время жизни (обычно 1 час)
+    - Автоматическая ротация токена при истечении
+    """
+
+    # URL для получения токена Cloud.ru
+    TOKEN_URL = "https://auth.iam.cloud.ru/realms/platform/protocol/openid-connect/token"
+
+    # Буфер времени до истечения токена (секунды) - обновляем заранее
+    TOKEN_REFRESH_BUFFER = 300  # 5 минут
+
+    def __init__(self, client_id: str, client_secret: str):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self._access_token: Optional[str] = None
+        self._token_expires_at: float = 0
+        self._lock = threading.Lock()
+
+    def get_access_token(self) -> Optional[str]:
+        """
+        Получает действующий access token
+        Автоматически обновляет если истёк или скоро истечёт
+
+        Returns:
+            access_token или None при ошибке
+        """
+        with self._lock:
+            current_time = time.time()
+
+            # Проверяем нужно ли обновить токен
+            if (self._access_token is None or
+                current_time >= self._token_expires_at - self.TOKEN_REFRESH_BUFFER):
+
+                logger.info("🔄 Получаем новый access token от Cloud.ru...")
+                success = self._fetch_new_token()
+                if not success:
+                    return None
+
+            return self._access_token
+
+    def _fetch_new_token(self) -> bool:
+        """
+        Запрашивает новый access token у Cloud.ru
+
+        Returns:
+            True при успехе, False при ошибке
+        """
+        try:
+            payload = {
+                "grant_type": "client_credentials",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret
+            }
+
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+
+            response = requests.post(
+                self.TOKEN_URL,
+                data=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                logger.error(f"❌ Cloud.ru OAuth ошибка: {response.status_code}")
+                logger.error(f"Response: {response.text[:500]}")
+                return False
+
+            data = response.json()
+
+            self._access_token = data.get("access_token")
+            expires_in = data.get("expires_in", 3600)  # По умолчанию 1 час
+            self._token_expires_at = time.time() + expires_in
+
+            logger.info(f"✅ Cloud.ru access token получен (expires_in: {expires_in}s)")
+            return True
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Cloud.ru OAuth network error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Cloud.ru OAuth error: {e}")
+            return False
+
+    def invalidate_token(self):
+        """Принудительно инвалидирует текущий токен"""
+        with self._lock:
+            self._access_token = None
+            self._token_expires_at = 0
+
+
+# Глобальный кэш token managers (по client_id)
+_token_managers: Dict[str, CloudRuTokenManager] = {}
+_token_managers_lock = threading.Lock()
+
+
+def get_cloudru_token_manager(client_id: str, client_secret: str) -> CloudRuTokenManager:
+    """
+    Получает или создает TokenManager для данных credentials
+    Использует кэш для переиспользования
+    """
+    with _token_managers_lock:
+        if client_id not in _token_managers:
+            _token_managers[client_id] = CloudRuTokenManager(client_id, client_secret)
+        return _token_managers[client_id]
+
+
+def reset_cloudru_token_managers():
+    """Сбрасывает все кэшированные token managers"""
+    global _token_managers
+    with _token_managers_lock:
+        _token_managers = {}
 
 
 class AIProvider(Enum):
@@ -146,7 +275,7 @@ DEFAULT_INSTRUCTIONS = {
 class AIConfig:
     """Конфигурация AI провайдера"""
     provider: AIProvider
-    api_key: str
+    api_key: str = ""  # Для OpenAI/Custom
     api_base_url: str = "https://foundation-models.api.cloud.ru/v1"
     model: str = "openai/gpt-oss-120b"
     temperature: float = 0.3
@@ -159,6 +288,9 @@ class AIConfig:
     # Кастомные инструкции
     custom_category_instruction: str = ""
     custom_size_instruction: str = ""
+    # Cloud.ru OAuth2 credentials
+    client_id: str = ""
+    client_secret: str = ""
 
     @classmethod
     def from_settings(cls, settings) -> Optional['AIConfig']:
@@ -166,11 +298,25 @@ class AIConfig:
         if not hasattr(settings, 'ai_enabled') or not settings.ai_enabled:
             return None
 
-        if not settings.ai_api_key:
-            logger.warning("AI включен, но API ключ не указан")
-            return None
-
         provider = AIProvider(settings.ai_provider or 'cloudru')
+
+        # Проверяем наличие credentials в зависимости от провайдера
+        if provider == AIProvider.CLOUDRU:
+            # Cloud.ru использует client_id + client_secret
+            client_id = getattr(settings, 'ai_client_id', '') or ''
+            client_secret = getattr(settings, 'ai_client_secret', '') or ''
+            if not client_id or not client_secret:
+                logger.warning("Cloud.ru AI включен, но client_id/client_secret не указаны")
+                return None
+            api_key = ""  # Не используется для Cloud.ru
+        else:
+            # OpenAI/Custom используют API key
+            if not settings.ai_api_key:
+                logger.warning("AI включен, но API ключ не указан")
+                return None
+            api_key = settings.ai_api_key
+            client_id = ""
+            client_secret = ""
 
         # Определяем базовый URL в зависимости от провайдера
         if provider == AIProvider.CLOUDRU:
@@ -185,7 +331,7 @@ class AIConfig:
 
         return cls(
             provider=provider,
-            api_key=settings.ai_api_key,
+            api_key=api_key,
             api_base_url=api_base,
             model=settings.ai_model or default_model,
             temperature=getattr(settings, 'ai_temperature', 0.3) or 0.3,
@@ -195,23 +341,48 @@ class AIConfig:
             presence_penalty=getattr(settings, 'ai_presence_penalty', 0.0) or 0.0,
             frequency_penalty=getattr(settings, 'ai_frequency_penalty', 0.0) or 0.0,
             custom_category_instruction=getattr(settings, 'ai_category_instruction', '') or '',
-            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or ''
+            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or '',
+            client_id=client_id,
+            client_secret=client_secret
         )
 
 
 class AIClient:
     """
     Клиент для работы с AI API
-    Поддерживает OpenAI-совместимые API (включая Cloud.ru)
+    Поддерживает OpenAI-совместимые API (включая Cloud.ru с OAuth2)
     """
 
     def __init__(self, config: AIConfig):
         self.config = config
         self._session = requests.Session()
         self._session.headers.update({
-            'Authorization': f'Bearer {config.api_key}',
             'Content-Type': 'application/json'
         })
+
+        # Для Cloud.ru используем TokenManager
+        self._token_manager: Optional[CloudRuTokenManager] = None
+        if config.provider == AIProvider.CLOUDRU and config.client_id and config.client_secret:
+            self._token_manager = get_cloudru_token_manager(config.client_id, config.client_secret)
+        elif config.api_key:
+            # Для OpenAI/Custom используем статичный API key
+            self._session.headers['Authorization'] = f'Bearer {config.api_key}'
+
+    def _get_auth_header(self) -> Optional[str]:
+        """
+        Получает актуальный Authorization header
+
+        Для Cloud.ru получает токен через OAuth2 с автоматической ротацией
+        Для OpenAI/Custom возвращает статичный API key
+        """
+        if self._token_manager:
+            token = self._token_manager.get_access_token()
+            if token:
+                return f'Bearer {token}'
+            return None
+        elif self.config.api_key:
+            return f'Bearer {self.config.api_key}'
+        return None
 
     def chat_completion(
         self,
@@ -253,9 +424,18 @@ class AIClient:
             logger.debug(f"Messages: {messages}")
             logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
+            # Получаем актуальный Authorization header (с ротацией токена для Cloud.ru)
+            auth_header = self._get_auth_header()
+            if not auth_header:
+                logger.error("❌ Не удалось получить Authorization header")
+                return None
+
+            headers = {'Authorization': auth_header}
+
             response = self._session.post(
                 url,
                 json=payload,
+                headers=headers,
                 timeout=self.config.timeout
             )
 
@@ -700,6 +880,8 @@ def reset_ai_service():
     if _ai_service_instance:
         _ai_service_instance.close()
     _ai_service_instance = None
+    # Также сбрасываем кэшированные token managers
+    reset_cloudru_token_managers()
 
 
 def get_available_models(provider: str) -> Dict[str, Dict]:

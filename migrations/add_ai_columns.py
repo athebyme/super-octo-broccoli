@@ -71,10 +71,10 @@ def migrate():
     # Новые колонки для добавления
     new_columns = [
         ('ai_enabled', 'BOOLEAN DEFAULT 0'),
-        ('ai_provider', "VARCHAR(50) DEFAULT 'openai'"),
+        ('ai_provider', "VARCHAR(50) DEFAULT 'cloudru'"),
         ('ai_api_key', 'VARCHAR(500)'),
         ('ai_api_base_url', 'VARCHAR(500)'),
-        ('ai_model', "VARCHAR(100) DEFAULT 'gpt-4o-mini'"),
+        ('ai_model', "VARCHAR(100) DEFAULT 'openai/gpt-oss-120b'"),
         ('ai_temperature', 'FLOAT DEFAULT 0.3'),
         ('ai_max_tokens', 'INTEGER DEFAULT 2000'),
         ('ai_timeout', 'INTEGER DEFAULT 60'),
@@ -86,6 +86,9 @@ def migrate():
         ('ai_frequency_penalty', 'FLOAT DEFAULT 0.0'),
         ('ai_category_instruction', 'TEXT'),
         ('ai_size_instruction', 'TEXT'),
+        # Cloud.ru OAuth2 credentials
+        ('ai_client_id', 'VARCHAR(500)'),
+        ('ai_client_secret', 'VARCHAR(500)'),
     ]
 
     added = 0
@@ -128,10 +131,10 @@ def run_migration_with_path(db_path):
     # Новые колонки
     new_columns = [
         ('ai_enabled', 'BOOLEAN DEFAULT 0'),
-        ('ai_provider', "VARCHAR(50) DEFAULT 'openai'"),
+        ('ai_provider', "VARCHAR(50) DEFAULT 'cloudru'"),
         ('ai_api_key', 'VARCHAR(500)'),
         ('ai_api_base_url', 'VARCHAR(500)'),
-        ('ai_model', "VARCHAR(100) DEFAULT 'gpt-4o-mini'"),
+        ('ai_model', "VARCHAR(100) DEFAULT 'openai/gpt-oss-120b'"),
         ('ai_temperature', 'FLOAT DEFAULT 0.3'),
         ('ai_max_tokens', 'INTEGER DEFAULT 2000'),
         ('ai_timeout', 'INTEGER DEFAULT 60'),
@@ -143,6 +146,9 @@ def run_migration_with_path(db_path):
         ('ai_frequency_penalty', 'FLOAT DEFAULT 0.0'),
         ('ai_category_instruction', 'TEXT'),
         ('ai_size_instruction', 'TEXT'),
+        # Cloud.ru OAuth2 credentials
+        ('ai_client_id', 'VARCHAR(500)'),
+        ('ai_client_secret', 'VARCHAR(500)'),
     ]
 
     added = 0

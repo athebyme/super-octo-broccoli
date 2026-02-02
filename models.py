@@ -717,6 +717,9 @@ class AutoImportSettings(db.Model):
     # Кастомные инструкции AI
     ai_category_instruction = db.Column(db.Text)  # Кастомная инструкция для определения категорий
     ai_size_instruction = db.Column(db.Text)  # Кастомная инструкция для парсинга размеров
+    # Cloud.ru OAuth2 credentials (вместо простого API ключа)
+    ai_client_id = db.Column(db.String(500))  # Client ID для Cloud.ru OAuth2
+    ai_client_secret = db.Column(db.String(500))  # Client Secret для Cloud.ru OAuth2
 
     # Частота автоимпорта (в часах)
     auto_import_interval_hours = db.Column(db.Integer, default=24, nullable=False)  # По умолчанию раз в сутки
