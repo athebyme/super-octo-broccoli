@@ -24,32 +24,73 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# CLOUD.RU OAUTH2 TOKEN MANAGER
+# CLOUD.RU TOKEN MANAGER
 # ============================================================================
+
+import base64
+
+
+def parse_cloudru_key_secret(key_secret: str) -> Tuple[str, str]:
+    """
+    Парсит Key Secret от Cloud.ru в формате {base64(key_id)}.{secret}
+
+    Args:
+        key_secret: Полный Key Secret, например:
+            ZWVjYjQwYmItMTgwOS00OTcwLWIwYjctZmI2ZmIzOWRlZDM3.8edb891f1fec4eda94c4242e96ff5e13
+
+    Returns:
+        Tuple[key_id, secret] - распарсенные части
+    """
+    if '.' not in key_secret:
+        # Если нет точки, возможно это уже просто key_id или ошибка
+        logger.warning("Key Secret не содержит точку, используем как есть")
+        return key_secret, key_secret
+
+    parts = key_secret.split('.', 1)
+    if len(parts) != 2:
+        return key_secret, key_secret
+
+    base64_key_id, secret = parts
+
+    # Декодируем Key ID из base64
+    try:
+        key_id = base64.b64decode(base64_key_id).decode('utf-8')
+        logger.info(f"✅ Распарсен Cloud.ru Key ID: {key_id[:8]}...")
+    except Exception as e:
+        logger.warning(f"Не удалось декодировать Key ID из base64: {e}")
+        key_id = base64_key_id
+
+    return key_id, secret
+
 
 class CloudRuTokenManager:
     """
     Менеджер токенов для Cloud.ru Foundation Models API
-    Использует OAuth2 Client Credentials flow
 
     Cloud.ru требует:
-    - client_id и client_secret для получения access_token
-    - Токены имеют ограниченное время жизни (обычно 1 час)
+    - Key ID и Secret для получения access_token через grant_type=access_key
+    - Токены имеют ограниченное время жизни
     - Автоматическая ротация токена при истечении
     """
 
     # URL для получения токена Cloud.ru
-    TOKEN_URL = "https://auth.iam.cloud.ru/realms/platform/protocol/openid-connect/token"
+    TOKEN_URL = "https://id.cloud.ru/auth/system/openid/token"
 
     # Буфер времени до истечения токена (секунды) - обновляем заранее
     TOKEN_REFRESH_BUFFER = 300  # 5 минут
 
-    def __init__(self, client_id: str, client_secret: str):
-        self.client_id = client_id
-        self.client_secret = client_secret
+    def __init__(self, key_id: str, secret: str):
+        self.key_id = key_id
+        self.secret = secret
         self._access_token: Optional[str] = None
         self._token_expires_at: float = 0
         self._lock = threading.Lock()
+
+    @classmethod
+    def from_key_secret(cls, key_secret: str) -> 'CloudRuTokenManager':
+        """Создает TokenManager из полного Key Secret"""
+        key_id, secret = parse_cloudru_key_secret(key_secret)
+        return cls(key_id, secret)
 
     def get_access_token(self) -> Optional[str]:
         """
@@ -82,14 +123,16 @@ class CloudRuTokenManager:
         """
         try:
             payload = {
-                "grant_type": "client_credentials",
-                "client_id": self.client_id,
-                "client_secret": self.client_secret
+                "grant_type": "access_key",
+                "client_id": self.key_id,
+                "client_secret": self.secret
             }
 
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded"
             }
+
+            logger.info(f"🔑 Запрос токена к {self.TOKEN_URL} с key_id={self.key_id[:8]}...")
 
             response = requests.post(
                 self.TOKEN_URL,
@@ -99,7 +142,7 @@ class CloudRuTokenManager:
             )
 
             if response.status_code != 200:
-                logger.error(f"❌ Cloud.ru OAuth ошибка: {response.status_code}")
+                logger.error(f"❌ Cloud.ru Token ошибка: {response.status_code}")
                 logger.error(f"Response: {response.text[:500]}")
                 return False
 
@@ -113,10 +156,12 @@ class CloudRuTokenManager:
             return True
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Cloud.ru OAuth network error: {e}")
+            logger.error(f"❌ Cloud.ru Token network error: {e}")
             return False
         except Exception as e:
-            logger.error(f"❌ Cloud.ru OAuth error: {e}")
+            logger.error(f"❌ Cloud.ru Token error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     def invalidate_token(self):
@@ -126,20 +171,25 @@ class CloudRuTokenManager:
             self._token_expires_at = 0
 
 
-# Глобальный кэш token managers (по client_id)
+# Глобальный кэш token managers (по key_secret)
 _token_managers: Dict[str, CloudRuTokenManager] = {}
 _token_managers_lock = threading.Lock()
 
 
-def get_cloudru_token_manager(client_id: str, client_secret: str) -> CloudRuTokenManager:
+def get_cloudru_token_manager(key_secret: str) -> CloudRuTokenManager:
     """
-    Получает или создает TokenManager для данных credentials
+    Получает или создает TokenManager для данного Key Secret
     Использует кэш для переиспользования
+
+    Args:
+        key_secret: Полный Key Secret в формате {base64(key_id)}.{secret}
     """
     with _token_managers_lock:
-        if client_id not in _token_managers:
-            _token_managers[client_id] = CloudRuTokenManager(client_id, client_secret)
-        return _token_managers[client_id]
+        # Используем первые 20 символов как ключ кэша (без раскрытия полного секрета)
+        cache_key = key_secret[:20] if len(key_secret) > 20 else key_secret
+        if cache_key not in _token_managers:
+            _token_managers[cache_key] = CloudRuTokenManager.from_key_secret(key_secret)
+        return _token_managers[cache_key]
 
 
 def reset_cloudru_token_managers():
@@ -339,9 +389,28 @@ class AIClient:
         self.config = config
         self._session = requests.Session()
         self._session.headers.update({
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {config.api_key}'
+            'Content-Type': 'application/json'
         })
+
+        # Для Cloud.ru используем TokenManager (нужен token exchange)
+        self._token_manager: Optional[CloudRuTokenManager] = None
+        if config.provider == AIProvider.CLOUDRU:
+            self._token_manager = get_cloudru_token_manager(config.api_key)
+        else:
+            # Для OpenAI/Custom используем API key напрямую
+            self._session.headers['Authorization'] = f'Bearer {config.api_key}'
+
+    def _get_auth_header(self) -> Optional[str]:
+        """Получает актуальный Authorization header"""
+        if self._token_manager:
+            # Cloud.ru - получаем свежий access token
+            token = self._token_manager.get_access_token()
+            if token:
+                return f'Bearer {token}'
+            return None
+        else:
+            # OpenAI/Custom - API key уже в сессии
+            return self._session.headers.get('Authorization')
 
     def chat_completion(
         self,
@@ -383,9 +452,18 @@ class AIClient:
             logger.debug(f"Messages: {messages}")
             logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
+            # Получаем актуальный Authorization header
+            auth_header = self._get_auth_header()
+            if not auth_header:
+                logger.error("❌ Не удалось получить Authorization header")
+                return None
+
+            headers = {'Authorization': auth_header}
+
             response = self._session.post(
                 url,
                 json=payload,
+                headers=headers,
                 timeout=self.config.timeout
             )
 
