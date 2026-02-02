@@ -698,6 +698,19 @@ class AutoImportSettings(db.Model):
     resize_images_to_1200 = db.Column(db.Boolean, default=True, nullable=False)  # Приводить к 1200x1200
     image_background_color = db.Column(db.String(20), default='white')  # Цвет фона для дорисовки
 
+    # AI настройки
+    ai_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Использовать AI для определения категорий/размеров
+    ai_provider = db.Column(db.String(50), default='openai')  # Провайдер AI (openai, cloudru, custom)
+    ai_api_key = db.Column(db.String(500))  # API ключ для AI
+    ai_api_base_url = db.Column(db.String(500))  # Базовый URL API (для custom провайдеров)
+    ai_model = db.Column(db.String(100), default='gpt-4o-mini')  # Модель AI
+    ai_temperature = db.Column(db.Float, default=0.3)  # Температура для AI
+    ai_max_tokens = db.Column(db.Integer, default=2000)  # Максимум токенов
+    ai_timeout = db.Column(db.Integer, default=60)  # Таймаут запросов в секундах
+    ai_use_for_categories = db.Column(db.Boolean, default=True, nullable=False)  # Использовать AI для категорий
+    ai_use_for_sizes = db.Column(db.Boolean, default=True, nullable=False)  # Использовать AI для размеров
+    ai_category_confidence_threshold = db.Column(db.Float, default=0.7)  # Минимальная уверенность AI для принятия категории
+
     # Частота автоимпорта (в часах)
     auto_import_interval_hours = db.Column(db.Integer, default=24, nullable=False)  # По умолчанию раз в сутки
 
@@ -741,6 +754,18 @@ class AutoImportSettings(db.Model):
             'use_blurred_images': self.use_blurred_images,
             'resize_images_to_1200': self.resize_images_to_1200,
             'image_background_color': self.image_background_color,
+            # AI настройки
+            'ai_enabled': self.ai_enabled,
+            'ai_provider': self.ai_provider,
+            'ai_api_base_url': self.ai_api_base_url,
+            'ai_model': self.ai_model,
+            'ai_temperature': self.ai_temperature,
+            'ai_max_tokens': self.ai_max_tokens,
+            'ai_timeout': self.ai_timeout,
+            'ai_use_for_categories': self.ai_use_for_categories,
+            'ai_use_for_sizes': self.ai_use_for_sizes,
+            'ai_category_confidence_threshold': self.ai_category_confidence_threshold,
+            # Не отдаем ai_api_key в JSON из соображений безопасности
             'auto_import_interval_hours': self.auto_import_interval_hours,
             'last_import_at': self.last_import_at.isoformat() if self.last_import_at else None,
             'next_import_at': self.next_import_at.isoformat() if self.next_import_at else None,

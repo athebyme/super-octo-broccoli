@@ -207,12 +207,88 @@
             <!-- Ошибки валидации -->
             {% if product.validation_errors_list %}
             <div class="bg-red-50 border border-red-200 rounded-lg p-6">
-                <h3 class="text-lg font-medium text-red-900 mb-4">Ошибки валидации</h3>
-                <ul class="list-disc list-inside space-y-1">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-red-900">Ошибки валидации</h3>
+                    <button type="button" id="showFixFormBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                        Исправить ошибки
+                    </button>
+                </div>
+                <ul class="list-disc list-inside space-y-1 mb-4">
                     {% for error in product.validation_errors_list %}
                     <li class="text-sm text-red-700">{{ error }}</li>
                     {% endfor %}
                 </ul>
+
+                <!-- Форма исправления ошибок -->
+                <div id="fixForm" class="hidden mt-4 pt-4 border-t border-red-200">
+                    <form id="fixErrorsForm">
+                        <!-- Баркоды -->
+                        {% if 'баркод' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_barcodes" class="block text-sm font-medium text-gray-700 mb-1">
+                                Баркоды (через запятую)
+                            </label>
+                            <input type="text" id="fix_barcodes" name="barcodes"
+                                   value="{{ product.barcodes_list|join(', ') if product.barcodes_list else '' }}"
+                                   class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                   placeholder="1234567890123, 1234567890124">
+                            <p class="mt-1 text-xs text-gray-500">
+                                EAN-13 или другой штрихкод. Можно указать несколько через запятую.
+                            </p>
+                        </div>
+                        {% endif %}
+
+                        <!-- Бренд -->
+                        {% if 'бренд' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_brand" class="block text-sm font-medium text-gray-700 mb-1">
+                                Бренд
+                            </label>
+                            <input type="text" id="fix_brand" name="brand"
+                                   value="{{ product.brand or '' }}"
+                                   class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                   placeholder="Название бренда">
+                        </div>
+                        {% endif %}
+
+                        <!-- Название -->
+                        {% if 'название' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_title" class="block text-sm font-medium text-gray-700 mb-1">
+                                Название товара
+                            </label>
+                            <input type="text" id="fix_title" name="title"
+                                   value="{{ product.title or '' }}"
+                                   class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                   placeholder="Название товара">
+                        </div>
+                        {% endif %}
+
+                        <!-- Категория WB -->
+                        {% if 'категория' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_category" class="block text-sm font-medium text-gray-700 mb-1">
+                                Категория WB
+                            </label>
+                            <select id="fix_category" name="wb_subject_id"
+                                    class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                                <option value="">Выберите категорию...</option>
+                            </select>
+                        </div>
+                        {% endif %}
+
+                        <div class="flex gap-2">
+                            <button type="submit" id="saveFixBtn"
+                                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
+                                Сохранить и проверить
+                            </button>
+                            <button type="button" id="cancelFixBtn"
+                                    class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                Отмена
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
             {% endif %}
         </div>
@@ -566,6 +642,92 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (togglePadding) {
         togglePadding.addEventListener('change', updatePhotoUrls);
+    }
+
+    // Fix errors form functionality
+    const showFixFormBtn = document.getElementById('showFixFormBtn');
+    const fixForm = document.getElementById('fixForm');
+    const cancelFixBtn = document.getElementById('cancelFixBtn');
+    const fixErrorsForm = document.getElementById('fixErrorsForm');
+    const fixCategorySelect = document.getElementById('fix_category');
+
+    // Populate category select for fix form
+    if (fixCategorySelect && wbCategories) {
+        const sortedCategories = Object.entries(wbCategories).sort((a, b) => a[1].localeCompare(b[1]));
+        sortedCategories.forEach(([id, name]) => {
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = `${name} (ID: ${id})`;
+            fixCategorySelect.appendChild(option);
+        });
+    }
+
+    if (showFixFormBtn && fixForm) {
+        showFixFormBtn.addEventListener('click', function() {
+            fixForm.classList.remove('hidden');
+            showFixFormBtn.classList.add('hidden');
+        });
+    }
+
+    if (cancelFixBtn && fixForm && showFixFormBtn) {
+        cancelFixBtn.addEventListener('click', function() {
+            fixForm.classList.add('hidden');
+            showFixFormBtn.classList.remove('hidden');
+        });
+    }
+
+    if (fixErrorsForm) {
+        fixErrorsForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(fixErrorsForm);
+            const data = {};
+
+            // Собираем данные из формы
+            for (let [key, value] of formData.entries()) {
+                if (value.trim()) {
+                    data[key] = value.trim();
+                }
+            }
+
+            // Обрабатываем баркоды
+            if (data.barcodes) {
+                data.barcodes = data.barcodes.split(',').map(b => b.trim()).filter(b => b);
+            }
+
+            // Преобразуем wb_subject_id в число
+            if (data.wb_subject_id) {
+                data.wb_subject_id = parseInt(data.wb_subject_id);
+            }
+
+            const saveBtn = document.getElementById('saveFixBtn');
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Сохранение...';
+
+            fetch('{{ url_for("auto_import_update_product", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success) {
+                    alert('Данные сохранены и товар повторно проверен!');
+                    window.location.reload();
+                } else {
+                    alert('Ошибка: ' + (result.error || 'Неизвестная ошибка'));
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Сохранить и проверить';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка запроса: ' + error);
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Сохранить и проверить';
+            });
+        });
     }
 });
 </script>

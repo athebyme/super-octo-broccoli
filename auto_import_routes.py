@@ -104,6 +104,43 @@ def register_auto_import_routes(app):
             settings.sexoptovik_login = request.form.get('sexoptovik_login', '').strip()
             settings.sexoptovik_password = request.form.get('sexoptovik_password', '').strip()
 
+            # AI настройки
+            settings.ai_enabled = request.form.get('ai_enabled') == 'on'
+            settings.ai_provider = request.form.get('ai_provider', 'openai')
+            settings.ai_api_key = request.form.get('ai_api_key', '').strip()
+            settings.ai_api_base_url = request.form.get('ai_api_base_url', '').strip()
+            settings.ai_model = request.form.get('ai_model', 'gpt-4o-mini').strip()
+            settings.ai_use_for_categories = request.form.get('ai_use_for_categories') == 'on'
+            settings.ai_use_for_sizes = request.form.get('ai_use_for_sizes') == 'on'
+
+            try:
+                settings.ai_temperature = float(request.form.get('ai_temperature', 0.3))
+            except ValueError:
+                settings.ai_temperature = 0.3
+
+            try:
+                settings.ai_max_tokens = int(request.form.get('ai_max_tokens', 2000))
+            except ValueError:
+                settings.ai_max_tokens = 2000
+
+            try:
+                settings.ai_timeout = int(request.form.get('ai_timeout', 60))
+            except ValueError:
+                settings.ai_timeout = 60
+
+            try:
+                settings.ai_category_confidence_threshold = float(request.form.get('ai_category_confidence_threshold', 0.7))
+            except ValueError:
+                settings.ai_category_confidence_threshold = 0.7
+
+            # Сбрасываем AI сервис при изменении настроек
+            if settings.ai_enabled:
+                try:
+                    from ai_service import reset_ai_service
+                    reset_ai_service()
+                except ImportError:
+                    pass
+
             try:
                 settings.auto_import_interval_hours = int(request.form.get('auto_import_interval_hours', 24))
             except ValueError:
@@ -534,6 +571,84 @@ def register_auto_import_routes(app):
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/product/<int:product_id>/update', methods=['POST'])
+    @login_required
+    def auto_import_update_product(product_id):
+        """Обновляет данные товара и перезапускает валидацию"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        try:
+            data = request.get_json()
+
+            # Обновляем поля
+            if 'title' in data:
+                product.title = data['title']
+
+            if 'brand' in data:
+                product.brand = data['brand']
+
+            if 'barcodes' in data:
+                barcodes = data['barcodes']
+                if isinstance(barcodes, str):
+                    barcodes = [b.strip() for b in barcodes.split(',') if b.strip()]
+                product.barcodes = json.dumps(barcodes, ensure_ascii=False)
+
+            if 'wb_subject_id' in data:
+                from wb_categories_mapping import WB_ADULT_CATEGORIES
+                new_id = data['wb_subject_id']
+                if new_id in WB_ADULT_CATEGORIES:
+                    product.wb_subject_id = new_id
+                    product.mapped_wb_category = WB_ADULT_CATEGORIES[new_id]
+                    product.category_confidence = 1.0
+
+            # Перезапускаем валидацию
+            from auto_import_manager import ProductValidator
+
+            # Собираем данные для валидации
+            product_data = {
+                'title': product.title,
+                'external_vendor_code': product.external_vendor_code,
+                'category': product.category,
+                'brand': product.brand,
+                'barcodes': json.loads(product.barcodes) if product.barcodes else [],
+                'photo_urls': json.loads(product.photo_urls) if product.photo_urls else [],
+                'colors': json.loads(product.colors) if product.colors else [],
+                'sizes': json.loads(product.sizes) if product.sizes else [],
+                'wb_subject_id': product.wb_subject_id
+            }
+
+            is_valid, errors = ProductValidator.validate_product(product_data)
+
+            if is_valid:
+                product.import_status = 'validated'
+                product.validation_errors = None
+            else:
+                product.import_status = 'failed'
+                product.validation_errors = json.dumps(errors, ensure_ascii=False)
+
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'is_valid': is_valid,
+                'errors': errors if not is_valid else [],
+                'new_status': product.import_status
+            })
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/auto-import/recalculate-categories', methods=['POST'])
     @login_required
     def auto_import_recalculate_categories():
@@ -609,15 +724,39 @@ def register_auto_import_routes(app):
         Query params:
             url: URL исходного фото
             bg_color: Цвет фона для padding (по умолчанию 'white')
+            fallback_blur: URL альтернативного изображения (blur)
+            fallback_original: URL альтернативного изображения (original)
         """
         photo_url = request.args.get('url')
         bg_color = request.args.get('bg_color', 'white')
+        fallback_blur = request.args.get('fallback_blur')
+        fallback_original = request.args.get('fallback_original')
 
         if not photo_url:
             return jsonify({'error': 'URL параметр обязателен'}), 400
 
         try:
             logger.info(f"🖼️  Запрос обработки фото: {photo_url}")
+
+            # Собираем fallback URLs
+            fallback_urls = []
+            if fallback_blur:
+                fallback_urls.append(fallback_blur)
+            if fallback_original:
+                fallback_urls.append(fallback_original)
+
+            # Автоматически формируем fallback URLs для sexoptovik
+            if 'sexoptovik.ru' in photo_url and not fallback_urls:
+                # Извлекаем ID и номер из URL
+                import re
+                match = re.search(r'/(\d+)/(\d+)_(\d+)_1200\.jpg', photo_url)
+                if match:
+                    product_id, _, photo_num = match.groups()
+                    fallback_urls = [
+                        f"https://x-story.ru/mp/_project/img_sx0_1200/{product_id}_{photo_num}_1200.jpg",
+                        f"https://x-story.ru/mp/_project/img_sx_1200/{product_id}_{photo_num}_1200.jpg"
+                    ]
+                    logger.info(f"📋 Автоматические fallback URLs: {fallback_urls}")
 
             # Получаем настройки автоимпорта для получения credentials sexoptovik
             seller = current_user.seller if current_user.is_authenticated else None
@@ -641,36 +780,35 @@ def register_auto_import_routes(app):
                             settings.sexoptovik_password
                         )
                         if not auth_cookies:
-                            error_msg = "Не удалось авторизоваться на sexoptovik.ru. Проверьте логин и пароль в настройках."
-                            logger.error(f"❌ {error_msg}")
-                            return jsonify({'error': error_msg, 'details': 'Авторизация не прошла'}), 401
-                        logger.info(f"✅ Авторизация успешна, получены cookies")
+                            logger.warning(f"⚠️  Авторизация не удалась, пробуем fallback URLs")
+                            # Не возвращаем ошибку, пробуем fallback
+                        else:
+                            logger.info(f"✅ Авторизация успешна, получены cookies")
                     else:
-                        error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
-                        logger.warning(f"⚠️  {error_msg}")
-                        return jsonify({'error': error_msg, 'details': 'Отсутствуют учетные данные'}), 403
+                        logger.warning(f"⚠️  Нет credentials для sexoptovik, пробуем fallback URLs")
                 else:
                     logger.info(f"ℹ️  URL не от sexoptovik.ru, авторизация не требуется")
             else:
-                logger.warning(f"⚠️  Seller: {seller is not None}, Auto import settings: {seller.auto_import_settings if seller else None}")
-                if 'sexoptovik.ru' in photo_url:
-                    error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
-                    logger.warning(f"⚠️  {error_msg}")
-                    return jsonify({'error': error_msg, 'details': 'Настройки не найдены'}), 403
+                logger.warning(f"⚠️  Настройки не найдены, пробуем без авторизации или fallback")
 
-            # Скачиваем и обрабатываем фото
+            # Скачиваем и обрабатываем фото с retry и fallback
             logger.info(f"⬇️  Скачивание и обработка изображения...")
             processed_image = ImageProcessor.download_and_process_image(
                 photo_url,
                 target_size=(1200, 1200),
                 background_color=bg_color,
-                auth_cookies=auth_cookies
+                auth_cookies=auth_cookies,
+                fallback_urls=fallback_urls if fallback_urls else None
             )
 
             if not processed_image:
-                error_msg = "Не удалось скачать или обработать изображение. Проверьте URL и доступность сервера."
-                logger.error(f"❌ {error_msg} URL: {photo_url}")
-                return jsonify({'error': error_msg, 'details': f'URL: {photo_url}'}), 500
+                error_msg = "Не удалось скачать или обработать изображение после всех попыток."
+                logger.error(f"❌ {error_msg} URL: {photo_url}, Fallbacks: {fallback_urls}")
+                return jsonify({
+                    'error': error_msg,
+                    'details': f'URL: {photo_url}',
+                    'fallback_urls': fallback_urls
+                }), 500
 
             logger.info(f"✅ Изображение успешно обработано")
             # Возвращаем обработанное изображение

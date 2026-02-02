@@ -245,6 +245,176 @@
             </div>
         </div>
 
+        <!-- AI Настройки -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="flex items-center mb-4">
+                <svg class="h-6 w-6 text-purple-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <h3 class="text-lg font-medium text-gray-900">AI-помощник (опционально)</h3>
+            </div>
+            <p class="text-sm text-gray-600 mb-4">
+                Используйте AI для улучшения определения категорий и парсинга размеров товаров.
+                Поддерживаются OpenAI-совместимые API (OpenAI, Cloud.ru Foundation Models и др.).
+            </p>
+
+            <!-- Включить AI -->
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if settings.ai_enabled else '' }}
+                           class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                           onchange="toggleAISettings()">
+                    <span class="ml-2 text-sm text-gray-700">Включить AI-помощник</span>
+                </label>
+            </div>
+
+            <div id="ai_settings_block" class="{{ '' if settings.ai_enabled else 'hidden' }}">
+                <!-- Провайдер AI -->
+                <div class="mb-4">
+                    <label for="ai_provider" class="block text-sm font-medium text-gray-700 mb-1">
+                        Провайдер AI
+                    </label>
+                    <select id="ai_provider" name="ai_provider"
+                            class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                            onchange="updateAIProviderSettings()">
+                        <option value="openai" {{ 'selected' if settings.ai_provider == 'openai' else '' }}>
+                            OpenAI
+                        </option>
+                        <option value="cloudru" {{ 'selected' if settings.ai_provider == 'cloudru' else '' }}>
+                            Cloud.ru Foundation Models
+                        </option>
+                        <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
+                            Другой (OpenAI-совместимый)
+                        </option>
+                    </select>
+                </div>
+
+                <!-- API ключ -->
+                <div class="mb-4">
+                    <label for="ai_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        API ключ <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="ai_api_key" name="ai_api_key"
+                           value="{{ settings.ai_api_key or '' }}"
+                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="sk-...">
+                    <p class="mt-1 text-xs text-gray-500">
+                        API ключ для доступа к AI сервису
+                    </p>
+                </div>
+
+                <!-- Базовый URL (для custom) -->
+                <div class="mb-4" id="ai_base_url_block">
+                    <label for="ai_api_base_url" class="block text-sm font-medium text-gray-700 mb-1">
+                        Базовый URL API
+                    </label>
+                    <input type="url" id="ai_api_base_url" name="ai_api_base_url"
+                           value="{{ settings.ai_api_base_url or '' }}"
+                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="https://api.openai.com/v1">
+                    <p class="mt-1 text-xs text-gray-500">
+                        Укажите для custom провайдера или Cloud.ru
+                    </p>
+                </div>
+
+                <!-- Модель -->
+                <div class="mb-4">
+                    <label for="ai_model" class="block text-sm font-medium text-gray-700 mb-1">
+                        Модель AI
+                    </label>
+                    <input type="text" id="ai_model" name="ai_model"
+                           value="{{ settings.ai_model or 'gpt-4o-mini' }}"
+                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="gpt-4o-mini">
+                    <p class="mt-1 text-xs text-gray-500">
+                        Рекомендуется: gpt-4o-mini (баланс цены/качества) или gpt-4o (лучшее качество)
+                    </p>
+                </div>
+
+                <!-- Использовать для категорий -->
+                <div class="mb-4">
+                    <label class="flex items-center">
+                        <input type="checkbox" name="ai_use_for_categories" {{ 'checked' if settings.ai_use_for_categories else '' }}
+                               class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
+                        <span class="ml-2 text-sm text-gray-700">Использовать AI для определения категорий</span>
+                    </label>
+                    <p class="ml-6 mt-1 text-xs text-gray-500">
+                        AI будет помогать определять категорию WB когда обычный алгоритм не уверен
+                    </p>
+                </div>
+
+                <!-- Использовать для размеров -->
+                <div class="mb-4">
+                    <label class="flex items-center">
+                        <input type="checkbox" name="ai_use_for_sizes" {{ 'checked' if settings.ai_use_for_sizes else '' }}
+                               class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
+                        <span class="ml-2 text-sm text-gray-700">Использовать AI для парсинга размеров</span>
+                    </label>
+                    <p class="ml-6 mt-1 text-xs text-gray-500">
+                        AI будет извлекать характеристики (длина, диаметр и т.д.) из текстовых описаний
+                    </p>
+                </div>
+
+                <!-- Порог уверенности для AI категорий -->
+                <div class="mb-4">
+                    <label for="ai_category_confidence_threshold" class="block text-sm font-medium text-gray-700 mb-1">
+                        Порог уверенности для AI (категории)
+                    </label>
+                    <input type="number" id="ai_category_confidence_threshold" name="ai_category_confidence_threshold"
+                           value="{{ settings.ai_category_confidence_threshold or 0.7 }}"
+                           min="0" max="1" step="0.05"
+                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    <p class="mt-1 text-xs text-gray-500">
+                        AI будет использоваться если уверенность обычного алгоритма ниже этого значения (0-1)
+                    </p>
+                </div>
+
+                <!-- Расширенные настройки (свернутые) -->
+                <details class="mb-4">
+                    <summary class="text-sm font-medium text-gray-700 cursor-pointer hover:text-purple-600">
+                        Расширенные настройки AI
+                    </summary>
+                    <div class="mt-3 pl-4 border-l-2 border-gray-200 space-y-4">
+                        <!-- Температура -->
+                        <div>
+                            <label for="ai_temperature" class="block text-sm font-medium text-gray-700 mb-1">
+                                Температура
+                            </label>
+                            <input type="number" id="ai_temperature" name="ai_temperature"
+                                   value="{{ settings.ai_temperature or 0.3 }}"
+                                   min="0" max="2" step="0.1"
+                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <p class="mt-1 text-xs text-gray-500">
+                                Низкая (0.1-0.3) = более точные ответы, высокая (0.7-1.0) = более креативные
+                            </p>
+                        </div>
+
+                        <!-- Макс токенов -->
+                        <div>
+                            <label for="ai_max_tokens" class="block text-sm font-medium text-gray-700 mb-1">
+                                Максимум токенов
+                            </label>
+                            <input type="number" id="ai_max_tokens" name="ai_max_tokens"
+                                   value="{{ settings.ai_max_tokens or 2000 }}"
+                                   min="100" max="8000"
+                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                        </div>
+
+                        <!-- Таймаут -->
+                        <div>
+                            <label for="ai_timeout" class="block text-sm font-medium text-gray-700 mb-1">
+                                Таймаут запроса (секунды)
+                            </label>
+                            <input type="number" id="ai_timeout" name="ai_timeout"
+                                   value="{{ settings.ai_timeout or 60 }}"
+                                   min="10" max="300"
+                                   class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </div>
+
         <!-- Кнопки -->
         <div class="flex gap-4">
             <button type="submit"
@@ -258,4 +428,44 @@
         </div>
     </form>
 </div>
+
+<script>
+function toggleAISettings() {
+    const checkbox = document.getElementById('ai_enabled');
+    const settingsBlock = document.getElementById('ai_settings_block');
+    if (checkbox.checked) {
+        settingsBlock.classList.remove('hidden');
+    } else {
+        settingsBlock.classList.add('hidden');
+    }
+}
+
+function updateAIProviderSettings() {
+    const provider = document.getElementById('ai_provider').value;
+    const baseUrlBlock = document.getElementById('ai_base_url_block');
+    const baseUrlInput = document.getElementById('ai_api_base_url');
+    const modelInput = document.getElementById('ai_model');
+
+    // Показываем/скрываем блок базового URL
+    if (provider === 'openai') {
+        baseUrlBlock.classList.add('hidden');
+        baseUrlInput.value = '';
+        if (!modelInput.value || modelInput.value === 'gpt-4o-mini') {
+            modelInput.placeholder = 'gpt-4o-mini';
+        }
+    } else {
+        baseUrlBlock.classList.remove('hidden');
+        if (provider === 'cloudru') {
+            baseUrlInput.placeholder = 'https://api.cloudru.ru/v1';
+        } else {
+            baseUrlInput.placeholder = 'https://your-api.com/v1';
+        }
+    }
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener('DOMContentLoaded', function() {
+    updateAIProviderSettings();
+});
+</script>
 {% endblock %}
