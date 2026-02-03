@@ -32,16 +32,18 @@ import base64
 
 def parse_cloudru_key_secret(key_secret: str) -> Tuple[str, str]:
     """
-    Парсит Key Secret от Cloud.ru в формате {key_id}.{secret}
+    Парсит Key Secret от Cloud.ru в формате {base64(key_id)}.{secret}
 
-    Cloud.ru ожидает key_id как есть (base64-подобный формат)
+    Cloud.ru ожидает key_id как UUID (декодированный из base64)
 
     Args:
         key_secret: Полный Key Secret, например:
             ZWVjYjQwYmItMTgwOS00OTcwLWIwYjctZmI2ZmIzOWRlZDM3.8edb891f1fec4eda94c4242e96ff5e13
 
+            Где первая часть - это base64-encoded UUID: eecb40bb-1809-4970-b0b7-fb6fb39ded37
+
     Returns:
-        Tuple[key_id, secret] - обе части как есть
+        Tuple[key_id (UUID), secret]
     """
     if '.' not in key_secret:
         # Если нет точки, возможно это уже просто key_id или ошибка
@@ -52,12 +54,17 @@ def parse_cloudru_key_secret(key_secret: str) -> Tuple[str, str]:
     if len(parts) != 2:
         return key_secret, key_secret
 
-    key_id, secret = parts
+    key_id_base64, secret = parts
 
-    # НЕ декодируем - Cloud.ru ожидает key_id как есть
-    logger.info(f"✅ Распарсен Cloud.ru Key: key_id={key_id[:12]}..., secret={secret[:8]}...")
-
-    return key_id, secret
+    # Декодируем base64 чтобы получить UUID
+    try:
+        key_id_uuid = base64.b64decode(key_id_base64).decode('utf-8')
+        logger.info(f"✅ Распарсен Cloud.ru Key: key_id (UUID)={key_id_uuid}, secret={secret[:8]}...")
+        return key_id_uuid, secret
+    except Exception as e:
+        logger.warning(f"Не удалось декодировать key_id из base64: {e}, используем как есть")
+        logger.info(f"✅ Распарсен Cloud.ru Key: key_id={key_id_base64[:12]}..., secret={secret[:8]}...")
+        return key_id_base64, secret
 
 
 class CloudRuTokenManager:
