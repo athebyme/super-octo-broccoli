@@ -72,13 +72,13 @@ class CloudRuTokenManager:
     Менеджер токенов для Cloud.ru Foundation Models API
 
     Cloud.ru требует:
-    - Key ID и Secret для получения access_token через grant_type=access_key
-    - Токены имеют ограниченное время жизни
+    - Key ID и Secret для получения access_token через IAM API
+    - Токены имеют ограниченное время жизни (1 час)
     - Автоматическая ротация токена при истечении
     """
 
-    # URL для получения токена Cloud.ru
-    TOKEN_URL = "https://id.cloud.ru/auth/system/openid/token"
+    # URL для получения токена Cloud.ru IAM API
+    TOKEN_URL = "https://iam.api.cloud.ru/api/v1/auth/token"
 
     # Буфер времени до истечения токена (секунды) - обновляем заранее
     TOKEN_REFRESH_BUFFER = 300  # 5 минут
@@ -120,27 +120,27 @@ class CloudRuTokenManager:
 
     def _fetch_new_token(self) -> bool:
         """
-        Запрашивает новый access token у Cloud.ru
+        Запрашивает новый access token у Cloud.ru IAM API
 
         Returns:
             True при успехе, False при ошибке
         """
         try:
+            # Cloud.ru IAM API ожидает JSON с keyId и secret
             payload = {
-                "grant_type": "access_key",
-                "client_id": self.key_id,
-                "client_secret": self.secret
+                "keyId": self.key_id,
+                "secret": self.secret
             }
 
             headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
+                "Content-Type": "application/json"
             }
 
-            logger.info(f"🔑 Запрос токена к {self.TOKEN_URL} с key_id={self.key_id[:8]}...")
+            logger.info(f"🔑 Запрос токена к {self.TOKEN_URL} с keyId={self.key_id[:8]}...")
 
             response = requests.post(
                 self.TOKEN_URL,
-                data=payload,
+                json=payload,
                 headers=headers,
                 timeout=30
             )
