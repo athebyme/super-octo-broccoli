@@ -10,7 +10,7 @@ import threading
 import logging
 import time
 
-from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
+from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AutoImportProduct
 from auto_import_manager import AutoImportManager, ImageProcessor
 
 logger = logging.getLogger(__name__)
