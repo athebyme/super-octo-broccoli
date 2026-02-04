@@ -728,7 +728,7 @@ class ImageProcessor:
             url,
             headers=headers,
             cookies=auth_cookies,
-            timeout=30,
+            timeout=10,  # Уменьшен с 30 до 10 секунд
             allow_redirects=True
         )
         response.raise_for_status()

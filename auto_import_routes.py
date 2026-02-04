@@ -8,6 +8,7 @@ from flask_login import login_required, current_user
 import json
 import threading
 import logging
+import time
 
 from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
 from auto_import_manager import AutoImportManager, ImageProcessor
@@ -740,6 +741,17 @@ def register_auto_import_routes(app):
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    # Простой файловый кэш для картинок
+    import hashlib
+    import os
+    PHOTO_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'photo_cache')
+    os.makedirs(PHOTO_CACHE_DIR, exist_ok=True)
+
+    def get_photo_cache_path(url: str) -> str:
+        """Генерирует путь к кэшированному файлу"""
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        return os.path.join(PHOTO_CACHE_DIR, f"{url_hash}.jpg")
+
     @app.route('/auto-import/photo/padded', methods=['GET'])
     def auto_import_photo_padded():
         """
@@ -757,6 +769,15 @@ def register_auto_import_routes(app):
 
         if not photo_url:
             return jsonify({'error': 'URL параметр обязателен'}), 400
+
+        # Проверяем кэш
+        cache_path = get_photo_cache_path(photo_url)
+        if os.path.exists(cache_path):
+            # Проверяем возраст кэша (24 часа)
+            cache_age = time.time() - os.path.getmtime(cache_path)
+            if cache_age < 86400:  # 24 часа
+                logger.info(f"📦 Кэш найден для: {photo_url[:50]}...")
+                return send_file(cache_path, mimetype='image/jpeg')
 
         try:
             logger.info(f"🖼️  Запрос обработки фото: {photo_url}")
@@ -834,6 +855,17 @@ def register_auto_import_routes(app):
                 }), 500
 
             logger.info(f"✅ Изображение успешно обработано")
+
+            # Сохраняем в кэш
+            try:
+                processed_image.seek(0)
+                with open(cache_path, 'wb') as f:
+                    f.write(processed_image.read())
+                processed_image.seek(0)
+                logger.info(f"💾 Сохранено в кэш: {cache_path}")
+            except Exception as cache_err:
+                logger.warning(f"⚠️  Ошибка сохранения в кэш: {cache_err}")
+
             # Возвращаем обработанное изображение
             return send_file(
                 processed_image,
