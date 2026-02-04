@@ -846,13 +846,16 @@ def register_auto_import_routes(app):
             )
 
             if not processed_image:
-                error_msg = "Не удалось скачать или обработать изображение после всех попыток."
-                logger.error(f"❌ {error_msg} URL: {photo_url}, Fallbacks: {fallback_urls}")
-                return jsonify({
-                    'error': error_msg,
-                    'details': f'URL: {photo_url}',
-                    'fallback_urls': fallback_urls
-                }), 500
+                # Вместо ошибки 500 возвращаем placeholder - это не блокирует UI
+                logger.debug(f"Фото недоступно, возвращаем placeholder: {photo_url[:50]}...")
+                # Создаём простой серый placeholder
+                from PIL import Image
+                from io import BytesIO
+                placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
+                buffer = BytesIO()
+                placeholder.save(buffer, format='JPEG', quality=80)
+                buffer.seek(0)
+                return send_file(buffer, mimetype='image/jpeg')
 
             logger.info(f"✅ Изображение успешно обработано")
 
@@ -875,14 +878,15 @@ def register_auto_import_routes(app):
             )
 
         except Exception as e:
-            import traceback
-            error_trace = traceback.format_exc()
-            logger.error(f"❌ Критическая ошибка при обработке фото:\n{error_trace}")
-            return jsonify({
-                'error': f'Ошибка обработки изображения: {str(e)}',
-                'details': error_trace.split('\n')[-2] if error_trace else str(e),
-                'url': photo_url
-            }), 500
+            # Вместо ошибки 500 возвращаем placeholder
+            logger.debug(f"Ошибка загрузки фото, возвращаем placeholder: {str(e)[:100]}")
+            from PIL import Image
+            from io import BytesIO
+            placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
+            buffer = BytesIO()
+            placeholder.save(buffer, format='JPEG', quality=80)
+            buffer.seek(0)
+            return send_file(buffer, mimetype='image/jpeg')
 
 
     @app.route('/auto-import/ai-update', methods=['GET'])
