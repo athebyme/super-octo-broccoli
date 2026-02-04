@@ -10,7 +10,7 @@ import threading
 import logging
 import time
 
-from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AutoImportProduct
+from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
 from auto_import_manager import AutoImportManager, ImageProcessor
 
 logger = logging.getLogger(__name__)
@@ -1276,7 +1276,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1330,7 +1330,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1376,7 +1376,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1431,7 +1431,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1484,7 +1484,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1551,7 +1551,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1613,7 +1613,7 @@ def register_auto_import_routes(app):
         if not settings or not settings.ai_enabled:
             return jsonify({'success': False, 'error': 'AI не настроен'}), 400
 
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
@@ -1674,7 +1674,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'product_id required'}), 400
 
         seller = current_user.seller
-        product = AutoImportProduct.query.filter_by(
+        product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first()
 
