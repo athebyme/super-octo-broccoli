@@ -249,6 +249,142 @@ OPENAI_MODELS = {
 # ============================================================================
 
 DEFAULT_INSTRUCTIONS = {
+    "seo_title": {
+        "name": "SEO-оптимизация заголовка",
+        "description": "Генерация оптимизированного заголовка для поиска на WB",
+        "template": """Ты SEO-эксперт для маркетплейса Wildberries.
+
+Твоя задача - создать оптимизированный заголовок товара для лучшего ранжирования в поиске.
+
+ПРАВИЛА:
+1. Максимум 100 символов
+2. Начинай с ключевого слова (тип товара)
+3. Включай важные характеристики (материал, размер, цвет)
+4. Не используй CAPS LOCK и спецсимволы
+5. Избегай повторений слов
+6. Не используй слова: "лучший", "топ", "хит", "№1"
+7. Название должно быть информативным и читаемым
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "title": "<оптимизированный заголовок>",
+    "keywords_used": ["ключевое1", "ключевое2"],
+    "improvements": ["что улучшено"]
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "keywords": {
+        "name": "Генерация ключевых слов",
+        "description": "Создание ключевых слов для поиска товара",
+        "template": """Ты SEO-специалист для маркетплейса Wildberries.
+
+Твоя задача - сгенерировать ключевые слова для товара.
+
+ПРАВИЛА:
+1. Генерируй 15-30 релевантных ключевых слов
+2. Включай синонимы и вариации написания
+3. Добавляй общие и специфичные запросы
+4. Учитывай транслитерацию популярных терминов
+5. Не дублируй слова из названия напрямую
+6. Избегай нерелевантных слов
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "keywords": ["слово1", "слово2", ...],
+    "search_queries": ["популярный запрос 1", "популярный запрос 2"]
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "bullet_points": {
+        "name": "Преимущества товара",
+        "description": "Генерация кратких bullet points с преимуществами",
+        "template": """Ты копирайтер для маркетплейса.
+
+Твоя задача - создать краткие преимущества товара (bullet points).
+
+ПРАВИЛА:
+1. 4-6 кратких преимуществ
+2. Каждое преимущество - 1 строка (до 50 символов)
+3. Начинай с глагола или существительного
+4. Фокус на пользе для покупателя
+5. Конкретика вместо абстракций
+6. Не повторяй информацию из названия
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "bullet_points": [
+        "✓ Преимущество 1",
+        "✓ Преимущество 2"
+    ],
+    "target_audience": "<целевая аудитория>"
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "description_enhance": {
+        "name": "Улучшение описания",
+        "description": "SEO-оптимизация и улучшение описания товара",
+        "template": """Ты профессиональный копирайтер для маркетплейсов.
+
+Твоя задача - улучшить описание товара для повышения конверсии.
+
+ПРАВИЛА:
+1. Сохрани все факты и характеристики из оригинала
+2. Добавь структуру (абзацы, списки)
+3. Первый абзац - краткое УТП (1-2 предложения)
+4. Второй абзац - подробное описание
+5. Используй ключевые слова естественно
+6. Максимум 1000 символов
+7. Без воды и пустых фраз
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "description": "<улучшенное описание>",
+    "structure": {
+        "intro": "<вступление>",
+        "features": ["особенность1", "особенность2"],
+        "call_to_action": "<призыв>"
+    }
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "card_analysis": {
+        "name": "Анализ карточки",
+        "description": "Рекомендации по улучшению карточки товара",
+        "template": """Ты эксперт по оптимизации карточек товаров на Wildberries.
+
+Твоя задача - проанализировать карточку и дать рекомендации.
+
+ОЦЕНИ:
+1. Заголовок (SEO, читаемость)
+2. Описание (полнота, структура)
+3. Характеристики (заполненность)
+4. Фото (по описанию)
+5. Ценообразование (если указано)
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "score": <число 1-100>,
+    "issues": [
+        {"priority": "high/medium/low", "issue": "проблема", "fix": "решение"}
+    ],
+    "recommendations": [
+        "рекомендация 1",
+        "рекомендация 2"
+    ],
+    "strengths": ["сильная сторона 1"]
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
     "category_detection": {
         "name": "Определение категорий WB",
         "description": "Инструкция для определения категории товара на Wildberries",
@@ -762,6 +898,213 @@ class SizeParsingTask(AITask):
             return None
 
 
+class SEOTitleTask(AITask):
+    """Задача генерации SEO-оптимизированного заголовка"""
+
+    def get_system_prompt(self) -> str:
+        return DEFAULT_INSTRUCTIONS["seo_title"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        category = kwargs.get('category', '')
+        brand = kwargs.get('brand', '')
+        description = kwargs.get('description', '')
+
+        return f"""Оптимизируй заголовок товара:
+
+ТЕКУЩИЙ ЗАГОЛОВОК: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+БРЕНД: {brand or 'Не указан'}
+ОПИСАНИЕ: {description[:300] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'title': data.get('title', ''),
+                'keywords_used': data.get('keywords_used', []),
+                'improvements': data.get('improvements', [])
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class KeywordsTask(AITask):
+    """Задача генерации ключевых слов"""
+
+    def get_system_prompt(self) -> str:
+        return DEFAULT_INSTRUCTIONS["keywords"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        category = kwargs.get('category', '')
+        description = kwargs.get('description', '')
+
+        return f"""Сгенерируй ключевые слова для товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ОПИСАНИЕ: {description[:500] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'keywords': data.get('keywords', []),
+                'search_queries': data.get('search_queries', [])
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class BulletPointsTask(AITask):
+    """Задача генерации bullet points"""
+
+    def get_system_prompt(self) -> str:
+        return DEFAULT_INSTRUCTIONS["bullet_points"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Создай преимущества товара:
+
+НАЗВАНИЕ: {title}
+ОПИСАНИЕ: {description[:500] if description else 'Не указано'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'bullet_points': data.get('bullet_points', []),
+                'target_audience': data.get('target_audience', '')
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class DescriptionEnhanceTask(AITask):
+    """Задача улучшения описания"""
+
+    def get_system_prompt(self) -> str:
+        return DEFAULT_INSTRUCTIONS["description_enhance"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        category = kwargs.get('category', '')
+
+        return f"""Улучши описание товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ТЕКУЩЕЕ ОПИСАНИЕ:
+{description or 'Описание отсутствует'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'description': data.get('description', ''),
+                'structure': data.get('structure', {})
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class CardAnalysisTask(AITask):
+    """Задача анализа карточки товара"""
+
+    def get_system_prompt(self) -> str:
+        return DEFAULT_INSTRUCTIONS["card_analysis"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        category = kwargs.get('category', '')
+        characteristics = kwargs.get('characteristics', {})
+        photos_count = kwargs.get('photos_count', 0)
+        price = kwargs.get('price', 0)
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Проанализируй карточку товара:
+
+ЗАГОЛОВОК: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ОПИСАНИЕ: {description[:800] if description else 'Отсутствует'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не заполнены'}
+ФОТО: {photos_count} шт.
+ЦЕНА: {price} руб."""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'score': data.get('score', 0),
+                'issues': data.get('issues', []),
+                'recommendations': data.get('recommendations', []),
+                'strengths': data.get('strengths', [])
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
 class AIService:
     """
     Главный сервис для работы с AI
@@ -846,6 +1189,189 @@ class AIService:
             return True, result, ""
 
         return False, {}, error or "Ошибка AI"
+
+    def generate_seo_title(
+        self,
+        title: str,
+        category: str = '',
+        brand: str = '',
+        description: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Генерирует SEO-оптимизированный заголовок
+
+        Returns:
+            Tuple[success, {title, keywords_used, improvements}, error]
+        """
+        task = SEOTitleTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            category=category,
+            brand=brand,
+            description=description
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def generate_keywords(
+        self,
+        title: str,
+        category: str = '',
+        description: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Генерирует ключевые слова для товара
+
+        Returns:
+            Tuple[success, {keywords, search_queries}, error]
+        """
+        task = KeywordsTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            category=category,
+            description=description
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def generate_bullet_points(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Генерирует bullet points (преимущества)
+
+        Returns:
+            Tuple[success, {bullet_points, target_audience}, error]
+        """
+        task = BulletPointsTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {}
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def enhance_description(
+        self,
+        title: str,
+        description: str,
+        category: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Улучшает описание товара
+
+        Returns:
+            Tuple[success, {description, structure}, error]
+        """
+        task = DescriptionEnhanceTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            category=category
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def analyze_card(
+        self,
+        title: str,
+        description: str = '',
+        category: str = '',
+        characteristics: Optional[Dict] = None,
+        photos_count: int = 0,
+        price: float = 0
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Анализирует карточку и дает рекомендации
+
+        Returns:
+            Tuple[success, {score, issues, recommendations, strengths}, error]
+        """
+        task = CardAnalysisTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            category=category,
+            characteristics=characteristics or {},
+            photos_count=photos_count,
+            price=price
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def full_optimize(
+        self,
+        title: str,
+        description: str = '',
+        category: str = '',
+        brand: str = '',
+        characteristics: Optional[Dict] = None,
+        photos_count: int = 0,
+        price: float = 0
+    ) -> Dict:
+        """
+        Полная оптимизация карточки - все AI функции за один вызов
+
+        Returns:
+            Dict с результатами всех оптимизаций
+        """
+        results = {
+            'seo_title': None,
+            'keywords': None,
+            'bullet_points': None,
+            'enhanced_description': None,
+            'analysis': None,
+            'errors': []
+        }
+
+        # SEO заголовок
+        success, data, error = self.generate_seo_title(title, category, brand, description)
+        if success:
+            results['seo_title'] = data
+        else:
+            results['errors'].append(f"SEO заголовок: {error}")
+
+        # Ключевые слова
+        success, data, error = self.generate_keywords(title, category, description)
+        if success:
+            results['keywords'] = data
+        else:
+            results['errors'].append(f"Ключевые слова: {error}")
+
+        # Bullet points
+        success, data, error = self.generate_bullet_points(title, description, characteristics)
+        if success:
+            results['bullet_points'] = data
+        else:
+            results['errors'].append(f"Преимущества: {error}")
+
+        # Улучшенное описание
+        if description:
+            success, data, error = self.enhance_description(title, description, category)
+            if success:
+                results['enhanced_description'] = data
+            else:
+                results['errors'].append(f"Описание: {error}")
+
+        # Анализ карточки
+        success, data, error = self.analyze_card(
+            title, description, category, characteristics, photos_count, price
+        )
+        if success:
+            results['analysis'] = data
+        else:
+            results['errors'].append(f"Анализ: {error}")
+
+        return results
 
     def test_connection(self) -> Tuple[bool, str]:
         """

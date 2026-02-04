@@ -1253,6 +1253,420 @@ def register_auto_import_routes(app):
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    # ============================================================================
+    # AI ENHANCED ENDPOINTS - Новые AI функции для улучшения карточки
+    # ============================================================================
+
+    @app.route('/auto-import/ai/seo-title', methods=['POST'])
+    @login_required
+    def auto_import_ai_seo_title():
+        """Генерация SEO-оптимизированного заголовка"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            if not config:
+                return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+            ai_service = AIService(config)
+            success, result, error = ai_service.generate_seo_title(
+                title=product.title or '',
+                category=product.wb_category_name or '',
+                brand=product.brand or '',
+                description=product.description or ''
+            )
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'original_title': product.title
+                })
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI SEO title error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/keywords', methods=['POST'])
+    @login_required
+    def auto_import_ai_keywords():
+        """Генерация ключевых слов для товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+            success, result, error = ai_service.generate_keywords(
+                title=product.title or '',
+                category=product.wb_category_name or '',
+                description=product.description or ''
+            )
+
+            if success:
+                return jsonify({'success': True, 'data': result})
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI keywords error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/bullet-points', methods=['POST'])
+    @login_required
+    def auto_import_ai_bullet_points():
+        """Генерация bullet points (преимуществ) товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики если есть
+            characteristics = {}
+            if product.wb_characteristics:
+                try:
+                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                except:
+                    pass
+
+            success, result, error = ai_service.generate_bullet_points(
+                title=product.title or '',
+                description=product.description or '',
+                characteristics=characteristics
+            )
+
+            if success:
+                return jsonify({'success': True, 'data': result})
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI bullet points error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/enhance-description', methods=['POST'])
+    @login_required
+    def auto_import_ai_enhance_description():
+        """Улучшение описания товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        if not product.description:
+            return jsonify({'success': False, 'error': 'Описание отсутствует'}), 400
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+            success, result, error = ai_service.enhance_description(
+                title=product.title or '',
+                description=product.description,
+                category=product.wb_category_name or ''
+            )
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'original_description': product.description
+                })
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI enhance description error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/analyze', methods=['POST'])
+    @login_required
+    def auto_import_ai_analyze():
+        """Анализ карточки товара с рекомендациями"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики
+            characteristics = {}
+            if product.wb_characteristics:
+                try:
+                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                except:
+                    pass
+
+            # Считаем фото
+            photos_count = 0
+            if product.photo_urls:
+                try:
+                    photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                    photos_count = len(photos) if photos else 0
+                except:
+                    pass
+
+            success, result, error = ai_service.analyze_card(
+                title=product.title or '',
+                description=product.description or '',
+                category=product.wb_category_name or '',
+                characteristics=characteristics,
+                photos_count=photos_count,
+                price=float(product.price or 0)
+            )
+
+            if success:
+                return jsonify({'success': True, 'data': result})
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI analyze error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/full-optimize', methods=['POST'])
+    @login_required
+    def auto_import_ai_full_optimize():
+        """Полная AI-оптимизация карточки товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики
+            characteristics = {}
+            if product.wb_characteristics:
+                try:
+                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                except:
+                    pass
+
+            # Считаем фото
+            photos_count = 0
+            if product.photo_urls:
+                try:
+                    photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                    photos_count = len(photos) if photos else 0
+                except:
+                    pass
+
+            result = ai_service.full_optimize(
+                title=product.title or '',
+                description=product.description or '',
+                category=product.wb_category_name or '',
+                brand=product.brand or '',
+                characteristics=characteristics,
+                photos_count=photos_count,
+                price=float(product.price or 0)
+            )
+
+            return jsonify({'success': True, 'data': result})
+
+        except Exception as e:
+            logger.error(f"AI full optimize error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/apply', methods=['POST'])
+    @login_required
+    def auto_import_ai_apply():
+        """Применяет AI-улучшения к товару"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        updates = data.get('updates', {})
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            applied = []
+
+            if 'title' in updates and updates['title']:
+                product.title = updates['title']
+                applied.append('title')
+
+            if 'description' in updates and updates['description']:
+                product.description = updates['description']
+                applied.append('description')
+
+            if 'keywords' in updates and updates['keywords']:
+                # Сохраняем ключевые слова в отдельное поле или добавляем к характеристикам
+                existing_chars = {}
+                if product.wb_characteristics:
+                    try:
+                        existing_chars = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                    except:
+                        pass
+                existing_chars['_keywords'] = updates['keywords']
+                product.wb_characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                applied.append('keywords')
+
+            if 'bullet_points' in updates and updates['bullet_points']:
+                existing_chars = {}
+                if product.wb_characteristics:
+                    try:
+                        existing_chars = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                    except:
+                        pass
+                existing_chars['_bullet_points'] = updates['bullet_points']
+                product.wb_characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                applied.append('bullet_points')
+
+            if applied:
+                db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'applied': applied,
+                'message': f"Применено: {', '.join(applied)}" if applied else "Нет изменений"
+            })
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"AI apply error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
 
 # Пример использования:
 # from auto_import_routes import register_auto_import_routes
