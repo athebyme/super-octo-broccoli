@@ -395,7 +395,9 @@ class AIClient:
             # Cloud.ru - получаем свежий access token
             token = self._token_manager.get_access_token()
             if token:
-                return f'Bearer {token}'
+                auth_header = f'Bearer {token}'
+                logger.info(f"🔐 Auth header: Bearer {token[:20]}... (длина токена: {len(token)})")
+                return auth_header
             return None
         else:
             # OpenAI/Custom - API key уже в сессии
