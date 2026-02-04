@@ -30,82 +30,70 @@ logger = logging.getLogger(__name__)
 import base64
 
 
-def parse_cloudru_key_secret(key_secret: str) -> Tuple[str, str]:
+class CloudRuApiKeyManager:
     """
-    Парсит Key Secret от Cloud.ru в формате {base64(key_id)}.{secret}
+    Менеджер API-ключей для Cloud.ru Foundation Models API
 
-    Cloud.ru IAM API ожидает:
-    - keyId: UUID (декодированный из base64)
-    - secret: вторая часть после точки
+    Cloud.ru поддерживает два способа аутентификации:
+    1. API-ключ (формат {base64}.{secret}) - используется напрямую:
+       Authorization: Api-Key {api_key}
 
-    Args:
-        key_secret: Полный Key Secret, например:
-            NjIzYTc2ZjUtMDc4My00YTRiLTk2MTUtZDk5NDE4MzRkNjc3.dc42a44e6773d371e96baa0c1ba0bab1
+    2. Ключ доступа (отдельные Key ID и Key Secret) - требует обмена на токен:
+       Authorization: Bearer {access_token}
 
-    Returns:
-        Tuple[key_id (UUID), secret]
-    """
-    if '.' not in key_secret:
-        logger.warning("Key Secret не содержит точку, используем как есть")
-        return key_secret, key_secret
-
-    parts = key_secret.split('.', 1)
-    if len(parts) != 2:
-        return key_secret, key_secret
-
-    key_id_base64, secret = parts
-
-    # Декодируем base64 чтобы получить UUID
-    try:
-        key_id_uuid = base64.b64decode(key_id_base64).decode('utf-8')
-        logger.info(f"✅ Распарсен Cloud.ru Key: keyId (UUID)={key_id_uuid}, secret={secret[:8]}...")
-        return key_id_uuid, secret
-    except Exception as e:
-        logger.warning(f"Не удалось декодировать keyId из base64: {e}, используем как есть")
-        return key_id_base64, secret
-
-
-class CloudRuTokenManager:
-    """
-    Менеджер токенов для Cloud.ru Foundation Models API
-
-    Cloud.ru требует:
-    - Key ID (UUID) и Secret для получения access_token через IAM API
-    - Токены имеют ограниченное время жизни (1 час)
-    - Автоматическая ротация токена при истечении
+    Этот менеджер поддерживает оба формата:
+    - Если ключ содержит точку - это API-ключ, используется напрямую с Api-Key
+    - Если ключ в формате "keyId:secret" - это ключ доступа, обмениваем на токен
     """
 
-    # URL для получения токена Cloud.ru IAM API
+    # URL для получения токена Cloud.ru IAM API (для ключей доступа)
     TOKEN_URL = "https://iam.api.cloud.ru/api/v1/auth/token"
-
-    # Буфер времени до истечения токена (секунды) - обновляем заранее
     TOKEN_REFRESH_BUFFER = 300  # 5 минут
 
-    def __init__(self, key_id: str, secret: str):
-        self.key_id = key_id
-        self.secret = secret
+    def __init__(self, api_key: str):
+        """
+        Args:
+            api_key: API-ключ или ключ доступа в формате "keyId:secret"
+        """
+        self.original_key = api_key
         self._access_token: Optional[str] = None
         self._token_expires_at: float = 0
         self._lock = threading.Lock()
 
+        # Определяем тип ключа
+        if ':' in api_key and '.' not in api_key:
+            # Формат "keyId:secret" - ключ доступа, требует обмена на токен
+            self.auth_type = 'access_key'
+            parts = api_key.split(':', 1)
+            self.key_id = parts[0]
+            self.secret = parts[1] if len(parts) > 1 else ''
+            logger.info(f"✅ Cloud.ru ключ доступа: keyId={self.key_id[:8]}...")
+        else:
+            # API-ключ - используется напрямую
+            self.auth_type = 'api_key'
+            self.api_key = api_key
+            logger.info(f"✅ Cloud.ru API-ключ: {api_key[:12]}...")
+
     @classmethod
-    def from_key_secret(cls, key_secret: str) -> 'CloudRuTokenManager':
-        """Создает TokenManager из полного Key Secret"""
-        key_id, secret = parse_cloudru_key_secret(key_secret)
-        return cls(key_id, secret)
+    def from_key_secret(cls, key_secret: str) -> 'CloudRuApiKeyManager':
+        """Создает менеджер из ключа"""
+        return cls(key_secret)
 
     def get_access_token(self) -> Optional[str]:
         """
-        Получает действующий access token
-        Автоматически обновляет если истёк или скоро истечёт
+        Получает токен/ключ для Authorization заголовка
 
         Returns:
-            access_token или None при ошибке
+            Токен или API-ключ
         """
+        if self.auth_type == 'api_key':
+            # API-ключ используется напрямую
+            return self.api_key
+
+        # Ключ доступа - нужен обмен на токен
         with self._lock:
             current_time = time.time()
 
-            # Проверяем нужно ли обновить токен
             if (self._access_token is None or
                 current_time >= self._token_expires_at - self.TOKEN_REFRESH_BUFFER):
 
@@ -116,15 +104,23 @@ class CloudRuTokenManager:
 
             return self._access_token
 
-    def _fetch_new_token(self) -> bool:
+    def get_auth_header(self) -> Optional[str]:
         """
-        Запрашивает новый access token у Cloud.ru IAM API
+        Возвращает полный Authorization заголовок
 
         Returns:
-            True при успехе, False при ошибке
+            "Bearer {key}" для API-ключа или "Bearer {token}" для ключа доступа
         """
+        token = self.get_access_token()
+        if not token:
+            return None
+
+        # Cloud.ru Foundation Models всегда использует Bearer
+        return f'Bearer {token}'
+
+    def _fetch_new_token(self) -> bool:
+        """Запрашивает новый access token у Cloud.ru IAM API"""
         try:
-            # Cloud.ru IAM API ожидает JSON с keyId (UUID) и secret
             payload = {
                 "keyId": self.key_id,
                 "secret": self.secret
@@ -134,7 +130,7 @@ class CloudRuTokenManager:
                 "Content-Type": "application/json"
             }
 
-            logger.info(f"🔑 Запрос токена к {self.TOKEN_URL} с keyId={self.key_id}...")
+            logger.info(f"🔑 Запрос токена к {self.TOKEN_URL} с keyId={self.key_id[:8]}...")
 
             response = requests.post(
                 self.TOKEN_URL,
@@ -149,53 +145,44 @@ class CloudRuTokenManager:
                 return False
 
             data = response.json()
-
             self._access_token = data.get("access_token")
-            expires_in = data.get("expires_in", 3600)  # По умолчанию 1 час
+            expires_in = data.get("expires_in", 3600)
             self._token_expires_at = time.time() + expires_in
 
             logger.info(f"✅ Cloud.ru access token получен (expires_in: {expires_in}s)")
             return True
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Cloud.ru Token network error: {e}")
-            return False
         except Exception as e:
             logger.error(f"❌ Cloud.ru Token error: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return False
 
     def invalidate_token(self):
-        """Принудительно инвалидирует текущий токен"""
+        """Инвалидирует текущий токен"""
         with self._lock:
             self._access_token = None
             self._token_expires_at = 0
 
 
-# Глобальный кэш token managers (по key_secret)
-_token_managers: Dict[str, CloudRuTokenManager] = {}
+# Алиас для совместимости
+CloudRuTokenManager = CloudRuApiKeyManager
+
+
+# Глобальный кэш
+_token_managers: Dict[str, CloudRuApiKeyManager] = {}
 _token_managers_lock = threading.Lock()
 
 
-def get_cloudru_token_manager(key_secret: str) -> CloudRuTokenManager:
-    """
-    Получает или создает TokenManager для данного Key Secret
-    Использует кэш для переиспользования
-
-    Args:
-        key_secret: Полный Key Secret от Cloud.ru Foundation Models
-    """
+def get_cloudru_token_manager(key_secret: str) -> CloudRuApiKeyManager:
+    """Получает или создает менеджер для данного ключа"""
     with _token_managers_lock:
-        # Используем первые 20 символов как ключ кэша (без раскрытия полного секрета)
         cache_key = key_secret[:20] if len(key_secret) > 20 else key_secret
         if cache_key not in _token_managers:
-            _token_managers[cache_key] = CloudRuTokenManager.from_key_secret(key_secret)
+            _token_managers[cache_key] = CloudRuApiKeyManager.from_key_secret(key_secret)
         return _token_managers[cache_key]
 
 
 def reset_cloudru_token_managers():
-    """Сбрасывает все кэшированные token managers"""
+    """Сбрасывает все кэшированные менеджеры"""
     global _token_managers
     with _token_managers_lock:
         _token_managers = {}
