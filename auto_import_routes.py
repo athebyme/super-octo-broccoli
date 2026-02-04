@@ -1293,7 +1293,7 @@ def register_auto_import_routes(app):
             ai_service = AIService(config)
             success, result, error = ai_service.generate_seo_title(
                 title=product.title or '',
-                category=product.wb_category_name or '',
+                category=product.mapped_wb_category or '',
                 brand=product.brand or '',
                 description=product.description or ''
             )
@@ -1344,7 +1344,7 @@ def register_auto_import_routes(app):
             ai_service = AIService(config)
             success, result, error = ai_service.generate_keywords(
                 title=product.title or '',
-                category=product.wb_category_name or '',
+                category=product.mapped_wb_category or '',
                 description=product.description or ''
             )
 
@@ -1391,9 +1391,9 @@ def register_auto_import_routes(app):
 
             # Получаем характеристики если есть
             characteristics = {}
-            if product.wb_characteristics:
+            if product.characteristics:
                 try:
-                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
                 except:
                     pass
 
@@ -1449,7 +1449,7 @@ def register_auto_import_routes(app):
             success, result, error = ai_service.enhance_description(
                 title=product.title or '',
                 description=product.description,
-                category=product.wb_category_name or ''
+                category=product.mapped_wb_category or ''
             )
 
             if success:
@@ -1499,9 +1499,9 @@ def register_auto_import_routes(app):
 
             # Получаем характеристики
             characteristics = {}
-            if product.wb_characteristics:
+            if product.characteristics:
                 try:
-                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
                 except:
                     pass
 
@@ -1517,10 +1517,10 @@ def register_auto_import_routes(app):
             success, result, error = ai_service.analyze_card(
                 title=product.title or '',
                 description=product.description or '',
-                category=product.wb_category_name or '',
+                category=product.mapped_wb_category or '',
                 characteristics=characteristics,
                 photos_count=photos_count,
-                price=float(product.price or 0)
+                price=float(getattr(product, 'price', 0) or 0)
             )
 
             if success:
@@ -1566,19 +1566,19 @@ def register_auto_import_routes(app):
 
             # Получаем характеристики
             characteristics = {}
-            if product.wb_characteristics:
+            if product.characteristics:
                 try:
-                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
                 except:
                     pass
 
             success, result, error = ai_service.generate_rich_content(
                 title=product.title or '',
                 description=product.description or '',
-                category=product.wb_category_name or '',
+                category=product.mapped_wb_category or '',
                 brand=product.brand or '',
                 characteristics=characteristics,
-                price=float(product.price or 0)
+                price=float(getattr(product, 'price', 0) or 0)
             )
 
             if success:
@@ -1628,9 +1628,9 @@ def register_auto_import_routes(app):
 
             # Получаем характеристики
             characteristics = {}
-            if product.wb_characteristics:
+            if product.characteristics:
                 try:
-                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
                 except:
                     pass
 
@@ -1646,11 +1646,11 @@ def register_auto_import_routes(app):
             result = ai_service.full_optimize(
                 title=product.title or '',
                 description=product.description or '',
-                category=product.wb_category_name or '',
+                category=product.mapped_wb_category or '',
                 brand=product.brand or '',
                 characteristics=characteristics,
                 photos_count=photos_count,
-                price=float(product.price or 0)
+                price=float(getattr(product, 'price', 0) or 0)
             )
 
             return jsonify({'success': True, 'data': result})
@@ -1695,24 +1695,24 @@ def register_auto_import_routes(app):
             if 'keywords' in updates and updates['keywords']:
                 # Сохраняем ключевые слова в отдельное поле или добавляем к характеристикам
                 existing_chars = {}
-                if product.wb_characteristics:
+                if product.characteristics:
                     try:
-                        existing_chars = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                        existing_chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
                     except:
                         pass
                 existing_chars['_keywords'] = updates['keywords']
-                product.wb_characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
                 applied.append('keywords')
 
             if 'bullet_points' in updates and updates['bullet_points']:
                 existing_chars = {}
-                if product.wb_characteristics:
+                if product.characteristics:
                     try:
-                        existing_chars = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                        existing_chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
                     except:
                         pass
                 existing_chars['_bullet_points'] = updates['bullet_points']
-                product.wb_characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
                 applied.append('bullet_points')
 
             if applied:
