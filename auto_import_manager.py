@@ -648,9 +648,9 @@ class ImageProcessor:
                                    background_color: str = 'white',
                                    auth_cookies: Optional[dict] = None,
                                    fallback_urls: Optional[List[str]] = None,
-                                   retry_count: int = 3) -> Optional[BytesIO]:
+                                   retry_count: int = 1) -> Optional[BytesIO]:
         """
-        Скачивает и обрабатывает изображение с поддержкой retry и fallback
+        Скачивает и обрабатывает изображение (быстро, без долгих retry)
 
         Args:
             url: URL изображения
@@ -658,40 +658,33 @@ class ImageProcessor:
             background_color: Цвет фона для дорисовки
             auth_cookies: Cookies для авторизации (для sexoptovik)
             fallback_urls: Альтернативные URL если основной не работает
-            retry_count: Количество попыток для каждого URL
+            retry_count: Количество попыток для каждого URL (по умолчанию 1)
 
         Returns:
             BytesIO с обработанным изображением или None
         """
-        # Собираем все URL для попыток
+        # Собираем все URL для попыток (основной + fallbacks)
         urls_to_try = [url]
         if fallback_urls:
             urls_to_try.extend(fallback_urls)
 
-        last_error = None
-
         for current_url in urls_to_try:
-            for attempt in range(retry_count):
-                try:
-                    result = ImageProcessor._download_single_image(
-                        current_url, target_size, background_color, auth_cookies
-                    )
-                    if result:
-                        return result
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"Попытка {attempt + 1}/{retry_count} для {current_url}: {e}")
+            try:
+                result = ImageProcessor._download_single_image(
+                    current_url, target_size, background_color, auth_cookies
+                )
+                if result:
+                    return result
+            except Exception as e:
+                # Логируем кратко, без спама
+                logger.debug(f"Фото недоступно: {current_url[:60]}...")
 
-                    # При ошибке авторизации - сбрасываем кеш cookies
-                    if 'Content-Type=text/html' in str(e) or '401' in str(e) or '403' in str(e):
-                        SexoptovikAuth.clear_cache()
-                        ImageProcessor.reset_session()
+                # При ошибке авторизации - сбрасываем кеш cookies и пробуем следующий URL
+                if 'Content-Type=text/html' in str(e) or '401' in str(e) or '403' in str(e):
+                    SexoptovikAuth.clear_cache()
+                    ImageProcessor.reset_session()
 
-                    # Небольшая задержка перед повторной попыткой
-                    import time
-                    time.sleep(0.5 * (attempt + 1))
-
-        logger.error(f"Не удалось загрузить изображение после всех попыток. Последняя ошибка: {last_error}")
+        # Не спамим error логами - просто возвращаем None
         return None
 
     @staticmethod
