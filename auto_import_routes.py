@@ -1019,10 +1019,31 @@ def register_auto_import_routes(app):
                     except:
                         pass
 
+                    # Получаем список характеристик для категории WB
+                    category_chars = []
+                    if product.wb_subject_id:
+                        try:
+                            from wb_api_client import WBApiClient
+                            # Используем WB API клиент селлера
+                            wb_client = WBApiClient(seller.api_key)
+                            chars_config = wb_client.get_card_characteristics_config(product.wb_subject_id)
+                            if chars_config and chars_config.get('data'):
+                                # Извлекаем названия характеристик (особенно размерные)
+                                size_keywords = ['длина', 'ширина', 'высота', 'диаметр', 'глубина', 'размер', 'вес', 'объем']
+                                for char in chars_config['data']:
+                                    char_name = char.get('name', '')
+                                    # Добавляем размерные характеристики
+                                    if any(kw in char_name.lower() for kw in size_keywords):
+                                        category_chars.append(char_name)
+                                logger.info(f"Загружено {len(category_chars)} размерных характеристик для категории {product.wb_subject_id}")
+                        except Exception as e:
+                            logger.warning(f"Не удалось загрузить характеристики категории: {e}")
+
                     success, parsed_data, error = ai_service.parse_sizes(
                         sizes_text=sizes_text,
                         product_title=product.title or '',
-                        description=product.description or ''
+                        description=product.description or '',
+                        category_characteristics=category_chars if category_chars else None
                     )
 
                     if success and parsed_data:
