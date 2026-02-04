@@ -1137,6 +1137,9 @@ def register_auto_import_routes(app):
         try:
             from ai_service import get_ai_service, reset_ai_service
 
+            # Логируем какой ключ используется
+            logger.info(f"🔑 AI Test: provider={settings.ai_provider}, api_key={settings.ai_api_key[:20] if settings.ai_api_key else 'None'}... (длина: {len(settings.ai_api_key) if settings.ai_api_key else 0})")
+
             # Сбрасываем кэш чтобы использовать свежие настройки
             reset_ai_service()
             ai_service = get_ai_service(settings)
