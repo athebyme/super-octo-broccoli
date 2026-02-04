@@ -1117,22 +1117,27 @@ def register_auto_import_routes(app):
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
 
-    @app.route('/auto-import/ai/test-raw', methods=['POST'])
-    @login_required
+    @app.route('/auto-import/ai/test-raw', methods=['POST', 'GET'])
     def auto_import_ai_test_raw():
-        """Тестирует подключение к AI API напрямую (как curl)"""
-        if not current_user.seller:
-            return jsonify({'success': False, 'error': 'Seller not found'}), 403
-
-        seller = current_user.seller
-        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
-
-        if not settings or not settings.ai_api_key:
-            return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
-
+        """
+        Тестирует подключение к AI API напрямую (как curl)
+        GET: использует ключ из настроек (требует авторизацию)
+        POST с json: {"api_key": "..."} - тест с переданным ключом
+        """
         import requests as req
 
-        api_key = settings.ai_api_key
+        # Получаем api_key из запроса или из настроек
+        if request.method == 'POST' and request.json and request.json.get('api_key'):
+            api_key = request.json.get('api_key')
+            logger.info(f"🧪 RAW TEST: используем ключ из запроса")
+        elif current_user.is_authenticated and current_user.seller:
+            settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+            if not settings or not settings.ai_api_key:
+                return jsonify({'success': False, 'error': 'API ключ не настроен в настройках'}), 400
+            api_key = settings.ai_api_key
+            logger.info(f"🧪 RAW TEST: используем ключ из настроек")
+        else:
+            return jsonify({'success': False, 'error': 'Передайте api_key в JSON или авторизуйтесь'}), 400
         url = "https://foundation-models.api.cloud.ru/v1/chat/completions"
 
         logger.info(f"🧪 RAW TEST: api_key={api_key[:20]}... (len={len(api_key)})")
