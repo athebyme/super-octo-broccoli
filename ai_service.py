@@ -440,6 +440,7 @@ class AIClient:
 
         try:
             logger.info(f"🤖 AI запрос к {self.config.provider.value}: модель={self.config.model}")
+            logger.info(f"📍 URL: {url}")
             logger.debug(f"Messages: {messages}")
             logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
@@ -448,6 +449,10 @@ class AIClient:
             if not auth_header:
                 logger.error("❌ Не удалось получить Authorization header")
                 return None
+
+            # Логируем полный запрос для отладки
+            logger.info(f"📤 Request: POST {url}")
+            logger.info(f"📤 Authorization: {auth_header[:30]}... (full length: {len(auth_header)})")
 
             headers = {'Authorization': auth_header}
 
