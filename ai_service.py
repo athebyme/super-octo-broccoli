@@ -355,6 +355,55 @@ DEFAULT_INSTRUCTIONS = {
 ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
     },
 
+    "rich_content": {
+        "name": "Rich контент",
+        "description": "Генерация продающего rich контента для карточки",
+        "template": """Ты топовый копирайтер для маркетплейсов, специализирующийся на создании продающего rich контента.
+
+Твоя задача - создать мощный, конверсионный контент для карточки товара.
+
+СТРУКТУРА RICH КОНТЕНТА:
+
+1. HOOK (Крючок) - яркий заголовок, цепляющий внимание
+2. PAIN POINTS - проблемы, которые решает товар (2-3 пункта)
+3. BENEFITS - ключевые преимущества с эмодзи (4-6 пунктов)
+4. FEATURES - технические особенности
+5. SOCIAL PROOF - элементы доверия
+6. CTA - призыв к действию
+
+ПРАВИЛА:
+1. Используй эмодзи для визуального выделения
+2. Короткие абзацы (2-3 предложения)
+3. Буллеты для списков
+4. Эмоциональный, но не кричащий тон
+5. Конкретные цифры и факты
+6. Без воды и клише типа "уникальный", "лучший"
+7. Максимум 1500 символов общий текст
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "hook": "<цепляющий заголовок>",
+    "pain_points": [
+        {"emoji": "😤", "text": "проблема 1"},
+        {"emoji": "😔", "text": "проблема 2"}
+    ],
+    "benefits": [
+        {"emoji": "✨", "title": "Преимущество", "text": "описание"}
+    ],
+    "features": [
+        {"icon": "📏", "name": "Характеристика", "value": "значение"}
+    ],
+    "social_proof": "<элемент доверия>",
+    "cta": "<призыв к действию>",
+    "full_description": "<полное описание для карточки>",
+    "infographic_texts": [
+        {"block": 1, "title": "Заголовок для фото", "text": "Текст для инфографики"}
+    ]
+}
+
+ВАЖНО: Создай контент, который ПРОДАЕТ. Отвечай ТОЛЬКО валидным JSON."""
+    },
+
     "card_analysis": {
         "name": "Анализ карточки",
         "description": "Рекомендации по улучшению карточки товара",
@@ -1055,6 +1104,69 @@ class DescriptionEnhanceTask(AITask):
         return match.group() if match else text
 
 
+class RichContentTask(AITask):
+    """Задача генерации rich контента для карточки"""
+
+    def get_system_prompt(self) -> str:
+        return DEFAULT_INSTRUCTIONS["rich_content"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        category = kwargs.get('category', '')
+        brand = kwargs.get('brand', '')
+        characteristics = kwargs.get('characteristics', {})
+        price = kwargs.get('price', 0)
+
+        chars_str = ""
+        if characteristics:
+            # Фильтруем служебные поля
+            chars_str = "\n".join([
+                f"- {k}: {v}" for k, v in characteristics.items()
+                if not k.startswith('_')
+            ])
+
+        return f"""Создай продающий rich контент для товара:
+
+НАЗВАНИЕ: {title}
+БРЕНД: {brand or 'Не указан'}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ЦЕНА: {price} руб.
+
+ОПИСАНИЕ:
+{description[:800] if description else 'Описание отсутствует'}
+
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+
+Создай мощный продающий контент!"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'hook': data.get('hook', ''),
+                'pain_points': data.get('pain_points', []),
+                'benefits': data.get('benefits', []),
+                'features': data.get('features', []),
+                'social_proof': data.get('social_proof', ''),
+                'cta': data.get('cta', ''),
+                'full_description': data.get('full_description', ''),
+                'infographic_texts': data.get('infographic_texts', [])
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
 class CardAnalysisTask(AITask):
     """Задача анализа карточки товара"""
 
@@ -1302,6 +1414,34 @@ class AIService:
             category=category,
             characteristics=characteristics or {},
             photos_count=photos_count,
+            price=price
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def generate_rich_content(
+        self,
+        title: str,
+        description: str = '',
+        category: str = '',
+        brand: str = '',
+        characteristics: Optional[Dict] = None,
+        price: float = 0
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Генерирует продающий rich контент для карточки
+
+        Returns:
+            Tuple[success, {hook, pain_points, benefits, features, social_proof, cta, full_description, infographic_texts}, error]
+        """
+        task = RichContentTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            category=category,
+            brand=brand,
+            characteristics=characteristics or {},
             price=price
         )
         if success and result:

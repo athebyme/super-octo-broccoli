@@ -1532,6 +1532,68 @@ def register_auto_import_routes(app):
             logger.error(f"AI analyze error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/ai/rich-content', methods=['POST'])
+    @login_required
+    def auto_import_ai_rich_content():
+        """Генерация продающего rich контента для карточки"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = AutoImportProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики
+            characteristics = {}
+            if product.wb_characteristics:
+                try:
+                    characteristics = json.loads(product.wb_characteristics) if isinstance(product.wb_characteristics, str) else product.wb_characteristics
+                except:
+                    pass
+
+            success, result, error = ai_service.generate_rich_content(
+                title=product.title or '',
+                description=product.description or '',
+                category=product.wb_category_name or '',
+                brand=product.brand or '',
+                characteristics=characteristics,
+                price=float(product.price or 0)
+            )
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'original_description': product.description
+                })
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI rich content error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/auto-import/ai/full-optimize', methods=['POST'])
     @login_required
     def auto_import_ai_full_optimize():
