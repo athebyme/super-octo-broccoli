@@ -316,12 +316,14 @@
                 <div class="grid grid-cols-2 gap-2">
                     {% for photo in product.photo_urls_list[:6] %}
                     <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden relative group">
-                        <img src="/auto-import/photo/padded?url={{ (photo.sexoptovik or '')|urlencode }}"
+                        <img data-src="/auto-import/photo/padded?url={{ (photo.sexoptovik or '')|urlencode }}"
+                             src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect fill='%23f3f4f6' width='200' height='200'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%239ca3af' font-size='12'%3EЗагрузка...%3C/text%3E%3C/svg%3E"
                              data-blur="{{ photo.blur or '' }}"
                              data-original="{{ photo.original or '' }}"
                              data-sexoptovik="{{ photo.sexoptovik or '' }}"
                              alt="Фото товара"
-                             class="product-photo w-full h-full object-cover transition-opacity duration-200"
+                             loading="lazy"
+                             class="lazy-photo product-photo w-full h-full object-cover transition-opacity duration-200"
                              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'%3E%3Crect fill=\'%23f3f4f6\' width=\'100\' height=\'100\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' fill=\'%239ca3af\' font-size=\'14\'%3EНет фото%3C/text%3E%3C/svg%3E'">
                         <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all duration-200 pointer-events-none"></div>
                     </div>
@@ -727,6 +729,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 saveBtn.disabled = false;
                 saveBtn.textContent = 'Сохранить и проверить';
             });
+        });
+    }
+});
+
+// Lazy loading для фото
+document.addEventListener('DOMContentLoaded', function() {
+    const lazyPhotos = document.querySelectorAll('.lazy-photo');
+
+    if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    if (img.dataset.src) {
+                        img.src = img.dataset.src;
+                        img.classList.remove('lazy-photo');
+                        observer.unobserve(img);
+                    }
+                }
+            });
+        }, { rootMargin: '50px' });
+
+        lazyPhotos.forEach(img => observer.observe(img));
+    } else {
+        // Fallback для старых браузеров
+        lazyPhotos.forEach(img => {
+            if (img.dataset.src) {
+                img.src = img.dataset.src;
+            }
         });
     }
 });

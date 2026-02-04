@@ -227,8 +227,11 @@
                                     <div class="flex items-center">
                                         {% set photos = (product.photo_urls or '[]')|from_json if product.photo_urls else [] %}
                                         {% if photos and photos|length > 0 and photos[0] %}
-                                        <img src="{{ url_for('auto_import_photo_padded', url=photos[0]) }}"
-                                             class="w-12 h-12 object-cover rounded-lg mr-3"
+                                        {% set photo_url = photos[0].sexoptovik if photos[0] is mapping else photos[0] %}
+                                        <img data-src="{{ url_for('auto_import_photo_padded', url=photo_url) }}"
+                                             src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect fill='%23e5e7eb' width='48' height='48'/%3E%3C/svg%3E"
+                                             loading="lazy"
+                                             class="lazy-photo w-12 h-12 object-cover rounded-lg mr-3"
                                              onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect fill=%22%23e5e7eb%22 width=%2248%22 height=%2248%22/></svg>'">
                                         {% else %}
                                         <div class="w-12 h-12 bg-gray-200 rounded-lg mr-3 flex items-center justify-center">
@@ -523,6 +526,26 @@ async function runAIUpdate() {
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     updateSelection();
+
+    // Lazy loading для фото
+    const lazyPhotos = document.querySelectorAll('.lazy-photo');
+    if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    if (img.dataset.src) {
+                        img.src = img.dataset.src;
+                        img.classList.remove('lazy-photo');
+                        observer.unobserve(img);
+                    }
+                }
+            });
+        }, { rootMargin: '100px' });
+        lazyPhotos.forEach(img => observer.observe(img));
+    } else {
+        lazyPhotos.forEach(img => { if (img.dataset.src) img.src = img.dataset.src; });
+    }
 });
 </script>
 {% endblock %}
