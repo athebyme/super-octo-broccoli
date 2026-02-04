@@ -1117,6 +1117,54 @@ def register_auto_import_routes(app):
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/ai/test-raw', methods=['POST'])
+    @login_required
+    def auto_import_ai_test_raw():
+        """Тестирует подключение к AI API напрямую (как curl)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
+
+        import requests as req
+
+        api_key = settings.ai_api_key
+        url = "https://foundation-models.api.cloud.ru/v1/chat/completions"
+
+        logger.info(f"🧪 RAW TEST: api_key={api_key[:20]}... (len={len(api_key)})")
+        logger.info(f"🧪 RAW TEST: url={url}")
+
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            "model": "openai/gpt-oss-120b",
+            "messages": [{"role": "user", "content": "Ответь одним словом: работает"}],
+            "temperature": 0.7,
+            "max_tokens": 50
+        }
+
+        logger.info(f"🧪 RAW TEST: Authorization header = Bearer {api_key[:20]}...")
+
+        try:
+            response = req.post(url, json=payload, headers=headers, timeout=30)
+            logger.info(f"🧪 RAW TEST: status={response.status_code}")
+            logger.info(f"🧪 RAW TEST: response={response.text[:500]}")
+
+            if response.status_code == 200:
+                return jsonify({'success': True, 'message': 'RAW тест успешен!', 'response': response.json()})
+            else:
+                return jsonify({'success': False, 'error': f'HTTP {response.status_code}: {response.text}'})
+        except Exception as e:
+            logger.error(f"🧪 RAW TEST ERROR: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
     @app.route('/auto-import/ai/test', methods=['POST'])
     @login_required
     def auto_import_ai_test():
