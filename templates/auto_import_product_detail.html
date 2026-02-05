@@ -510,7 +510,8 @@ function populateSavedAIData() {
 
 function computeContentHash() {
     // Simple hash based on title and description
-    const content = '{{ (product.title or "")|e }}' + '{{ (product.description or "")|e }}';
+    // Using tojson filter to properly escape for JavaScript
+    const content = {{ (product.title or "")|tojson }} + {{ (product.description or "")|tojson }};
     let hash = 0;
     for (let i = 0; i < content.length; i++) {
         const char = content.charCodeAt(i);
