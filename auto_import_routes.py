@@ -2031,6 +2031,20 @@ def register_auto_import_routes(app):
                 product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
                 applied.append('bullet_points')
 
+            # Размеры и габариты
+            if 'sizes' in updates and updates['sizes']:
+                product.ai_clothing_sizes = json.dumps(updates['sizes'], ensure_ascii=False)
+                applied.append('sizes')
+
+            if 'dimensions' in updates and updates['dimensions']:
+                product.ai_dimensions = json.dumps(updates['dimensions'], ensure_ascii=False)
+                applied.append('dimensions')
+
+            # Сохраняем размеры в поле sizes если есть
+            if 'sizes_text' in updates and updates['sizes_text']:
+                product.sizes = updates['sizes_text']
+                applied.append('sizes_text')
+
             if applied:
                 db.session.commit()
 

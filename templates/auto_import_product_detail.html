@@ -1562,7 +1562,12 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Sizes button clicked');
         const result = await callAiEndpoint('/auto-import/ai/parse-clothing-sizes', this);
         if (result.success) {
-            currentAiData = { sizes: result.data };
+            // Сохраняем данные для применения
+            currentAiData = {
+                sizes: result.data,
+                dimensions: result.data.dimensions,
+                sizes_text: result.data.raw_text
+            };
             let content = '<div class="space-y-4">';
             const data = result.data;
 
@@ -1688,7 +1693,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             content += '</div>';
-            showModal('Размеры товара', content, false);
+            showModal('Размеры товара', content, true);
         } else {
             showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
         }
