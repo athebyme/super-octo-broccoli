@@ -248,9 +248,15 @@ No text overlays, no watermarks, no logos.
 class ReplicateImageGenerator(ImageGenerator):
     """Генератор изображений через Replicate API (Flux, SDXL)"""
 
+    # Настройки retry для rate limiting
+    MAX_RETRIES = 3
+    INITIAL_BACKOFF = 10  # секунд
+
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
         self.api_url = "https://api.replicate.com/v1/predictions"
+        # Новый API endpoint для моделей (без указания версии)
+        self.models_api_url = "https://api.replicate.com/v1/models"
 
     def generate(
         self,
@@ -276,28 +282,29 @@ class ReplicateImageGenerator(ImageGenerator):
         reference_url: Optional[str],
         api_key: str
     ) -> Tuple[bool, Optional[bytes], str]:
-        """Генерация через Flux.1 Pro"""
+        """Генерация через Flux.1 Pro (новый API без версии)"""
+
+        # Используем новый API endpoint без указания версии
+        # https://api.replicate.com/v1/models/{owner}/{model}/predictions
+        model_endpoint = f"{self.models_api_url}/black-forest-labs/flux-1.1-pro/predictions"
 
         # Flux поддерживает произвольные размеры
         payload = {
-            "version": "2c09d6e1903deb32a364c1a29f88dd3a639665769a97e9a5f90e0b5bc666fa33",
             "input": {
                 "prompt": self._enhance_prompt_for_flux(prompt),
                 "width": width,
                 "height": height,
-                "num_outputs": 1,
                 "output_format": "png",
-                "guidance": 3.5,
-                "num_inference_steps": 28
+                "aspect_ratio": "custom"
             }
         }
 
-        # Если есть референс - добавляем
+        # Если есть референс - добавляем (если модель поддерживает)
         if reference_url:
-            payload["input"]["image"] = reference_url
+            payload["input"]["image_prompt"] = reference_url
             payload["input"]["prompt_strength"] = 0.8
 
-        return self._run_replicate_prediction(payload, api_key, "Flux.1 Pro")
+        return self._run_replicate_prediction(payload, api_key, "Flux.1 Pro", model_endpoint)
 
     def _generate_sdxl(
         self,
@@ -307,14 +314,16 @@ class ReplicateImageGenerator(ImageGenerator):
         reference_url: Optional[str],
         api_key: str
     ) -> Tuple[bool, Optional[bytes], str]:
-        """Генерация через SDXL"""
+        """Генерация через SDXL (новый API без версии)"""
+
+        # Используем новый API endpoint без указания версии
+        model_endpoint = f"{self.models_api_url}/stability-ai/sdxl/predictions"
 
         # SDXL лучше работает с размерами кратными 8
         width = (width // 8) * 8
         height = (height // 8) * 8
 
         payload = {
-            "version": "39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
             "input": {
                 "prompt": self._enhance_prompt_for_sdxl(prompt),
                 "width": min(width, 1024),
@@ -331,83 +340,141 @@ class ReplicateImageGenerator(ImageGenerator):
             payload["input"]["image"] = reference_url
             payload["input"]["prompt_strength"] = 0.75
 
-        return self._run_replicate_prediction(payload, api_key, "SDXL")
+        return self._run_replicate_prediction(payload, api_key, "SDXL", model_endpoint)
 
     def _run_replicate_prediction(
         self,
         payload: Dict,
         api_key: str,
-        model_name: str
+        model_name: str,
+        endpoint_url: Optional[str] = None
     ) -> Tuple[bool, Optional[bytes], str]:
-        """Запускает prediction на Replicate и ждет результат"""
+        """
+        Запускает prediction на Replicate и ждет результат.
+        Поддерживает retry с exponential backoff при rate limiting.
+        """
 
         headers = {
-            "Authorization": f"Token {api_key}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {api_key}",  # Новый формат авторизации
+            "Content-Type": "application/json",
+            "Prefer": "wait"  # Синхронный режим если возможно
         }
 
-        try:
-            logger.info(f"🎨 {model_name} генерация запущена...")
+        # Используем переданный endpoint или дефолтный
+        api_endpoint = endpoint_url or self.api_url
 
-            # Создаем prediction
-            response = requests.post(
-                self.api_url,
-                json=payload,
-                headers=headers,
-                timeout=30
-            )
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                logger.info(f"🎨 {model_name} генерация запущена... (попытка {attempt + 1})")
 
-            if response.status_code not in [200, 201]:
-                error_msg = response.json().get('detail', response.text[:200])
-                logger.error(f"❌ Replicate ошибка: {response.status_code} - {error_msg}")
-                return False, None, f"Replicate ошибка: {error_msg}"
+                # Создаем prediction
+                response = requests.post(
+                    api_endpoint,
+                    json=payload,
+                    headers=headers,
+                    timeout=30
+                )
 
-            prediction = response.json()
-            prediction_id = prediction['id']
-            get_url = prediction.get('urls', {}).get('get', f"{self.api_url}/{prediction_id}")
+                # Обработка rate limiting (429)
+                if response.status_code == 429:
+                    if attempt < self.MAX_RETRIES:
+                        # Пытаемся получить время ожидания из ответа
+                        retry_after = self._parse_retry_after(response)
+                        wait_time = retry_after or (self.INITIAL_BACKOFF * (2 ** attempt))
+                        logger.warning(f"⏳ Rate limit! Ждём {wait_time}с перед повтором...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        error_msg = response.json().get('detail', 'Rate limit exceeded')
+                        return False, None, f"Replicate rate limit: {error_msg}. Попробуйте позже."
 
-            # Ждем завершения (polling)
-            max_wait = self.config.timeout
-            waited = 0
-            poll_interval = 2
+                if response.status_code not in [200, 201]:
+                    error_msg = response.json().get('detail', response.text[:200])
+                    logger.error(f"❌ Replicate ошибка: {response.status_code} - {error_msg}")
+                    return False, None, f"Replicate ошибка: {error_msg}"
 
-            while waited < max_wait:
-                time.sleep(poll_interval)
-                waited += poll_interval
+                prediction = response.json()
 
-                status_response = requests.get(get_url, headers=headers, timeout=30)
-                if status_response.status_code != 200:
-                    continue
-
-                status_data = status_response.json()
-                status = status_data.get('status')
-
-                if status == 'succeeded':
-                    output = status_data.get('output')
+                # Проверяем, завершён ли запрос синхронно (Prefer: wait)
+                if prediction.get('status') == 'succeeded':
+                    output = prediction.get('output')
                     if output:
                         image_url = output[0] if isinstance(output, list) else output
-                        # Скачиваем изображение
                         img_response = requests.get(image_url, timeout=60)
                         if img_response.status_code == 200:
-                            logger.info(f"✅ {model_name} изображение создано")
+                            logger.info(f"✅ {model_name} изображение создано (синхронно)")
                             return True, img_response.content, ""
-                    return False, None, "Пустой output от Replicate"
 
-                elif status == 'failed':
-                    error = status_data.get('error', 'Unknown error')
-                    logger.error(f"❌ {model_name} failed: {error}")
-                    return False, None, f"{model_name} ошибка: {error}"
+                prediction_id = prediction['id']
+                get_url = prediction.get('urls', {}).get('get', f"{self.api_url}/{prediction_id}")
 
-                elif status == 'canceled':
-                    return False, None, "Генерация отменена"
+                # Ждем завершения (polling)
+                max_wait = self.config.timeout
+                waited = 0
+                poll_interval = 2
 
-                logger.debug(f"⏳ {model_name} статус: {status}, ждем...")
+                while waited < max_wait:
+                    time.sleep(poll_interval)
+                    waited += poll_interval
 
-            return False, None, f"Таймаут генерации ({max_wait}с)"
+                    status_response = requests.get(get_url, headers=headers, timeout=30)
+                    if status_response.status_code != 200:
+                        continue
 
-        except Exception as e:
-            logger.error(f"❌ Replicate ошибка: {e}")
-            return False, None, str(e)
+                    status_data = status_response.json()
+                    status = status_data.get('status')
+
+                    if status == 'succeeded':
+                        output = status_data.get('output')
+                        if output:
+                            image_url = output[0] if isinstance(output, list) else output
+                            # Скачиваем изображение
+                            img_response = requests.get(image_url, timeout=60)
+                            if img_response.status_code == 200:
+                                logger.info(f"✅ {model_name} изображение создано")
+                                return True, img_response.content, ""
+                        return False, None, "Пустой output от Replicate"
+
+                    elif status == 'failed':
+                        error = status_data.get('error', 'Unknown error')
+                        logger.error(f"❌ {model_name} failed: {error}")
+                        return False, None, f"{model_name} ошибка: {error}"
+
+                    elif status == 'canceled':
+                        return False, None, "Генерация отменена"
+
+                    logger.debug(f"⏳ {model_name} статус: {status}, ждем...")
+
+                return False, None, f"Таймаут генерации ({max_wait}с)"
+
+            except Exception as e:
+                logger.error(f"❌ Replicate ошибка: {e}")
+                if attempt < self.MAX_RETRIES:
+                    wait_time = self.INITIAL_BACKOFF * (2 ** attempt)
+                    logger.warning(f"⏳ Повтор через {wait_time}с...")
+                    time.sleep(wait_time)
+                    continue
+                return False, None, str(e)
+
+        return False, None, "Превышено количество попыток"
+
+    def _parse_retry_after(self, response: requests.Response) -> Optional[int]:
+        """Извлекает время ожидания из ответа rate limit"""
+        try:
+            # Из заголовка Retry-After
+            retry_header = response.headers.get('Retry-After')
+            if retry_header:
+                return int(retry_header)
+
+            # Из тела ответа (Replicate часто указывает "resets in ~Xs")
+            import re
+            text = response.text
+            match = re.search(r'resets in ~?(\d+)s', text)
+            if match:
+                return int(match.group(1)) + 1  # +1 для надёжности
+        except:
+            pass
+        return None
 
     def _enhance_prompt_for_flux(self, prompt: str) -> str:
         """Улучшает промпт для Flux"""
@@ -524,6 +591,14 @@ class ImageGenerationService:
         """
         results = []
 
+        # Определяем паузу между запросами в зависимости от провайдера
+        # Replicate free tier: 6 запросов/минуту = 10с между запросами
+        # OpenAI: 50 запросов/минуту (но дорого)
+        if self.config.provider == ImageProvider.OPENAI_DALLE:
+            pause_between_requests = 2  # OpenAI имеет высокий лимит
+        else:
+            pause_between_requests = 12  # Replicate: 6/мин = 10с + запас
+
         for i, slide in enumerate(slides):
             slide_num = slide.get('number', i + 1)
             logger.info(f"📸 Генерация слайда {slide_num}/{len(slides)}...")
@@ -542,9 +617,10 @@ class ImageGenerationService:
                 'error': error
             })
 
-            # Небольшая пауза между запросами
+            # Пауза между запросами для соблюдения rate limit
             if i < len(slides) - 1:
-                time.sleep(1)
+                logger.info(f"⏳ Пауза {pause_between_requests}с перед следующим слайдом...")
+                time.sleep(pause_between_requests)
 
         return results
 
