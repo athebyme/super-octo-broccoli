@@ -2768,6 +2768,81 @@ def register_auto_import_routes(app):
             logger.error(f"AI detect color error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/ai/detect-category', methods=['POST'])
+    @login_required
+    def auto_import_ai_detect_category():
+        """Определение категории WB с помощью AI"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+            from wb_categories_mapping import WB_ADULT_CATEGORIES
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+            ai_service.set_categories(WB_ADULT_CATEGORIES)
+
+            all_categories = []
+            if product.all_categories:
+                try:
+                    all_categories = json.loads(product.all_categories) if isinstance(product.all_categories, str) else product.all_categories
+                except:
+                    pass
+
+            category_id, category_name, confidence, reasoning = ai_service.detect_category(
+                product_title=product.title or '',
+                source_category=product.category or '',
+                all_categories=all_categories,
+                brand=product.brand or '',
+                description=product.description or ''
+            )
+
+            result = {
+                'category_id': category_id,
+                'category_name': category_name,
+                'confidence': confidence,
+                'reasoning': reasoning,
+                'original_category': product.category,
+                'current_wb_category': product.mapped_wb_category
+            }
+
+            if category_id and category_name:
+                product.mapped_wb_category = category_name
+                product.wb_category_id = category_id
+                product.category_confidence = confidence
+                db.session.commit()
+
+                save_ai_history(seller.id, product.id, 'category_detection',
+                              {'title': product.title, 'source_category': product.category}, result)
+                return jsonify({'success': True, 'data': result})
+            else:
+                save_ai_history(seller.id, product.id, 'category_detection', None, None, False, reasoning)
+                return jsonify({'success': False, 'error': reasoning}), 500
+
+        except Exception as e:
+            logger.error(f"AI detect category error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/auto-import/ai/extract-all-attributes', methods=['POST'])
     @login_required
     def auto_import_ai_extract_all_attributes():

@@ -1506,6 +1506,186 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.target === modal) hideModal();
     });
 
+    // Category Detection (aiCategoryBtn)
+    document.getElementById('aiCategoryBtn')?.addEventListener('click', async function() {
+        console.log('Category button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/detect-category', this);
+        if (result.success) {
+            currentAiData = { category: result.data.category_name, category_id: result.data.category_id };
+            const confidencePercent = Math.round((result.data.confidence || 0) * 100);
+            const confidenceColor = confidencePercent >= 80 ? 'green' : confidencePercent >= 60 ? 'yellow' : 'red';
+            const content = `
+                <div class="space-y-4">
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2">Исходная категория:</h4>
+                        <p class="text-gray-600">${result.data.original_category || '—'}</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-green-700 mb-2">Определённая категория WB:</h4>
+                        <p class="text-green-800 font-medium">${result.data.category_name || '—'}</p>
+                        <p class="text-xs text-gray-500 mt-1">ID: ${result.data.category_id || '—'}</p>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-${confidenceColor}-50 rounded-lg">
+                        <span class="text-sm text-gray-700">Уверенность AI:</span>
+                        <div class="flex items-center gap-2">
+                            <div class="w-24 bg-gray-200 rounded-full h-2">
+                                <div class="bg-${confidenceColor}-500 h-2 rounded-full" style="width: ${confidencePercent}%"></div>
+                            </div>
+                            <span class="font-medium text-${confidenceColor}-700">${confidencePercent}%</span>
+                        </div>
+                    </div>
+                    ${result.data.reasoning ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Обоснование:</h4>
+                        <p class="text-sm text-gray-600">${result.data.reasoning}</p>
+                    </div>` : ''}
+                    ${result.data.current_wb_category && result.data.current_wb_category !== result.data.category_name ? `
+                    <div class="bg-yellow-50 p-3 rounded-lg">
+                        <p class="text-sm text-yellow-700">Категория уже была применена к товару</p>
+                    </div>` : ''}
+                </div>
+            `;
+            showModal('Определение категории WB', content, false);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Sizes Parsing (aiSizesBtn)
+    document.getElementById('aiSizesBtn')?.addEventListener('click', async function() {
+        console.log('Sizes button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/parse-clothing-sizes', this);
+        if (result.success) {
+            currentAiData = { sizes: result.data };
+            let content = '<div class="space-y-4">';
+
+            // Стандартизированные размеры
+            if (result.data.standardized_sizes?.length) {
+                content += `
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-green-700 mb-2">Стандартизированные размеры:</h4>
+                        <div class="flex flex-wrap gap-2">
+                            ${result.data.standardized_sizes.map(s => `<span class="px-3 py-1 bg-green-200 text-green-800 rounded-full font-medium">${s}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Международные размеры
+            if (result.data.international_sizes) {
+                const intl = result.data.international_sizes;
+                content += `
+                    <div class="bg-blue-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-blue-700 mb-2">Международные размеры:</h4>
+                        <div class="grid grid-cols-2 gap-2 text-sm">
+                            ${intl.xs !== undefined ? `<div>XS: <span class="font-medium">${intl.xs}</span></div>` : ''}
+                            ${intl.s !== undefined ? `<div>S: <span class="font-medium">${intl.s}</span></div>` : ''}
+                            ${intl.m !== undefined ? `<div>M: <span class="font-medium">${intl.m}</span></div>` : ''}
+                            ${intl.l !== undefined ? `<div>L: <span class="font-medium">${intl.l}</span></div>` : ''}
+                            ${intl.xl !== undefined ? `<div>XL: <span class="font-medium">${intl.xl}</span></div>` : ''}
+                            ${intl.xxl !== undefined ? `<div>XXL: <span class="font-medium">${intl.xxl}</span></div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Российские размеры
+            if (result.data.russian_sizes?.length) {
+                content += `
+                    <div class="bg-purple-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-purple-700 mb-2">Российские размеры:</h4>
+                        <div class="flex flex-wrap gap-2">
+                            ${result.data.russian_sizes.map(s => `<span class="px-2 py-1 bg-purple-200 text-purple-800 text-sm rounded">${s}</span>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Размерная сетка
+            if (result.data.size_grid) {
+                const grid = result.data.size_grid;
+                content += `
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2">Размерная сетка:</h4>
+                        <div class="text-sm space-y-1">
+                            ${grid.bust ? `<p>Обхват груди: ${grid.bust}</p>` : ''}
+                            ${grid.waist ? `<p>Обхват талии: ${grid.waist}</p>` : ''}
+                            ${grid.hips ? `<p>Обхват бёдер: ${grid.hips}</p>` : ''}
+                            ${grid.length ? `<p>Длина: ${grid.length}</p>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Тип размеров
+            if (result.data.size_type) {
+                content += `<p class="text-sm text-gray-600">Тип размеров: <span class="font-medium">${result.data.size_type}</span></p>`;
+            }
+
+            content += '</div>';
+            showModal('Размеры товара', content, false);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Apply AI Data to product (applyAiDataBtn)
+    document.getElementById('applyAiDataBtn')?.addEventListener('click', async function() {
+        console.log('Apply AI Data button clicked');
+
+        if (!confirm('Применить все AI-оптимизированные данные к карточке товара? Текущие данные будут заменены.')) {
+            return;
+        }
+
+        showLoading(this, 'Применение...');
+
+        try {
+            // Сначала делаем полную оптимизацию
+            const optimizeResponse = await fetch('/auto-import/ai/full-optimize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_id: productId })
+            });
+            const optimizeResult = await optimizeResponse.json();
+
+            if (!optimizeResult.success) {
+                showModal('Ошибка', `<p class="text-red-600">${optimizeResult.error}</p>`);
+                return;
+            }
+
+            const data = optimizeResult.data;
+            const updates = {
+                title: data.seo_title?.title,
+                keywords: data.keywords?.keywords,
+                bullet_points: data.bullet_points?.bullet_points,
+                description: data.enhanced_description?.description
+            };
+
+            // Применяем изменения
+            const applyResponse = await fetch('/auto-import/ai/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    product_id: productId,
+                    updates: updates
+                })
+            });
+            const applyResult = await applyResponse.json();
+
+            if (applyResult.success) {
+                alert('AI данные успешно применены к карточке!');
+                window.location.reload();
+            } else {
+                showModal('Ошибка', `<p class="text-red-600">${applyResult.error}</p>`);
+            }
+        } catch (error) {
+            console.error('Apply AI data error:', error);
+            showModal('Ошибка', `<p class="text-red-600">${error.message}</p>`);
+        } finally {
+            hideLoading(this);
+        }
+    });
+
     // Генерация изображений для слайдов
     window.generateSlideImages = async function() {
         const btn = document.getElementById('generateSlideImagesBtn');
