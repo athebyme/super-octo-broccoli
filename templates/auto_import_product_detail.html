@@ -417,111 +417,16 @@
                 </div>
             </div>
 
-            <!-- Сохраненные AI-результаты -->
-            {% if product.ai_keywords or product.ai_bullets or product.ai_rich_content or product.ai_analysis %}
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-lg font-medium text-gray-900">AI-контент</h3>
-                    {% if product.ai_analysis_at %}
-                    <span class="text-xs text-gray-500" id="aiAnalysisDate">
-                        Обновлено: {{ product.ai_analysis_at.strftime('%d.%m.%Y %H:%M') }}
-                    </span>
-                    {% endif %}
-                </div>
-
-                <!-- Предупреждение об изменениях -->
-                <div id="contentChangedWarning" class="hidden mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                    <div class="flex items-center text-yellow-800">
-                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                        </svg>
-                        <span class="text-sm font-medium">Карточка была изменена. AI-анализ может быть неактуален.</span>
-                    </div>
-                </div>
-
-                <div class="space-y-4">
-                    <!-- SEO заголовок -->
-                    {% if product.ai_seo_title %}
-                    <div class="p-3 bg-blue-50 rounded-lg">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-blue-900">SEO заголовок</span>
-                            <button onclick="copyToClipboard('{{ product.ai_seo_title|e }}')" class="text-xs text-blue-600 hover:text-blue-800">Копировать</button>
-                        </div>
-                        <p class="text-sm text-blue-800">{{ product.ai_seo_title }}</p>
-                    </div>
-                    {% endif %}
-
-                    <!-- Ключевые слова -->
-                    {% if product.ai_keywords %}
-                    <div class="p-3 bg-green-50 rounded-lg">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-green-900">Ключевые слова</span>
-                            <button onclick="toggleSection('keywordsSection')" class="text-xs text-green-600 hover:text-green-800">Показать/Скрыть</button>
-                        </div>
-                        <div id="keywordsSection" class="hidden">
-                            <div class="flex flex-wrap gap-1" id="keywordsList">
-                                <!-- Keywords will be populated by JS -->
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <!-- Преимущества (Bullets) -->
-                    {% if product.ai_bullets %}
-                    <div class="p-3 bg-purple-50 rounded-lg">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-purple-900">Преимущества</span>
-                            <button onclick="toggleSection('bulletsSection')" class="text-xs text-purple-600 hover:text-purple-800">Показать/Скрыть</button>
-                        </div>
-                        <div id="bulletsSection" class="hidden">
-                            <ul class="list-disc list-inside text-sm text-purple-800 space-y-1" id="bulletsList">
-                                <!-- Bullets will be populated by JS -->
-                            </ul>
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <!-- Rich контент -->
-                    {% if product.ai_rich_content %}
-                    <div class="p-3 bg-orange-50 rounded-lg">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-orange-900">Rich-контент (блоки для WB)</span>
-                            <button onclick="toggleSection('richSection')" class="text-xs text-orange-600 hover:text-orange-800">Показать/Скрыть</button>
-                        </div>
-                        <div id="richSection" class="hidden space-y-3" id="richBlocksList">
-                            <!-- Rich blocks will be populated by JS -->
-                        </div>
-                    </div>
-                    {% endif %}
-
-                    <!-- Анализ карточки -->
-                    {% if product.ai_analysis %}
-                    <div class="p-3 bg-indigo-50 rounded-lg">
-                        <div class="flex items-center justify-between mb-2">
-                            <span class="text-sm font-medium text-indigo-900">Анализ карточки</span>
-                            <button onclick="toggleSection('analysisSection')" class="text-xs text-indigo-600 hover:text-indigo-800">Показать/Скрыть</button>
-                        </div>
-                        <div id="analysisSection">
-                            <div id="analysisContent">
-                                <!-- Analysis will be populated by JS -->
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-            {% else %}
-            <!-- Предложение сделать анализ -->
+            <!-- AI-контент (результаты будут показаны в модальном окне) -->
             <div class="bg-gray-50 shadow-sm rounded-lg border border-gray-200 p-6">
                 <div class="text-center">
                     <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
                     </svg>
-                    <h3 class="mt-2 text-sm font-medium text-gray-900">AI-контент не сгенерирован</h3>
-                    <p class="mt-1 text-sm text-gray-500">Используйте кнопки выше для генерации SEO-контента, ключевых слов и Rich-контента</p>
+                    <h3 class="mt-2 text-sm font-medium text-gray-900">AI-оптимизация</h3>
+                    <p class="mt-1 text-sm text-gray-500">Используйте кнопки выше для генерации SEO-контента, ключевых слов и Rich-контента. Результаты будут показаны в модальном окне.</p>
                 </div>
             </div>
-            {% endif %}
 
             <!-- Действия -->
             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
@@ -568,6 +473,8 @@
 </div>
 
 <script>
+console.log('Script tag loaded');
+
 // Helper functions
 function toggleSection(sectionId) {
     const section = document.getElementById(sectionId);
@@ -584,144 +491,11 @@ function copyToClipboard(text) {
     });
 }
 
-// Populate saved AI data
+// Populate saved AI data - simplified version
 function populateSavedAIData() {
-    // Keywords
-    {% if product.ai_keywords %}
-    try {
-        const keywordsData = {{ product.ai_keywords|safe }};
-        const keywordsList = document.getElementById('keywordsList');
-        if (keywordsList && keywordsData.keywords) {
-            keywordsList.innerHTML = keywordsData.keywords.map(kw =>
-                `<span class="inline-block px-2 py-1 text-xs bg-green-100 text-green-800 rounded">${kw}</span>`
-            ).join('');
-        }
-    } catch(e) { console.error('Keywords parse error:', e); }
-    {% endif %}
-
-    // Bullets
-    {% if product.ai_bullets %}
-    try {
-        const bulletsData = {{ product.ai_bullets|safe }};
-        const bulletsList = document.getElementById('bulletsList');
-        if (bulletsList && bulletsData.bullet_points) {
-            bulletsList.innerHTML = bulletsData.bullet_points.map(bp =>
-                `<li>${bp}</li>`
-            ).join('');
-        }
-    } catch(e) { console.error('Bullets parse error:', e); }
-    {% endif %}
-
-    // Rich content
-    {% if product.ai_rich_content %}
-    try {
-        const richData = {{ product.ai_rich_content|safe }};
-        const richSection = document.getElementById('richSection');
-        // Support both old format (blocks) and new format (slides)
-        const slides = richData.slides || richData.blocks || [];
-        if (richSection && slides.length > 0) {
-            let html = '';
-
-            // Design recommendations if available
-            if (richData.design_recommendations) {
-                const dr = richData.design_recommendations;
-                html += `<div class="mb-4 p-3 bg-gradient-to-r from-orange-100 to-pink-100 rounded-lg">
-                    <p class="text-xs font-bold text-orange-800 mb-2">Рекомендации по дизайну:</p>
-                    <div class="grid grid-cols-2 gap-2 text-xs">
-                        ${dr.color_palette ? `<div><span class="text-gray-600">Палитра:</span> <span class="font-mono">${dr.color_palette.join(', ')}</span></div>` : ''}
-                        ${dr.font_style ? `<div><span class="text-gray-600">Стиль:</span> ${dr.font_style}</div>` : ''}
-                        ${dr.overall_mood ? `<div class="col-span-2"><span class="text-gray-600">Настроение:</span> ${dr.overall_mood}</div>` : ''}
-                    </div>
-                </div>`;
-            }
-
-            // Slides/blocks
-            html += slides.map((slide, i) => {
-                const imgConcept = slide.image_concept || {};
-                const textLayout = slide.text_layout || {};
-                const bullets = slide.bullets ? `<ul class="mt-1 text-xs text-gray-600 list-disc list-inside">${slide.bullets.map(b => `<li>${b}</li>`).join('')}</ul>` : '';
-
-                return `<div class="p-3 bg-white rounded-lg border border-orange-200 shadow-sm">
-                    <div class="flex items-center justify-between mb-2">
-                        <span class="px-2 py-1 text-xs font-bold text-white bg-gradient-to-r from-orange-500 to-pink-500 rounded">
-                            Слайд ${slide.number || i+1}: ${slide.type || ''}
-                        </span>
-                        <span class="text-xs text-gray-400">1440x810px</span>
-                    </div>
-                    <p class="text-sm font-bold text-gray-900 uppercase">${slide.title}</p>
-                    ${slide.subtitle ? `<p class="text-xs text-gray-700 mt-1">${slide.subtitle}</p>` : ''}
-                    ${bullets}
-                    ${imgConcept.main_object ? `
-                    <div class="mt-2 p-2 bg-gray-50 rounded text-xs">
-                        <p class="font-medium text-gray-700 mb-1">Концепция изображения:</p>
-                        <p class="text-gray-600"><span class="font-medium">Объект:</span> ${imgConcept.main_object}</p>
-                        ${imgConcept.background ? `<p class="text-gray-600"><span class="font-medium">Фон:</span> ${imgConcept.background}</p>` : ''}
-                        ${imgConcept.composition ? `<p class="text-gray-600"><span class="font-medium">Композиция:</span> ${imgConcept.composition}</p>` : ''}
-                        ${imgConcept.mood ? `<p class="text-gray-600"><span class="font-medium">Настроение:</span> ${imgConcept.mood}</p>` : ''}
-                    </div>` : ''}
-                    ${textLayout.title_position ? `
-                    <div class="mt-2 p-2 bg-blue-50 rounded text-xs">
-                        <p class="font-medium text-blue-700 mb-1">Расположение текста:</p>
-                        <p class="text-blue-600"><span class="font-medium">Заголовок:</span> ${textLayout.title_position} | ${textLayout.title_color || ''}</p>
-                        ${textLayout.text_background ? `<p class="text-blue-600"><span class="font-medium">Подложка:</span> ${textLayout.text_background}</p>` : ''}
-                    </div>` : ''}
-                    ${slide.image_idea ? `<p class="text-xs text-gray-400 mt-2 italic">Идея: ${slide.image_idea}</p>` : ''}
-                </div>`;
-            }).join('');
-
-            // Main USP and target audience
-            if (richData.main_usp || richData.main_message) {
-                html += `<div class="mt-3 p-3 bg-orange-50 rounded-lg">
-                    <p class="text-sm text-orange-800"><strong>УТП:</strong> ${richData.main_usp || richData.main_message}</p>
-                    ${richData.target_audience ? `<p class="text-xs text-orange-600 mt-1"><strong>Целевая аудитория:</strong> ${richData.target_audience}</p>` : ''}
-                </div>`;
-            }
-
-            richSection.innerHTML = html;
-        }
-    } catch(e) { console.error('Rich content parse error:', e); }
-    {% endif %}
-
-    // Analysis
-    {% if product.ai_analysis %}
-    try {
-        const analysisData = {{ product.ai_analysis|safe }};
-        const analysisContent = document.getElementById('analysisContent');
-        if (analysisContent) {
-            let html = '';
-            if (analysisData.score !== undefined) {
-                const scoreColor = analysisData.score >= 80 ? 'green' : analysisData.score >= 60 ? 'yellow' : 'red';
-                html += `<div class="mb-3"><span class="text-2xl font-bold text-${scoreColor}-600">${analysisData.score}</span><span class="text-sm text-gray-500">/100</span></div>`;
-            }
-            if (analysisData.issues && analysisData.issues.length > 0) {
-                html += '<div class="mb-2"><span class="text-sm font-medium">Проблемы:</span><ul class="list-disc list-inside text-xs text-gray-700 mt-1">';
-                analysisData.issues.forEach(issue => {
-                    const color = issue.priority === 'high' ? 'red' : issue.priority === 'medium' ? 'yellow' : 'gray';
-                    html += `<li><span class="text-${color}-600">[${issue.priority}]</span> ${issue.issue}</li>`;
-                });
-                html += '</ul></div>';
-            }
-            if (analysisData.recommendations && analysisData.recommendations.length > 0) {
-                html += '<div><span class="text-sm font-medium">Рекомендации:</span><ul class="list-disc list-inside text-xs text-gray-700 mt-1">';
-                analysisData.recommendations.forEach(rec => {
-                    html += `<li>${rec}</li>`;
-                });
-                html += '</ul></div>';
-            }
-            analysisContent.innerHTML = html;
-        }
-    } catch(e) { console.error('Analysis parse error:', e); }
-    {% endif %}
-
-    // Check content hash for changes
-    {% if product.content_hash %}
-    const currentHash = computeContentHash();
-    const savedHash = '{{ product.content_hash }}';
-    if (currentHash !== savedHash) {
-        const warning = document.getElementById('contentChangedWarning');
-        if (warning) warning.classList.remove('hidden');
-    }
-    {% endif %}
+    console.log('populateSavedAIData called');
+    // AI data will be populated after migration is run
+    // For now, this function is a no-op
 }
 
 function computeContentHash() {
