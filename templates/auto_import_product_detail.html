@@ -1101,7 +1101,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // AI Optimization Functions
 (function() {
+    console.log('AI Optimization script starting...');
     const productId = {{ product.id }};
+    console.log('Product ID:', productId);
     const modal = document.getElementById('aiResultsModal');
     const modalTitle = document.getElementById('aiModalTitle');
     const modalContent = document.getElementById('aiModalContent');
@@ -1141,19 +1143,29 @@ document.addEventListener('DOMContentLoaded', function() {
     async function callAiEndpoint(endpoint, btn) {
         showLoading(btn);
         try {
+            console.log('Calling AI endpoint:', endpoint, 'with product_id:', productId);
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ product_id: productId })
             });
-            return await response.json();
+            const result = await response.json();
+            console.log('AI endpoint response:', result);
+            return result;
+        } catch (error) {
+            console.error('AI endpoint error:', error);
+            alert('Ошибка запроса: ' + error.message);
+            return { success: false, error: error.message };
         } finally {
             hideLoading(btn);
         }
     }
 
+    console.log('AI buttons initializing for product:', productId);
+
     // SEO Title
     document.getElementById('aiSeoTitleBtn')?.addEventListener('click', async function() {
+        console.log('SEO Title button clicked');
         const result = await callAiEndpoint('/auto-import/ai/seo-title', this);
         if (result.success) {
             currentAiData = { title: result.data.title };
@@ -1191,6 +1203,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Keywords
     document.getElementById('aiKeywordsBtn')?.addEventListener('click', async function() {
+        console.log('Keywords button clicked');
         const result = await callAiEndpoint('/auto-import/ai/keywords', this);
         if (result.success) {
             currentAiData = { keywords: result.data.keywords };
@@ -1294,6 +1307,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Rich Content
     document.getElementById('aiRichContentBtn')?.addEventListener('click', async function() {
+        console.log('Rich Content button clicked');
         const result = await callAiEndpoint('/auto-import/ai/rich-content', this);
         if (result.success) {
             currentAiData = { rich_content: result.data };
