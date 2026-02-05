@@ -321,15 +321,52 @@ def register_auto_import_routes(app):
 
         # Безопасный доступ к AI-полям (могут не существовать до миграции)
         product.has_ai_data = False
+        product.ai_keywords_list = None
+        product.ai_bullets_list = None
+        product.ai_rich_content_data = None
+        product.ai_analysis_data = None
+
         try:
+            # Парсим AI JSON поля
+            ai_keywords_raw = getattr(product, 'ai_keywords', None)
+            ai_bullets_raw = getattr(product, 'ai_bullets', None)
+            ai_rich_content_raw = getattr(product, 'ai_rich_content', None)
+            ai_analysis_raw = getattr(product, 'ai_analysis', None)
+            ai_seo_title = getattr(product, 'ai_seo_title', None)
+
+            if ai_keywords_raw:
+                try:
+                    product.ai_keywords_list = json.loads(ai_keywords_raw)
+                except:
+                    product.ai_keywords_list = None
+
+            if ai_bullets_raw:
+                try:
+                    product.ai_bullets_list = json.loads(ai_bullets_raw)
+                except:
+                    product.ai_bullets_list = None
+
+            if ai_rich_content_raw:
+                try:
+                    product.ai_rich_content_data = json.loads(ai_rich_content_raw)
+                except:
+                    product.ai_rich_content_data = None
+
+            if ai_analysis_raw:
+                try:
+                    product.ai_analysis_data = json.loads(ai_analysis_raw)
+                except:
+                    product.ai_analysis_data = None
+
             product.has_ai_data = bool(
-                getattr(product, 'ai_keywords', None) or
-                getattr(product, 'ai_bullets', None) or
-                getattr(product, 'ai_rich_content', None) or
-                getattr(product, 'ai_analysis', None)
+                product.ai_keywords_list or
+                product.ai_bullets_list or
+                product.ai_rich_content_data or
+                product.ai_analysis_data or
+                ai_seo_title
             )
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Ошибка парсинга AI полей: {e}")
 
         # Получаем список всех WB категорий для dropdown
         from wb_categories_mapping import WB_ADULT_CATEGORIES

@@ -709,7 +709,11 @@ class AIClient:
             response.raise_for_status()
 
             data = response.json()
-            content = data['choices'][0]['message']['content']
+            content = data.get('choices', [{}])[0].get('message', {}).get('content')
+
+            if content is None:
+                logger.error(f"❌ AI вернул пустой ответ: {data}")
+                return None
 
             logger.info(f"✅ AI ответ получен ({len(content)} символов)")
             logger.debug(f"Response: {content[:500]}...")
@@ -1191,17 +1195,27 @@ class RichContentTask(AITask):
         try:
             json_str = self._extract_json(response)
             data = json.loads(json_str)
-            return {
-                'hook': data.get('hook', ''),
-                'pain_points': data.get('pain_points', []),
-                'benefits': data.get('benefits', []),
-                'features': data.get('features', []),
-                'social_proof': data.get('social_proof', ''),
-                'cta': data.get('cta', ''),
-                'full_description': data.get('full_description', ''),
-                'infographic_texts': data.get('infographic_texts', [])
+
+            # Новый формат со слайдами
+            result = {
+                'slides': data.get('slides', []),
+                'design_recommendations': data.get('design_recommendations', {}),
+                'total_slides': data.get('total_slides', len(data.get('slides', []))),
+                'main_usp': data.get('main_usp', ''),
+                'target_audience': data.get('target_audience', ''),
+                # Совместимость со старым форматом
+                'blocks': data.get('blocks', []),
+                'main_message': data.get('main_message', '')
             }
-        except:
+
+            # Если слайды пустые, но есть блоки - используем блоки
+            if not result['slides'] and result['blocks']:
+                result['slides'] = result['blocks']
+                result['total_slides'] = len(result['blocks'])
+
+            return result
+        except Exception as e:
+            logger.error(f"Ошибка парсинга Rich content: {e}")
             return None
 
     def _extract_json(self, text: str) -> str:

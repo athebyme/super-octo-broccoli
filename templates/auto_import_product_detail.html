@@ -420,10 +420,99 @@
             <!-- AI-контент -->
             {% if product.has_ai_data %}
             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-                <h3 class="text-lg font-medium text-gray-900 mb-4">AI-контент</h3>
-                <div id="aiResultsContainer" class="space-y-4">
-                    <!-- Результаты будут загружены через JavaScript -->
-                    <p class="text-sm text-gray-500">Загрузка сохранённых результатов...</p>
+                <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    Сохранённые AI-результаты
+                </h3>
+                <div class="space-y-4">
+                    <!-- SEO заголовок -->
+                    {% if product.ai_seo_title %}
+                    <div class="bg-green-50 p-3 rounded-lg border border-green-200">
+                        <h4 class="text-sm font-medium text-green-700 mb-1">SEO заголовок</h4>
+                        <p class="text-green-800">{{ product.ai_seo_title }}</p>
+                    </div>
+                    {% endif %}
+
+                    <!-- Ключевые слова -->
+                    {% if product.ai_keywords_list %}
+                    <div>
+                        <h4 class="text-sm font-medium text-gray-700 mb-2">Ключевые слова</h4>
+                        <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                            {% for keyword in product.ai_keywords_list[:20] %}
+                            <span class="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full">{{ keyword }}</span>
+                            {% endfor %}
+                            {% if product.ai_keywords_list|length > 20 %}
+                            <span class="px-2 py-0.5 text-gray-500 text-xs">+{{ product.ai_keywords_list|length - 20 }} ещё</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Преимущества -->
+                    {% if product.ai_bullets_list %}
+                    <div>
+                        <h4 class="text-sm font-medium text-gray-700 mb-2">Преимущества</h4>
+                        <ul class="text-sm text-gray-600 space-y-1">
+                            {% for bullet in product.ai_bullets_list %}
+                            <li class="flex items-start">
+                                <span class="text-green-600 mr-1 flex-shrink-0">✓</span>
+                                <span>{{ bullet }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+
+                    <!-- Анализ карточки -->
+                    {% if product.ai_analysis_data %}
+                    <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                        <div class="flex items-center justify-between mb-2">
+                            <h4 class="text-sm font-medium text-gray-700">Анализ карточки</h4>
+                            {% if product.ai_analysis_data.score %}
+                            <span class="px-2 py-1 rounded-full text-sm font-bold
+                                {% if product.ai_analysis_data.score >= 80 %}bg-green-100 text-green-800
+                                {% elif product.ai_analysis_data.score >= 60 %}bg-yellow-100 text-yellow-800
+                                {% else %}bg-red-100 text-red-800{% endif %}">
+                                {{ product.ai_analysis_data.score }}/100
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% if product.ai_analysis_data.issues %}
+                        <div class="text-xs text-gray-600">
+                            <span class="font-medium">Проблемы:</span> {{ product.ai_analysis_data.issues|length }}
+                        </div>
+                        {% endif %}
+                        {% if product.ai_analysis_data.recommendations %}
+                        <div class="text-xs text-gray-600">
+                            <span class="font-medium">Рекомендации:</span> {{ product.ai_analysis_data.recommendations|length }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Rich контент -->
+                    {% if product.ai_rich_content_data %}
+                    <div class="bg-gradient-to-r from-orange-50 to-pink-50 p-3 rounded-lg border border-orange-200">
+                        <h4 class="text-sm font-medium text-orange-700 mb-1">Rich-контент</h4>
+                        {% if product.ai_rich_content_data.slides %}
+                        <p class="text-xs text-orange-600">{{ product.ai_rich_content_data.slides|length }} слайдов готово</p>
+                        {% elif product.ai_rich_content_data.blocks %}
+                        <p class="text-xs text-orange-600">{{ product.ai_rich_content_data.blocks|length }} блоков</p>
+                        {% endif %}
+                        {% if product.ai_rich_content_data.main_usp %}
+                        <p class="text-xs text-gray-600 mt-1">УТП: {{ product.ai_rich_content_data.main_usp }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Время анализа -->
+                    {% if product.ai_analysis_at %}
+                    <div class="text-xs text-gray-400 text-right">
+                        Обновлено: {{ product.ai_analysis_at.strftime('%d.%m.%Y %H:%M') }}
+                    </div>
+                    {% endif %}
                 </div>
             </div>
             {% else %}
