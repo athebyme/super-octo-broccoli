@@ -185,6 +185,25 @@ def register_auto_import_routes(app):
             settings.ai_category_instruction = request.form.get('ai_category_instruction', '').strip() or None
             settings.ai_size_instruction = request.form.get('ai_size_instruction', '').strip() or None
 
+            # Настройки генерации изображений
+            settings.image_gen_enabled = request.form.get('image_gen_enabled') == 'on'
+            settings.image_gen_provider = request.form.get('image_gen_provider', 'openai_dalle').strip()
+            settings.openai_api_key = request.form.get('openai_api_key', '').strip()
+            settings.replicate_api_key = request.form.get('replicate_api_key', '').strip()
+
+            try:
+                settings.image_gen_width = int(request.form.get('image_gen_width', 1440))
+            except ValueError:
+                settings.image_gen_width = 1440
+
+            try:
+                settings.image_gen_height = int(request.form.get('image_gen_height', 810))
+            except ValueError:
+                settings.image_gen_height = 810
+
+            settings.openai_image_quality = request.form.get('openai_image_quality', 'standard').strip()
+            settings.openai_image_style = request.form.get('openai_image_style', 'vivid').strip()
+
             # Сбрасываем AI сервис при изменении настроек
             if settings.ai_enabled:
                 try:
