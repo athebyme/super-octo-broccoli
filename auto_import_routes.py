@@ -2665,16 +2665,19 @@ def register_auto_import_routes(app):
             )
 
             if success:
-                # Добавляем запас к весу
+                # Добавляем запас к весу (собираем изменения отдельно чтобы не менять dict во время итерации)
                 if result.get('extracted_values'):
+                    weight_margins = {}
                     for key, value in result['extracted_values'].items():
                         if 'вес' in key.lower() or 'масса' in key.lower():
                             try:
                                 weight = float(str(value).replace(',', '.'))
                                 weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 1)
-                                result['extracted_values'][f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
+                                weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
                             except:
                                 pass
+                    # Добавляем после завершения итерации
+                    result['extracted_values'].update(weight_margins)
 
                 # Сохраняем результат
                 result['wb_category_id'] = category_id
