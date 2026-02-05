@@ -1626,8 +1626,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             }
 
-            // Размеры из массива sizes (показываем всегда если есть)
-            if (data.sizes?.length > 0) {
+            // Размеры из массива sizes (только для одежды, не для физических товаров)
+            if (data.sizes?.length > 0 && data.product_type !== 'physical') {
                 content += `
                     <div class="bg-green-50 p-4 rounded-lg">
                         <h4 class="font-medium text-green-700 mb-3">Размеры одежды:</h4>
