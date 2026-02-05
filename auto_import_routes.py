@@ -298,7 +298,7 @@ def register_auto_import_routes(app):
     @app.route('/auto-import/products', methods=['GET'])
     @login_required
     def auto_import_products():
-        """Список импортированных товаров"""
+        """Список импортированных товаров с расширенными фильтрами"""
         if not current_user.seller:
             flash('Для работы с автоимпортом обратитесь к администратору.', 'warning')
             return redirect(url_for('dashboard'))
@@ -307,25 +307,106 @@ def register_auto_import_routes(app):
 
         # Фильтры
         status_filter = request.args.get('status', '')
+        search_query = request.args.get('q', '').strip()
+        category_filter = request.args.get('category', '')
+        brand_filter = request.args.get('brand', '')
+        has_ai_filter = request.args.get('has_ai', '')  # 'yes', 'no', ''
+        sort_by = request.args.get('sort', 'created_at')  # created_at, title, category
+        sort_order = request.args.get('order', 'desc')  # asc, desc
         page = int(request.args.get('page', 1))
-        per_page = 50
+        per_page = int(request.args.get('per_page', 50))
+        per_page = min(max(per_page, 10), 100)  # От 10 до 100
 
         query = ImportedProduct.query.filter_by(seller_id=seller.id)
 
+        # Применяем фильтры
         if status_filter:
             query = query.filter_by(import_status=status_filter)
 
-        pagination = query.order_by(ImportedProduct.created_at.desc()).paginate(
-            page=page, per_page=per_page, error_out=False
-        )
+        if search_query:
+            search_pattern = f"%{search_query}%"
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.title.ilike(search_pattern),
+                    ImportedProduct.external_id.ilike(search_pattern),
+                    ImportedProduct.external_vendor_code.ilike(search_pattern),
+                    ImportedProduct.description.ilike(search_pattern),
+                    ImportedProduct.brand.ilike(search_pattern)
+                )
+            )
 
+        if category_filter:
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.category.ilike(f"%{category_filter}%"),
+                    ImportedProduct.mapped_wb_category.ilike(f"%{category_filter}%")
+                )
+            )
+
+        if brand_filter:
+            query = query.filter(ImportedProduct.brand.ilike(f"%{brand_filter}%"))
+
+        if has_ai_filter == 'yes':
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.ai_seo_title.isnot(None),
+                    ImportedProduct.ai_keywords.isnot(None),
+                    ImportedProduct.ai_bullets.isnot(None),
+                    ImportedProduct.ai_rich_content.isnot(None)
+                )
+            )
+        elif has_ai_filter == 'no':
+            query = query.filter(
+                ImportedProduct.ai_seo_title.is_(None),
+                ImportedProduct.ai_keywords.is_(None),
+                ImportedProduct.ai_bullets.is_(None),
+                ImportedProduct.ai_rich_content.is_(None)
+            )
+
+        # Сортировка
+        sort_column = getattr(ImportedProduct, sort_by, ImportedProduct.created_at)
+        if sort_order == 'asc':
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         products = pagination.items
+
+        # Получаем уникальные значения для фильтров
+        all_categories = db.session.query(ImportedProduct.category).filter_by(
+            seller_id=seller.id
+        ).filter(ImportedProduct.category.isnot(None)).distinct().all()
+        categories = sorted(set(c[0] for c in all_categories if c[0]))
+
+        all_brands = db.session.query(ImportedProduct.brand).filter_by(
+            seller_id=seller.id
+        ).filter(ImportedProduct.brand.isnot(None)).distinct().all()
+        brands = sorted(set(b[0] for b in all_brands if b[0]))
+
+        # Статистика
+        stats = {
+            'total': ImportedProduct.query.filter_by(seller_id=seller.id).count(),
+            'pending': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='pending').count(),
+            'validated': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='validated').count(),
+            'imported': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='imported').count(),
+            'failed': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='failed').count(),
+        }
 
         return render_template(
             'auto_import_products.html',
             products=products,
             pagination=pagination,
-            status_filter=status_filter
+            status_filter=status_filter,
+            search_query=search_query,
+            category_filter=category_filter,
+            brand_filter=brand_filter,
+            has_ai_filter=has_ai_filter,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            categories=categories,
+            brands=brands,
+            stats=stats
         )
 
     @app.route('/auto-import/run', methods=['POST'])
