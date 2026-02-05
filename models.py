@@ -721,6 +721,16 @@ class AutoImportSettings(db.Model):
     ai_client_id = db.Column(db.String(500))  # Client ID для Cloud.ru OAuth2
     ai_client_secret = db.Column(db.String(500))  # Client Secret для Cloud.ru OAuth2
 
+    # Настройки генерации изображений для инфографики
+    image_gen_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включена генерация картинок
+    image_gen_provider = db.Column(db.String(50), default='openai_dalle')  # Провайдер (openai_dalle, flux_pro, sdxl)
+    openai_api_key = db.Column(db.String(500))  # API ключ OpenAI (для DALL-E)
+    replicate_api_key = db.Column(db.String(500))  # API ключ Replicate (для Flux/SDXL)
+    image_gen_width = db.Column(db.Integer, default=1440)  # Ширина изображения
+    image_gen_height = db.Column(db.Integer, default=810)  # Высота изображения
+    openai_image_quality = db.Column(db.String(20), default='standard')  # standard или hd
+    openai_image_style = db.Column(db.String(20), default='vivid')  # vivid или natural
+
     # Частота автоимпорта (в часах)
     auto_import_interval_hours = db.Column(db.Integer, default=24, nullable=False)  # По умолчанию раз в сутки
 
@@ -781,6 +791,14 @@ class AutoImportSettings(db.Model):
             'ai_category_instruction': self.ai_category_instruction,
             'ai_size_instruction': self.ai_size_instruction,
             # Не отдаем ai_api_key в JSON из соображений безопасности
+            # Настройки генерации изображений
+            'image_gen_enabled': self.image_gen_enabled,
+            'image_gen_provider': self.image_gen_provider,
+            'image_gen_width': self.image_gen_width,
+            'image_gen_height': self.image_gen_height,
+            'openai_image_quality': self.openai_image_quality,
+            'openai_image_style': self.openai_image_style,
+            # Не отдаем API ключи в JSON
             'auto_import_interval_hours': self.auto_import_interval_hours,
             'last_import_at': self.last_import_at.isoformat() if self.last_import_at else None,
             'next_import_at': self.next_import_at.isoformat() if self.next_import_at else None,

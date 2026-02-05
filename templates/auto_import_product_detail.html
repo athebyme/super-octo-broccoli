@@ -436,32 +436,46 @@
                     {% endif %}
 
                     <!-- Ключевые слова -->
-                    {% if product.ai_keywords_list %}
+                    {% if product.ai_keywords_list and product.ai_keywords_list.keywords %}
+                    {% set keywords = product.ai_keywords_list.keywords %}
                     <div>
-                        <h4 class="text-sm font-medium text-gray-700 mb-2">Ключевые слова</h4>
+                        <h4 class="text-sm font-medium text-gray-700 mb-2">Ключевые слова ({{ keywords|length }})</h4>
                         <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
-                            {% for keyword in product.ai_keywords_list[:20] %}
+                            {% for keyword in keywords[:20] %}
                             <span class="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full">{{ keyword }}</span>
                             {% endfor %}
-                            {% if product.ai_keywords_list|length > 20 %}
-                            <span class="px-2 py-0.5 text-gray-500 text-xs">+{{ product.ai_keywords_list|length - 20 }} ещё</span>
+                            {% if keywords|length > 20 %}
+                            <span class="px-2 py-0.5 text-gray-500 text-xs">+{{ keywords|length - 20 }} ещё</span>
                             {% endif %}
                         </div>
+                        {% if product.ai_keywords_list.search_queries %}
+                        <div class="mt-2">
+                            <span class="text-xs text-gray-500">Поисковые запросы:</span>
+                            <div class="flex flex-wrap gap-1 mt-1">
+                                {% for query in product.ai_keywords_list.search_queries[:5] %}
+                                <span class="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded">{{ query }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                     {% endif %}
 
                     <!-- Преимущества -->
-                    {% if product.ai_bullets_list %}
+                    {% if product.ai_bullets_list and product.ai_bullets_list.bullet_points %}
                     <div>
                         <h4 class="text-sm font-medium text-gray-700 mb-2">Преимущества</h4>
                         <ul class="text-sm text-gray-600 space-y-1">
-                            {% for bullet in product.ai_bullets_list %}
+                            {% for bullet in product.ai_bullets_list.bullet_points %}
                             <li class="flex items-start">
                                 <span class="text-green-600 mr-1 flex-shrink-0">✓</span>
                                 <span>{{ bullet }}</span>
                             </li>
                             {% endfor %}
                         </ul>
+                        {% if product.ai_bullets_list.target_audience %}
+                        <p class="text-xs text-gray-400 mt-2">Целевая аудитория: {{ product.ai_bullets_list.target_audience }}</p>
+                        {% endif %}
                     </div>
                     {% endif %}
 
@@ -495,14 +509,31 @@
                     <!-- Rich контент -->
                     {% if product.ai_rich_content_data %}
                     <div class="bg-gradient-to-r from-orange-50 to-pink-50 p-3 rounded-lg border border-orange-200">
-                        <h4 class="text-sm font-medium text-orange-700 mb-1">Rich-контент</h4>
+                        <div class="flex justify-between items-start mb-2">
+                            <h4 class="text-sm font-medium text-orange-700">Rich-контент</h4>
+                            <button onclick="viewRichContentSlides()" class="text-xs text-orange-600 hover:text-orange-800 underline">
+                                Просмотр слайдов
+                            </button>
+                        </div>
                         {% if product.ai_rich_content_data.slides %}
                         <p class="text-xs text-orange-600">{{ product.ai_rich_content_data.slides|length }} слайдов готово</p>
+                        <!-- Кнопка генерации изображений -->
+                        <button id="generateSlideImagesBtn"
+                            onclick="generateSlideImages()"
+                            class="mt-2 w-full inline-flex justify-center items-center px-3 py-1.5 border border-orange-300 text-xs font-medium rounded-md text-orange-700 bg-white hover:bg-orange-50">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                            </svg>
+                            Сгенерировать изображения (AI)
+                        </button>
                         {% elif product.ai_rich_content_data.blocks %}
                         <p class="text-xs text-orange-600">{{ product.ai_rich_content_data.blocks|length }} блоков</p>
                         {% endif %}
                         {% if product.ai_rich_content_data.main_usp %}
                         <p class="text-xs text-gray-600 mt-1">УТП: {{ product.ai_rich_content_data.main_usp }}</p>
+                        {% endif %}
+                        {% if product.ai_rich_content_data.target_audience %}
+                        <p class="text-xs text-gray-500">Аудитория: {{ product.ai_rich_content_data.target_audience }}</p>
                         {% endif %}
                     </div>
                     {% endif %}
@@ -1416,6 +1447,108 @@ document.addEventListener('DOMContentLoaded', function() {
     modal?.addEventListener('click', function(e) {
         if (e.target === modal) hideModal();
     });
+
+    // Генерация изображений для слайдов
+    window.generateSlideImages = async function() {
+        const btn = document.getElementById('generateSlideImagesBtn');
+        if (!btn) return;
+
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `
+            <svg class="animate-spin w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Генерация... (может занять 1-2 мин)
+        `;
+        btn.disabled = true;
+
+        try {
+            const response = await fetch('/auto-import/ai/generate-all-slide-images', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_id: productId })
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                let content = `
+                    <div class="mb-4 p-3 bg-green-50 rounded-lg">
+                        <p class="text-green-700 font-medium">Сгенерировано ${result.successful} из ${result.total_slides} изображений</p>
+                        <p class="text-xs text-gray-500 mt-1">Провайдер: ${result.provider}</p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 max-h-96 overflow-y-auto">
+                `;
+
+                result.results.forEach(r => {
+                    if (r.success && r.image_base64) {
+                        content += `
+                            <div class="border rounded-lg overflow-hidden">
+                                <img src="data:image/png;base64,${r.image_base64}" alt="Слайд ${r.slide_number}" class="w-full">
+                                <div class="p-2 bg-gray-50 text-xs">
+                                    <span class="font-medium">Слайд ${r.slide_number}</span>
+                                    <span class="text-gray-500 ml-2">${r.slide_type}</span>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        content += `
+                            <div class="border border-red-200 rounded-lg p-4 bg-red-50">
+                                <p class="text-red-600 text-sm">Слайд ${r.slide_number}: ${r.error || 'Ошибка'}</p>
+                            </div>
+                        `;
+                    }
+                });
+
+                content += '</div>';
+                showModal('Сгенерированные изображения', content, false);
+            } else {
+                showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+            }
+        } catch (e) {
+            showModal('Ошибка', `<p class="text-red-600">${e.message}</p>`);
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    };
+
+    // Просмотр слайдов Rich-контента
+    window.viewRichContentSlides = function() {
+        {% if product.ai_rich_content_data and product.ai_rich_content_data.slides %}
+        const slides = {{ product.ai_rich_content_data.slides|tojson }};
+        let content = '<div class="space-y-4">';
+
+        slides.forEach((slide, i) => {
+            const imgConcept = slide.image_concept || {};
+            const textLayout = slide.text_layout || {};
+            content += `
+                <div class="border-2 border-orange-200 rounded-lg overflow-hidden">
+                    <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2">
+                        <span class="font-bold">Слайд ${slide.number || i+1}: ${slide.type || ''}</span>
+                    </div>
+                    <div class="p-4">
+                        <p class="text-lg font-bold uppercase">${slide.title || ''}</p>
+                        ${slide.subtitle ? `<p class="text-gray-600 mt-1">${slide.subtitle}</p>` : ''}
+                        ${slide.bullets ? `<ul class="mt-2 text-sm">${slide.bullets.map(b => `<li>• ${b}</li>`).join('')}</ul>` : ''}
+                        ${imgConcept.main_object ? `
+                            <div class="mt-3 p-3 bg-gray-50 rounded text-xs">
+                                <p><strong>Изображение:</strong> ${imgConcept.main_object}</p>
+                                ${imgConcept.background ? `<p><strong>Фон:</strong> ${imgConcept.background}</p>` : ''}
+                                ${imgConcept.mood ? `<p><strong>Настроение:</strong> ${imgConcept.mood}</p>` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        });
+
+        content += '</div>';
+        showModal('Слайды Rich-контента', content, false);
+        {% else %}
+        alert('Нет слайдов для отображения');
+        {% endif %}
+    };
 })();
 </script>
 {% endblock %}

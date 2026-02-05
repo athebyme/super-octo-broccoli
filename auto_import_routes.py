@@ -1866,6 +1866,247 @@ def register_auto_import_routes(app):
             logger.error(f"AI apply error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/ai/generate-slide-image', methods=['POST'])
+    @login_required
+    def auto_import_ai_generate_slide_image():
+        """Генерация изображения для слайда Rich-контента"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index', 0)
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings:
+            return jsonify({'success': False, 'error': 'Настройки не найдены'}), 400
+
+        # Проверяем настройки генерации изображений
+        image_gen_enabled = getattr(settings, 'image_gen_enabled', False)
+        if not image_gen_enabled:
+            return jsonify({'success': False, 'error': 'Генерация изображений не включена. Настройте провайдер в настройках автоимпорта.'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        # Проверяем наличие Rich content
+        if not product.ai_rich_content:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        try:
+            rich_content = json.loads(product.ai_rich_content)
+            slides = rich_content.get('slides', [])
+
+            if not slides:
+                return jsonify({'success': False, 'error': 'Нет слайдов в Rich-контенте'}), 400
+
+            if slide_index >= len(slides):
+                return jsonify({'success': False, 'error': f'Слайд {slide_index} не найден'}), 400
+
+            slide = slides[slide_index]
+
+            # Получаем фотографии товара
+            product_photos = []
+            if product.photo_urls:
+                try:
+                    product_photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                except:
+                    pass
+
+            # Импортируем сервис генерации изображений
+            from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
+
+            # Создаем конфигурацию
+            provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle') or 'openai_dalle'
+            try:
+                provider = ImageProvider(provider_str)
+            except ValueError:
+                provider = ImageProvider.OPENAI_DALLE
+
+            api_key = ""
+            replicate_key = ""
+
+            if provider == ImageProvider.OPENAI_DALLE:
+                api_key = getattr(settings, 'openai_api_key', '') or ''
+                if not api_key:
+                    return jsonify({'success': False, 'error': 'OpenAI API ключ не настроен'}), 400
+            else:
+                replicate_key = getattr(settings, 'replicate_api_key', '') or ''
+                if not replicate_key:
+                    return jsonify({'success': False, 'error': 'Replicate API ключ не настроен'}), 400
+
+            config = ImageGenerationConfig(
+                provider=provider,
+                api_key=api_key,
+                replicate_api_key=replicate_key,
+                openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
+                openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid',
+                default_width=getattr(settings, 'image_gen_width', 1440) or 1440,
+                default_height=getattr(settings, 'image_gen_height', 810) or 810
+            )
+
+            service = ImageGenerationService(config)
+
+            # Генерируем изображение
+            success, image_bytes, error = service.generate_slide_image(
+                slide_data=slide,
+                product_photos=product_photos,
+                product_title=product.title or ''
+            )
+
+            if not success:
+                return jsonify({'success': False, 'error': error}), 500
+
+            # Конвертируем в base64
+            import base64
+            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+            return jsonify({
+                'success': True,
+                'slide_index': slide_index,
+                'slide_type': slide.get('type', 'unknown'),
+                'image_base64': image_b64,
+                'image_size': len(image_bytes),
+                'provider': provider.value
+            })
+
+        except Exception as e:
+            logger.error(f"Image generation error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/generate-all-slide-images', methods=['POST'])
+    @login_required
+    def auto_import_ai_generate_all_slide_images():
+        """Генерация изображений для всех слайдов Rich-контента"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings:
+            return jsonify({'success': False, 'error': 'Настройки не найдены'}), 400
+
+        image_gen_enabled = getattr(settings, 'image_gen_enabled', False)
+        if not image_gen_enabled:
+            return jsonify({'success': False, 'error': 'Генерация изображений не включена'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        if not product.ai_rich_content:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        try:
+            rich_content = json.loads(product.ai_rich_content)
+            slides = rich_content.get('slides', [])
+
+            if not slides:
+                return jsonify({'success': False, 'error': 'Нет слайдов'}), 400
+
+            # Получаем фотографии товара
+            product_photos = []
+            if product.photo_urls:
+                try:
+                    product_photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                except:
+                    pass
+
+            from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
+
+            provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle') or 'openai_dalle'
+            try:
+                provider = ImageProvider(provider_str)
+            except ValueError:
+                provider = ImageProvider.OPENAI_DALLE
+
+            api_key = getattr(settings, 'openai_api_key', '') if provider == ImageProvider.OPENAI_DALLE else ''
+            replicate_key = getattr(settings, 'replicate_api_key', '') if provider != ImageProvider.OPENAI_DALLE else ''
+
+            if not api_key and not replicate_key:
+                return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
+
+            config = ImageGenerationConfig(
+                provider=provider,
+                api_key=api_key,
+                replicate_api_key=replicate_key,
+                openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
+                openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid'
+            )
+
+            service = ImageGenerationService(config)
+
+            # Генерируем все изображения
+            results = service.generate_all_slides(
+                slides=slides,
+                product_photos=product_photos,
+                product_title=product.title or ''
+            )
+
+            # Конвертируем в base64
+            import base64
+            output = []
+            for r in results:
+                item = {
+                    'slide_number': r['slide_number'],
+                    'slide_type': r['slide_type'],
+                    'success': r['success'],
+                    'error': r.get('error', '')
+                }
+                if r['success'] and r['image_bytes']:
+                    item['image_base64'] = base64.b64encode(r['image_bytes']).decode('utf-8')
+                    item['image_size'] = len(r['image_bytes'])
+                output.append(item)
+
+            successful = sum(1 for r in results if r['success'])
+
+            return jsonify({
+                'success': True,
+                'total_slides': len(slides),
+                'successful': successful,
+                'failed': len(slides) - successful,
+                'results': output,
+                'provider': provider.value
+            })
+
+        except Exception as e:
+            logger.error(f"Image generation error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/image-providers', methods=['GET'])
+    @login_required
+    def auto_import_ai_image_providers():
+        """Получение списка доступных провайдеров генерации изображений"""
+        try:
+            from image_generation_service import get_available_providers
+            providers = get_available_providers()
+            return jsonify({'success': True, 'providers': providers})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
 
 # Пример использования:
 # from auto_import_routes import register_auto_import_routes
