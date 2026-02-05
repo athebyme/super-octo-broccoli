@@ -1560,7 +1560,9 @@ def register_auto_import_routes(app):
                     product_id=product.id,
                     action_type='seo_title',
                     input_data={'title': product.title, 'category': product.mapped_wb_category},
-                    result_data=result
+                    result_data=result,
+                    ai_provider=settings.ai_provider,
+                    ai_model=settings.ai_model
                 )
 
                 return jsonify({
@@ -1569,7 +1571,7 @@ def register_auto_import_routes(app):
                     'original_title': product.title
                 })
             else:
-                save_ai_history(seller.id, product.id, 'seo_title', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'seo_title', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1622,11 +1624,12 @@ def register_auto_import_routes(app):
 
                 # Сохраняем в историю
                 save_ai_history(seller.id, product.id, 'keywords',
-                    {'title': product.title, 'category': product.mapped_wb_category}, result)
+                    {'title': product.title, 'category': product.mapped_wb_category}, result,
+                    ai_provider=settings.ai_provider, ai_model=settings.ai_model)
 
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'keywords', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'keywords', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1688,11 +1691,13 @@ def register_auto_import_routes(app):
 
                 # Сохраняем в историю
                 save_ai_history(seller.id, product.id, 'bullets',
-                    {'title': product.title}, result)
+                    {'title': product.title}, result,
+                    ai_provider=settings.ai_provider, ai_model=settings.ai_model)
 
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'bullets', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'bullets', None, None, False, error,
+                    ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1819,11 +1824,12 @@ def register_auto_import_routes(app):
 
                 # Сохраняем в историю
                 save_ai_history(seller.id, product.id, 'analysis',
-                    {'title': product.title, 'photos_count': photos_count}, result)
+                    {'title': product.title, 'photos_count': photos_count}, result,
+                    ai_provider=settings.ai_provider, ai_model=settings.ai_model)
 
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'analysis', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'analysis', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1888,7 +1894,8 @@ def register_auto_import_routes(app):
 
                 # Сохраняем в историю
                 save_ai_history(seller.id, product.id, 'rich_content',
-                    {'title': product.title, 'category': product.mapped_wb_category}, result)
+                    {'title': product.title, 'category': product.mapped_wb_category}, result,
+                    ai_provider=settings.ai_provider, ai_model=settings.ai_model)
 
                 return jsonify({
                     'success': True,
@@ -1896,7 +1903,7 @@ def register_auto_import_routes(app):
                     'original_description': product.description
                 })
             else:
-                save_ai_history(seller.id, product.id, 'rich_content', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'rich_content', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2524,10 +2531,10 @@ def register_auto_import_routes(app):
                 product.ai_dimensions = json.dumps(result, ensure_ascii=False)
                 db.session.commit()
 
-                save_ai_history(seller.id, product.id, 'dimensions', {'title': product.title}, result)
+                save_ai_history(seller.id, product.id, 'dimensions', {'title': product.title}, result, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'dimensions', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'dimensions', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2659,7 +2666,8 @@ def register_auto_import_routes(app):
                 db.session.commit()
 
                 save_ai_history(seller.id, product.id, 'category_dimensions',
-                              {'title': product.title, 'category_id': category_id}, result)
+                              {'title': product.title, 'category_id': category_id}, result,
+                              ai_provider=settings.ai_provider, ai_model=settings.ai_model)
 
                 return jsonify({
                     'success': True,
@@ -2667,7 +2675,7 @@ def register_auto_import_routes(app):
                     'wb_characteristics': size_characteristics
                 })
             else:
-                save_ai_history(seller.id, product.id, 'category_dimensions', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'category_dimensions', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2719,10 +2727,10 @@ def register_auto_import_routes(app):
                 product.ai_clothing_sizes = json.dumps(result, ensure_ascii=False)
                 db.session.commit()
 
-                save_ai_history(seller.id, product.id, 'clothing_sizes', {'title': product.title, 'sizes': product.sizes}, result)
+                save_ai_history(seller.id, product.id, 'clothing_sizes', {'title': product.title, 'sizes': product.sizes}, result, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'clothing_sizes', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'clothing_sizes', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2781,10 +2789,10 @@ def register_auto_import_routes(app):
                     product.brand = result['brand_normalized']
                 db.session.commit()
 
-                save_ai_history(seller.id, product.id, 'brand_detection', {'title': product.title}, result)
+                save_ai_history(seller.id, product.id, 'brand_detection', {'title': product.title}, result, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'brand_detection', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'brand_detection', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2841,10 +2849,10 @@ def register_auto_import_routes(app):
                 product.ai_materials = json.dumps(result, ensure_ascii=False)
                 db.session.commit()
 
-                save_ai_history(seller.id, product.id, 'materials', {'title': product.title}, result)
+                save_ai_history(seller.id, product.id, 'materials', {'title': product.title}, result, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'materials', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'materials', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2900,10 +2908,10 @@ def register_auto_import_routes(app):
                 product.ai_colors = json.dumps(result, ensure_ascii=False)
                 db.session.commit()
 
-                save_ai_history(seller.id, product.id, 'color', {'title': product.title}, result)
+                save_ai_history(seller.id, product.id, 'color', {'title': product.title}, result, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'color', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'color', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -2975,10 +2983,11 @@ def register_auto_import_routes(app):
                 db.session.commit()
 
                 save_ai_history(seller.id, product.id, 'category_detection',
-                              {'title': product.title, 'source_category': product.category}, result)
+                              {'title': product.title, 'source_category': product.category}, result,
+                              ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'category_detection', None, None, False, reasoning)
+                save_ai_history(seller.id, product.id, 'category_detection', None, None, False, reasoning, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': reasoning}), 500
 
         except Exception as e:
@@ -3064,10 +3073,10 @@ def register_auto_import_routes(app):
 
                 db.session.commit()
 
-                save_ai_history(seller.id, product.id, 'all_attributes', {'title': product.title}, result)
+                save_ai_history(seller.id, product.id, 'all_attributes', {'title': product.title}, result, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': True, 'data': result})
             else:
-                save_ai_history(seller.id, product.id, 'all_attributes', None, None, False, error)
+                save_ai_history(seller.id, product.id, 'all_attributes', None, None, False, error, ai_provider=settings.ai_provider, ai_model=settings.ai_model)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
