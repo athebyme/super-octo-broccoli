@@ -3,14 +3,17 @@
 Image Generation Service - Генерация изображений для инфографики WB
 
 Поддерживаемые провайдеры:
-- OpenAI DALL-E 3 (лучшее качество, понимает русский)
-- Together AI Flux (быстрый, $5 бесплатно при регистрации)
-- Flux.1 Pro через Replicate (быстрый, высокое качество)
-- Stable Diffusion XL через Replicate (бюджетный)
+- FluxAPI.ai (простой API, trial credits)
+- Tensor.art (дешёвый, $0.003/credit)
+- Together AI Flux (быстрый, платный)
+- OpenAI DALL-E 3 (лучшее качество, дорогой)
+- Replicate Flux/SDXL (требует оплату)
 
 Для работы нужны API ключи:
+- FluxAPI: https://fluxapi.ai/ (есть trial)
+- Tensor.art: https://tams.tensor.art/
+- Together AI: https://api.together.xyz/settings/api-keys
 - OpenAI: https://platform.openai.com/api-keys
-- Together AI: https://api.together.xyz/settings/api-keys (рекомендуется!)
 - Replicate: https://replicate.com/account/api-tokens
 """
 
@@ -20,6 +23,7 @@ import requests
 import time
 import base64
 import io
+import hashlib
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
@@ -31,14 +35,44 @@ logger = logging.getLogger(__name__)
 
 class ImageProvider(Enum):
     """Поддерживаемые провайдеры генерации изображений"""
+    FLUXAPI = "fluxapi"  # FluxAPI.ai - простой API
+    TENSORART = "tensorart"  # Tensor.art - дешёвый
+    TOGETHER_FLUX = "together_flux"  # Together AI Flux
     OPENAI_DALLE = "openai_dalle"  # DALL-E 3
-    TOGETHER_FLUX = "together_flux"  # Flux через Together AI (рекомендуется!)
     FLUX_PRO = "flux_pro"  # Flux.1 Pro через Replicate
     SDXL = "sdxl"  # Stable Diffusion XL через Replicate
 
 
 # Конфигурация провайдеров
 PROVIDER_CONFIG = {
+    ImageProvider.FLUXAPI: {
+        "name": "FluxAPI.ai",
+        "description": "Простой API, есть trial credits",
+        "api_url": "https://api.fluxapi.ai/api/v1/flux/kontext/generate",
+        "price_per_image": "~$0.025",
+        "max_size": "1440x810",
+        "supports_reference": True,
+        "recommended": True
+    },
+    ImageProvider.TENSORART: {
+        "name": "Tensor.art",
+        "description": "Дешёвый ($0.003/credit), много моделей",
+        "api_url": "https://api.tensor.art",
+        "price_per_image": "~$0.01",
+        "max_size": "1440x810",
+        "supports_reference": True,
+        "recommended": True
+    },
+    ImageProvider.TOGETHER_FLUX: {
+        "name": "Together AI Flux",
+        "description": "Быстрый, высокий лимит запросов",
+        "api_url": "https://api.together.xyz/v1/images/generations",
+        "model": "black-forest-labs/FLUX.1-schnell-Free",
+        "price_per_image": "~$0.02",
+        "max_size": "1440x810",
+        "supports_reference": False,
+        "recommended": False
+    },
     ImageProvider.OPENAI_DALLE: {
         "name": "OpenAI DALL-E 3",
         "description": "Лучшее качество, понимает русский язык, дорогой",
@@ -47,16 +81,6 @@ PROVIDER_CONFIG = {
         "max_size": "1792x1024",
         "supports_reference": False,
         "recommended": False
-    },
-    ImageProvider.TOGETHER_FLUX: {
-        "name": "Together AI Flux",
-        "description": "Быстрый, $5 бесплатно, высокий лимит запросов",
-        "api_url": "https://api.together.xyz/v1/images/generations",
-        "model": "black-forest-labs/FLUX.1-schnell-Free",
-        "price_per_image": "~$0.00 (free tier)",
-        "max_size": "1440x810",
-        "supports_reference": False,
-        "recommended": True  # Рекомендуется как основной!
     },
     ImageProvider.FLUX_PRO: {
         "name": "Flux.1 Pro",
@@ -94,6 +118,11 @@ class ImageGenerationConfig:
     replicate_api_key: str = ""
     # Together AI specific
     together_api_key: str = ""
+    # FluxAPI specific
+    fluxapi_key: str = ""
+    # TensorArt specific
+    tensorart_app_id: str = ""
+    tensorart_api_key: str = ""  # Private key for signing
     # Общие
     default_width: int = 1440
     default_height: int = 810
@@ -105,24 +134,32 @@ class ImageGenerationConfig:
         if not hasattr(settings, 'image_gen_enabled') or not settings.image_gen_enabled:
             return None
 
-        provider_str = getattr(settings, 'image_gen_provider', 'together_flux')  # Together по умолчанию
+        provider_str = getattr(settings, 'image_gen_provider', 'fluxapi')  # FluxAPI по умолчанию
         try:
             provider = ImageProvider(provider_str)
         except ValueError:
-            provider = ImageProvider.TOGETHER_FLUX  # Together как default
+            provider = ImageProvider.FLUXAPI
 
         api_key = ""
         replicate_key = ""
         together_key = ""
+        fluxapi_key = ""
+        tensorart_app_id = ""
+        tensorart_api_key = ""
 
-        if provider == ImageProvider.OPENAI_DALLE:
+        if provider == ImageProvider.FLUXAPI:
+            fluxapi_key = getattr(settings, 'fluxapi_key', '') or ''
+        elif provider == ImageProvider.TENSORART:
+            tensorart_app_id = getattr(settings, 'tensorart_app_id', '') or ''
+            tensorart_api_key = getattr(settings, 'tensorart_api_key', '') or ''
+        elif provider == ImageProvider.OPENAI_DALLE:
             api_key = getattr(settings, 'openai_api_key', '') or ''
         elif provider == ImageProvider.TOGETHER_FLUX:
             together_key = getattr(settings, 'together_api_key', '') or ''
         else:
             replicate_key = getattr(settings, 'replicate_api_key', '') or ''
 
-        if not api_key and not replicate_key and not together_key:
+        if not api_key and not replicate_key and not together_key and not fluxapi_key and not tensorart_api_key:
             logger.warning("Image generation включен, но API ключ не указан")
             return None
 
@@ -131,6 +168,9 @@ class ImageGenerationConfig:
             api_key=api_key,
             replicate_api_key=replicate_key,
             together_api_key=together_key,
+            fluxapi_key=fluxapi_key,
+            tensorart_app_id=tensorart_app_id,
+            tensorart_api_key=tensorart_api_key,
             openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
             openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid',
             default_width=getattr(settings, 'image_gen_width', 1440) or 1440,
@@ -264,13 +304,287 @@ No text overlays, no watermarks, no logos.
             return image_bytes
 
 
+class FluxAPIImageGenerator(ImageGenerator):
+    """
+    Генератор изображений через FluxAPI.ai
+
+    Преимущества:
+    - Простой REST API
+    - Trial credits при регистрации
+    - Поддержка Flux Kontext моделей
+    """
+
+    def __init__(self, config: ImageGenerationConfig):
+        self.config = config
+        self.api_url = "https://api.fluxapi.ai/api/v1/flux/kontext/generate"
+        self.result_url = "https://api.fluxapi.ai/api/v1/flux/kontext/result"
+
+    def generate(
+        self,
+        prompt: str,
+        width: int = 1440,
+        height: int = 810,
+        reference_image_url: Optional[str] = None
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Генерирует изображение через FluxAPI.ai"""
+
+        api_key = self.config.fluxapi_key
+
+        # Определяем aspect ratio
+        if width > height:
+            aspect_ratio = "16:9"
+        elif height > width:
+            aspect_ratio = "9:16"
+        else:
+            aspect_ratio = "1:1"
+
+        enhanced_prompt = self._enhance_prompt(prompt)
+
+        payload = {
+            "prompt": enhanced_prompt,
+            "aspectRatio": aspect_ratio,
+            "outputFormat": "png",
+            "model": "flux-kontext-pro",
+            "enableTranslation": True,
+            "safetyTolerance": 2
+        }
+
+        if reference_image_url:
+            payload["inputImage"] = reference_image_url
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            logger.info(f"🎨 FluxAPI генерация: {prompt[:100]}...")
+
+            # Создаём задачу
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('msg', response.text[:300])
+                logger.error(f"❌ FluxAPI ошибка: {response.status_code} - {error_msg}")
+                return False, None, f"FluxAPI ошибка: {error_msg}"
+
+            data = response.json()
+            if data.get('code') != 200:
+                return False, None, f"FluxAPI ошибка: {data.get('msg', 'Unknown error')}"
+
+            task_id = data.get('data', {}).get('taskId')
+            if not task_id:
+                return False, None, "FluxAPI: не получен taskId"
+
+            # Ждём результат
+            max_wait = self.config.timeout
+            waited = 0
+            poll_interval = 3
+
+            while waited < max_wait:
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+                result_response = requests.get(
+                    f"{self.result_url}/{task_id}",
+                    headers=headers,
+                    timeout=30
+                )
+
+                if result_response.status_code != 200:
+                    continue
+
+                result_data = result_response.json()
+                status = result_data.get('data', {}).get('status')
+
+                if status == 'completed':
+                    image_url = result_data.get('data', {}).get('imageUrl')
+                    if image_url:
+                        img_response = requests.get(image_url, timeout=60)
+                        if img_response.status_code == 200:
+                            logger.info(f"✅ FluxAPI изображение создано")
+                            return True, img_response.content, ""
+                    return False, None, "FluxAPI: пустой результат"
+
+                elif status == 'failed':
+                    error = result_data.get('data', {}).get('error', 'Unknown error')
+                    return False, None, f"FluxAPI ошибка: {error}"
+
+                logger.debug(f"⏳ FluxAPI статус: {status}, ждем...")
+
+            return False, None, f"FluxAPI таймаут ({max_wait}с)"
+
+        except requests.exceptions.Timeout:
+            return False, None, f"Таймаут запроса ({self.config.timeout}с)"
+        except Exception as e:
+            logger.error(f"❌ FluxAPI ошибка: {e}")
+            return False, None, str(e)
+
+    def _enhance_prompt(self, prompt: str) -> str:
+        return f"""Professional e-commerce product infographic slide.
+{prompt}
+Style: clean, modern, minimalist, commercial photography.
+No text, no watermarks, no logos. High quality, sharp details."""
+
+
+class TensorArtImageGenerator(ImageGenerator):
+    """
+    Генератор изображений через Tensor.art TAMS API
+
+    Преимущества:
+    - Дешёвый ($0.003/credit)
+    - Много моделей
+    - Хорошее качество
+    """
+
+    def __init__(self, config: ImageGenerationConfig):
+        self.config = config
+        self.api_url = "https://ap-east-1.tensorart.cloud/v1/jobs"
+
+    def generate(
+        self,
+        prompt: str,
+        width: int = 1440,
+        height: int = 810,
+        reference_image_url: Optional[str] = None
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Генерирует изображение через Tensor.art"""
+
+        app_id = self.config.tensorart_app_id
+        api_key = self.config.tensorart_api_key
+
+        if not app_id or not api_key:
+            return False, None, "TensorArt: не указаны app_id или api_key"
+
+        # Ограничения размера
+        width = min(max(width, 512), 1536)
+        height = min(max(height, 512), 1536)
+
+        enhanced_prompt = self._enhance_prompt(prompt)
+
+        # Генерируем request_id
+        request_id = hashlib.md5(str(time.time()).encode()).hexdigest()
+
+        payload = {
+            "request_id": request_id,
+            "stages": [
+                {
+                    "type": "INPUT_INITIALIZE",
+                    "inputInitialize": {
+                        "seed": -1,
+                        "count": 1
+                    }
+                },
+                {
+                    "type": "DIFFUSION",
+                    "diffusion": {
+                        "width": width,
+                        "height": height,
+                        "prompts": [{"text": enhanced_prompt}],
+                        "negativePrompts": [{"text": "text, watermark, logo, blurry, low quality"}],
+                        "sampler": "DPM++ 2M Karras",
+                        "sdVae": "Automatic",
+                        "steps": 25,
+                        "cfgScale": 7
+                    }
+                }
+            ]
+        }
+
+        # Создаём подпись (упрощённая версия)
+        timestamp = str(int(time.time() * 1000))
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "X-App-Id": app_id,
+            "X-Timestamp": timestamp
+        }
+
+        try:
+            logger.info(f"🎨 TensorArt генерация: {prompt[:100]}...")
+
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                error_msg = response.text[:300]
+                logger.error(f"❌ TensorArt ошибка: {response.status_code} - {error_msg}")
+                return False, None, f"TensorArt ошибка: {error_msg}"
+
+            data = response.json()
+            job_id = data.get('job', {}).get('id')
+
+            if not job_id:
+                return False, None, "TensorArt: не получен job_id"
+
+            # Ждём результат
+            max_wait = self.config.timeout
+            waited = 0
+            poll_interval = 3
+
+            while waited < max_wait:
+                time.sleep(poll_interval)
+                waited += poll_interval
+
+                status_response = requests.get(
+                    f"{self.api_url}/{job_id}",
+                    headers=headers,
+                    timeout=30
+                )
+
+                if status_response.status_code != 200:
+                    continue
+
+                status_data = status_response.json()
+                job_status = status_data.get('job', {}).get('status')
+
+                if job_status == 'SUCCESS':
+                    images = status_data.get('job', {}).get('successInfo', {}).get('images', [])
+                    if images:
+                        image_url = images[0].get('url')
+                        if image_url:
+                            img_response = requests.get(image_url, timeout=60)
+                            if img_response.status_code == 200:
+                                logger.info(f"✅ TensorArt изображение создано")
+                                return True, img_response.content, ""
+                    return False, None, "TensorArt: пустой результат"
+
+                elif job_status == 'FAILED':
+                    error = status_data.get('job', {}).get('failedInfo', {}).get('reason', 'Unknown')
+                    return False, None, f"TensorArt ошибка: {error}"
+
+                logger.debug(f"⏳ TensorArt статус: {job_status}, ждем...")
+
+            return False, None, f"TensorArt таймаут ({max_wait}с)"
+
+        except requests.exceptions.Timeout:
+            return False, None, f"Таймаут запроса ({self.config.timeout}с)"
+        except Exception as e:
+            logger.error(f"❌ TensorArt ошибка: {e}")
+            return False, None, str(e)
+
+    def _enhance_prompt(self, prompt: str) -> str:
+        return f"""Professional e-commerce product infographic slide, {prompt},
+clean modern design, commercial photography, studio lighting, high quality, sharp details"""
+
+
 class TogetherImageGenerator(ImageGenerator):
     """
     Генератор изображений через Together AI API
 
     Преимущества:
-    - $5 бесплатных кредитов при регистрации
-    - Высокий лимит запросов (без жёстких ограничений)
+    - Высокий лимит запросов
     - OpenAI-совместимый API
     - Поддержка Flux моделей
     """
@@ -278,11 +592,9 @@ class TogetherImageGenerator(ImageGenerator):
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
         self.api_url = "https://api.together.xyz/v1/images/generations"
-        # Доступные модели Flux на Together AI
         self.models = {
-            "schnell": "black-forest-labs/FLUX.1-schnell-Free",  # Бесплатная быстрая
-            "schnell_paid": "black-forest-labs/FLUX.1-schnell",  # Платная быстрая
-            "dev": "black-forest-labs/FLUX.1-dev",  # Development версия
+            "schnell": "black-forest-labs/FLUX.1-schnell",
+            "dev": "black-forest-labs/FLUX.1-dev",
         }
 
     def generate(
@@ -299,15 +611,13 @@ class TogetherImageGenerator(ImageGenerator):
         # Together поддерживает размеры кратные 32
         width = (width // 32) * 32
         height = (height // 32) * 32
-
-        # Ограничения Together AI для бесплатного Flux
         width = min(max(width, 256), 1440)
         height = min(max(height, 256), 1440)
 
         enhanced_prompt = self._enhance_prompt(prompt)
 
         payload = {
-            "model": self.models["schnell"],  # Бесплатная модель
+            "model": self.models["schnell"],
             "prompt": enhanced_prompt,
             "width": width,
             "height": height,
@@ -648,10 +958,14 @@ class ImageGenerationService:
         self.config = config
 
         # Создаем генератор под провайдера
-        if config.provider == ImageProvider.OPENAI_DALLE:
-            self.generator = OpenAIImageGenerator(config)
+        if config.provider == ImageProvider.FLUXAPI:
+            self.generator = FluxAPIImageGenerator(config)
+        elif config.provider == ImageProvider.TENSORART:
+            self.generator = TensorArtImageGenerator(config)
         elif config.provider == ImageProvider.TOGETHER_FLUX:
             self.generator = TogetherImageGenerator(config)
+        elif config.provider == ImageProvider.OPENAI_DALLE:
+            self.generator = OpenAIImageGenerator(config)
         else:
             # Replicate (FLUX_PRO, SDXL)
             self.generator = ReplicateImageGenerator(config)
@@ -733,10 +1047,15 @@ class ImageGenerationService:
         results = []
 
         # Определяем паузу между запросами в зависимости от провайдера
-        # Together AI: высокий лимит, быстрая генерация
-        # OpenAI: 50 запросов/минуту (но дорого)
+        # FluxAPI, TensorArt, Together AI, OpenAI - высокий лимит
         # Replicate free tier: 6 запросов/минуту
-        if self.config.provider in (ImageProvider.OPENAI_DALLE, ImageProvider.TOGETHER_FLUX):
+        high_limit_providers = (
+            ImageProvider.FLUXAPI,
+            ImageProvider.TENSORART,
+            ImageProvider.TOGETHER_FLUX,
+            ImageProvider.OPENAI_DALLE
+        )
+        if self.config.provider in high_limit_providers:
             pause_between_requests = 2  # Высокий лимит
         else:
             pause_between_requests = 12  # Replicate: 6/мин = 10с + запас

@@ -5,10 +5,13 @@
 
 Добавляет в таблицу auto_import_settings:
 - image_gen_enabled: включена ли генерация картинок
-- image_gen_provider: провайдер (together_flux рекомендуется!)
+- image_gen_provider: провайдер (fluxapi рекомендуется!)
+- fluxapi_key: API ключ FluxAPI.ai (рекомендуется - есть trial)
+- tensorart_app_id: Tensor.art App ID
+- tensorart_api_key: Tensor.art API Key
+- together_api_key: API ключ Together AI
 - openai_api_key: API ключ OpenAI
 - replicate_api_key: API ключ Replicate
-- together_api_key: API ключ Together AI (рекомендуется - $5 бесплатно!)
 - image_gen_width: ширина изображения
 - image_gen_height: высота изображения
 - openai_image_quality: качество DALL-E (standard/hd)
@@ -90,10 +93,13 @@ def migrate():
         # Колонки для добавления
         new_columns = [
             ("image_gen_enabled", "BOOLEAN DEFAULT 0 NOT NULL"),
-            ("image_gen_provider", "VARCHAR(50) DEFAULT 'together_flux'"),
-            ("openai_api_key", "VARCHAR(500)"),
-            ("replicate_api_key", "VARCHAR(500)"),
-            ("together_api_key", "VARCHAR(500)"),  # Together AI - рекомендуется!
+            ("image_gen_provider", "VARCHAR(50) DEFAULT 'fluxapi'"),
+            ("fluxapi_key", "VARCHAR(500)"),  # FluxAPI.ai - рекомендуется!
+            ("tensorart_app_id", "VARCHAR(500)"),  # Tensor.art App ID
+            ("tensorart_api_key", "VARCHAR(500)"),  # Tensor.art API Key
+            ("together_api_key", "VARCHAR(500)"),  # Together AI
+            ("openai_api_key", "VARCHAR(500)"),  # OpenAI DALL-E
+            ("replicate_api_key", "VARCHAR(500)"),  # Replicate
             ("image_gen_width", "INTEGER DEFAULT 1440"),
             ("image_gen_height", "INTEGER DEFAULT 810"),
             ("openai_image_quality", "VARCHAR(20) DEFAULT 'standard'"),

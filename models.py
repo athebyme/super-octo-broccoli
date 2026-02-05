@@ -723,10 +723,14 @@ class AutoImportSettings(db.Model):
 
     # Настройки генерации изображений для инфографики
     image_gen_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включена генерация картинок
-    image_gen_provider = db.Column(db.String(50), default='together_flux')  # Провайдер (together_flux рекомендуется!)
-    openai_api_key = db.Column(db.String(500))  # API ключ OpenAI (для DALL-E)
-    replicate_api_key = db.Column(db.String(500))  # API ключ Replicate (для Flux/SDXL)
-    together_api_key = db.Column(db.String(500))  # API ключ Together AI (рекомендуется - $5 бесплатно!)
+    image_gen_provider = db.Column(db.String(50), default='fluxapi')  # Провайдер (fluxapi рекомендуется!)
+    # API ключи для разных провайдеров
+    fluxapi_key = db.Column(db.String(500))  # FluxAPI.ai (рекомендуется - есть trial)
+    tensorart_app_id = db.Column(db.String(500))  # Tensor.art App ID
+    tensorart_api_key = db.Column(db.String(500))  # Tensor.art API Key
+    together_api_key = db.Column(db.String(500))  # Together AI
+    openai_api_key = db.Column(db.String(500))  # OpenAI DALL-E
+    replicate_api_key = db.Column(db.String(500))  # Replicate (Flux/SDXL)
     image_gen_width = db.Column(db.Integer, default=1440)  # Ширина изображения
     image_gen_height = db.Column(db.Integer, default=810)  # Высота изображения
     openai_image_quality = db.Column(db.String(20), default='standard')  # standard или hd
