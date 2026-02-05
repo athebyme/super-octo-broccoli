@@ -24,8 +24,43 @@ def compute_content_hash(product):
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 
-def save_ai_history(seller_id, product_id, action_type, input_data, result_data, success=True, error_message=None):
-    """Сохраняет действие AI в историю"""
+def save_ai_history(
+    seller_id,
+    product_id,
+    action_type,
+    input_data,
+    result_data,
+    success=True,
+    error_message=None,
+    ai_provider=None,
+    ai_model=None,
+    system_prompt=None,
+    user_prompt=None,
+    raw_response=None,
+    response_time_ms=0,
+    tokens_used=0,
+    source_module='auto_import'
+):
+    """
+    Сохраняет действие AI в историю с расширенной информацией
+
+    Args:
+        seller_id: ID продавца
+        product_id: ID товара (опционально)
+        action_type: Тип действия (seo_title, keywords, etc.)
+        input_data: Входные данные (dict)
+        result_data: Результат (dict)
+        success: Успешен ли запрос
+        error_message: Сообщение об ошибке
+        ai_provider: Провайдер AI (cloudru, openai, custom)
+        ai_model: Модель AI
+        system_prompt: Системный промпт
+        user_prompt: Пользовательский промпт
+        raw_response: Сырой ответ AI
+        response_time_ms: Время ответа в мс
+        tokens_used: Использовано токенов
+        source_module: Модуль-источник запроса
+    """
     try:
         history = AIHistory(
             seller_id=seller_id,
@@ -34,14 +69,44 @@ def save_ai_history(seller_id, product_id, action_type, input_data, result_data,
             input_data=json.dumps(input_data, ensure_ascii=False) if input_data else None,
             result_data=json.dumps(result_data, ensure_ascii=False) if result_data else None,
             success=success,
-            error_message=error_message
+            error_message=error_message,
+            ai_provider=ai_provider,
+            ai_model=ai_model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            raw_response=raw_response,
+            response_time_ms=response_time_ms,
+            tokens_used=tokens_used,
+            source_module=source_module
         )
         db.session.add(history)
         db.session.commit()
         return history
     except Exception as e:
         logger.error(f"Error saving AI history: {e}")
+        db.session.rollback()
         return None
+
+
+def ai_request_logger_callback(**kwargs):
+    """Callback для централизованного логирования AI запросов из ai_service"""
+    save_ai_history(
+        seller_id=kwargs.get('seller_id', 0),
+        product_id=kwargs.get('product_id'),
+        action_type=kwargs.get('action_type', 'unknown'),
+        input_data=None,
+        result_data=None,
+        success=kwargs.get('success', True),
+        error_message=kwargs.get('error_message'),
+        ai_provider=kwargs.get('provider'),
+        ai_model=kwargs.get('model'),
+        system_prompt=kwargs.get('system_prompt'),
+        user_prompt=kwargs.get('user_prompt'),
+        raw_response=kwargs.get('response'),
+        response_time_ms=kwargs.get('response_time_ms', 0),
+        tokens_used=kwargs.get('tokens_used', 0),
+        source_module=kwargs.get('source_module', 'ai_service')
+    )
 
 
 def register_auto_import_routes(app):
@@ -181,9 +246,15 @@ def register_auto_import_routes(app):
             except ValueError:
                 settings.ai_frequency_penalty = 0.0
 
-            # Кастомные инструкции AI
+            # Кастомные инструкции AI для каждой функции
             settings.ai_category_instruction = request.form.get('ai_category_instruction', '').strip() or None
             settings.ai_size_instruction = request.form.get('ai_size_instruction', '').strip() or None
+            settings.ai_seo_title_instruction = request.form.get('ai_seo_title_instruction', '').strip() or None
+            settings.ai_keywords_instruction = request.form.get('ai_keywords_instruction', '').strip() or None
+            settings.ai_bullets_instruction = request.form.get('ai_bullets_instruction', '').strip() or None
+            settings.ai_description_instruction = request.form.get('ai_description_instruction', '').strip() or None
+            settings.ai_rich_content_instruction = request.form.get('ai_rich_content_instruction', '').strip() or None
+            settings.ai_analysis_instruction = request.form.get('ai_analysis_instruction', '').strip() or None
 
             # Настройки генерации изображений
             settings.image_gen_enabled = request.form.get('image_gen_enabled') == 'on'
@@ -2141,6 +2212,182 @@ def register_auto_import_routes(app):
             return jsonify({'success': True, 'providers': providers})
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
+
+    # =====================================
+    # AI History Endpoints
+    # =====================================
+
+    @app.route('/auto-import/ai/history', methods=['GET'])
+    @login_required
+    def auto_import_ai_history():
+        """
+        Получение истории AI запросов
+
+        Query params:
+            page: номер страницы (default: 1)
+            per_page: записей на страницу (default: 20, max: 100)
+            action_type: фильтр по типу действия
+            product_id: фильтр по товару
+            success: фильтр по успешности (true/false)
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        page = request.args.get('page', 1, type=int)
+        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        action_type = request.args.get('action_type')
+        product_id = request.args.get('product_id', type=int)
+        success_filter = request.args.get('success')
+
+        # Строим запрос
+        query = AIHistory.query.filter_by(seller_id=seller.id)
+
+        if action_type:
+            query = query.filter_by(action_type=action_type)
+        if product_id:
+            query = query.filter_by(imported_product_id=product_id)
+        if success_filter is not None:
+            query = query.filter_by(success=success_filter.lower() == 'true')
+
+        # Сортировка по дате (новые первые)
+        query = query.order_by(AIHistory.created_at.desc())
+
+        # Пагинация
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # Формируем ответ
+        history_items = []
+        for item in pagination.items:
+            item_dict = item.to_dict(include_prompts=False)
+            item_dict['action_type_display'] = AIHistory.get_action_type_display(item.action_type)
+            # Добавляем название товара если есть
+            if item.imported_product:
+                item_dict['product_title'] = item.imported_product.title
+            history_items.append(item_dict)
+
+        return jsonify({
+            'success': True,
+            'history': history_items,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': pagination.total,
+                'pages': pagination.pages,
+                'has_next': pagination.has_next,
+                'has_prev': pagination.has_prev
+            }
+        })
+
+    @app.route('/auto-import/ai/history/<int:history_id>', methods=['GET'])
+    @login_required
+    def auto_import_ai_history_detail(history_id):
+        """Получение детальной информации о записи AI истории"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        history = AIHistory.query.filter_by(
+            id=history_id,
+            seller_id=seller.id
+        ).first()
+
+        if not history:
+            return jsonify({'success': False, 'error': 'Запись не найдена'}), 404
+
+        item_dict = history.to_dict(include_prompts=True)
+        item_dict['action_type_display'] = AIHistory.get_action_type_display(history.action_type)
+        if history.imported_product:
+            item_dict['product_title'] = history.imported_product.title
+
+        return jsonify({
+            'success': True,
+            'history': item_dict
+        })
+
+    @app.route('/auto-import/ai/history/stats', methods=['GET'])
+    @login_required
+    def auto_import_ai_history_stats():
+        """Статистика AI запросов"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+
+        # Общая статистика
+        total_requests = AIHistory.query.filter_by(seller_id=seller.id).count()
+        successful_requests = AIHistory.query.filter_by(seller_id=seller.id, success=True).count()
+        failed_requests = total_requests - successful_requests
+
+        # Статистика по типам действий
+        from sqlalchemy import func
+        action_stats = db.session.query(
+            AIHistory.action_type,
+            func.count(AIHistory.id).label('count'),
+            func.sum(AIHistory.tokens_used).label('total_tokens')
+        ).filter_by(seller_id=seller.id).group_by(AIHistory.action_type).all()
+
+        action_stats_list = []
+        for action_type, count, total_tokens in action_stats:
+            action_stats_list.append({
+                'action_type': action_type,
+                'action_type_display': AIHistory.get_action_type_display(action_type),
+                'count': count,
+                'total_tokens': total_tokens or 0
+            })
+
+        # Последние 10 запросов
+        recent = AIHistory.query.filter_by(seller_id=seller.id).order_by(
+            AIHistory.created_at.desc()
+        ).limit(10).all()
+
+        recent_list = []
+        for item in recent:
+            recent_list.append({
+                'id': item.id,
+                'action_type': item.action_type,
+                'action_type_display': AIHistory.get_action_type_display(item.action_type),
+                'success': item.success,
+                'created_at': item.created_at.isoformat() if item.created_at else None
+            })
+
+        return jsonify({
+            'success': True,
+            'stats': {
+                'total_requests': total_requests,
+                'successful_requests': successful_requests,
+                'failed_requests': failed_requests,
+                'success_rate': round(successful_requests / total_requests * 100, 1) if total_requests > 0 else 0,
+                'by_action_type': action_stats_list
+            },
+            'recent': recent_list
+        })
+
+    @app.route('/auto-import/ai/history/clear', methods=['POST'])
+    @login_required
+    def auto_import_ai_history_clear():
+        """Очистка истории AI запросов (старше 30 дней)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        days = request.get_json().get('days', 30) if request.is_json else 30
+
+        from datetime import timedelta
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+
+        deleted = AIHistory.query.filter(
+            AIHistory.seller_id == seller.id,
+            AIHistory.created_at < cutoff_date
+        ).delete()
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'deleted': deleted,
+            'message': f'Удалено {deleted} записей старше {days} дней'
+        })
 
 
 # Пример использования:

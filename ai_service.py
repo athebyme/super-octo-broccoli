@@ -15,12 +15,139 @@ import logging
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, List, Any, Tuple
+from typing import Optional, Dict, List, Any, Tuple, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from datetime import datetime
 import requests
+from html import unescape
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# HTML STRIPPING UTILITY
+# ============================================================================
+
+def strip_html_tags(text: str) -> str:
+    """
+    Удаляет HTML теги из текста и очищает от лишних пробелов
+
+    Args:
+        text: Текст с возможными HTML тегами
+
+    Returns:
+        Очищенный текст без HTML тегов
+    """
+    if not text:
+        return text
+
+    # Удаляем HTML теги
+    clean = re.sub(r'<[^>]+>', '', text)
+    # Декодируем HTML entities (&nbsp;, &amp;, etc.)
+    clean = unescape(clean)
+    # Заменяем множественные пробелы и переносы строк
+    clean = re.sub(r'\s+', ' ', clean)
+    # Убираем пробелы в начале и конце
+    clean = clean.strip()
+
+    return clean
+
+
+def clean_ai_response(response: str, strip_html: bool = True) -> str:
+    """
+    Очищает ответ AI от нежелательных элементов
+
+    Args:
+        response: Ответ AI
+        strip_html: Удалять ли HTML теги
+
+    Returns:
+        Очищенный ответ
+    """
+    if not response:
+        return response
+
+    text = response.strip()
+
+    # Удаляем markdown code blocks если есть
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\n?', '', text)
+        text = re.sub(r'\n?```$', '', text)
+
+    # Удаляем HTML если нужно
+    if strip_html:
+        text = strip_html_tags(text)
+
+    return text
+
+
+# ============================================================================
+# AI REQUEST LOGGER (Центральное логирование всех AI запросов)
+# ============================================================================
+
+# Callback для логирования AI запросов (будет установлен из routes)
+_ai_request_logger: Optional[Callable] = None
+
+
+def set_ai_request_logger(logger_callback: Callable):
+    """Устанавливает callback для логирования AI запросов"""
+    global _ai_request_logger
+    _ai_request_logger = logger_callback
+
+
+def log_ai_request(
+    seller_id: int,
+    action_type: str,
+    provider: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    response: Optional[str],
+    success: bool,
+    error_message: Optional[str] = None,
+    response_time_ms: int = 0,
+    tokens_used: int = 0,
+    source_module: str = 'ai_service',
+    product_id: Optional[int] = None
+):
+    """
+    Логирует AI запрос в историю
+
+    Args:
+        seller_id: ID продавца
+        action_type: Тип действия (seo_title, keywords, etc.)
+        provider: Провайдер AI
+        model: Модель
+        system_prompt: Системный промпт
+        user_prompt: Пользовательский промпт
+        response: Ответ AI
+        success: Успешен ли запрос
+        error_message: Сообщение об ошибке
+        response_time_ms: Время ответа в мс
+        tokens_used: Использовано токенов
+        source_module: Модуль-источник запроса
+        product_id: ID товара (если применимо)
+    """
+    if _ai_request_logger:
+        try:
+            _ai_request_logger(
+                seller_id=seller_id,
+                action_type=action_type,
+                provider=provider,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response=response,
+                success=success,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                tokens_used=tokens_used,
+                source_module=source_module,
+                product_id=product_id
+            )
+        except Exception as e:
+            logger.error(f"Ошибка логирования AI запроса: {e}")
 
 
 # ============================================================================
@@ -563,9 +690,17 @@ class AIConfig:
     top_p: float = 0.95
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
-    # Кастомные инструкции
+    # Кастомные инструкции для каждой AI функции
     custom_category_instruction: str = ""
     custom_size_instruction: str = ""
+    custom_seo_title_instruction: str = ""
+    custom_keywords_instruction: str = ""
+    custom_bullets_instruction: str = ""
+    custom_description_instruction: str = ""
+    custom_rich_content_instruction: str = ""
+    custom_analysis_instruction: str = ""
+    # Для логирования
+    seller_id: int = 0
 
     @classmethod
     def from_settings(cls, settings) -> Optional['AIConfig']:
@@ -603,7 +738,14 @@ class AIConfig:
             presence_penalty=getattr(settings, 'ai_presence_penalty', 0.0) or 0.0,
             frequency_penalty=getattr(settings, 'ai_frequency_penalty', 0.0) or 0.0,
             custom_category_instruction=getattr(settings, 'ai_category_instruction', '') or '',
-            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or ''
+            custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or '',
+            custom_seo_title_instruction=getattr(settings, 'ai_seo_title_instruction', '') or '',
+            custom_keywords_instruction=getattr(settings, 'ai_keywords_instruction', '') or '',
+            custom_bullets_instruction=getattr(settings, 'ai_bullets_instruction', '') or '',
+            custom_description_instruction=getattr(settings, 'ai_description_instruction', '') or '',
+            custom_rich_content_instruction=getattr(settings, 'ai_rich_content_instruction', '') or '',
+            custom_analysis_instruction=getattr(settings, 'ai_analysis_instruction', '') or '',
+            seller_id=getattr(settings, 'seller_id', 0) or 0
         )
 
 
@@ -1001,6 +1143,8 @@ class SEOTitleTask(AITask):
     """Задача генерации SEO-оптимизированного заголовка"""
 
     def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
         return DEFAULT_INSTRUCTIONS["seo_title"]["template"]
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -1041,6 +1185,8 @@ class KeywordsTask(AITask):
     """Задача генерации ключевых слов"""
 
     def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
         return DEFAULT_INSTRUCTIONS["keywords"]["template"]
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -1078,6 +1224,8 @@ class BulletPointsTask(AITask):
     """Задача генерации bullet points"""
 
     def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
         return DEFAULT_INSTRUCTIONS["bullet_points"]["template"]
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -1120,6 +1268,8 @@ class DescriptionEnhanceTask(AITask):
     """Задача улучшения описания"""
 
     def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
         return DEFAULT_INSTRUCTIONS["description_enhance"]["template"]
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -1158,6 +1308,8 @@ class RichContentTask(AITask):
     """Задача генерации rich контента для карточки"""
 
     def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
         return DEFAULT_INSTRUCTIONS["rich_content"]["template"]
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -1231,6 +1383,8 @@ class CardAnalysisTask(AITask):
     """Задача анализа карточки товара"""
 
     def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
         return DEFAULT_INSTRUCTIONS["card_analysis"]["template"]
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -1375,7 +1529,7 @@ class AIService:
         Returns:
             Tuple[success, {title, keywords_used, improvements}, error]
         """
-        task = SEOTitleTask(self.client)
+        task = SEOTitleTask(self.client, self.config.custom_seo_title_instruction)
         success, result, error = task.execute(
             title=title,
             category=category,
@@ -1383,6 +1537,9 @@ class AIService:
             description=description
         )
         if success and result:
+            # Очищаем заголовок от HTML тегов
+            if result.get('title'):
+                result['title'] = strip_html_tags(result['title'])
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
@@ -1398,7 +1555,7 @@ class AIService:
         Returns:
             Tuple[success, {keywords, search_queries}, error]
         """
-        task = KeywordsTask(self.client)
+        task = KeywordsTask(self.client, self.config.custom_keywords_instruction)
         success, result, error = task.execute(
             title=title,
             category=category,
@@ -1420,13 +1577,16 @@ class AIService:
         Returns:
             Tuple[success, {bullet_points, target_audience}, error]
         """
-        task = BulletPointsTask(self.client)
+        task = BulletPointsTask(self.client, self.config.custom_bullets_instruction)
         success, result, error = task.execute(
             title=title,
             description=description,
             characteristics=characteristics or {}
         )
         if success and result:
+            # Очищаем каждый буллет от HTML
+            if result.get('bullet_points'):
+                result['bullet_points'] = [strip_html_tags(b) for b in result['bullet_points']]
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
@@ -1442,13 +1602,16 @@ class AIService:
         Returns:
             Tuple[success, {description, structure}, error]
         """
-        task = DescriptionEnhanceTask(self.client)
+        task = DescriptionEnhanceTask(self.client, self.config.custom_description_instruction)
         success, result, error = task.execute(
             title=title,
             description=description,
             category=category
         )
         if success and result:
+            # Очищаем описание от HTML тегов
+            if result.get('description'):
+                result['description'] = strip_html_tags(result['description'])
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
@@ -1467,7 +1630,7 @@ class AIService:
         Returns:
             Tuple[success, {score, issues, recommendations, strengths}, error]
         """
-        task = CardAnalysisTask(self.client)
+        task = CardAnalysisTask(self.client, self.config.custom_analysis_instruction)
         success, result, error = task.execute(
             title=title,
             description=description,
@@ -1495,7 +1658,7 @@ class AIService:
         Returns:
             Tuple[success, {hook, pain_points, benefits, features, social_proof, cta, full_description, infographic_texts}, error]
         """
-        task = RichContentTask(self.client)
+        task = RichContentTask(self.client, self.config.custom_rich_content_instruction)
         success, result, error = task.execute(
             title=title,
             description=description,

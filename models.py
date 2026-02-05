@@ -714,9 +714,15 @@ class AutoImportSettings(db.Model):
     ai_top_p = db.Column(db.Float, default=0.95)  # Top P для семплирования
     ai_presence_penalty = db.Column(db.Float, default=0.0)  # Штраф за присутствие
     ai_frequency_penalty = db.Column(db.Float, default=0.0)  # Штраф за частоту
-    # Кастомные инструкции AI
+    # Кастомные инструкции AI для каждой функции
     ai_category_instruction = db.Column(db.Text)  # Кастомная инструкция для определения категорий
     ai_size_instruction = db.Column(db.Text)  # Кастомная инструкция для парсинга размеров
+    ai_seo_title_instruction = db.Column(db.Text)  # Кастомная инструкция для SEO заголовков
+    ai_keywords_instruction = db.Column(db.Text)  # Кастомная инструкция для ключевых слов
+    ai_bullets_instruction = db.Column(db.Text)  # Кастомная инструкция для преимуществ
+    ai_description_instruction = db.Column(db.Text)  # Кастомная инструкция для описания
+    ai_rich_content_instruction = db.Column(db.Text)  # Кастомная инструкция для Rich контента
+    ai_analysis_instruction = db.Column(db.Text)  # Кастомная инструкция для анализа карточки
     # Cloud.ru OAuth2 credentials (вместо простого API ключа)
     ai_client_id = db.Column(db.String(500))  # Client ID для Cloud.ru OAuth2
     ai_client_secret = db.Column(db.String(500))  # Client Secret для Cloud.ru OAuth2
@@ -795,6 +801,12 @@ class AutoImportSettings(db.Model):
             'ai_frequency_penalty': self.ai_frequency_penalty,
             'ai_category_instruction': self.ai_category_instruction,
             'ai_size_instruction': self.ai_size_instruction,
+            'ai_seo_title_instruction': self.ai_seo_title_instruction,
+            'ai_keywords_instruction': self.ai_keywords_instruction,
+            'ai_bullets_instruction': self.ai_bullets_instruction,
+            'ai_description_instruction': self.ai_description_instruction,
+            'ai_rich_content_instruction': self.ai_rich_content_instruction,
+            'ai_analysis_instruction': self.ai_analysis_instruction,
             # Не отдаем ai_api_key в JSON из соображений безопасности
             # Настройки генерации изображений
             'image_gen_enabled': self.image_gen_enabled,
@@ -1649,7 +1661,7 @@ class SystemSettings(db.Model):
 
 
 class AIHistory(db.Model):
-    """История AI-действий для товаров"""
+    """История AI-действий для товаров (расширенная версия для полного логирования)"""
     __tablename__ = 'ai_history'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -1657,18 +1669,33 @@ class AIHistory(db.Model):
     imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=True, index=True)
 
     # Тип действия
-    action_type = db.Column(db.String(50), nullable=False, index=True)  # 'seo_title', 'keywords', 'bullets', 'rich_content', 'analysis', 'full_optimize'
+    action_type = db.Column(db.String(50), nullable=False, index=True)  # 'seo_title', 'keywords', 'bullets', 'rich_content', 'analysis', 'full_optimize', 'description', 'category', 'sizes'
 
-    # Входные данные (для воспроизведения)
+    # AI провайдер и модель
+    ai_provider = db.Column(db.String(50))  # 'cloudru', 'openai', 'custom'
+    ai_model = db.Column(db.String(100))  # Использованная модель
+
+    # Промпты (полные тексты для воспроизведения)
+    system_prompt = db.Column(db.Text)  # Системный промпт (инструкция)
+    user_prompt = db.Column(db.Text)  # Пользовательский промпт
+
+    # Входные данные (для воспроизведения) - JSON
     input_data = db.Column(db.Text)  # JSON с входными данными
 
     # Результат
     result_data = db.Column(db.Text)  # JSON с результатом
+    raw_response = db.Column(db.Text)  # Сырой ответ от AI (до парсинга)
     success = db.Column(db.Boolean, default=True)
     error_message = db.Column(db.Text)
 
     # Статистика
-    tokens_used = db.Column(db.Integer, default=0)  # Использовано токенов
+    tokens_used = db.Column(db.Integer, default=0)  # Использовано токенов (всего)
+    tokens_prompt = db.Column(db.Integer, default=0)  # Токенов в промпте
+    tokens_completion = db.Column(db.Integer, default=0)  # Токенов в ответе
+    response_time_ms = db.Column(db.Integer, default=0)  # Время ответа в мс
+
+    # Источник запроса
+    source_module = db.Column(db.String(100))  # Модуль откуда пришел запрос (auto_import, product_edit, etc.)
 
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
@@ -1680,24 +1707,61 @@ class AIHistory(db.Model):
     __table_args__ = (
         db.Index('idx_ai_history_seller_action', 'seller_id', 'action_type'),
         db.Index('idx_ai_history_product_created', 'imported_product_id', 'created_at'),
+        db.Index('idx_ai_history_created', 'created_at'),
     )
 
     def __repr__(self) -> str:
         return f'<AIHistory {self.action_type} product_id={self.imported_product_id}>'
 
-    def to_dict(self) -> dict:
-        """Конвертировать в словарь для JSON"""
+    def to_dict(self, include_prompts: bool = False) -> dict:
+        """
+        Конвертировать в словарь для JSON
+
+        Args:
+            include_prompts: Включать ли полные промпты (для детального просмотра)
+        """
         import json
-        return {
+        result = {
             'id': self.id,
             'action_type': self.action_type,
+            'ai_provider': self.ai_provider,
+            'ai_model': self.ai_model,
             'input_data': json.loads(self.input_data) if self.input_data else None,
             'result_data': json.loads(self.result_data) if self.result_data else None,
             'success': self.success,
             'error_message': self.error_message,
             'tokens_used': self.tokens_used,
-            'created_at': self.created_at.isoformat() if self.created_at else None
+            'tokens_prompt': self.tokens_prompt,
+            'tokens_completion': self.tokens_completion,
+            'response_time_ms': self.response_time_ms,
+            'source_module': self.source_module,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'imported_product_id': self.imported_product_id
         }
+        if include_prompts:
+            result['system_prompt'] = self.system_prompt
+            result['user_prompt'] = self.user_prompt
+            result['raw_response'] = self.raw_response
+        return result
+
+    @staticmethod
+    def get_action_type_display(action_type: str) -> str:
+        """Возвращает человекочитаемое название действия"""
+        action_names = {
+            'seo_title': 'SEO Заголовок',
+            'keywords': 'Ключевые слова',
+            'bullets': 'Преимущества',
+            'bullet_points': 'Преимущества',
+            'rich_content': 'Rich контент',
+            'analysis': 'Анализ карточки',
+            'full_optimize': 'Полная оптимизация',
+            'description': 'Генерация описания',
+            'enhance_description': 'Улучшение описания',
+            'category': 'Определение категории',
+            'sizes': 'Парсинг размеров',
+            'dimensions': 'Характеристики'
+        }
+        return action_names.get(action_type, action_type)
 
 
 # ============= HELPER FUNCTIONS FOR LOGGING =============
