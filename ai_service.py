@@ -1821,6 +1821,100 @@ class DimensionsExtractionTask(AITask):
         return match.group() if match else text
 
 
+class CategoryDimensionsTask(AITask):
+    """Задача извлечения характеристик на основе списка характеристик категории WB"""
+
+    def __init__(self, client: 'AIClient', custom_instruction: str = '', category_characteristics: List[str] = None):
+        super().__init__(client, custom_instruction)
+        self.category_characteristics = category_characteristics or []
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+
+        chars_list = "\n".join(self.category_characteristics) if self.category_characteristics else "Характеристики не указаны"
+
+        return f"""Ты эксперт по заполнению характеристик товаров для маркетплейса Wildberries.
+
+Твоя задача - извлечь значения для КОНКРЕТНЫХ характеристик категории из текста товара.
+
+ХАРАКТЕРИСТИКИ КАТЕГОРИИ ДЛЯ ЗАПОЛНЕНИЯ:
+{chars_list}
+
+ВАЖНЫЕ ПРАВИЛА:
+1. Заполняй ТОЛЬКО характеристики из списка выше
+2. Если характеристика помечена [ОБЯЗАТЕЛЬНО] - постарайся найти или вычислить значение
+3. Для веса (г, кг) - ВСЕГДА указывай в граммах
+4. Для длины/ширины/высоты - указывай в сантиметрах
+5. Если значение не найдено - не включай его в ответ
+6. Если есть несколько похожих характеристик (Длина, Длина изделия, Максимальная длина) - заполни ВСЕ подходящие одним значением
+7. Числа с запятой (7,5) преобразуй в формат с точкой (7.5)
+8. Для диапазонов (15-20 см) можно указать либо диапазон, либо максимальное значение
+
+ПРИМЕРЫ:
+- "длина 7,5 см, диаметр 2 см, вес 50 г"
+  Заполни: Длина = 7.5, Диаметр = 2, Вес = 50
+
+- "размер M (44-46), рост 170-176"
+  Заполни: Размер = M, Российский размер = 44-46
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{{
+    "extracted_values": {{
+        "Название характеристики": "значение",
+        ...
+    }},
+    "missing_required": ["список обязательных характеристик которые не удалось найти"],
+    "suggestions": {{
+        "Название характеристики": "предположительное значение с объяснением"
+    }},
+    "raw_found": ["найденные в тексте размеры/веса"],
+    "confidence": <число от 0.0 до 1.0>
+}}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        sizes_text = kwargs.get('sizes_text', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Извлеки значения характеристик из данных товара:
+
+НАЗВАНИЕ: {title}
+СТРОКА РАЗМЕРОВ: {sizes_text or 'Не указана'}
+СУЩЕСТВУЮЩИЕ ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+ОПИСАНИЕ: {description[:1000] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'extracted_values': data.get('extracted_values', {}),
+                'missing_required': data.get('missing_required', []),
+                'suggestions': data.get('suggestions', {}),
+                'raw_found': data.get('raw_found', []),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
 class ClothingSizesTask(AITask):
     """Задача парсинга и стандартизации размеров одежды"""
 
@@ -2336,6 +2430,42 @@ class AIService:
             Tuple[success, {dimensions, package_dimensions, raw_text, confidence}, error]
         """
         task = DimensionsExtractionTask(self.client, self.config.custom_dimensions_instruction)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            sizes_text=sizes_text
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def extract_category_dimensions(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        sizes_text: str = '',
+        category_characteristics: Optional[List[str]] = None
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Извлекает характеристики товара на основе списка характеристик категории WB
+
+        Args:
+            title: Название товара
+            description: Описание
+            characteristics: Существующие характеристики товара
+            sizes_text: Строка с размерами
+            category_characteristics: Список характеристик из WB API для данной категории
+
+        Returns:
+            Tuple[success, {extracted_values, missing_required, confidence}, error]
+        """
+        task = CategoryDimensionsTask(
+            self.client,
+            self.config.custom_dimensions_instruction,
+            category_characteristics or []
+        )
         success, result, error = task.execute(
             title=title,
             description=description,

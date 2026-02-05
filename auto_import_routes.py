@@ -2534,6 +2534,148 @@ def register_auto_import_routes(app):
             logger.error(f"AI extract dimensions error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/ai/wb-category-characteristics', methods=['POST'])
+    @login_required
+    def auto_import_ai_wb_category_characteristics():
+        """Получить характеристики категории WB и извлечь размеры на их основе"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        weight_margin_percent = data.get('weight_margin', 10)  # Запас по весу в %
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        # Получаем характеристики категории из WB API
+        wb_characteristics = []
+        size_characteristics = []
+        category_id = product.wb_category_id or product.wb_subject_id
+
+        if category_id and seller.wb_api_key:
+            try:
+                from wb_api_client import WildberriesAPIClient
+                with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                    chars_config = wb_client.get_card_characteristics_config(int(category_id))
+                    wb_characteristics = chars_config.get('data', [])
+
+                    # Фильтруем характеристики связанные с размерами и весом
+                    size_keywords = [
+                        'длина', 'ширина', 'высота', 'глубина', 'диаметр',
+                        'размер', 'вес', 'масса', 'объем', 'толщина',
+                        'обхват', 'рабочая', 'максимальн', 'минимальн'
+                    ]
+                    for char in wb_characteristics:
+                        char_name = char.get('name', '').lower()
+                        if any(kw in char_name for kw in size_keywords):
+                            size_characteristics.append({
+                                'id': char.get('charcID'),
+                                'name': char.get('name'),
+                                'required': char.get('required', False),
+                                'unit': char.get('unitName', ''),
+                                'type': char.get('charcType'),
+                                'maxCount': char.get('maxCount', 1)
+                            })
+            except Exception as e:
+                logger.warning(f"Не удалось получить характеристики WB: {e}")
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Подготавливаем характеристики товара
+            product_characteristics = {}
+            if product.characteristics:
+                try:
+                    product_characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            # Формируем список характеристик для AI
+            chars_list = []
+            if size_characteristics:
+                for sc in size_characteristics:
+                    unit_str = f" ({sc['unit']})" if sc['unit'] else ""
+                    required_str = " [ОБЯЗАТЕЛЬНО]" if sc['required'] else ""
+                    chars_list.append(f"- {sc['name']}{unit_str}{required_str}")
+            else:
+                # Базовый список если нет данных из WB
+                chars_list = [
+                    "- Длина (см)",
+                    "- Ширина (см)",
+                    "- Высота (см)",
+                    "- Глубина (см)",
+                    "- Диаметр (см)",
+                    "- Вес (г)",
+                    "- Объем (мл)",
+                    "- Рабочая длина (см)",
+                    "- Максимальная длина (см)",
+                    "- Толщина (см)"
+                ]
+
+            # Вызываем AI с характеристиками категории
+            success, result, error = ai_service.extract_category_dimensions(
+                title=product.title or '',
+                description=product.description or '',
+                characteristics=product_characteristics,
+                sizes_text=product.sizes or '',
+                category_characteristics=chars_list
+            )
+
+            if success:
+                # Добавляем запас к весу
+                if result.get('extracted_values'):
+                    for key, value in result['extracted_values'].items():
+                        if 'вес' in key.lower() or 'масса' in key.lower():
+                            try:
+                                weight = float(str(value).replace(',', '.'))
+                                weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 1)
+                                result['extracted_values'][f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
+                            except:
+                                pass
+
+                # Сохраняем результат
+                result['wb_category_id'] = category_id
+                result['wb_characteristics_count'] = len(size_characteristics)
+                result['weight_margin_percent'] = weight_margin_percent
+
+                product.ai_dimensions = json.dumps(result, ensure_ascii=False)
+                db.session.commit()
+
+                save_ai_history(seller.id, product.id, 'category_dimensions',
+                              {'title': product.title, 'category_id': category_id}, result)
+
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'wb_characteristics': size_characteristics
+                })
+            else:
+                save_ai_history(seller.id, product.id, 'category_dimensions', None, None, False, error)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI extract category dimensions error: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/auto-import/ai/parse-clothing-sizes', methods=['POST'])
     @login_required
     def auto_import_ai_parse_clothing_sizes():

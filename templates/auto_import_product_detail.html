@@ -452,6 +452,12 @@
                             </svg>
                             Размеры
                         </button>
+                        <button id="aiWbCharsBtn" class="col-span-2 inline-flex justify-center items-center px-3 py-2 border border-orange-300 text-xs font-medium rounded-md text-orange-700 bg-white hover:bg-orange-50 disabled:opacity-50" title="Извлечь характеристики по категории WB">
+                            <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+                            </svg>
+                            Характеристики WB
+                        </button>
                         <button id="aiAnalyzeBtn" class="col-span-2 inline-flex justify-center items-center px-3 py-2 border border-green-300 text-xs font-medium rounded-md text-green-700 bg-white hover:bg-green-50 disabled:opacity-50">
                             <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
@@ -1703,6 +1709,114 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
             `;
             showModal('Улучшение описания', content, true);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // WB Category Characteristics (aiWbCharsBtn)
+    document.getElementById('aiWbCharsBtn')?.addEventListener('click', async function() {
+        console.log('WB Characteristics button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/wb-category-characteristics', this);
+        if (result.success) {
+            const data = result.data;
+            const wbChars = result.wb_characteristics || [];
+            let content = '<div class="space-y-4">';
+
+            // Информация о категории
+            content += `
+                <div class="bg-orange-50 p-3 rounded-lg flex items-center justify-between">
+                    <span class="text-sm text-gray-700">Характеристики из WB API:</span>
+                    <span class="font-medium text-orange-700">${wbChars.length} найдено</span>
+                </div>
+            `;
+
+            // Список характеристик категории
+            if (wbChars.length > 0) {
+                content += `
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2">Доступные характеристики категории:</h4>
+                        <div class="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                            ${wbChars.map(c => `
+                                <span class="px-2 py-1 text-xs rounded ${c.required ? 'bg-red-100 text-red-700' : 'bg-gray-200 text-gray-700'}">
+                                    ${c.name}${c.unit ? ` (${c.unit})` : ''}${c.required ? ' *' : ''}
+                                </span>
+                            `).join('')}
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">* обязательные характеристики</p>
+                    </div>
+                `;
+            }
+
+            // Извлечённые значения
+            if (data.extracted_values && Object.keys(data.extracted_values).length > 0) {
+                content += `
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-green-700 mb-3">Извлечённые значения:</h4>
+                        <div class="space-y-2">
+                `;
+                for (const [key, value] of Object.entries(data.extracted_values)) {
+                    const isWeight = key.toLowerCase().includes('вес') || key.toLowerCase().includes('масса');
+                    content += `
+                        <div class="flex items-center justify-between bg-white p-2 rounded border border-green-200">
+                            <span class="text-sm text-gray-700">${key}</span>
+                            <span class="font-medium ${isWeight ? 'text-orange-600' : 'text-green-700'}">${value}</span>
+                        </div>
+                    `;
+                }
+                content += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Отсутствующие обязательные
+            if (data.missing_required?.length > 0) {
+                content += `
+                    <div class="bg-red-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-red-700 mb-2">Не найдены обязательные:</h4>
+                        <ul class="list-disc list-inside text-sm text-red-600">
+                            ${data.missing_required.map(m => `<li>${m}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            // Предположения AI
+            if (data.suggestions && Object.keys(data.suggestions).length > 0) {
+                content += `
+                    <div class="bg-yellow-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-yellow-700 mb-2">Предположения AI:</h4>
+                        <div class="space-y-1 text-sm">
+                `;
+                for (const [key, value] of Object.entries(data.suggestions)) {
+                    content += `<p><span class="font-medium">${key}:</span> ${value}</p>`;
+                }
+                content += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Найденные в тексте
+            if (data.raw_found?.length > 0) {
+                content += `
+                    <div class="text-xs text-gray-500">
+                        <span class="font-medium">Найдено в тексте:</span> ${data.raw_found.join(', ')}
+                    </div>
+                `;
+            }
+
+            // Уверенность и запас веса
+            content += `
+                <div class="flex items-center justify-between text-xs text-gray-500 pt-2 border-t">
+                    <span>Уверенность: ${Math.round((data.confidence || 0) * 100)}%</span>
+                    <span>Запас веса: +${data.weight_margin_percent || 10}%</span>
+                </div>
+            `;
+
+            content += '</div>';
+            showModal('Характеристики категории WB', content, false);
         } else {
             showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
         }
