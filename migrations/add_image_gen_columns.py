@@ -28,15 +28,24 @@ def find_database():
     parent_dir = os.path.dirname(script_dir)
 
     possible_paths = [
-        # Docker пути
+        # Docker пути - seller_platform.db
+        '/app/seller_platform.db',
+        '/app/data/seller_platform.db',
+        '/app/instance/seller_platform.db',
+        # Docker пути - app.db
         '/app/instance/app.db',
         '/app/app.db',
         '/app/data/app.db',
         # Локальные пути относительно скрипта
+        os.path.join(parent_dir, 'seller_platform.db'),
+        os.path.join(parent_dir, 'data', 'seller_platform.db'),
+        os.path.join(parent_dir, 'instance', 'seller_platform.db'),
         os.path.join(parent_dir, 'instance', 'app.db'),
         os.path.join(parent_dir, 'app.db'),
         os.path.join(parent_dir, 'data', 'app.db'),
         # Текущая директория
+        'seller_platform.db',
+        'data/seller_platform.db',
         'instance/app.db',
         'app.db',
         'data/app.db',
