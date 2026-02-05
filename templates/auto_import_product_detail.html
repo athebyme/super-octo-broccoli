@@ -617,20 +617,67 @@ function populateSavedAIData() {
     try {
         const richData = {{ product.ai_rich_content|safe }};
         const richSection = document.getElementById('richSection');
-        if (richSection && richData.blocks) {
-            richSection.innerHTML = richData.blocks.map((block, i) => `
-                <div class="p-3 bg-white rounded border border-orange-200">
-                    <div class="flex items-center justify-between mb-2">
-                        <span class="text-xs font-bold text-orange-600">Блок ${block.number || i+1}: ${block.type || ''}</span>
+        // Support both old format (blocks) and new format (slides)
+        const slides = richData.slides || richData.blocks || [];
+        if (richSection && slides.length > 0) {
+            let html = '';
+
+            // Design recommendations if available
+            if (richData.design_recommendations) {
+                const dr = richData.design_recommendations;
+                html += `<div class="mb-4 p-3 bg-gradient-to-r from-orange-100 to-pink-100 rounded-lg">
+                    <p class="text-xs font-bold text-orange-800 mb-2">Рекомендации по дизайну:</p>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        ${dr.color_palette ? `<div><span class="text-gray-600">Палитра:</span> <span class="font-mono">${dr.color_palette.join(', ')}</span></div>` : ''}
+                        ${dr.font_style ? `<div><span class="text-gray-600">Стиль:</span> ${dr.font_style}</div>` : ''}
+                        ${dr.overall_mood ? `<div class="col-span-2"><span class="text-gray-600">Настроение:</span> ${dr.overall_mood}</div>` : ''}
                     </div>
-                    <p class="text-sm font-semibold text-gray-900">${block.title}</p>
-                    <p class="text-xs text-gray-600 mt-1">${block.subtitle || ''}</p>
-                    ${block.image_idea ? `<p class="text-xs text-gray-400 mt-2 italic">Фото: ${block.image_idea}</p>` : ''}
-                </div>
-            `).join('');
-            if (richData.main_message) {
-                richSection.innerHTML += `<p class="text-sm text-orange-700 mt-2"><strong>Главный посыл:</strong> ${richData.main_message}</p>`;
+                </div>`;
             }
+
+            // Slides/blocks
+            html += slides.map((slide, i) => {
+                const imgConcept = slide.image_concept || {};
+                const textLayout = slide.text_layout || {};
+                const bullets = slide.bullets ? `<ul class="mt-1 text-xs text-gray-600 list-disc list-inside">${slide.bullets.map(b => `<li>${b}</li>`).join('')}</ul>` : '';
+
+                return `<div class="p-3 bg-white rounded-lg border border-orange-200 shadow-sm">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="px-2 py-1 text-xs font-bold text-white bg-gradient-to-r from-orange-500 to-pink-500 rounded">
+                            Слайд ${slide.number || i+1}: ${slide.type || ''}
+                        </span>
+                        <span class="text-xs text-gray-400">1440x810px</span>
+                    </div>
+                    <p class="text-sm font-bold text-gray-900 uppercase">${slide.title}</p>
+                    ${slide.subtitle ? `<p class="text-xs text-gray-700 mt-1">${slide.subtitle}</p>` : ''}
+                    ${bullets}
+                    ${imgConcept.main_object ? `
+                    <div class="mt-2 p-2 bg-gray-50 rounded text-xs">
+                        <p class="font-medium text-gray-700 mb-1">Концепция изображения:</p>
+                        <p class="text-gray-600"><span class="font-medium">Объект:</span> ${imgConcept.main_object}</p>
+                        ${imgConcept.background ? `<p class="text-gray-600"><span class="font-medium">Фон:</span> ${imgConcept.background}</p>` : ''}
+                        ${imgConcept.composition ? `<p class="text-gray-600"><span class="font-medium">Композиция:</span> ${imgConcept.composition}</p>` : ''}
+                        ${imgConcept.mood ? `<p class="text-gray-600"><span class="font-medium">Настроение:</span> ${imgConcept.mood}</p>` : ''}
+                    </div>` : ''}
+                    ${textLayout.title_position ? `
+                    <div class="mt-2 p-2 bg-blue-50 rounded text-xs">
+                        <p class="font-medium text-blue-700 mb-1">Расположение текста:</p>
+                        <p class="text-blue-600"><span class="font-medium">Заголовок:</span> ${textLayout.title_position} | ${textLayout.title_color || ''}</p>
+                        ${textLayout.text_background ? `<p class="text-blue-600"><span class="font-medium">Подложка:</span> ${textLayout.text_background}</p>` : ''}
+                    </div>` : ''}
+                    ${slide.image_idea ? `<p class="text-xs text-gray-400 mt-2 italic">Идея: ${slide.image_idea}</p>` : ''}
+                </div>`;
+            }).join('');
+
+            // Main USP and target audience
+            if (richData.main_usp || richData.main_message) {
+                html += `<div class="mt-3 p-3 bg-orange-50 rounded-lg">
+                    <p class="text-sm text-orange-800"><strong>УТП:</strong> ${richData.main_usp || richData.main_message}</p>
+                    ${richData.target_audience ? `<p class="text-xs text-orange-600 mt-1"><strong>Целевая аудитория:</strong> ${richData.target_audience}</p>` : ''}
+                </div>`;
+            }
+
+            richSection.innerHTML = html;
         }
     } catch(e) { console.error('Rich content parse error:', e); }
     {% endif %}
@@ -1249,124 +1296,110 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('aiRichContentBtn')?.addEventListener('click', async function() {
         const result = await callAiEndpoint('/auto-import/ai/rich-content', this);
         if (result.success) {
-            currentAiData = { description: result.data.full_description };
+            currentAiData = { rich_content: result.data };
             const data = result.data;
 
             let content = '<div class="space-y-4">';
 
-            // Hook
-            if (data.hook) {
-                content += `
-                    <div class="bg-gradient-to-r from-pink-50 to-orange-50 p-4 rounded-lg border border-pink-200">
-                        <h4 class="font-bold text-lg text-pink-800 mb-1">🎯 Цепляющий заголовок</h4>
-                        <p class="text-pink-900 font-medium">${data.hook}</p>
-                    </div>
-                `;
-            }
+            // Header with specs
+            content += `
+                <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white p-4 rounded-lg">
+                    <h4 class="font-bold text-lg">Rich-контент для Wildberries</h4>
+                    <p class="text-sm opacity-90">Макеты слайдов инфографики 1440x810px</p>
+                    ${data.total_slides ? `<p class="text-xs mt-1">Всего слайдов: ${data.total_slides}</p>` : ''}
+                </div>
+            `;
 
-            // Pain Points
-            if (data.pain_points?.length) {
+            // Design recommendations
+            if (data.design_recommendations) {
+                const dr = data.design_recommendations;
                 content += `
-                    <div>
-                        <h4 class="font-medium text-gray-700 mb-2">😤 Решаемые проблемы:</h4>
-                        <ul class="space-y-1">
-                            ${data.pain_points.map(pp => `<li class="flex items-start"><span class="mr-2">${pp.emoji || '•'}</span><span class="text-gray-600">${pp.text}</span></li>`).join('')}
-                        </ul>
-                    </div>
-                `;
-            }
-
-            // Benefits
-            if (data.benefits?.length) {
-                content += `
-                    <div class="bg-green-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-green-700 mb-2">✨ Преимущества:</h4>
-                        <div class="space-y-2">
-                            ${data.benefits.map(b => `
-                                <div class="flex items-start">
-                                    <span class="text-xl mr-2">${b.emoji || '✓'}</span>
-                                    <div>
-                                        <span class="font-medium text-green-800">${b.title}</span>
-                                        <p class="text-sm text-green-700">${b.text}</p>
+                    <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                        <h4 class="font-bold text-purple-800 mb-2">Рекомендации по дизайну</h4>
+                        <div class="grid grid-cols-2 gap-3 text-sm">
+                            ${dr.color_palette ? `
+                                <div>
+                                    <span class="text-gray-600">Палитра:</span>
+                                    <div class="flex gap-1 mt-1">
+                                        ${dr.color_palette.map(c => `<span class="inline-block w-6 h-6 rounded border" style="background:${c}" title="${c}"></span>`).join('')}
                                     </div>
                                 </div>
-                            `).join('')}
+                            ` : ''}
+                            ${dr.font_style ? `<div><span class="text-gray-600">Стиль шрифта:</span> <span class="font-medium">${dr.font_style}</span></div>` : ''}
+                            ${dr.overall_mood ? `<div class="col-span-2"><span class="text-gray-600">Настроение:</span> <span class="font-medium">${dr.overall_mood}</span></div>` : ''}
+                            ${dr.key_visual_elements?.length ? `<div class="col-span-2"><span class="text-gray-600">Ключевые элементы:</span> ${dr.key_visual_elements.join(', ')}</div>` : ''}
                         </div>
                     </div>
                 `;
             }
 
-            // Features
-            if (data.features?.length) {
-                content += `
-                    <div>
-                        <h4 class="font-medium text-gray-700 mb-2">📋 Характеристики:</h4>
-                        <div class="grid grid-cols-2 gap-2">
-                            ${data.features.map(f => `
-                                <div class="bg-gray-50 p-2 rounded flex items-center">
-                                    <span class="mr-2">${f.icon || '📌'}</span>
-                                    <div>
-                                        <span class="text-xs text-gray-500">${f.name}</span>
-                                        <p class="text-sm font-medium">${f.value}</p>
+            // Slides (new format) or blocks (old format)
+            const slides = data.slides || data.blocks || [];
+            if (slides.length > 0) {
+                content += `<div class="space-y-3">`;
+                slides.forEach((slide, i) => {
+                    const imgConcept = slide.image_concept || {};
+                    const textLayout = slide.text_layout || {};
+                    const bullets = slide.bullets && slide.bullets.length > 0 ? slide.bullets : null;
+
+                    content += `
+                        <div class="bg-white border-2 border-orange-200 rounded-lg overflow-hidden">
+                            <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2 flex justify-between items-center">
+                                <span class="font-bold">Слайд ${slide.number || i+1}: ${slide.type || ''}</span>
+                                <span class="text-xs opacity-75">1440x810px</span>
+                            </div>
+                            <div class="p-4">
+                                <p class="text-lg font-bold text-gray-900 uppercase">${slide.title}</p>
+                                ${slide.subtitle ? `<p class="text-gray-700 mt-1">${slide.subtitle}</p>` : ''}
+                                ${bullets ? `
+                                    <ul class="mt-2 space-y-1 text-sm text-gray-600">
+                                        ${bullets.map(b => `<li class="flex items-start"><span class="mr-2 text-orange-500">•</span>${b}</li>`).join('')}
+                                    </ul>
+                                ` : ''}
+
+                                ${imgConcept.main_object ? `
+                                    <div class="mt-3 p-3 bg-gray-50 rounded-lg">
+                                        <p class="text-xs font-bold text-gray-700 mb-2">КОНЦЕПЦИЯ ИЗОБРАЖЕНИЯ:</p>
+                                        <div class="grid grid-cols-2 gap-2 text-xs">
+                                            <div><span class="text-gray-500">Объект:</span> <span class="text-gray-800">${imgConcept.main_object}</span></div>
+                                            ${imgConcept.background ? `<div><span class="text-gray-500">Фон:</span> <span class="text-gray-800">${imgConcept.background}</span></div>` : ''}
+                                            ${imgConcept.composition ? `<div><span class="text-gray-500">Композиция:</span> <span class="text-gray-800">${imgConcept.composition}</span></div>` : ''}
+                                            ${imgConcept.mood ? `<div><span class="text-gray-500">Настроение:</span> <span class="text-gray-800">${imgConcept.mood}</span></div>` : ''}
+                                        </div>
                                     </div>
-                                </div>
-                            `).join('')}
+                                ` : ''}
+
+                                ${textLayout.title_position ? `
+                                    <div class="mt-2 p-3 bg-blue-50 rounded-lg">
+                                        <p class="text-xs font-bold text-blue-700 mb-2">РАСПОЛОЖЕНИЕ ТЕКСТА:</p>
+                                        <div class="grid grid-cols-2 gap-2 text-xs">
+                                            <div><span class="text-blue-600">Позиция:</span> <span class="text-blue-800">${textLayout.title_position}</span></div>
+                                            ${textLayout.title_color ? `<div><span class="text-blue-600">Цвет:</span> <span class="text-blue-800">${textLayout.title_color}</span></div>` : ''}
+                                            ${textLayout.text_background ? `<div class="col-span-2"><span class="text-blue-600">Подложка:</span> <span class="text-blue-800">${textLayout.text_background}</span></div>` : ''}
+                                        </div>
+                                    </div>
+                                ` : ''}
+
+                                ${slide.image_idea ? `<p class="mt-2 text-xs text-gray-400 italic">Идея: ${slide.image_idea}</p>` : ''}
+                            </div>
                         </div>
-                    </div>
-                `;
+                    `;
+                });
+                content += `</div>`;
             }
 
-            // Social Proof
-            if (data.social_proof) {
+            // USP and target audience
+            if (data.main_usp || data.main_message || data.target_audience) {
                 content += `
-                    <div class="bg-blue-50 p-3 rounded-lg">
-                        <span class="text-blue-600">👥</span>
-                        <span class="text-blue-800 text-sm ml-2">${data.social_proof}</span>
-                    </div>
-                `;
-            }
-
-            // CTA
-            if (data.cta) {
-                content += `
-                    <div class="bg-orange-50 p-3 rounded-lg text-center">
-                        <p class="text-orange-800 font-medium">🛒 ${data.cta}</p>
-                    </div>
-                `;
-            }
-
-            // Infographic texts
-            if (data.infographic_texts?.length) {
-                content += `
-                    <div class="border-t pt-4">
-                        <h4 class="font-medium text-gray-700 mb-2">🖼️ Тексты для инфографики:</h4>
-                        <div class="space-y-2">
-                            ${data.infographic_texts.map(it => `
-                                <div class="bg-gray-50 p-2 rounded">
-                                    <span class="text-xs text-gray-500">Блок ${it.block}:</span>
-                                    <p class="font-medium text-sm">${it.title}</p>
-                                    <p class="text-xs text-gray-600">${it.text}</p>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `;
-            }
-
-            // Full description preview
-            if (data.full_description) {
-                content += `
-                    <div class="border-t pt-4">
-                        <h4 class="font-medium text-gray-700 mb-2">📝 Полное описание для карточки:</h4>
-                        <div class="bg-white border rounded-lg p-3 text-sm whitespace-pre-line max-h-40 overflow-y-auto">
-                            ${data.full_description}
-                        </div>
+                    <div class="bg-orange-50 p-4 rounded-lg border border-orange-200">
+                        ${data.main_usp || data.main_message ? `<p class="font-medium text-orange-800"><span class="font-bold">УТП:</span> ${data.main_usp || data.main_message}</p>` : ''}
+                        ${data.target_audience ? `<p class="text-sm text-orange-700 mt-1"><span class="font-bold">Целевая аудитория:</span> ${data.target_audience}</p>` : ''}
                     </div>
                 `;
             }
 
             content += '</div>';
-            showModal('Rich Контент', content, true);
+            showModal('Rich Контент для WB', content, false);
         } else {
             showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
         }
