@@ -9,11 +9,39 @@ import json
 import threading
 import logging
 import time
+import hashlib
+from datetime import datetime
 
-from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
+from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory
 from auto_import_manager import AutoImportManager, ImageProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def compute_content_hash(product):
+    """Вычисляет хеш контента карточки для отслеживания изменений"""
+    content = f"{product.title or ''}{product.description or ''}{product.characteristics or ''}"
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
+def save_ai_history(seller_id, product_id, action_type, input_data, result_data, success=True, error_message=None):
+    """Сохраняет действие AI в историю"""
+    try:
+        history = AIHistory(
+            seller_id=seller_id,
+            imported_product_id=product_id,
+            action_type=action_type,
+            input_data=json.dumps(input_data, ensure_ascii=False) if input_data else None,
+            result_data=json.dumps(result_data, ensure_ascii=False) if result_data else None,
+            success=success,
+            error_message=error_message
+        )
+        db.session.add(history)
+        db.session.commit()
+        return history
+    except Exception as e:
+        logger.error(f"Error saving AI history: {e}")
+        return None
 
 
 def register_auto_import_routes(app):
@@ -1299,12 +1327,28 @@ def register_auto_import_routes(app):
             )
 
             if success:
+                # Сохраняем результат в кэш продукта
+                if result.get('title'):
+                    product.ai_seo_title = result['title']
+                    product.content_hash = compute_content_hash(product)
+                    db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(
+                    seller_id=seller.id,
+                    product_id=product.id,
+                    action_type='seo_title',
+                    input_data={'title': product.title, 'category': product.mapped_wb_category},
+                    result_data=result
+                )
+
                 return jsonify({
                     'success': True,
                     'data': result,
                     'original_title': product.title
                 })
             else:
+                save_ai_history(seller.id, product.id, 'seo_title', None, None, False, error)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1349,8 +1393,19 @@ def register_auto_import_routes(app):
             )
 
             if success:
+                # Сохраняем в кэш продукта
+                product.ai_keywords = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'keywords',
+                    {'title': product.title, 'category': product.mapped_wb_category}, result)
+
                 return jsonify({'success': True, 'data': result})
             else:
+                save_ai_history(seller.id, product.id, 'keywords', None, None, False, error)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1404,8 +1459,19 @@ def register_auto_import_routes(app):
             )
 
             if success:
+                # Сохраняем в кэш продукта
+                product.ai_bullets = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'bullets',
+                    {'title': product.title}, result)
+
                 return jsonify({'success': True, 'data': result})
             else:
+                save_ai_history(seller.id, product.id, 'bullets', None, None, False, error)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1524,8 +1590,19 @@ def register_auto_import_routes(app):
             )
 
             if success:
+                # Сохраняем анализ в кэш продукта
+                product.ai_analysis = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'analysis',
+                    {'title': product.title, 'photos_count': photos_count}, result)
+
                 return jsonify({'success': True, 'data': result})
             else:
+                save_ai_history(seller.id, product.id, 'analysis', None, None, False, error)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
@@ -1582,12 +1659,23 @@ def register_auto_import_routes(app):
             )
 
             if success:
+                # Сохраняем rich контент в кэш продукта
+                product.ai_rich_content = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'rich_content',
+                    {'title': product.title, 'category': product.mapped_wb_category}, result)
+
                 return jsonify({
                     'success': True,
                     'data': result,
                     'original_description': product.description
                 })
             else:
+                save_ai_history(seller.id, product.id, 'rich_content', None, None, False, error)
                 return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:

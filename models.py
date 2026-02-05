@@ -837,6 +837,15 @@ class ImportedProduct(db.Model):
     validation_errors = db.Column(db.Text)  # Ошибки валидации (JSON)
     import_error = db.Column(db.Text)  # Ошибка импорта
 
+    # AI-оптимизация (кэшированные результаты)
+    ai_keywords = db.Column(db.Text)  # Ключевые слова (JSON)
+    ai_bullets = db.Column(db.Text)  # Преимущества/буллиты (JSON)
+    ai_rich_content = db.Column(db.Text)  # Rich контент (JSON)
+    ai_seo_title = db.Column(db.String(500))  # SEO заголовок
+    ai_analysis = db.Column(db.Text)  # Последний анализ карточки (JSON)
+    ai_analysis_at = db.Column(db.DateTime)  # Когда был сделан анализ
+    content_hash = db.Column(db.String(64))  # Хеш контента для отслеживания изменений
+
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     imported_at = db.Column(db.DateTime)  # Когда импортировано в WB
@@ -1612,6 +1621,58 @@ class SystemSettings(db.Model):
             'updated_by_user_id': self.updated_by_user_id,
             'updated_by_username': self.updated_by.username if self.updated_by else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+class AIHistory(db.Model):
+    """История AI-действий для товаров"""
+    __tablename__ = 'ai_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=True, index=True)
+
+    # Тип действия
+    action_type = db.Column(db.String(50), nullable=False, index=True)  # 'seo_title', 'keywords', 'bullets', 'rich_content', 'analysis', 'full_optimize'
+
+    # Входные данные (для воспроизведения)
+    input_data = db.Column(db.Text)  # JSON с входными данными
+
+    # Результат
+    result_data = db.Column(db.Text)  # JSON с результатом
+    success = db.Column(db.Boolean, default=True)
+    error_message = db.Column(db.Text)
+
+    # Статистика
+    tokens_used = db.Column(db.Integer, default=0)  # Использовано токенов
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    imported_product = db.relationship('ImportedProduct', backref=db.backref('ai_history', lazy='dynamic', order_by='AIHistory.created_at.desc()'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_ai_history_seller_action', 'seller_id', 'action_type'),
+        db.Index('idx_ai_history_product_created', 'imported_product_id', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<AIHistory {self.action_type} product_id={self.imported_product_id}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        import json
+        return {
+            'id': self.id,
+            'action_type': self.action_type,
+            'input_data': json.loads(self.input_data) if self.input_data else None,
+            'result_data': json.loads(self.result_data) if self.result_data else None,
+            'success': self.success,
+            'error_message': self.error_message,
+            'tokens_used': self.tokens_used,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
