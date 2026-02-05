@@ -508,6 +508,166 @@
             </div>
         </div>
 
+        <!-- Генерация изображений -->
+        <div class="bg-gradient-to-br from-orange-50 to-pink-50 shadow-sm rounded-lg border border-orange-200 p-6">
+            <div class="flex items-center mb-4">
+                <div class="p-2 bg-orange-100 rounded-lg mr-3">
+                    <svg class="h-6 w-6 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">Генерация изображений для инфографики</h3>
+                    <p class="text-xs text-gray-500">AI создает картинки для слайдов Rich-контента (1440x810px)</p>
+                </div>
+            </div>
+
+            <!-- Включить генерацию -->
+            <div class="mb-4">
+                <label class="flex items-center p-3 bg-white rounded-lg border border-orange-200 cursor-pointer hover:bg-orange-50 transition-colors">
+                    <input type="checkbox" name="image_gen_enabled" id="image_gen_enabled"
+                           {{ 'checked' if settings.image_gen_enabled else '' }}
+                           class="h-5 w-5 text-orange-600 focus:ring-orange-500 border-gray-300 rounded"
+                           onchange="toggleImageGenSettings()">
+                    <span class="ml-3 text-sm font-medium text-gray-900">Включить генерацию изображений</span>
+                </label>
+            </div>
+
+            <div id="image_gen_settings_block" class="{{ '' if settings.image_gen_enabled else 'hidden' }}">
+                <!-- Провайдер -->
+                <div class="mb-4">
+                    <label for="image_gen_provider" class="block text-sm font-medium text-gray-700 mb-1">
+                        Провайдер генерации
+                    </label>
+                    <select id="image_gen_provider" name="image_gen_provider"
+                            class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                            onchange="updateImageGenProviderHint()">
+                        <option value="openai_dalle" {{ 'selected' if (settings.image_gen_provider or 'openai_dalle') == 'openai_dalle' else '' }}>
+                            OpenAI DALL-E 3 (лучшее качество, ~$0.04-0.12/изображение)
+                        </option>
+                        <option value="flux_pro" {{ 'selected' if settings.image_gen_provider == 'flux_pro' else '' }}>
+                            Flux.1 Pro (высокое качество, ~$0.05/изображение)
+                        </option>
+                        <option value="sdxl" {{ 'selected' if settings.image_gen_provider == 'sdxl' else '' }}>
+                            Stable Diffusion XL (бюджетный, ~$0.01/изображение)
+                        </option>
+                    </select>
+                </div>
+
+                <!-- Подсказка для OpenAI -->
+                <div id="openai_hint" class="p-4 bg-green-50 border border-green-200 rounded-lg mb-3">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div class="text-sm text-green-700">
+                            <strong>Как получить OpenAI API ключ:</strong><br>
+                            1. Зарегистрируйтесь на <a href="https://platform.openai.com" target="_blank" class="underline font-medium">platform.openai.com</a><br>
+                            2. Перейдите в <a href="https://platform.openai.com/api-keys" target="_blank" class="underline">API Keys</a><br>
+                            3. Нажмите "Create new secret key"<br>
+                            4. Скопируйте ключ (начинается с <code class="bg-green-100 px-1">sk-</code>)<br>
+                            <span class="text-xs text-green-600">Нужна привязка карты и баланс от $5</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Подсказка для Replicate -->
+                <div id="replicate_hint" class="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-3 hidden">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div class="text-sm text-blue-700">
+                            <strong>Как получить Replicate API токен:</strong><br>
+                            1. Зарегистрируйтесь на <a href="https://replicate.com" target="_blank" class="underline font-medium">replicate.com</a> (можно через GitHub)<br>
+                            2. Перейдите в <a href="https://replicate.com/account/api-tokens" target="_blank" class="underline">Account → API Tokens</a><br>
+                            3. Нажмите "Create token"<br>
+                            4. Скопируйте токен (начинается с <code class="bg-blue-100 px-1">r8_</code>)<br>
+                            <span class="text-xs text-blue-600">Есть бесплатный тариф на старте</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- OpenAI API ключ -->
+                <div id="openai_api_key_block" class="mb-4">
+                    <label for="openai_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        OpenAI API ключ <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="openai_api_key" name="openai_api_key"
+                           value="{{ settings.openai_api_key or '' }}"
+                           class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="sk-...">
+                </div>
+
+                <!-- Replicate API ключ -->
+                <div id="replicate_api_key_block" class="mb-4 hidden">
+                    <label for="replicate_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        Replicate API токен <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="replicate_api_key" name="replicate_api_key"
+                           value="{{ settings.replicate_api_key or '' }}"
+                           class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="r8_...">
+                </div>
+
+                <!-- Настройки DALL-E -->
+                <div id="dalle_settings" class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label for="openai_image_quality" class="block text-sm font-medium text-gray-700 mb-1">
+                            Качество DALL-E
+                        </label>
+                        <select id="openai_image_quality" name="openai_image_quality"
+                                class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <option value="standard" {{ 'selected' if (settings.openai_image_quality or 'standard') == 'standard' else '' }}>
+                                Standard ($0.04)
+                            </option>
+                            <option value="hd" {{ 'selected' if settings.openai_image_quality == 'hd' else '' }}>
+                                HD ($0.08) - больше деталей
+                            </option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="openai_image_style" class="block text-sm font-medium text-gray-700 mb-1">
+                            Стиль DALL-E
+                        </label>
+                        <select id="openai_image_style" name="openai_image_style"
+                                class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <option value="vivid" {{ 'selected' if (settings.openai_image_style or 'vivid') == 'vivid' else '' }}>
+                                Vivid - яркий, насыщенный
+                            </option>
+                            <option value="natural" {{ 'selected' if settings.openai_image_style == 'natural' else '' }}>
+                                Natural - естественный, реалистичный
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Размер изображения -->
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label for="image_gen_width" class="block text-sm font-medium text-gray-700 mb-1">
+                            Ширина (px)
+                        </label>
+                        <input type="number" id="image_gen_width" name="image_gen_width"
+                               value="{{ settings.image_gen_width or 1440 }}"
+                               class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    </div>
+                    <div>
+                        <label for="image_gen_height" class="block text-sm font-medium text-gray-700 mb-1">
+                            Высота (px)
+                        </label>
+                        <input type="number" id="image_gen_height" name="image_gen_height"
+                               value="{{ settings.image_gen_height or 810 }}"
+                               class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    </div>
+                </div>
+
+                <div class="p-3 bg-orange-100 rounded-lg text-sm text-orange-800">
+                    <strong>Как использовать:</strong> после генерации Rich-контента появится кнопка "Сгенерировать изображения" в карточке товара.
+                </div>
+            </div>
+        </div>
+
         <!-- Кнопки -->
         <div class="flex gap-4">
             <button type="submit"
@@ -683,6 +843,49 @@ document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('ai_enabled').checked) {
         loadModels();
     }
+    // Инициализация настроек генерации изображений
+    updateImageGenProviderHint();
 });
+
+// =====================================================
+// Функции для генерации изображений
+// =====================================================
+
+function toggleImageGenSettings() {
+    const checkbox = document.getElementById('image_gen_enabled');
+    const settingsBlock = document.getElementById('image_gen_settings_block');
+    if (checkbox.checked) {
+        settingsBlock.classList.remove('hidden');
+        updateImageGenProviderHint();
+    } else {
+        settingsBlock.classList.add('hidden');
+    }
+}
+
+function updateImageGenProviderHint() {
+    const provider = document.getElementById('image_gen_provider')?.value;
+    if (!provider) return;
+
+    const openaiHint = document.getElementById('openai_hint');
+    const replicateHint = document.getElementById('replicate_hint');
+    const openaiKeyBlock = document.getElementById('openai_api_key_block');
+    const replicateKeyBlock = document.getElementById('replicate_api_key_block');
+    const dalleSettings = document.getElementById('dalle_settings');
+
+    if (provider === 'openai_dalle') {
+        openaiHint?.classList.remove('hidden');
+        replicateHint?.classList.add('hidden');
+        openaiKeyBlock?.classList.remove('hidden');
+        replicateKeyBlock?.classList.add('hidden');
+        dalleSettings?.classList.remove('hidden');
+    } else {
+        // Flux или SDXL - используют Replicate
+        openaiHint?.classList.add('hidden');
+        replicateHint?.classList.remove('hidden');
+        openaiKeyBlock?.classList.add('hidden');
+        replicateKeyBlock?.classList.remove('hidden');
+        dalleSettings?.classList.add('hidden');
+    }
+}
 </script>
 {% endblock %}

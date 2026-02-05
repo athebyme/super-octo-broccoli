@@ -21,12 +21,32 @@ import sqlite3
 import os
 import sys
 
-# Путь к базе данных
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance', 'app.db')
+def find_database():
+    """Находит базу данных в разных возможных путях"""
+    # Возможные пути к базе данных
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
 
-# Альтернативный путь если instance нет
-if not os.path.exists(DB_PATH):
-    DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'app.db')
+    possible_paths = [
+        # Docker пути
+        '/app/instance/app.db',
+        '/app/app.db',
+        '/app/data/app.db',
+        # Локальные пути относительно скрипта
+        os.path.join(parent_dir, 'instance', 'app.db'),
+        os.path.join(parent_dir, 'app.db'),
+        os.path.join(parent_dir, 'data', 'app.db'),
+        # Текущая директория
+        'instance/app.db',
+        'app.db',
+        'data/app.db',
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+
+    return None
 
 
 def get_existing_columns(cursor, table_name):
@@ -37,8 +57,14 @@ def get_existing_columns(cursor, table_name):
 
 def migrate():
     """Выполняет миграцию"""
-    if not os.path.exists(DB_PATH):
-        print(f"❌ База данных не найдена: {DB_PATH}")
+    DB_PATH = find_database()
+
+    if not DB_PATH:
+        print("❌ База данных не найдена!")
+        print("   Проверьте, что файл app.db существует в одном из путей:")
+        print("   - /app/instance/app.db (Docker)")
+        print("   - ./instance/app.db")
+        print("   - ./app.db")
         sys.exit(1)
 
     print(f"📂 База данных: {DB_PATH}")
