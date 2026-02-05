@@ -319,6 +319,18 @@ def register_auto_import_routes(app):
         except:
             product.validation_errors_list = []
 
+        # Безопасный доступ к AI-полям (могут не существовать до миграции)
+        product.has_ai_data = False
+        try:
+            product.has_ai_data = bool(
+                getattr(product, 'ai_keywords', None) or
+                getattr(product, 'ai_bullets', None) or
+                getattr(product, 'ai_rich_content', None) or
+                getattr(product, 'ai_analysis', None)
+            )
+        except:
+            pass
+
         # Получаем список всех WB категорий для dropdown
         from wb_categories_mapping import WB_ADULT_CATEGORIES
         wb_categories = WB_ADULT_CATEGORIES
