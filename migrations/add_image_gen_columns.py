@@ -5,9 +5,10 @@
 
 Добавляет в таблицу auto_import_settings:
 - image_gen_enabled: включена ли генерация картинок
-- image_gen_provider: провайдер (openai_dalle, flux_pro, sdxl)
+- image_gen_provider: провайдер (together_flux рекомендуется!)
 - openai_api_key: API ключ OpenAI
 - replicate_api_key: API ключ Replicate
+- together_api_key: API ключ Together AI (рекомендуется - $5 бесплатно!)
 - image_gen_width: ширина изображения
 - image_gen_height: высота изображения
 - openai_image_quality: качество DALL-E (standard/hd)
@@ -89,9 +90,10 @@ def migrate():
         # Колонки для добавления
         new_columns = [
             ("image_gen_enabled", "BOOLEAN DEFAULT 0 NOT NULL"),
-            ("image_gen_provider", "VARCHAR(50) DEFAULT 'openai_dalle'"),
+            ("image_gen_provider", "VARCHAR(50) DEFAULT 'together_flux'"),
             ("openai_api_key", "VARCHAR(500)"),
             ("replicate_api_key", "VARCHAR(500)"),
+            ("together_api_key", "VARCHAR(500)"),  # Together AI - рекомендуется!
             ("image_gen_width", "INTEGER DEFAULT 1440"),
             ("image_gen_height", "INTEGER DEFAULT 810"),
             ("openai_image_quality", "VARCHAR(20) DEFAULT 'standard'"),

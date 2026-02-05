@@ -723,9 +723,10 @@ class AutoImportSettings(db.Model):
 
     # Настройки генерации изображений для инфографики
     image_gen_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включена генерация картинок
-    image_gen_provider = db.Column(db.String(50), default='openai_dalle')  # Провайдер (openai_dalle, flux_pro, sdxl)
+    image_gen_provider = db.Column(db.String(50), default='together_flux')  # Провайдер (together_flux рекомендуется!)
     openai_api_key = db.Column(db.String(500))  # API ключ OpenAI (для DALL-E)
     replicate_api_key = db.Column(db.String(500))  # API ключ Replicate (для Flux/SDXL)
+    together_api_key = db.Column(db.String(500))  # API ключ Together AI (рекомендуется - $5 бесплатно!)
     image_gen_width = db.Column(db.Integer, default=1440)  # Ширина изображения
     image_gen_height = db.Column(db.Integer, default=810)  # Высота изображения
     openai_image_quality = db.Column(db.String(20), default='standard')  # standard или hd

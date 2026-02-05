@@ -4,11 +4,13 @@ Image Generation Service - Генерация изображений для ин
 
 Поддерживаемые провайдеры:
 - OpenAI DALL-E 3 (лучшее качество, понимает русский)
+- Together AI Flux (быстрый, $5 бесплатно при регистрации)
 - Flux.1 Pro через Replicate (быстрый, высокое качество)
 - Stable Diffusion XL через Replicate (бюджетный)
 
 Для работы нужны API ключи:
 - OpenAI: https://platform.openai.com/api-keys
+- Together AI: https://api.together.xyz/settings/api-keys (рекомендуется!)
 - Replicate: https://replicate.com/account/api-tokens
 """
 
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 class ImageProvider(Enum):
     """Поддерживаемые провайдеры генерации изображений"""
     OPENAI_DALLE = "openai_dalle"  # DALL-E 3
+    TOGETHER_FLUX = "together_flux"  # Flux через Together AI (рекомендуется!)
     FLUX_PRO = "flux_pro"  # Flux.1 Pro через Replicate
     SDXL = "sdxl"  # Stable Diffusion XL через Replicate
 
@@ -42,8 +45,18 @@ PROVIDER_CONFIG = {
         "api_url": "https://api.openai.com/v1/images/generations",
         "price_per_image": "$0.04-0.12",
         "max_size": "1792x1024",
-        "supports_reference": False,  # Не поддерживает img2img напрямую
-        "recommended": True
+        "supports_reference": False,
+        "recommended": False
+    },
+    ImageProvider.TOGETHER_FLUX: {
+        "name": "Together AI Flux",
+        "description": "Быстрый, $5 бесплатно, высокий лимит запросов",
+        "api_url": "https://api.together.xyz/v1/images/generations",
+        "model": "black-forest-labs/FLUX.1-schnell-Free",
+        "price_per_image": "~$0.00 (free tier)",
+        "max_size": "1440x810",
+        "supports_reference": False,
+        "recommended": True  # Рекомендуется как основной!
     },
     ImageProvider.FLUX_PRO: {
         "name": "Flux.1 Pro",
@@ -79,6 +92,8 @@ class ImageGenerationConfig:
     openai_style: str = "vivid"  # vivid или natural
     # Replicate specific
     replicate_api_key: str = ""
+    # Together AI specific
+    together_api_key: str = ""
     # Общие
     default_width: int = 1440
     default_height: int = 810
@@ -90,21 +105,24 @@ class ImageGenerationConfig:
         if not hasattr(settings, 'image_gen_enabled') or not settings.image_gen_enabled:
             return None
 
-        provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle')
+        provider_str = getattr(settings, 'image_gen_provider', 'together_flux')  # Together по умолчанию
         try:
             provider = ImageProvider(provider_str)
         except ValueError:
-            provider = ImageProvider.OPENAI_DALLE
+            provider = ImageProvider.TOGETHER_FLUX  # Together как default
 
         api_key = ""
         replicate_key = ""
+        together_key = ""
 
         if provider == ImageProvider.OPENAI_DALLE:
             api_key = getattr(settings, 'openai_api_key', '') or ''
+        elif provider == ImageProvider.TOGETHER_FLUX:
+            together_key = getattr(settings, 'together_api_key', '') or ''
         else:
             replicate_key = getattr(settings, 'replicate_api_key', '') or ''
 
-        if not api_key and not replicate_key:
+        if not api_key and not replicate_key and not together_key:
             logger.warning("Image generation включен, но API ключ не указан")
             return None
 
@@ -112,6 +130,7 @@ class ImageGenerationConfig:
             provider=provider,
             api_key=api_key,
             replicate_api_key=replicate_key,
+            together_api_key=together_key,
             openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
             openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid',
             default_width=getattr(settings, 'image_gen_width', 1440) or 1440,
@@ -243,6 +262,125 @@ No text overlays, no watermarks, no logos.
         except Exception as e:
             logger.warning(f"Ошибка resize: {e}, возвращаем оригинал")
             return image_bytes
+
+
+class TogetherImageGenerator(ImageGenerator):
+    """
+    Генератор изображений через Together AI API
+
+    Преимущества:
+    - $5 бесплатных кредитов при регистрации
+    - Высокий лимит запросов (без жёстких ограничений)
+    - OpenAI-совместимый API
+    - Поддержка Flux моделей
+    """
+
+    def __init__(self, config: ImageGenerationConfig):
+        self.config = config
+        self.api_url = "https://api.together.xyz/v1/images/generations"
+        # Доступные модели Flux на Together AI
+        self.models = {
+            "schnell": "black-forest-labs/FLUX.1-schnell-Free",  # Бесплатная быстрая
+            "schnell_paid": "black-forest-labs/FLUX.1-schnell",  # Платная быстрая
+            "dev": "black-forest-labs/FLUX.1-dev",  # Development версия
+        }
+
+    def generate(
+        self,
+        prompt: str,
+        width: int = 1440,
+        height: int = 810,
+        reference_image_url: Optional[str] = None
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Генерирует изображение через Together AI"""
+
+        api_key = self.config.together_api_key
+
+        # Together поддерживает размеры кратные 32
+        width = (width // 32) * 32
+        height = (height // 32) * 32
+
+        # Ограничения Together AI для бесплатного Flux
+        width = min(max(width, 256), 1440)
+        height = min(max(height, 256), 1440)
+
+        enhanced_prompt = self._enhance_prompt(prompt)
+
+        payload = {
+            "model": self.models["schnell"],  # Бесплатная модель
+            "prompt": enhanced_prompt,
+            "width": width,
+            "height": height,
+            "n": 1,
+            "steps": 4,  # Schnell оптимизирован для 4 шагов
+            "response_format": "b64_json"
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            logger.info(f"🎨 Together AI Flux генерация: {prompt[:100]}...")
+
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.config.timeout
+            )
+
+            if response.status_code == 429:
+                # Rate limit - ждём и повторяем
+                retry_after = int(response.headers.get('Retry-After', 10))
+                logger.warning(f"⏳ Together AI rate limit, ждём {retry_after}с...")
+                time.sleep(retry_after)
+                response = requests.post(
+                    self.api_url, json=payload, headers=headers, timeout=self.config.timeout
+                )
+
+            if response.status_code != 200:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('error', {}).get('message', response.text[:300])
+                logger.error(f"❌ Together AI ошибка: {response.status_code} - {error_msg}")
+                return False, None, f"Together AI ошибка: {error_msg}"
+
+            data = response.json()
+
+            # Together возвращает данные в формате OpenAI
+            if 'data' in data and len(data['data']) > 0:
+                image_data = data['data'][0]
+
+                if 'b64_json' in image_data:
+                    image_bytes = base64.b64decode(image_data['b64_json'])
+                elif 'url' in image_data:
+                    # Скачиваем по URL
+                    img_response = requests.get(image_data['url'], timeout=60)
+                    if img_response.status_code == 200:
+                        image_bytes = img_response.content
+                    else:
+                        return False, None, "Не удалось скачать изображение"
+                else:
+                    return False, None, "Неожиданный формат ответа от Together AI"
+
+                logger.info(f"✅ Together AI изображение создано ({len(image_bytes)} байт)")
+                return True, image_bytes, ""
+
+            return False, None, "Пустой ответ от Together AI"
+
+        except requests.exceptions.Timeout:
+            return False, None, f"Таймаут запроса ({self.config.timeout}с)"
+        except Exception as e:
+            logger.error(f"❌ Together AI ошибка: {e}")
+            return False, None, str(e)
+
+    def _enhance_prompt(self, prompt: str) -> str:
+        """Улучшает промпт для Flux"""
+        return f"""Professional e-commerce product infographic slide.
+{prompt}
+Style: clean, modern, minimalist, commercial photography.
+No text, no watermarks, no logos. High quality, sharp details."""
 
 
 class ReplicateImageGenerator(ImageGenerator):
@@ -512,7 +650,10 @@ class ImageGenerationService:
         # Создаем генератор под провайдера
         if config.provider == ImageProvider.OPENAI_DALLE:
             self.generator = OpenAIImageGenerator(config)
+        elif config.provider == ImageProvider.TOGETHER_FLUX:
+            self.generator = TogetherImageGenerator(config)
         else:
+            # Replicate (FLUX_PRO, SDXL)
             self.generator = ReplicateImageGenerator(config)
 
     def generate_from_prompt(
@@ -592,10 +733,11 @@ class ImageGenerationService:
         results = []
 
         # Определяем паузу между запросами в зависимости от провайдера
-        # Replicate free tier: 6 запросов/минуту = 10с между запросами
+        # Together AI: высокий лимит, быстрая генерация
         # OpenAI: 50 запросов/минуту (но дорого)
-        if self.config.provider == ImageProvider.OPENAI_DALLE:
-            pause_between_requests = 2  # OpenAI имеет высокий лимит
+        # Replicate free tier: 6 запросов/минуту
+        if self.config.provider in (ImageProvider.OPENAI_DALLE, ImageProvider.TOGETHER_FLUX):
+            pause_between_requests = 2  # Высокий лимит
         else:
             pause_between_requests = 12  # Replicate: 6/мин = 10с + запас
 

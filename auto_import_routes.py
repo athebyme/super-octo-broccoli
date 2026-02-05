@@ -187,9 +187,10 @@ def register_auto_import_routes(app):
 
             # Настройки генерации изображений
             settings.image_gen_enabled = request.form.get('image_gen_enabled') == 'on'
-            settings.image_gen_provider = request.form.get('image_gen_provider', 'openai_dalle').strip()
+            settings.image_gen_provider = request.form.get('image_gen_provider', 'together_flux').strip()
             settings.openai_api_key = request.form.get('openai_api_key', '').strip()
             settings.replicate_api_key = request.form.get('replicate_api_key', '').strip()
+            settings.together_api_key = request.form.get('together_api_key', '').strip()
 
             try:
                 settings.image_gen_width = int(request.form.get('image_gen_width', 1440))
@@ -1945,19 +1946,24 @@ def register_auto_import_routes(app):
             from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
 
             # Создаем конфигурацию
-            provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle') or 'openai_dalle'
+            provider_str = getattr(settings, 'image_gen_provider', 'together_flux') or 'together_flux'
             try:
                 provider = ImageProvider(provider_str)
             except ValueError:
-                provider = ImageProvider.OPENAI_DALLE
+                provider = ImageProvider.TOGETHER_FLUX
 
             api_key = ""
             replicate_key = ""
+            together_key = ""
 
             if provider == ImageProvider.OPENAI_DALLE:
                 api_key = getattr(settings, 'openai_api_key', '') or ''
                 if not api_key:
                     return jsonify({'success': False, 'error': 'OpenAI API ключ не настроен'}), 400
+            elif provider == ImageProvider.TOGETHER_FLUX:
+                together_key = getattr(settings, 'together_api_key', '') or ''
+                if not together_key:
+                    return jsonify({'success': False, 'error': 'Together AI API ключ не настроен. Получите бесплатно на api.together.xyz'}), 400
             else:
                 replicate_key = getattr(settings, 'replicate_api_key', '') or ''
                 if not replicate_key:
@@ -1967,6 +1973,7 @@ def register_auto_import_routes(app):
                 provider=provider,
                 api_key=api_key,
                 replicate_api_key=replicate_key,
+                together_api_key=together_key,
                 openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
                 openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid',
                 default_width=getattr(settings, 'image_gen_width', 1440) or 1440,
@@ -2054,22 +2061,31 @@ def register_auto_import_routes(app):
 
             from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
 
-            provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle') or 'openai_dalle'
+            provider_str = getattr(settings, 'image_gen_provider', 'together_flux') or 'together_flux'
             try:
                 provider = ImageProvider(provider_str)
             except ValueError:
-                provider = ImageProvider.OPENAI_DALLE
+                provider = ImageProvider.TOGETHER_FLUX
 
-            api_key = getattr(settings, 'openai_api_key', '') if provider == ImageProvider.OPENAI_DALLE else ''
-            replicate_key = getattr(settings, 'replicate_api_key', '') if provider != ImageProvider.OPENAI_DALLE else ''
+            api_key = ""
+            replicate_key = ""
+            together_key = ""
 
-            if not api_key and not replicate_key:
+            if provider == ImageProvider.OPENAI_DALLE:
+                api_key = getattr(settings, 'openai_api_key', '') or ''
+            elif provider == ImageProvider.TOGETHER_FLUX:
+                together_key = getattr(settings, 'together_api_key', '') or ''
+            else:
+                replicate_key = getattr(settings, 'replicate_api_key', '') or ''
+
+            if not api_key and not replicate_key and not together_key:
                 return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
 
             config = ImageGenerationConfig(
                 provider=provider,
                 api_key=api_key,
                 replicate_api_key=replicate_key,
+                together_api_key=together_key,
                 openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
                 openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid'
             )
