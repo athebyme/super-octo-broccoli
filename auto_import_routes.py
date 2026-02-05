@@ -2045,6 +2045,11 @@ def register_auto_import_routes(app):
                 product.sizes = updates['sizes_text']
                 applied.append('sizes_text')
 
+            # Характеристики из WB API
+            if 'wb_characteristics' in updates and updates['wb_characteristics']:
+                product.ai_dimensions = json.dumps(updates['wb_characteristics'], ensure_ascii=False)
+                applied.append('wb_characteristics')
+
             if applied:
                 db.session.commit()
 

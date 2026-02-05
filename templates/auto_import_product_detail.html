@@ -1744,6 +1744,13 @@ document.addEventListener('DOMContentLoaded', function() {
         if (result.success) {
             const data = result.data;
             const wbChars = result.wb_characteristics || [];
+
+            // Сохраняем данные для применения
+            currentAiData = {
+                dimensions: data.extracted_values,
+                wb_characteristics: data.extracted_values
+            };
+
             let content = '<div class="space-y-4">';
 
             // Информация о категории
@@ -1839,7 +1846,7 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
 
             content += '</div>';
-            showModal('Характеристики категории WB', content, false);
+            showModal('Характеристики категории WB', content, true);
         } else {
             showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
         }
