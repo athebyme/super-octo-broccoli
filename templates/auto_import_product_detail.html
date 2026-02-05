@@ -1558,72 +1558,151 @@ document.addEventListener('DOMContentLoaded', function() {
         if (result.success) {
             currentAiData = { sizes: result.data };
             let content = '<div class="space-y-4">';
+            const data = result.data;
 
-            // Стандартизированные размеры
-            if (result.data.standardized_sizes?.length) {
+            // Тип размеров с переводом
+            const sizeTypeLabels = {
+                'letter': 'Буквенные (S/M/L)',
+                'numeric': 'Числовые (42/44/46)',
+                'combined': 'Комбинированные',
+                'one_size': 'Универсальный размер'
+            };
+            const sizeTypeLabel = sizeTypeLabels[data.size_type] || data.size_type;
+
+            content += `
+                <div class="bg-blue-50 p-3 rounded-lg flex items-center justify-between">
+                    <span class="text-sm text-gray-700">Тип размеров:</span>
+                    <span class="font-medium text-blue-700">${sizeTypeLabel}</span>
+                </div>
+            `;
+
+            // Размеры из массива sizes
+            if (data.sizes?.length > 0) {
                 content += `
                     <div class="bg-green-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-green-700 mb-2">Стандартизированные размеры:</h4>
-                        <div class="flex flex-wrap gap-2">
-                            ${result.data.standardized_sizes.map(s => `<span class="px-3 py-1 bg-green-200 text-green-800 rounded-full font-medium">${s}</span>`).join('')}
-                        </div>
-                    </div>
+                        <h4 class="font-medium text-green-700 mb-3">Размеры:</h4>
+                        <div class="space-y-2">
                 `;
-            }
 
-            // Международные размеры
-            if (result.data.international_sizes) {
-                const intl = result.data.international_sizes;
+                data.sizes.forEach(size => {
+                    content += `
+                        <div class="flex items-center justify-between bg-white p-2 rounded border border-green-200">
+                            <div class="flex gap-3">
+                                <span class="px-3 py-1 bg-green-200 text-green-800 rounded-full font-medium">${size.standardized || size.original}</span>
+                                ${size.ru_size ? `<span class="px-2 py-1 bg-purple-100 text-purple-700 text-sm rounded">RU: ${size.ru_size}</span>` : ''}
+                                ${size.international ? `<span class="px-2 py-1 bg-blue-100 text-blue-700 text-sm rounded">INT: ${size.international}</span>` : ''}
+                            </div>
+                            ${size.original !== size.standardized ? `<span class="text-xs text-gray-400">из: ${size.original}</span>` : ''}
+                        </div>
+                    `;
+                });
+
                 content += `
-                    <div class="bg-blue-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-blue-700 mb-2">Международные размеры:</h4>
-                        <div class="grid grid-cols-2 gap-2 text-sm">
-                            ${intl.xs !== undefined ? `<div>XS: <span class="font-medium">${intl.xs}</span></div>` : ''}
-                            ${intl.s !== undefined ? `<div>S: <span class="font-medium">${intl.s}</span></div>` : ''}
-                            ${intl.m !== undefined ? `<div>M: <span class="font-medium">${intl.m}</span></div>` : ''}
-                            ${intl.l !== undefined ? `<div>L: <span class="font-medium">${intl.l}</span></div>` : ''}
-                            ${intl.xl !== undefined ? `<div>XL: <span class="font-medium">${intl.xl}</span></div>` : ''}
-                            ${intl.xxl !== undefined ? `<div>XXL: <span class="font-medium">${intl.xxl}</span></div>` : ''}
                         </div>
+                    </div>
+                `;
+            } else if (data.size_type === 'one_size') {
+                content += `
+                    <div class="bg-yellow-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-yellow-700 mb-2">Универсальный размер</h4>
+                        <p class="text-sm text-yellow-600">Товар не имеет размерной сетки или подходит для всех размеров.</p>
+                        ${data.size_range?.min && data.size_range?.max ? `
+                            <p class="text-sm text-gray-600 mt-2">Примерный диапазон: ${data.size_range.min} - ${data.size_range.max}</p>
+                        ` : ''}
                     </div>
                 `;
             }
 
-            // Российские размеры
-            if (result.data.russian_sizes?.length) {
+            // Диапазон размеров
+            if (data.size_range && (data.size_range.min || data.size_range.max)) {
+                content += `
+                    <div class="bg-gray-50 p-3 rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2">Диапазон размеров:</h4>
+                        <p class="text-sm">от <span class="font-medium">${data.size_range.min || '?'}</span> до <span class="font-medium">${data.size_range.max || '?'}</span></p>
+                    </div>
+                `;
+            }
+
+            // Мерки тела
+            const measurements = data.body_measurements;
+            if (measurements && (measurements.chest_cm || measurements.waist_cm || measurements.hips_cm)) {
                 content += `
                     <div class="bg-purple-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-purple-700 mb-2">Российские размеры:</h4>
-                        <div class="flex flex-wrap gap-2">
-                            ${result.data.russian_sizes.map(s => `<span class="px-2 py-1 bg-purple-200 text-purple-800 text-sm rounded">${s}</span>`).join('')}
+                        <h4 class="font-medium text-purple-700 mb-2">Размеры тела (см):</h4>
+                        <div class="grid grid-cols-3 gap-2 text-sm">
+                            ${measurements.chest_cm ? `<div class="text-center"><div class="text-xs text-gray-500">Грудь</div><div class="font-medium">${measurements.chest_cm}</div></div>` : ''}
+                            ${measurements.waist_cm ? `<div class="text-center"><div class="text-xs text-gray-500">Талия</div><div class="font-medium">${measurements.waist_cm}</div></div>` : ''}
+                            ${measurements.hips_cm ? `<div class="text-center"><div class="text-xs text-gray-500">Бёдра</div><div class="font-medium">${measurements.hips_cm}</div></div>` : ''}
                         </div>
                     </div>
                 `;
             }
 
-            // Размерная сетка
-            if (result.data.size_grid) {
-                const grid = result.data.size_grid;
+            // Тип посадки
+            if (data.fit_type) {
+                const fitLabels = {
+                    'tight': 'Облегающий',
+                    'regular': 'Обычный',
+                    'loose': 'Свободный',
+                    'oversized': 'Оверсайз'
+                };
+                content += `<p class="text-sm text-gray-600">Посадка: <span class="font-medium">${fitLabels[data.fit_type] || data.fit_type}</span></p>`;
+            }
+
+            // Уверенность
+            if (data.confidence) {
+                const confPercent = Math.round(data.confidence * 100);
                 content += `
-                    <div class="bg-gray-50 p-4 rounded-lg">
-                        <h4 class="font-medium text-gray-700 mb-2">Размерная сетка:</h4>
-                        <div class="text-sm space-y-1">
-                            ${grid.bust ? `<p>Обхват груди: ${grid.bust}</p>` : ''}
-                            ${grid.waist ? `<p>Обхват талии: ${grid.waist}</p>` : ''}
-                            ${grid.hips ? `<p>Обхват бёдер: ${grid.hips}</p>` : ''}
-                            ${grid.length ? `<p>Длина: ${grid.length}</p>` : ''}
+                    <div class="flex items-center gap-2 text-xs text-gray-500">
+                        <span>Уверенность AI:</span>
+                        <div class="w-20 bg-gray-200 rounded-full h-1.5">
+                            <div class="bg-green-500 h-1.5 rounded-full" style="width: ${confPercent}%"></div>
                         </div>
+                        <span>${confPercent}%</span>
                     </div>
                 `;
-            }
-
-            // Тип размеров
-            if (result.data.size_type) {
-                content += `<p class="text-sm text-gray-600">Тип размеров: <span class="font-medium">${result.data.size_type}</span></p>`;
             }
 
             content += '</div>';
             showModal('Размеры товара', content, false);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Description Enhancement (aiDescriptionBtn)
+    document.getElementById('aiDescriptionBtn')?.addEventListener('click', async function() {
+        console.log('Description button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/enhance-description', this);
+        if (result.success) {
+            currentAiData = { description: result.data.description };
+            const content = `
+                <div class="space-y-4">
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2">Текущее описание:</h4>
+                        <p class="text-gray-600 text-sm max-h-32 overflow-y-auto">${result.original_description || '—'}</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-green-700 mb-2">Улучшенное описание:</h4>
+                        <p class="text-green-800 whitespace-pre-line">${result.data.description || '—'}</p>
+                    </div>
+                    ${result.data.key_features?.length ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Ключевые особенности:</h4>
+                        <ul class="list-disc list-inside text-sm text-gray-600 space-y-1">
+                            ${result.data.key_features.map(f => `<li>${f}</li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                    ${result.data.seo_keywords?.length ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">SEO ключевые слова:</h4>
+                        <div class="flex flex-wrap gap-1">
+                            ${result.data.seo_keywords.map(k => `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full">${k}</span>`).join('')}
+                        </div>
+                    </div>` : ''}
+                </div>
+            `;
+            showModal('Улучшение описания', content, true);
         } else {
             showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
         }
