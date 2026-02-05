@@ -672,6 +672,330 @@ Rich-контент на WB - это визуальные блоки (слайд
 ВАЖНО:
 - Заполняй МАКСИМУМ характеристик из списка которые подходят
 - Отвечай ТОЛЬКО валидным JSON без дополнительного текста"""
+    },
+
+    "dimensions_extraction": {
+        "name": "Извлечение габаритов",
+        "description": "Извлечение физических размеров товара (длина, ширина, высота, вес)",
+        "template": """Ты эксперт по извлечению физических размеров товаров для маркетплейса Wildberries.
+
+Твоя задача - найти и извлечь ВСЕ габариты товара из названия, описания и характеристик.
+
+КАКИЕ РАЗМЕРЫ НУЖНО НАЙТИ:
+1. Длина (см) - общая длина изделия
+2. Ширина (см) - ширина изделия
+3. Высота (см) - высота изделия
+4. Глубина (см) - если применимо
+5. Диаметр (см) - для круглых изделий
+6. Вес (г) - вес товара
+7. Объем (мл/л) - для жидкостей и емкостей
+8. Рабочая длина (см) - для вибраторов и подобных изделий
+9. Размеры упаковки (длина x ширина x высота)
+
+ПРАВИЛА:
+1. Преобразуй все единицы в стандартные (см, г, мл)
+2. Числа с запятой преобразуй в точку (7,5 → 7.5)
+3. Если диапазон (15-20 см) - укажи как "15-20" или среднее значение
+4. Различай размеры товара и размеры упаковки!
+5. Для одежды: обхват груди, талии, бедер в см
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "dimensions": {
+        "length_cm": <число или null>,
+        "width_cm": <число или null>,
+        "height_cm": <число или null>,
+        "depth_cm": <число или null>,
+        "diameter_cm": <число или null>,
+        "weight_g": <число или null>,
+        "volume_ml": <число или null>,
+        "working_length_cm": <число или null>
+    },
+    "package_dimensions": {
+        "length_cm": <число или null>,
+        "width_cm": <число или null>,
+        "height_cm": <число или null>,
+        "weight_g": <число или null>
+    },
+    "raw_text": "<исходный текст с размерами>",
+    "confidence": <число от 0.0 до 1.0>
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "clothing_sizes": {
+        "name": "Парсинг размеров одежды",
+        "description": "Определение и стандартизация размеров одежды",
+        "template": """Ты эксперт по размерам одежды для маркетплейса Wildberries.
+
+Твоя задача - распарсить и стандартизировать размеры одежды/белья.
+
+СТАНДАРТНЫЕ РАЗМЕРНЫЕ СЕТКИ:
+
+1. БУКВЕННЫЕ РАЗМЕРЫ:
+   XXS, XS, S, M, L, XL, XXL, XXXL, 4XL, 5XL, 6XL
+
+2. РОССИЙСКИЕ РАЗМЕРЫ (одежда):
+   40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66
+
+3. МЕЖДУНАРОДНОЕ СООТВЕТСТВИЕ:
+   XS = 40-42
+   S = 42-44
+   M = 44-46
+   L = 46-48
+   XL = 48-50
+   XXL = 50-52
+   XXXL = 52-54
+
+4. РАЗМЕРЫ БЕЛЬЯ:
+   - Бюстгальтеры: 70A, 75B, 80C и т.д.
+   - Трусы: S, M, L или 42, 44, 46
+
+5. РАЗМЕРЫ ОБУВИ:
+   - RU: 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45
+
+6. ONE SIZE / БЕЗРАЗМЕРНЫЙ:
+   - Подходит для диапазона 42-48 или указанного
+
+ПРАВИЛА:
+1. Определи тип размерной сетки (буквенная, числовая, комбинированная)
+2. Преобразуй в стандартный формат WB
+3. Если указан диапазон (S-M, 44-46) - укажи все размеры в нем
+4. Для one size укажи примерный диапазон
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "size_type": "letter/numeric/combined/one_size",
+    "sizes": [
+        {
+            "original": "<исходное значение>",
+            "standardized": "<стандартный размер WB>",
+            "ru_size": "<российский размер>",
+            "international": "<международный размер>"
+        }
+    ],
+    "size_range": {
+        "min": "<минимальный размер>",
+        "max": "<максимальный размер>"
+    },
+    "body_measurements": {
+        "chest_cm": "<обхват груди>",
+        "waist_cm": "<обхват талии>",
+        "hips_cm": "<обхват бедер>"
+    },
+    "fit_type": "tight/regular/loose/oversized",
+    "confidence": <число от 0.0 до 1.0>
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "brand_detection": {
+        "name": "Определение бренда",
+        "description": "Автоматическое определение бренда товара",
+        "template": """Ты эксперт по брендам товаров для маркетплейса Wildberries.
+
+Твоя задача - определить бренд товара из его названия, описания и характеристик.
+
+ПРАВИЛА ОПРЕДЕЛЕНИЯ БРЕНДА:
+1. Бренд обычно указан в начале названия или в характеристиках
+2. Отличай бренд от типа товара (Nike - бренд, Кроссовки - тип)
+3. Если бренд неизвестен - попробуй определить по:
+   - Упоминанию в описании
+   - Характерным особенностям продукции
+   - Стилю названия
+4. Для китайских товаров без явного бренда - указывай "No brand" или предполагаемый
+5. Некоторые бренды имеют несколько написаний - выбирай официальное
+
+ПОПУЛЯРНЫЕ БРЕНДЫ ПО КАТЕГОРИЯМ:
+- Одежда: Zara, H&M, Nike, Adidas, Puma, Reebok, Calvin Klein
+- Косметика: L'Oreal, Maybelline, MAC, NYX, Garnier
+- Электроника: Samsung, Apple, Xiaomi, Huawei, JBL
+- Интим-товары: Lola Games, Bior toys, Sexus, Lovetoy, Pipedream
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "brand": "<определенный бренд>",
+    "brand_normalized": "<нормализованное название для WB>",
+    "brand_type": "known/generic/no_brand/unknown",
+    "brand_origin": "название/описание/характеристики/определено_по_контексту",
+    "alternative_names": ["альтернативное написание 1", "альтернативное написание 2"],
+    "is_official": true/false,
+    "confidence": <число от 0.0 до 1.0>,
+    "reasoning": "<почему выбран этот бренд>"
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "material_detection": {
+        "name": "Определение материалов",
+        "description": "Извлечение информации о материалах и составе товара",
+        "template": """Ты эксперт по материалам и составу товаров для маркетплейса Wildberries.
+
+Твоя задача - определить материалы и состав товара из описания и характеристик.
+
+ТИПЫ МАТЕРИАЛОВ:
+
+1. ТКАНИ:
+   - Натуральные: хлопок, лен, шелк, шерсть, кашемир, вискоза
+   - Синтетические: полиэстер, нейлон, акрил, эластан, спандекс
+   - Смешанные: хлопок 95% + эластан 5%
+
+2. МАТЕРИАЛЫ ИНТИМ-ТОВАРОВ:
+   - Силикон (медицинский, пищевой)
+   - TPE/TPR (термопластичный эластомер)
+   - ABS-пластик
+   - Кибер-кожа (CyberSkin)
+   - ПВХ
+   - Латекс
+   - Металл (нержавеющая сталь)
+
+3. ДРУГИЕ:
+   - Кожа (натуральная, искусственная, экокожа)
+   - Пластик, металл, стекло, дерево
+
+ПРАВИЛА:
+1. Извлеки ВСЕ упомянутые материалы
+2. Если указан состав в процентах - сохрани проценты
+3. Определи основной материал (доминирующий)
+4. Для безопасности укажи гипоаллергенность
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "materials": [
+        {
+            "name": "<название материала>",
+            "name_ru": "<название на русском>",
+            "percentage": <процент или null>,
+            "is_primary": true/false
+        }
+    ],
+    "composition_text": "<полный состав как строка>",
+    "material_type": "natural/synthetic/mixed/unknown",
+    "care_instructions": ["рекомендация 1", "рекомендация 2"],
+    "properties": {
+        "hypoallergenic": true/false/null,
+        "waterproof": true/false/null,
+        "body_safe": true/false/null,
+        "phthalate_free": true/false/null
+    },
+    "confidence": <число от 0.0 до 1.0>
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "color_detection": {
+        "name": "Определение цвета",
+        "description": "Извлечение информации о цвете товара",
+        "template": """Ты эксперт по цветам товаров для маркетплейса Wildberries.
+
+Твоя задача - определить цвет товара из названия, описания и характеристик.
+
+СТАНДАРТНЫЕ ЦВЕТА WB:
+- Базовые: черный, белый, серый, бежевый, коричневый
+- Яркие: красный, синий, зеленый, желтый, оранжевый, розовый, фиолетовый
+- Оттенки: голубой, бирюзовый, бордовый, мятный, коралловый, персиковый
+- Металлик: золотой, серебряный, бронзовый
+- Прозрачный, мультиколор
+
+ПРАВИЛА:
+1. Определи основной цвет товара
+2. Если товар многоцветный - укажи все цвета
+3. Нормализуй название цвета для WB (молочный → белый/бежевый)
+4. Различай цвет товара и цвет упаковки
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "primary_color": "<основной цвет>",
+    "primary_color_wb": "<цвет для WB>",
+    "secondary_colors": ["дополнительный цвет 1", "дополнительный цвет 2"],
+    "color_description": "<описание цвета из источника>",
+    "is_multicolor": true/false,
+    "is_transparent": true/false,
+    "hex_code": "<#RRGGBB или null>",
+    "color_family": "neutral/warm/cool/bright/dark",
+    "confidence": <число от 0.0 до 1.0>
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "product_attributes": {
+        "name": "Комплексный анализ атрибутов",
+        "description": "Полное извлечение всех атрибутов товара за один запрос",
+        "template": """Ты эксперт по анализу карточек товаров для маркетплейса Wildberries.
+
+Твоя задача - извлечь ВСЕ возможные атрибуты товара за один проход.
+
+АТРИБУТЫ ДЛЯ ИЗВЛЕЧЕНИЯ:
+
+1. БРЕНД - название производителя/бренда
+
+2. ЦВЕТ - основной и дополнительные цвета
+
+3. МАТЕРИАЛ - состав и материалы изготовления
+
+4. РАЗМЕРЫ:
+   - Физические габариты (длина, ширина, высота, вес)
+   - Размеры одежды (S, M, L или 42, 44, 46)
+   - Специфичные размеры (диаметр, объем)
+
+5. ПОЛ - мужской/женский/унисекс
+
+6. ВОЗРАСТ - взрослый/детский/подростковый + конкретный возраст если указан
+
+7. СЕЗОН - всесезонный/лето/зима/демисезон
+
+8. СТРАНА - страна производства
+
+9. КОМПЛЕКТАЦИЯ - что входит в набор
+
+10. ОСОБЕННОСТИ - уникальные характеристики товара
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "brand": {
+        "name": "<бренд>",
+        "normalized": "<нормализованное название>",
+        "confidence": <0.0-1.0>
+    },
+    "colors": {
+        "primary": "<основной цвет>",
+        "secondary": ["доп. цвет"],
+        "wb_color": "<цвет для WB>"
+    },
+    "materials": {
+        "primary": "<основной материал>",
+        "composition": "<полный состав>",
+        "properties": ["свойство1", "свойство2"]
+    },
+    "dimensions": {
+        "length_cm": <число или null>,
+        "width_cm": <число или null>,
+        "height_cm": <число или null>,
+        "diameter_cm": <число или null>,
+        "weight_g": <число или null>,
+        "volume_ml": <число или null>
+    },
+    "clothing_size": {
+        "type": "letter/numeric/one_size/null",
+        "sizes": ["S", "M", "L"],
+        "ru_sizes": ["42", "44", "46"]
+    },
+    "gender": "male/female/unisex/null",
+    "age_group": "adult/teen/child/baby/null",
+    "age_range": "<возрастной диапазон или null>",
+    "season": "all_season/summer/winter/demi/null",
+    "country": "<страна производства или null>",
+    "package_contents": ["элемент 1", "элемент 2"],
+    "special_features": ["особенность 1", "особенность 2"],
+    "overall_confidence": <число от 0.0 до 1.0>
+}
+
+ВАЖНО: Заполняй ВСЕ поля что можешь определить. Отвечай ТОЛЬКО валидным JSON."""
     }
 }
 
@@ -699,6 +1023,13 @@ class AIConfig:
     custom_description_instruction: str = ""
     custom_rich_content_instruction: str = ""
     custom_analysis_instruction: str = ""
+    # Новые кастомные инструкции
+    custom_dimensions_instruction: str = ""
+    custom_clothing_sizes_instruction: str = ""
+    custom_brand_instruction: str = ""
+    custom_material_instruction: str = ""
+    custom_color_instruction: str = ""
+    custom_attributes_instruction: str = ""
     # Для логирования
     seller_id: int = 0
 
@@ -745,6 +1076,13 @@ class AIConfig:
             custom_description_instruction=getattr(settings, 'ai_description_instruction', '') or '',
             custom_rich_content_instruction=getattr(settings, 'ai_rich_content_instruction', '') or '',
             custom_analysis_instruction=getattr(settings, 'ai_analysis_instruction', '') or '',
+            # Новые кастомные инструкции
+            custom_dimensions_instruction=getattr(settings, 'ai_dimensions_instruction', '') or '',
+            custom_clothing_sizes_instruction=getattr(settings, 'ai_clothing_sizes_instruction', '') or '',
+            custom_brand_instruction=getattr(settings, 'ai_brand_instruction', '') or '',
+            custom_material_instruction=getattr(settings, 'ai_material_instruction', '') or '',
+            custom_color_instruction=getattr(settings, 'ai_color_instruction', '') or '',
+            custom_attributes_instruction=getattr(settings, 'ai_attributes_instruction', '') or '',
             seller_id=getattr(settings, 'seller_id', 0) or 0
         )
 
@@ -1431,6 +1769,315 @@ class CardAnalysisTask(AITask):
         return match.group() if match else text
 
 
+# ============================================================================
+# НОВЫЕ AI ЗАДАЧИ ДЛЯ РАСШИРЕННОГО АНАЛИЗА ТОВАРОВ
+# ============================================================================
+
+class DimensionsExtractionTask(AITask):
+    """Задача извлечения физических габаритов товара"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["dimensions_extraction"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        sizes_text = kwargs.get('sizes_text', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Извлеки габариты товара:
+
+НАЗВАНИЕ: {title}
+ОПИСАНИЕ: {description[:800] if description else 'Не указано'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+СТРОКА РАЗМЕРОВ: {sizes_text or 'Не указана'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'dimensions': data.get('dimensions', {}),
+                'package_dimensions': data.get('package_dimensions', {}),
+                'raw_text': data.get('raw_text', ''),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class ClothingSizesTask(AITask):
+    """Задача парсинга и стандартизации размеров одежды"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["clothing_sizes"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        sizes_text = kwargs.get('sizes_text', '')
+        category = kwargs.get('category', '')
+
+        return f"""Определи размеры одежды:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+СТРОКА РАЗМЕРОВ: {sizes_text or 'Не указана'}
+ОПИСАНИЕ: {description[:500] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'size_type': data.get('size_type', 'unknown'),
+                'sizes': data.get('sizes', []),
+                'size_range': data.get('size_range', {}),
+                'body_measurements': data.get('body_measurements', {}),
+                'fit_type': data.get('fit_type'),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class BrandDetectionTask(AITask):
+    """Задача автоматического определения бренда товара"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["brand_detection"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        category = kwargs.get('category', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Определи бренд товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+ОПИСАНИЕ: {description[:500] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'brand': data.get('brand', ''),
+                'brand_normalized': data.get('brand_normalized', ''),
+                'brand_type': data.get('brand_type', 'unknown'),
+                'brand_origin': data.get('brand_origin', ''),
+                'alternative_names': data.get('alternative_names', []),
+                'is_official': data.get('is_official', False),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5)))),
+                'reasoning': data.get('reasoning', '')
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class MaterialDetectionTask(AITask):
+    """Задача определения материалов и состава товара"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["material_detection"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        category = kwargs.get('category', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Определи материалы товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+ОПИСАНИЕ: {description[:800] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'materials': data.get('materials', []),
+                'composition_text': data.get('composition_text', ''),
+                'material_type': data.get('material_type', 'unknown'),
+                'care_instructions': data.get('care_instructions', []),
+                'properties': data.get('properties', {}),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class ColorDetectionTask(AITask):
+    """Задача определения цвета товара"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["color_detection"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Определи цвет товара:
+
+НАЗВАНИЕ: {title}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+ОПИСАНИЕ: {description[:500] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'primary_color': data.get('primary_color', ''),
+                'primary_color_wb': data.get('primary_color_wb', ''),
+                'secondary_colors': data.get('secondary_colors', []),
+                'color_description': data.get('color_description', ''),
+                'is_multicolor': data.get('is_multicolor', False),
+                'is_transparent': data.get('is_transparent', False),
+                'hex_code': data.get('hex_code'),
+                'color_family': data.get('color_family', ''),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class ProductAttributesTask(AITask):
+    """Задача комплексного извлечения всех атрибутов товара за один запрос"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["product_attributes"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        category = kwargs.get('category', '')
+        sizes_text = kwargs.get('sizes_text', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Извлеки все атрибуты товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+РАЗМЕРЫ: {sizes_text or 'Не указаны'}
+ОПИСАНИЕ: {description[:1000] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'brand': data.get('brand', {}),
+                'colors': data.get('colors', {}),
+                'materials': data.get('materials', {}),
+                'dimensions': data.get('dimensions', {}),
+                'clothing_size': data.get('clothing_size', {}),
+                'gender': data.get('gender'),
+                'age_group': data.get('age_group'),
+                'age_range': data.get('age_range'),
+                'season': data.get('season'),
+                'country': data.get('country'),
+                'package_contents': data.get('package_contents', []),
+                'special_features': data.get('special_features', []),
+                'overall_confidence': max(0.0, min(1.0, float(data.get('overall_confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
 class AIService:
     """
     Главный сервис для работы с AI
@@ -1666,6 +2313,154 @@ class AIService:
             brand=brand,
             characteristics=characteristics or {},
             price=price
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    # =========================================================================
+    # НОВЫЕ AI МЕТОДЫ ДЛЯ РАСШИРЕННОГО АНАЛИЗА
+    # =========================================================================
+
+    def extract_dimensions(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        sizes_text: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Извлекает физические габариты товара
+
+        Returns:
+            Tuple[success, {dimensions, package_dimensions, raw_text, confidence}, error]
+        """
+        task = DimensionsExtractionTask(self.client, self.config.custom_dimensions_instruction)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            sizes_text=sizes_text
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def parse_clothing_sizes(
+        self,
+        title: str,
+        sizes_text: str = '',
+        description: str = '',
+        category: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Парсит и стандартизирует размеры одежды
+
+        Returns:
+            Tuple[success, {size_type, sizes, size_range, body_measurements, fit_type, confidence}, error]
+        """
+        task = ClothingSizesTask(self.client, self.config.custom_clothing_sizes_instruction)
+        success, result, error = task.execute(
+            title=title,
+            sizes_text=sizes_text,
+            description=description,
+            category=category
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def detect_brand(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        category: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Определяет бренд товара
+
+        Returns:
+            Tuple[success, {brand, brand_normalized, brand_type, confidence, reasoning}, error]
+        """
+        task = BrandDetectionTask(self.client, self.config.custom_brand_instruction)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            category=category
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def detect_materials(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        category: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Определяет материалы и состав товара
+
+        Returns:
+            Tuple[success, {materials, composition_text, material_type, properties, confidence}, error]
+        """
+        task = MaterialDetectionTask(self.client, self.config.custom_material_instruction)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            category=category
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def detect_color(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Определяет цвет товара
+
+        Returns:
+            Tuple[success, {primary_color, primary_color_wb, secondary_colors, confidence}, error]
+        """
+        task = ColorDetectionTask(self.client, self.config.custom_color_instruction)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {}
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def extract_all_attributes(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        category: str = '',
+        sizes_text: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Комплексное извлечение всех атрибутов товара за один запрос
+
+        Returns:
+            Tuple[success, {brand, colors, materials, dimensions, clothing_size, gender, age_group, season, country, ...}, error]
+        """
+        task = ProductAttributesTask(self.client, self.config.custom_attributes_instruction)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            category=category,
+            sizes_text=sizes_text
         )
         if success and result:
             return True, result, ""

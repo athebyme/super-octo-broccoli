@@ -723,6 +723,13 @@ class AutoImportSettings(db.Model):
     ai_description_instruction = db.Column(db.Text)  # Кастомная инструкция для описания
     ai_rich_content_instruction = db.Column(db.Text)  # Кастомная инструкция для Rich контента
     ai_analysis_instruction = db.Column(db.Text)  # Кастомная инструкция для анализа карточки
+    # Новые кастомные инструкции для расширенного анализа
+    ai_dimensions_instruction = db.Column(db.Text)  # Инструкция для извлечения габаритов
+    ai_clothing_sizes_instruction = db.Column(db.Text)  # Инструкция для размеров одежды
+    ai_brand_instruction = db.Column(db.Text)  # Инструкция для определения бренда
+    ai_material_instruction = db.Column(db.Text)  # Инструкция для определения материалов
+    ai_color_instruction = db.Column(db.Text)  # Инструкция для определения цвета
+    ai_attributes_instruction = db.Column(db.Text)  # Инструкция для комплексного анализа
     # Cloud.ru OAuth2 credentials (вместо простого API ключа)
     ai_client_id = db.Column(db.String(500))  # Client ID для Cloud.ru OAuth2
     ai_client_secret = db.Column(db.String(500))  # Client Secret для Cloud.ru OAuth2
@@ -880,6 +887,18 @@ class ImportedProduct(db.Model):
     ai_analysis = db.Column(db.Text)  # Последний анализ карточки (JSON)
     ai_analysis_at = db.Column(db.DateTime)  # Когда был сделан анализ
     content_hash = db.Column(db.String(64))  # Хеш контента для отслеживания изменений
+
+    # Новые AI поля для расширенного анализа
+    ai_dimensions = db.Column(db.Text)  # Габариты (JSON) - length, width, height, weight
+    ai_clothing_sizes = db.Column(db.Text)  # Размеры одежды (JSON) - стандартизированные
+    ai_detected_brand = db.Column(db.Text)  # Определенный AI бренд (JSON)
+    ai_materials = db.Column(db.Text)  # Материалы и состав (JSON)
+    ai_colors = db.Column(db.Text)  # Цвета товара (JSON)
+    ai_attributes = db.Column(db.Text)  # Полный набор атрибутов (JSON)
+    ai_gender = db.Column(db.String(20))  # Пол: male/female/unisex
+    ai_age_group = db.Column(db.String(20))  # Возрастная группа
+    ai_season = db.Column(db.String(20))  # Сезон: all_season/summer/winter/demi
+    ai_country = db.Column(db.String(100))  # Страна производства
 
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
