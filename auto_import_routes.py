@@ -2571,7 +2571,7 @@ def register_auto_import_routes(app):
         # Получаем характеристики категории из WB API
         wb_characteristics = []
         size_characteristics = []
-        category_id = product.wb_category_id or product.wb_subject_id
+        category_id = product.wb_subject_id
 
         if category_id and seller.wb_api_key:
             try:
@@ -2978,7 +2978,7 @@ def register_auto_import_routes(app):
 
             if category_id and category_name:
                 product.mapped_wb_category = category_name
-                product.wb_category_id = category_id
+                product.wb_subject_id = category_id
                 product.category_confidence = confidence
                 db.session.commit()
 
