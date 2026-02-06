@@ -55,7 +55,40 @@
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-gray-500">Бренд</dt>
-                        <dd class="mt-1 text-sm text-gray-900">{{ product.brand or '—' }}</dd>
+                        <dd class="mt-1">
+                            <div id="brandDisplay" class="flex items-center justify-between">
+                                <span id="brandValue" class="text-sm text-gray-900">{{ product.brand or '—' }}</span>
+                                <div class="flex items-center gap-3">
+                                    <button type="button" id="validateBrandBtn" class="text-sm text-blue-600 hover:text-blue-900 font-medium" title="Проверить в справочнике WB">
+                                        🔍 Проверить
+                                    </button>
+                                    <button type="button" id="editBrandBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                                        Изменить
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="brandEditor" class="hidden mt-2">
+                                <div class="flex gap-2">
+                                    <input type="text" id="brandInput"
+                                           value="{{ product.brand or '' }}"
+                                           class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                                           placeholder="Введите название бренда">
+                                    <button type="button" id="searchBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                        🔍
+                                    </button>
+                                </div>
+                                <div id="brandSuggestions" class="hidden mt-2 border border-gray-200 rounded-md max-h-40 overflow-y-auto bg-white shadow-sm"></div>
+                                <div id="brandValidation" class="hidden mt-2 text-sm"></div>
+                                <div class="mt-2 flex gap-2">
+                                    <button type="button" id="saveBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                                        Сохранить
+                                    </button>
+                                    <button type="button" id="cancelBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                        Отмена
+                                    </button>
+                                </div>
+                            </div>
+                        </dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-gray-500">Страна производства</dt>
@@ -924,6 +957,162 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Ошибка при выполнении запроса: ' + error);
                 saveCategoryBtn.disabled = false;
                 saveCategoryBtn.textContent = 'Сохранить';
+            });
+        });
+    }
+
+    // === BRAND MANAGEMENT ===
+    const brandDisplay = document.getElementById('brandDisplay');
+    const brandEditor = document.getElementById('brandEditor');
+    const brandInput = document.getElementById('brandInput');
+    const brandValue = document.getElementById('brandValue');
+    const brandSuggestions = document.getElementById('brandSuggestions');
+    const brandValidation = document.getElementById('brandValidation');
+    const editBrandBtn = document.getElementById('editBrandBtn');
+    const validateBrandBtn = document.getElementById('validateBrandBtn');
+    const searchBrandBtn = document.getElementById('searchBrandBtn');
+    const saveBrandBtn = document.getElementById('saveBrandBtn');
+    const cancelBrandBtn = document.getElementById('cancelBrandBtn');
+
+    if (editBrandBtn) {
+        editBrandBtn.addEventListener('click', function() {
+            brandDisplay.classList.add('hidden');
+            brandEditor.classList.remove('hidden');
+        });
+    }
+
+    if (cancelBrandBtn) {
+        cancelBrandBtn.addEventListener('click', function() {
+            brandEditor.classList.add('hidden');
+            brandDisplay.classList.remove('hidden');
+            brandSuggestions.classList.add('hidden');
+            brandValidation.classList.add('hidden');
+        });
+    }
+
+    // Validate brand in WB
+    async function validateBrand(brandName) {
+        if (!brandName || brandName.length < 2) {
+            brandValidation.innerHTML = '<span class="text-yellow-600">Введите минимум 2 символа</span>';
+            brandValidation.classList.remove('hidden');
+            return;
+        }
+
+        brandValidation.innerHTML = '<span class="text-gray-500">Проверка...</span>';
+        brandValidation.classList.remove('hidden');
+
+        try {
+            const response = await fetch('/auto-import/validate-brand', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ brand: brandName })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                if (data.valid) {
+                    brandValidation.innerHTML = '<span class="text-green-600">✓ Бренд найден в справочнике WB: <strong>' + data.exact_match.name + '</strong></span>';
+                    brandInput.value = data.exact_match.name;
+                } else {
+                    let html = '<span class="text-yellow-600">⚠ Бренд не найден в справочнике WB</span>';
+                    if (data.suggestions && data.suggestions.length > 0) {
+                        html += '<div class="mt-1 text-xs text-gray-500">Похожие бренды:</div>';
+                    }
+                    brandValidation.innerHTML = html;
+
+                    // Show suggestions
+                    if (data.suggestions && data.suggestions.length > 0) {
+                        let suggestionsHtml = '';
+                        data.suggestions.forEach(brand => {
+                            suggestionsHtml += '<div class="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b border-gray-100 text-sm" data-brand="' + brand.name + '">' + brand.name + '</div>';
+                        });
+                        brandSuggestions.innerHTML = suggestionsHtml;
+                        brandSuggestions.classList.remove('hidden');
+
+                        // Click handler for suggestions
+                        brandSuggestions.querySelectorAll('[data-brand]').forEach(el => {
+                            el.addEventListener('click', function() {
+                                brandInput.value = this.dataset.brand;
+                                brandSuggestions.classList.add('hidden');
+                                brandValidation.innerHTML = '<span class="text-green-600">✓ Выбран бренд: <strong>' + this.dataset.brand + '</strong></span>';
+                            });
+                        });
+                    }
+                }
+            } else {
+                brandValidation.innerHTML = '<span class="text-red-600">Ошибка: ' + (data.error || 'Неизвестная ошибка') + '</span>';
+            }
+        } catch (error) {
+            brandValidation.innerHTML = '<span class="text-red-600">Ошибка подключения</span>';
+        }
+    }
+
+    if (validateBrandBtn) {
+        validateBrandBtn.addEventListener('click', function() {
+            const currentBrand = brandValue.textContent.trim();
+            if (currentBrand && currentBrand !== '—') {
+                brandDisplay.classList.add('hidden');
+                brandEditor.classList.remove('hidden');
+                brandInput.value = currentBrand;
+                validateBrand(currentBrand);
+            } else {
+                brandDisplay.classList.add('hidden');
+                brandEditor.classList.remove('hidden');
+            }
+        });
+    }
+
+    if (searchBrandBtn) {
+        searchBrandBtn.addEventListener('click', function() {
+            validateBrand(brandInput.value);
+        });
+    }
+
+    // Search on Enter key
+    if (brandInput) {
+        brandInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                validateBrand(brandInput.value);
+            }
+        });
+    }
+
+    if (saveBrandBtn) {
+        saveBrandBtn.addEventListener('click', function() {
+            const newBrand = brandInput.value.trim();
+
+            if (!newBrand) {
+                alert('Введите название бренда');
+                return;
+            }
+
+            saveBrandBtn.disabled = true;
+            saveBrandBtn.textContent = 'Сохранение...';
+
+            fetch('{{ url_for("auto_import_update_product", product_id=product.id) }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ brand: newBrand })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    brandValue.textContent = newBrand;
+                    brandEditor.classList.add('hidden');
+                    brandDisplay.classList.remove('hidden');
+                    brandSuggestions.classList.add('hidden');
+                    brandValidation.classList.add('hidden');
+                } else {
+                    alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+                }
+                saveBrandBtn.disabled = false;
+                saveBrandBtn.textContent = 'Сохранить';
+            })
+            .catch(error => {
+                alert('Ошибка: ' + error);
+                saveBrandBtn.disabled = false;
+                saveBrandBtn.textContent = 'Сохранить';
             });
         });
     }

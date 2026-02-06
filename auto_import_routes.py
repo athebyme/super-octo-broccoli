@@ -2998,17 +2998,34 @@ def register_auto_import_routes(app):
                         weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
                         fill_all_chars_of_type('weight_packed', weight_with_margin + 30)
 
+                # Характеристики которые должны быть ТЕКСТОВЫМИ (не преобразовывать в числа)
+                text_only_keywords = [
+                    'наименование', 'название', 'описание', 'комплектация',
+                    'артикул', 'бренд', 'модель', 'серия', 'коллекция',
+                    'страна', 'производитель', 'состав', 'материал', 'цвет',
+                    'особенности', 'назначение', 'применение', 'инструкция',
+                    'противопоказания', 'предупреждения', 'гарантия'
+                ]
+
+                def is_text_only_char(char_name):
+                    char_lower = char_name.lower()
+                    return any(kw in char_lower for kw in text_only_keywords)
+
                 # Добавляем остальные извлечённые AI значения (если совпадают с WB характеристиками)
                 for key, value in extracted.items():
                     wb_matches = match_ai_key_to_wb(key)
                     for wb_name, score in wb_matches:
                         if wb_name not in wb_extracted:
-                            try:
-                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
-                                if nums:
-                                    wb_extracted[wb_name] = float(nums[0].replace(',', '.'))
-                            except:
-                                wb_extracted[wb_name] = value
+                            # Если характеристика текстовая - сохраняем как есть
+                            if is_text_only_char(wb_name):
+                                wb_extracted[wb_name] = str(value).strip()
+                            else:
+                                try:
+                                    nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                    if nums:
+                                        wb_extracted[wb_name] = float(nums[0].replace(',', '.'))
+                                except:
+                                    wb_extracted[wb_name] = value
                             break
 
                 # === ДЕФОЛТЫ И ПРИНУДИТЕЛЬНОЕ ЗАПОЛНЕНИЕ ===
@@ -3472,18 +3489,36 @@ def register_auto_import_routes(app):
                         weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
                         fill_all_chars_of_type('weight_packed', weight_with_margin + 30)
 
+                # Характеристики которые должны быть ТЕКСТОВЫМИ (не преобразовывать в числа)
+                text_only_keywords = [
+                    'наименование', 'название', 'описание', 'комплектация',
+                    'артикул', 'бренд', 'модель', 'серия', 'коллекция',
+                    'страна', 'производитель', 'состав', 'материал', 'цвет',
+                    'особенности', 'назначение', 'применение', 'инструкция',
+                    'противопоказания', 'предупреждения', 'гарантия'
+                ]
+
+                def is_text_only_char(char_name):
+                    """Проверяет, является ли характеристика текстовой (не числовой)"""
+                    char_lower = char_name.lower()
+                    return any(kw in char_lower for kw in text_only_keywords)
+
                 # Добавляем остальные характеристики из AI (если совпадают с WB)
                 for key, value in extracted.items():
                     wb_exact = match_any_wb_char(key)
                     if wb_exact and wb_exact not in wb_extracted:
-                        try:
-                            nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
-                            if nums:
-                                wb_extracted[wb_exact] = float(nums[0].replace(',', '.'))
-                            else:
+                        # Если характеристика текстовая - сохраняем как есть
+                        if is_text_only_char(wb_exact):
+                            wb_extracted[wb_exact] = str(value).strip()
+                        else:
+                            try:
+                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                if nums:
+                                    wb_extracted[wb_exact] = float(nums[0].replace(',', '.'))
+                                else:
+                                    wb_extracted[wb_exact] = value
+                            except:
                                 wb_extracted[wb_exact] = value
-                        except:
-                            wb_extracted[wb_exact] = value
 
                 # === ДЕФОЛТЫ И ПРИНУДИТЕЛЬНОЕ ЗАПОЛНЕНИЕ ===
 
@@ -3529,6 +3564,31 @@ def register_auto_import_routes(app):
 
                 result['extracted_values'] = wb_extracted
 
+                # === ВАЛИДАЦИЯ БРЕНДА ЧЕРЕЗ WB API ===
+                brand_validation = None
+                if product.brand and seller.wb_api_key:
+                    try:
+                        from wb_api_client import WildberriesAPIClient
+                        with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                            brand_result = wb_client.validate_brand(product.brand)
+                            brand_validation = {
+                                'original_brand': product.brand,
+                                'valid': brand_result.get('valid', False),
+                                'exact_match': brand_result.get('exact_match'),
+                                'suggestions': brand_result.get('suggestions', [])[:5]
+                            }
+                            # Если бренд найден - используем точное имя из WB
+                            if brand_validation['valid'] and brand_validation['exact_match']:
+                                wb_brand = brand_validation['exact_match'].get('name')
+                                if wb_brand:
+                                    product.brand = wb_brand
+                                    brand_validation['corrected_to'] = wb_brand
+                    except Exception as e:
+                        logger.warning(f"Brand validation failed: {e}")
+                        brand_validation = {'error': str(e)}
+
+                result['brand_validation'] = brand_validation
+
                 # Считаем статистику
                 extracted_count = len(result.get('extracted_values', {}))
                 required_filled = sum(1 for char in required_characteristics
@@ -3558,7 +3618,8 @@ def register_auto_import_routes(app):
                     'success': True,
                     'data': result,
                     'required_characteristics': required_characteristics,
-                    'optional_characteristics': optional_characteristics[:50]  # Ограничиваем для UI
+                    'optional_characteristics': optional_characteristics[:50],  # Ограничиваем для UI
+                    'brand_validation': brand_validation
                 })
             else:
                 save_ai_history(seller.id, product.id, 'extract_all_characteristics',

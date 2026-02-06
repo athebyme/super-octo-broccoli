@@ -2420,9 +2420,11 @@ class AIService:
             description=description
         )
         if success and result:
-            # Очищаем заголовок от HTML тегов
+            # Очищаем заголовок от HTML тегов и делаем первую букву большой
             if result.get('title'):
-                result['title'] = strip_html_tags(result['title'])
+                title_clean = strip_html_tags(result['title']).strip()
+                if title_clean:
+                    result['title'] = title_clean[0].upper() + title_clean[1:]
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
