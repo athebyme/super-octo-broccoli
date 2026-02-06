@@ -2912,6 +2912,20 @@ def register_auto_import_routes(app):
 
                     return sorted(matches, key=lambda x: -x[1]) if matches else []
 
+                # Характеристики которые должны быть ТЕКСТОВЫМИ (не преобразовывать в числа)
+                text_only_keywords = [
+                    'наименование', 'название', 'описание', 'комплектация',
+                    'артикул', 'бренд', 'модель', 'серия', 'коллекция',
+                    'страна', 'производитель', 'состав', 'материал', 'цвет',
+                    'особенности', 'назначение', 'применение', 'инструкция',
+                    'противопоказания', 'предупреждения', 'гарантия', 'тип',
+                    'вид', 'форма', 'функци', 'режим', 'питание', 'особенност'
+                ]
+
+                def is_text_only_char(char_name):
+                    char_lower = char_name.lower()
+                    return any(kw in char_lower for kw in text_only_keywords)
+
                 # Извлекаем числовые значения из extracted и сопоставляем с WB
                 length_val = None
                 diameter_val = None
@@ -2922,6 +2936,18 @@ def register_auto_import_routes(app):
                 for key, value in extracted.items():
                     key_lower = key.lower()
                     try:
+                        # Сопоставляем с WB характеристиками
+                        wb_matches = match_ai_key_to_wb(key)
+
+                        # Определяем целевое имя WB характеристики
+                        target_wb_name = wb_matches[0][0] if wb_matches else None
+
+                        # Если это текстовая характеристика - сохраняем как текст
+                        if target_wb_name and is_text_only_char(target_wb_name):
+                            if target_wb_name not in wb_extracted:
+                                wb_extracted[target_wb_name] = str(value).strip()
+                            continue
+
                         nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
                         if nums:
                             val = float(nums[0].replace(',', '.'))
@@ -2944,7 +2970,6 @@ def register_auto_import_routes(app):
                                     height_val = val
 
                             # Сопоставляем с WB характеристиками
-                            wb_matches = match_ai_key_to_wb(key)
                             for wb_name, score in wb_matches:
                                 if wb_name not in wb_extracted:
                                     wb_extracted[wb_name] = val
@@ -2997,19 +3022,6 @@ def register_auto_import_routes(app):
                     if weight_val:
                         weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
                         fill_all_chars_of_type('weight_packed', weight_with_margin + 30)
-
-                # Характеристики которые должны быть ТЕКСТОВЫМИ (не преобразовывать в числа)
-                text_only_keywords = [
-                    'наименование', 'название', 'описание', 'комплектация',
-                    'артикул', 'бренд', 'модель', 'серия', 'коллекция',
-                    'страна', 'производитель', 'состав', 'материал', 'цвет',
-                    'особенности', 'назначение', 'применение', 'инструкция',
-                    'противопоказания', 'предупреждения', 'гарантия'
-                ]
-
-                def is_text_only_char(char_name):
-                    char_lower = char_name.lower()
-                    return any(kw in char_lower for kw in text_only_keywords)
 
                 # Добавляем остальные извлечённые AI значения (если совпадают с WB характеристиками)
                 for key, value in extracted.items():
@@ -3395,6 +3407,21 @@ def register_auto_import_routes(app):
                             return wb_name
                     return None
 
+                # Характеристики которые должны быть ТЕКСТОВЫМИ (не преобразовывать в числа)
+                text_only_keywords = [
+                    'наименование', 'название', 'описание', 'комплектация',
+                    'артикул', 'бренд', 'модель', 'серия', 'коллекция',
+                    'страна', 'производитель', 'состав', 'материал', 'цвет',
+                    'особенности', 'назначение', 'применение', 'инструкция',
+                    'противопоказания', 'предупреждения', 'гарантия', 'тип',
+                    'вид', 'форма', 'функци', 'режим', 'питание', 'особенност'
+                ]
+
+                def is_text_only_char(char_name):
+                    """Проверяет, является ли характеристика текстовой (не числовой)"""
+                    char_lower = char_name.lower()
+                    return any(kw in char_lower for kw in text_only_keywords)
+
                 # Извлекаем значения и сопоставляем с WB
                 length_val = None
                 diameter_val = None
@@ -3408,6 +3435,19 @@ def register_auto_import_routes(app):
                         # Сначала пробуем сопоставить с WB характеристикой
                         wb_matches = match_ai_key_to_wb(key)
                         wb_exact = match_any_wb_char(key)
+
+                        # Определяем целевое имя WB характеристики
+                        target_wb_name = None
+                        if wb_matches:
+                            target_wb_name = wb_matches[0][0]
+                        elif wb_exact:
+                            target_wb_name = wb_exact
+
+                        # Если это текстовая характеристика - сохраняем как текст
+                        if target_wb_name and is_text_only_char(target_wb_name):
+                            if target_wb_name not in wb_extracted:
+                                wb_extracted[target_wb_name] = str(value).strip()
+                            continue
 
                         nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
                         if nums:
@@ -3488,20 +3528,6 @@ def register_auto_import_routes(app):
                     if weight_val:
                         weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
                         fill_all_chars_of_type('weight_packed', weight_with_margin + 30)
-
-                # Характеристики которые должны быть ТЕКСТОВЫМИ (не преобразовывать в числа)
-                text_only_keywords = [
-                    'наименование', 'название', 'описание', 'комплектация',
-                    'артикул', 'бренд', 'модель', 'серия', 'коллекция',
-                    'страна', 'производитель', 'состав', 'материал', 'цвет',
-                    'особенности', 'назначение', 'применение', 'инструкция',
-                    'противопоказания', 'предупреждения', 'гарантия'
-                ]
-
-                def is_text_only_char(char_name):
-                    """Проверяет, является ли характеристика текстовой (не числовой)"""
-                    char_lower = char_name.lower()
-                    return any(kw in char_lower for kw in text_only_keywords)
 
                 # Добавляем остальные характеристики из AI (если совпадают с WB)
                 for key, value in extracted.items():
