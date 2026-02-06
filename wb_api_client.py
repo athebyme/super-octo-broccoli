@@ -1705,12 +1705,13 @@ class WildberriesAPIClient:
             {"data": [{"id": 1234, "name": "Nike"}]}
         """
         endpoint = "/content/v2/directory/brands"
+        # WB API использует 'name' для поиска, не 'pattern'
         params = {
-            'pattern': pattern,
+            'name': pattern,
             'top': top
         }
 
-        logger.info(f"🔍 Searching brands with pattern: '{pattern}'")
+        logger.info(f"🔍 Searching brands with name: '{pattern}'")
         try:
             response = self._make_request('GET', 'content', endpoint, params=params)
             result = response.json()

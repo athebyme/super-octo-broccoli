@@ -4278,30 +4278,29 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'AI API ключ не настроен'}), 400
 
         try:
-            from ai_service import create_ai_client, BrandDetectionTask, TaskPriority
+            from ai_service import AIConfig, AIService
             from brand_cache import get_brand_cache
 
-            # Создаем AI клиент и выполняем задачу
-            client = create_ai_client(
-                provider=settings.ai_provider,
-                api_key=settings.ai_api_key,
-                model=settings.ai_model
-            )
+            # Создаем AI клиент
+            config = AIConfig.from_settings(settings)
+            if not config:
+                return jsonify({'success': False, 'error': 'Не удалось инициализировать AI'}), 500
 
-            task = BrandDetectionTask(priority=TaskPriority.HIGH)
-            result, error = client.execute_task(
-                task,
+            ai_service = AIService(config)
+
+            # Определяем бренд с помощью AI
+            success, result, error = ai_service.detect_brand(
                 title=title,
                 description=description,
                 characteristics=characteristics,
                 category=category
             )
 
-            if error:
-                return jsonify({'success': False, 'error': error}), 500
+            if not success or error:
+                return jsonify({'success': False, 'error': error or 'AI не смог определить бренд'}), 500
 
             if not result:
-                return jsonify({'success': False, 'error': 'AI не смог определить бренд'}), 500
+                return jsonify({'success': False, 'error': 'AI не вернул результат'}), 500
 
             detected_brand = result.get('brand', '') or result.get('brand_normalized', '')
             confidence = result.get('confidence', 0.5)
