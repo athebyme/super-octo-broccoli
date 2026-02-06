@@ -3011,6 +3011,46 @@ def register_auto_import_routes(app):
                                 wb_extracted[wb_name] = value
                             break
 
+                # === ДЕФОЛТЫ И ПРИНУДИТЕЛЬНОЕ ЗАПОЛНЕНИЕ ===
+                for char in size_characteristics:
+                    char_name = char['name']
+                    char_lower = char_name.lower()
+
+                    # Упаковка - дефолт "Анонимная непрозрачная"
+                    if char_lower == 'упаковка' or 'тип упаковки' in char_lower:
+                        if char_name not in wb_extracted:
+                            wb_extracted[char_name] = 'Анонимная непрозрачная'
+
+                    # Страна производства - дефолт "Китай"
+                    if 'страна производ' in char_lower:
+                        if char_name not in wb_extracted:
+                            wb_extracted[char_name] = 'Китай'
+
+                    # Принудительно заполняем вес если есть размеры но вес не заполнен
+                    if ('вес' in char_lower or 'масса' in char_lower) and 'упаков' not in char_lower:
+                        if char_name not in wb_extracted and weight_val:
+                            weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
+                            wb_extracted[char_name] = weight_with_margin
+
+                    # Вес с упаковкой
+                    if ('вес' in char_lower or 'масса' in char_lower) and 'упаков' in char_lower:
+                        if char_name not in wb_extracted and weight_val:
+                            weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
+                            wb_extracted[char_name] = weight_with_margin + 30
+
+                    # Размеры упаковки
+                    if length_val:
+                        pack_margin = 4
+                        if 'длина' in char_lower and 'упаков' in char_lower:
+                            if char_name not in wb_extracted:
+                                wb_extracted[char_name] = int(min(max(length_val + pack_margin * 2, 10), 40))
+                        if 'ширина' in char_lower and 'упаков' in char_lower:
+                            if char_name not in wb_extracted:
+                                wb_extracted[char_name] = int(min(max((diameter_val or width_val or 5) + pack_margin * 2, 8), 25))
+                        if 'высота' in char_lower and 'упаков' in char_lower:
+                            if char_name not in wb_extracted:
+                                wb_extracted[char_name] = int(min(max((diameter_val or height_val or 5) + pack_margin * 2, 5), 20))
+
                 result['extracted_values'] = wb_extracted
                 result['_debug_raw_extracted'] = extracted  # Для отладки
 
@@ -3081,11 +3121,26 @@ def register_auto_import_routes(app):
                     chars_config = wb_client.get_card_characteristics_config(int(category_id))
                     raw_chars = chars_config.get('data', [])
 
+                    # Список характеристик которые WB помечает required но они НЕ нужны для заполнения
+                    # (это служебные поля, которые заполняются автоматически или не нужны)
+                    false_required_keywords = [
+                        'артикул ozon', 'артикул озон', 'sku', 'икпу', 'код упаковки',
+                        'номер декларации', 'номер сертификата', 'дата регистрации',
+                        'дата окончания', 'ставка ндс', 'штрих', 'barcode', 'ean',
+                        'уин', 'gtin', 'код тнвэд'
+                    ]
+
                     for char in raw_chars:
+                        char_name = char.get('name', '')
+                        char_name_lower = char_name.lower()
+
+                        # Проверяем, является ли это "ложной обязательной"
+                        is_false_required = any(kw in char_name_lower for kw in false_required_keywords)
+
                         char_info = {
                             'id': char.get('charcID'),
-                            'name': char.get('name'),
-                            'required': char.get('required', False),
+                            'name': char_name,
+                            'required': char.get('required', False) and not is_false_required,
                             'unit': char.get('unitName', ''),
                             'type': char.get('charcType'),
                             'maxCount': char.get('maxCount', 1),
@@ -3429,6 +3484,48 @@ def register_auto_import_routes(app):
                                 wb_extracted[wb_exact] = value
                         except:
                             wb_extracted[wb_exact] = value
+
+                # === ДЕФОЛТЫ И ПРИНУДИТЕЛЬНОЕ ЗАПОЛНЕНИЕ ===
+
+                # Ищем характеристику "Упаковка" и ставим дефолт если не заполнена
+                for char in all_chars:
+                    char_name = char['name']
+                    char_lower = char_name.lower()
+
+                    # Упаковка - дефолт "Анонимная непрозрачная"
+                    if char_lower == 'упаковка' or 'тип упаковки' in char_lower:
+                        if char_name not in wb_extracted:
+                            wb_extracted[char_name] = 'Анонимная непрозрачная'
+
+                    # Страна производства - дефолт "Китай"
+                    if 'страна производ' in char_lower:
+                        if char_name not in wb_extracted:
+                            wb_extracted[char_name] = 'Китай'
+
+                    # Принудительно заполняем вес если есть размеры но вес не заполнен
+                    if ('вес' in char_lower or 'масса' in char_lower) and 'упаков' not in char_lower:
+                        if char_name not in wb_extracted and weight_val:
+                            weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
+                            wb_extracted[char_name] = weight_with_margin
+
+                    # Вес с упаковкой
+                    if ('вес' in char_lower or 'масса' in char_lower) and 'упаков' in char_lower:
+                        if char_name not in wb_extracted and weight_val:
+                            weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
+                            wb_extracted[char_name] = weight_with_margin + 30
+
+                    # Размеры упаковки
+                    if length_val:
+                        pack_margin = 4
+                        if 'длина' in char_lower and 'упаков' in char_lower:
+                            if char_name not in wb_extracted:
+                                wb_extracted[char_name] = int(min(max(length_val + pack_margin * 2, 10), 40))
+                        if 'ширина' in char_lower and 'упаков' in char_lower:
+                            if char_name not in wb_extracted:
+                                wb_extracted[char_name] = int(min(max((diameter_val or width_val or 5) + pack_margin * 2, 8), 25))
+                        if 'высота' in char_lower and 'упаков' in char_lower:
+                            if char_name not in wb_extracted:
+                                wb_extracted[char_name] = int(min(max((diameter_val or height_val or 5) + pack_margin * 2, 5), 20))
 
                 result['extracted_values'] = wb_extracted
 
