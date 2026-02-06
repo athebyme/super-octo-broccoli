@@ -334,16 +334,26 @@ class CategoryMapper:
     """
     Маппер категорий из внешних источников в категории WB
     Использует точный маппинг из wb_categories_mapping.py
+    Поддерживает AI для улучшения определения
     """
 
-    def __init__(self):
+    def __init__(self, ai_service=None, ai_confidence_threshold: float = 0.7):
         # Импортируем точный маппинг категорий WB
         from wb_categories_mapping import get_best_category_match
         self.get_best_match = get_best_category_match
+        self.ai_service = ai_service
+        self.ai_confidence_threshold = ai_confidence_threshold
+
+    def set_ai_service(self, ai_service, confidence_threshold: float = 0.7):
+        """Устанавливает AI сервис для определения категорий"""
+        self.ai_service = ai_service
+        self.ai_confidence_threshold = confidence_threshold
 
     def map_category(self, source_category: str, source_type: str = 'sexoptovik',
                     general_category: str = '', all_categories: List[str] = None,
-                    product_title: str = '', external_id: str = None) -> Tuple[Optional[int], Optional[str], float]:
+                    product_title: str = '', external_id: str = None,
+                    brand: str = '', description: str = '',
+                    use_ai: bool = True) -> Tuple[Optional[int], Optional[str], float]:
         """
         Определяет категорию WB для товара
 
@@ -354,11 +364,14 @@ class CategoryMapper:
             all_categories: Все категории товара
             product_title: Название товара (для анализа ключевых слов)
             external_id: ID товара из внешнего источника (для ручных исправлений)
+            brand: Бренд товара
+            description: Описание товара
+            use_ai: Использовать ли AI для определения
 
         Returns:
             Tuple[subject_id, subject_name, confidence]
         """
-        if not source_category:
+        if not source_category and not product_title:
             return None, None, 0.0
 
         # Сначала проверяем БД (пользовательские переопределения через CategoryMapping)
@@ -370,7 +383,7 @@ class CategoryMapper:
         if mapping:
             return mapping.wb_subject_id, mapping.wb_subject_name, mapping.confidence_score
 
-        # Используем новый точный алгоритм (включая проверку ручных исправлений через ProductCategoryCorrection)
+        # Используем обычный алгоритм маппинга
         subject_id, subject_name, confidence = self.get_best_match(
             csv_category=source_category,
             product_title=product_title,
@@ -378,6 +391,24 @@ class CategoryMapper:
             external_id=external_id,
             source_type=source_type
         )
+
+        # Если уверенность низкая и AI доступен - пробуем AI
+        if use_ai and self.ai_service and confidence < self.ai_confidence_threshold:
+            logger.info(f"🤖 Низкая уверенность маппинга ({confidence:.2f}), пробуем AI...")
+
+            ai_cat_id, ai_cat_name, ai_confidence, ai_reasoning = self.ai_service.detect_category(
+                product_title=product_title,
+                source_category=source_category,
+                all_categories=all_categories,
+                brand=brand,
+                description=description
+            )
+
+            if ai_cat_id and ai_confidence > confidence:
+                logger.info(f"🤖 AI определил категорию: {ai_cat_name} (ID: {ai_cat_id}) "
+                           f"с уверенностью {ai_confidence:.2f}")
+                logger.info(f"🤖 Причина: {ai_reasoning}")
+                return ai_cat_id, ai_cat_name, ai_confidence
 
         return subject_id, subject_name, confidence
 
@@ -388,66 +419,114 @@ class SexoptovikAuth:
     """
 
     _session_cookies = {}  # Кеш cookies для каждого логина
+    _sessions = {}  # Кеш сессий requests
 
     @classmethod
-    def get_auth_cookies(cls, login: str, password: str) -> Optional[dict]:
+    def get_auth_cookies(cls, login: str, password: str, force_refresh: bool = False) -> Optional[dict]:
         """
         Авторизуется на sexoptovik.ru и возвращает cookies
 
         Args:
             login: Логин от sexoptovik.ru
             password: Пароль от sexoptovik.ru
+            force_refresh: Принудительно обновить авторизацию
 
         Returns:
             dict с cookies или None если авторизация не удалась
         """
         # Проверяем кеш
         cache_key = f"{login}:{password}"
-        if cache_key in cls._session_cookies:
+        if cache_key in cls._session_cookies and not force_refresh:
             logger.debug(f"Используем кешированные cookies для {login}")
             return cls._session_cookies[cache_key]
 
         try:
             logger.info(f"🔐 Начало авторизации на sexoptovik.ru для пользователя: {login}")
 
-            # Создаем сессию
-            session = requests.Session()
+            # Создаем или переиспользуем сессию
+            if cache_key not in cls._sessions:
+                cls._sessions[cache_key] = requests.Session()
+            session = cls._sessions[cache_key]
 
-            # Сначала загружаем страницу логина для получения сессии
-            login_page_url = 'https://sexoptovik.ru/login_page.php'
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            # Полные заголовки браузера
+            base_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0'
             }
 
+            # Сначала загружаем главную страницу для получения сессии
+            logger.info(f"📄 Загрузка главной страницы для инициализации сессии...")
+            main_response = session.get('https://sexoptovik.ru/', headers=base_headers, timeout=30)
+            main_response.raise_for_status()
+            logger.info(f"🍪 Cookies после главной страницы: {session.cookies.get_dict()}")
+
+            # Загружаем страницу логина
+            login_page_url = 'https://sexoptovik.ru/login_page.php'
+            base_headers['Referer'] = 'https://sexoptovik.ru/'
+            base_headers['Sec-Fetch-Site'] = 'same-origin'
+
             logger.info(f"📄 Загрузка страницы логина...")
-            get_response = session.get(login_page_url, headers=headers, timeout=30)
+            get_response = session.get(login_page_url, headers=base_headers, timeout=30)
             get_response.raise_for_status()
             logger.info(f"✅ Страница логина загружена, статус: {get_response.status_code}")
             logger.info(f"🍪 Cookies после GET: {session.cookies.get_dict()}")
+
+            # Извлекаем скрытые поля формы (CSRF токен и т.д.)
+            hidden_fields = {}
+            try:
+                from html.parser import HTMLParser
+
+                class FormParser(HTMLParser):
+                    def __init__(self):
+                        super().__init__()
+                        self.hidden_inputs = {}
+
+                    def handle_starttag(self, tag, attrs):
+                        if tag == 'input':
+                            attrs_dict = dict(attrs)
+                            if attrs_dict.get('type') == 'hidden':
+                                name = attrs_dict.get('name')
+                                value = attrs_dict.get('value', '')
+                                if name:
+                                    self.hidden_inputs[name] = value
+
+                parser = FormParser()
+                parser.feed(get_response.text)
+                hidden_fields = parser.hidden_inputs
+                if hidden_fields:
+                    logger.info(f"🔍 Найдены скрытые поля формы: {list(hidden_fields.keys())}")
+            except Exception as e:
+                logger.warning(f"⚠️  Не удалось распарсить скрытые поля: {e}")
 
             # POST запрос на авторизацию
             auth_data = {
                 'client_login': login,
                 'client_password': password,
-                'submit': 'Войти'
+                'submit': 'Войти',
+                **hidden_fields  # Добавляем скрытые поля
             }
 
-            headers['Content-Type'] = 'application/x-www-form-urlencoded'
-            headers['Referer'] = login_page_url
-            headers['Origin'] = 'https://sexoptovik.ru'
+            post_headers = base_headers.copy()
+            post_headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            post_headers['Referer'] = login_page_url
+            post_headers['Origin'] = 'https://sexoptovik.ru'
+            post_headers['Sec-Fetch-Site'] = 'same-origin'
 
             logger.info(f"📤 Отправка данных авторизации: login={login}")
             logger.info(f"POST данные: {list(auth_data.keys())}")
-            response = session.post(login_page_url, data=auth_data, headers=headers, timeout=30, allow_redirects=True)
+            response = session.post(login_page_url, data=auth_data, headers=post_headers, timeout=30, allow_redirects=True)
             logger.info(f"📥 Ответ получен, статус: {response.status_code}")
             logger.info(f"🔗 Final URL: {response.url}")
             logger.info(f"🍪 Cookies после POST: {session.cookies.get_dict()}")
-
-            # Логируем содержимое ответа (первые 1000 символов)
-            response_text = response.text[:1000] if hasattr(response, 'text') else 'N/A'
-            logger.info(f"📄 Начало ответа (1000 символов):\n{response_text}")
 
             response.raise_for_status()
 
@@ -455,30 +534,33 @@ class SexoptovikAuth:
             cookies_dict = session.cookies.get_dict()
 
             # Проверяем, что получили cookies авторизации
-            # Sexoptovik использует PHPSESSID и admin_pretends_as для авторизованных сессий
             if 'PHPSESSID' in cookies_dict:
                 logger.info(f"✅ Успешная авторизация для {login}")
                 logger.info(f"Полученные cookies: {list(cookies_dict.keys())}")
 
                 # Проверяем, что это именно авторизованная сессия
-                # Если есть admin_pretends_as - значит авторизация прошла успешно
                 if 'admin_pretends_as' in cookies_dict:
                     logger.info(f"✅ Подтверждена авторизованная сессия (admin_pretends_as={cookies_dict['admin_pretends_as']})")
 
-                cls._session_cookies[cache_key] = cookies_dict
-                return cookies_dict
+                # Дополнительная проверка - пробуем загрузить тестовую страницу админки
+                test_result = cls._verify_auth(session, base_headers)
+                if test_result:
+                    cls._session_cookies[cache_key] = cookies_dict
+                    return cookies_dict
+                else:
+                    logger.warning(f"⚠️  Cookies получены, но доступ к админке не подтвержден")
+                    # Всё равно возвращаем cookies - возможно хватит для фото
+                    cls._session_cookies[cache_key] = cookies_dict
+                    return cookies_dict
             else:
                 # Логируем содержимое ответа для отладки
                 logger.error(f"❌ Авторизация не удалась для {login} - нет PHPSESSID")
                 logger.error(f"Полученные cookies: {cookies_dict}")
                 logger.error(f"Статус код: {response.status_code}")
-                logger.error(f"URL после редиректов: {response.url}")
-                # Выводим первые 1000 символов ответа
-                response_preview = response.text[:1000] if hasattr(response, 'text') else "N/A"
-                logger.error(f"Начало ответа (1000 символов):\n{response_preview}")
 
                 # Проверяем, есть ли на странице сообщение об ошибке
-                if 'неверн' in response.text.lower() or 'error' in response.text.lower():
+                response_lower = response.text.lower()
+                if 'неверн' in response_lower or 'error' in response_lower or 'ошибка' in response_lower:
                     logger.error(f"⚠️  На странице обнаружено сообщение об ошибке авторизации")
 
                 return None
@@ -490,16 +572,53 @@ class SexoptovikAuth:
             return None
 
     @classmethod
+    def _verify_auth(cls, session: requests.Session, headers: dict) -> bool:
+        """Проверяет, что авторизация действительно работает"""
+        try:
+            # Пробуем зайти на страницу админки
+            verify_url = 'https://sexoptovik.ru/admin/'
+            response = session.get(verify_url, headers=headers, timeout=10, allow_redirects=False)
+
+            # Если редирект на login - авторизация не работает
+            if response.status_code in [301, 302, 303, 307, 308]:
+                location = response.headers.get('Location', '')
+                if 'login' in location.lower():
+                    logger.warning(f"⚠️  Редирект на страницу логина: {location}")
+                    return False
+
+            # Код 200 - авторизация работает
+            if response.status_code == 200:
+                return True
+
+            return False
+        except Exception as e:
+            logger.warning(f"⚠️  Ошибка проверки авторизации: {e}")
+            return False
+
+    @classmethod
     def clear_cache(cls, login: str = None):
-        """Очистить кеш cookies"""
+        """Очистить кеш cookies и сессий"""
         if login:
-            # Удаляем cookies для конкретного логина
+            # Удаляем cookies и сессии для конкретного логина
             keys_to_delete = [key for key in cls._session_cookies.keys() if key.startswith(f"{login}:")]
             for key in keys_to_delete:
-                del cls._session_cookies[key]
+                if key in cls._session_cookies:
+                    del cls._session_cookies[key]
+                if key in cls._sessions:
+                    try:
+                        cls._sessions[key].close()
+                    except:
+                        pass
+                    del cls._sessions[key]
         else:
             # Очищаем весь кеш
             cls._session_cookies.clear()
+            for session in cls._sessions.values():
+                try:
+                    session.close()
+                except:
+                    pass
+            cls._sessions.clear()
 
 
 class ImageProcessor:
@@ -507,68 +626,144 @@ class ImageProcessor:
     Обработчик изображений товаров
     """
 
+    # Сессия для переиспользования соединений
+    _session = None
+
+    @classmethod
+    def _get_session(cls) -> requests.Session:
+        """Возвращает или создает requests сессию"""
+        if cls._session is None:
+            cls._session = requests.Session()
+        return cls._session
+
+    @classmethod
+    def reset_session(cls):
+        """Сбрасывает сессию (при ошибках авторизации)"""
+        if cls._session:
+            cls._session.close()
+        cls._session = None
+
     @staticmethod
     def download_and_process_image(url: str, target_size: Tuple[int, int] = (1200, 1200),
                                    background_color: str = 'white',
-                                   auth_cookies: Optional[dict] = None) -> Optional[BytesIO]:
+                                   auth_cookies: Optional[dict] = None,
+                                   fallback_urls: Optional[List[str]] = None,
+                                   retry_count: int = 1) -> Optional[BytesIO]:
         """
-        Скачивает и обрабатывает изображение
+        Скачивает и обрабатывает изображение (быстро, без долгих retry)
 
         Args:
             url: URL изображения
             target_size: Целевой размер (ширина, высота)
             background_color: Цвет фона для дорисовки
             auth_cookies: Cookies для авторизации (для sexoptovik)
+            fallback_urls: Альтернативные URL если основной не работает
+            retry_count: Количество попыток для каждого URL (по умолчанию 1)
 
         Returns:
             BytesIO с обработанным изображением или None
         """
-        try:
-            # Заголовки для обхода защиты от hotlinking
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://sexoptovik.ru/',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Sec-Fetch-Dest': 'image',
-                'Sec-Fetch-Mode': 'no-cors',
-                'Sec-Fetch-Site': 'same-origin'
-            }
+        # Собираем все URL для попыток (основной + fallbacks)
+        urls_to_try = [url]
+        if fallback_urls:
+            urls_to_try.extend(fallback_urls)
 
-            # Если переданы cookies авторизации - используем их
-            response = requests.get(url, headers=headers, cookies=auth_cookies, timeout=30)
-            response.raise_for_status()
+        for current_url in urls_to_try:
+            try:
+                result = ImageProcessor._download_single_image(
+                    current_url, target_size, background_color, auth_cookies
+                )
+                if result:
+                    return result
+            except Exception as e:
+                # Логируем кратко, без спама
+                logger.debug(f"Фото недоступно: {current_url[:60]}...")
 
-            # Проверяем, что получили изображение, а не HTML/текст
-            content_type = response.headers.get('Content-Type', '')
-            if not content_type.startswith('image/'):
-                # Возможно, сервер вернул ошибку в виде HTML
-                logger.warning(f"URL {url} вернул не изображение: Content-Type={content_type}")
-                # Пробуем все равно распарсить
+                # При ошибке авторизации - сбрасываем кеш cookies и пробуем следующий URL
+                if 'Content-Type=text/html' in str(e) or '401' in str(e) or '403' in str(e):
+                    SexoptovikAuth.clear_cache()
+                    ImageProcessor.reset_session()
 
-            img = Image.open(BytesIO(response.content))
+        # Не спамим error логами - просто возвращаем None
+        return None
 
-            # Проверяем размер
-            if img.size == target_size:
-                # Уже нужный размер
-                output = BytesIO()
-                img.save(output, format='JPEG', quality=95)
-                output.seek(0)
-                return output
+    @staticmethod
+    def _download_single_image(url: str, target_size: Tuple[int, int],
+                               background_color: str,
+                               auth_cookies: Optional[dict]) -> Optional[BytesIO]:
+        """
+        Скачивает одно изображение (внутренний метод)
+        """
+        # Заголовки для обхода защиты от hotlinking
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        }
 
-            # Нужно изменить размер с сохранением пропорций
-            img_resized = ImageProcessor._resize_with_padding(img, target_size, background_color)
+        # Добавляем Referer в зависимости от домена
+        if 'sexoptovik.ru' in url:
+            headers['Referer'] = 'https://sexoptovik.ru/admin/'
+            headers['Sec-Fetch-Dest'] = 'image'
+            headers['Sec-Fetch-Mode'] = 'no-cors'
+            headers['Sec-Fetch-Site'] = 'same-origin'
+        elif 'x-story.ru' in url:
+            headers['Referer'] = 'https://x-story.ru/'
 
+        session = ImageProcessor._get_session()
+
+        # Если переданы cookies авторизации - используем их
+        response = session.get(
+            url,
+            headers=headers,
+            cookies=auth_cookies,
+            timeout=10,  # Уменьшен с 30 до 10 секунд
+            allow_redirects=True
+        )
+        response.raise_for_status()
+
+        # Проверяем, что получили изображение, а не HTML/текст
+        content_type = response.headers.get('Content-Type', '')
+
+        # Проверяем на редирект на страницу логина
+        if response.url != url and 'login' in response.url.lower():
+            raise Exception(f"Редирект на страницу авторизации: {response.url}")
+
+        if not content_type.startswith('image/'):
+            # Проверяем содержимое - если это HTML с формой логина
+            content_preview = response.content[:500].decode('utf-8', errors='ignore').lower()
+            if '<html' in content_preview or '<form' in content_preview or 'login' in content_preview:
+                raise Exception(f"URL {url} вернул HTML (возможно требуется авторизация): Content-Type={content_type}")
+            # Иногда сервер возвращает неправильный Content-Type, но содержимое - картинка
+            logger.warning(f"URL {url} имеет неожиданный Content-Type={content_type}, пробуем распарсить как изображение")
+
+        # Проверяем минимальный размер (картинка должна быть больше 1KB)
+        if len(response.content) < 1024:
+            raise Exception(f"Слишком маленький ответ ({len(response.content)} bytes), вероятно это не изображение")
+
+        img = Image.open(BytesIO(response.content))
+
+        # Проверяем размер
+        if img.size == target_size:
+            # Уже нужный размер
             output = BytesIO()
-            img_resized.save(output, format='JPEG', quality=95)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            img.save(output, format='JPEG', quality=95)
             output.seek(0)
             return output
 
-        except Exception as e:
-            logger.error(f"Ошибка обработки изображения {url}: {e}")
-            return None
+        # Нужно изменить размер с сохранением пропорций
+        img_resized = ImageProcessor._resize_with_padding(img, target_size, background_color)
+
+        output = BytesIO()
+        img_resized.save(output, format='JPEG', quality=95)
+        output.seek(0)
+        return output
 
     @staticmethod
     def _resize_with_padding(img: Image.Image, target_size: Tuple[int, int],
@@ -694,8 +889,25 @@ class AutoImportManager:
         self.settings = settings
         delimiter = settings.csv_delimiter if settings.csv_delimiter else ';'
         self.parser = CSVProductParser(settings.csv_source_type, delimiter)
-        self.category_mapper = CategoryMapper()
         self.validator = ProductValidator()
+
+        # Инициализируем AI сервис если включен
+        self.ai_service = None
+        if settings.ai_enabled and settings.ai_api_key:
+            try:
+                from ai_service import get_ai_service, AIConfig
+                self.ai_service = get_ai_service(settings)
+                if self.ai_service:
+                    logger.info(f"🤖 AI сервис инициализирован: провайдер={settings.ai_provider}, модель={settings.ai_model}")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось инициализировать AI сервис: {e}")
+
+        # Инициализируем маппер категорий с AI
+        ai_threshold = settings.ai_category_confidence_threshold if hasattr(settings, 'ai_category_confidence_threshold') else 0.7
+        self.category_mapper = CategoryMapper(
+            ai_service=self.ai_service if settings.ai_use_for_categories else None,
+            ai_confidence_threshold=ai_threshold
+        )
 
     def run_import(self) -> Dict:
         """
@@ -805,14 +1017,85 @@ class AutoImportManager:
         try:
             external_id = product_data['external_id']
 
-            # Определяем категорию WB (с учетом ручных исправлений)
+            # Формируем артикул по шаблону из настроек
+            vendor_code_pattern = self.settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}'
+
+            # Извлекаем числовой ID из external_id (формат: id-12345-код)
+            import re
+            match = re.search(r'id-(\d+)', external_id)
+            numeric_product_id = match.group(1) if match else external_id
+
+            generated_vendor_code = vendor_code_pattern.format(
+                product_id=numeric_product_id,
+                supplier_code=self.settings.supplier_code or ''
+            )
+
+            # ПРОВЕРКА ДУБЛИКАТОВ: проверяем, есть ли уже товар с таким артикулом в WB
+            existing_product = Product.query.filter_by(
+                seller_id=self.seller.id,
+                vendor_code=generated_vendor_code
+            ).first()
+
+            if existing_product:
+                logger.info(f"⚠️  Товар {external_id} уже существует в WB (nm_id={existing_product.nm_id}), пропускаем")
+                # Обновляем ImportedProduct с пометкой о дубликате
+                imported_product = ImportedProduct.query.filter_by(
+                    seller_id=self.seller.id,
+                    external_id=external_id,
+                    source_type=self.settings.csv_source_type
+                ).first()
+
+                if imported_product:
+                    imported_product.import_status = 'imported'
+                    imported_product.product_id = existing_product.id
+                    imported_product.import_error = None
+                    db.session.commit()
+                else:
+                    # Создаем запись с пометкой об уже импортированном товаре
+                    imported_product = ImportedProduct(
+                        seller_id=self.seller.id,
+                        external_id=external_id,
+                        source_type=self.settings.csv_source_type,
+                        import_status='imported',
+                        product_id=existing_product.id,
+                        title=product_data.get('title', ''),
+                        brand=product_data.get('brand', '')
+                    )
+                    db.session.add(imported_product)
+                    db.session.commit()
+
+                return 'skipped'
+
+            # Генерируем описание заранее для использования в AI
+            description = self._generate_description(product_data)
+
+            # Используем AI для парсинга размеров если включено
+            if self.ai_service and self.settings.ai_use_for_sizes:
+                sizes_raw = product_data.get('sizes', {}).get('raw', '')
+                if sizes_raw:
+                    success, ai_sizes, error = self.ai_service.parse_sizes(
+                        sizes_text=sizes_raw,
+                        product_title=product_data.get('title', ''),
+                        description=description
+                    )
+                    if success and ai_sizes.get('characteristics'):
+                        logger.info(f"🤖 AI распарсил размеры: {ai_sizes['characteristics']}")
+                        # Добавляем AI-распарсенные характеристики к sizes
+                        if isinstance(product_data['sizes'], dict):
+                            product_data['sizes']['ai_characteristics'] = ai_sizes['characteristics']
+                            product_data['sizes']['ai_confidence'] = ai_sizes.get('confidence', 0.5)
+
+            # Определяем категорию WB (с учетом ручных исправлений и AI)
             subject_id, subject_name, confidence = self.category_mapper.map_category(
                 product_data['category'],
                 self.settings.csv_source_type,
                 product_data.get('general_category', ''),
                 product_data.get('all_categories', []),
                 product_data.get('title', ''),
-                external_id=product_data.get('external_id')
+                external_id=product_data.get('external_id'),
+                brand=product_data.get('brand', ''),
+                description=description,
+                use_ai=self.settings.ai_use_for_categories if self.ai_service else False
             )
 
             # Подробное логирование для отладки категорий
@@ -867,8 +1150,7 @@ class AutoImportManager:
             imported_product.photo_urls = json.dumps(product_data['photo_urls'], ensure_ascii=False)
             imported_product.barcodes = json.dumps(product_data['barcodes'], ensure_ascii=False)
 
-            # Формируем описание
-            description = self._generate_description(product_data)
+            # Используем уже сгенерированное описание
             imported_product.description = description
 
             # ВАЖНО: Если товар уже был импортирован на WB, НЕ меняем статус обратно на 'validated'

@@ -207,12 +207,88 @@
             <!-- Ошибки валидации -->
             {% if product.validation_errors_list %}
             <div class="bg-red-50 border border-red-200 rounded-lg p-6">
-                <h3 class="text-lg font-medium text-red-900 mb-4">Ошибки валидации</h3>
-                <ul class="list-disc list-inside space-y-1">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-red-900">Ошибки валидации</h3>
+                    <button type="button" id="showFixFormBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                        Исправить ошибки
+                    </button>
+                </div>
+                <ul class="list-disc list-inside space-y-1 mb-4">
                     {% for error in product.validation_errors_list %}
                     <li class="text-sm text-red-700">{{ error }}</li>
                     {% endfor %}
                 </ul>
+
+                <!-- Форма исправления ошибок -->
+                <div id="fixForm" class="hidden mt-4 pt-4 border-t border-red-200">
+                    <form id="fixErrorsForm">
+                        <!-- Баркоды -->
+                        {% if 'баркод' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_barcodes" class="block text-sm font-medium text-gray-700 mb-1">
+                                Баркоды (через запятую)
+                            </label>
+                            <input type="text" id="fix_barcodes" name="barcodes"
+                                   value="{{ product.barcodes_list|join(', ') if product.barcodes_list else '' }}"
+                                   class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                   placeholder="1234567890123, 1234567890124">
+                            <p class="mt-1 text-xs text-gray-500">
+                                EAN-13 или другой штрихкод. Можно указать несколько через запятую.
+                            </p>
+                        </div>
+                        {% endif %}
+
+                        <!-- Бренд -->
+                        {% if 'бренд' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_brand" class="block text-sm font-medium text-gray-700 mb-1">
+                                Бренд
+                            </label>
+                            <input type="text" id="fix_brand" name="brand"
+                                   value="{{ product.brand or '' }}"
+                                   class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                   placeholder="Название бренда">
+                        </div>
+                        {% endif %}
+
+                        <!-- Название -->
+                        {% if 'название' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_title" class="block text-sm font-medium text-gray-700 mb-1">
+                                Название товара
+                            </label>
+                            <input type="text" id="fix_title" name="title"
+                                   value="{{ product.title or '' }}"
+                                   class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                   placeholder="Название товара">
+                        </div>
+                        {% endif %}
+
+                        <!-- Категория WB -->
+                        {% if 'категория' in (product.validation_errors_list|join(' '))|lower %}
+                        <div class="mb-4">
+                            <label for="fix_category" class="block text-sm font-medium text-gray-700 mb-1">
+                                Категория WB
+                            </label>
+                            <select id="fix_category" name="wb_subject_id"
+                                    class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                                <option value="">Выберите категорию...</option>
+                            </select>
+                        </div>
+                        {% endif %}
+
+                        <div class="flex gap-2">
+                            <button type="submit" id="saveFixBtn"
+                                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
+                                Сохранить и проверить
+                            </button>
+                            <button type="button" id="cancelFixBtn"
+                                    class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                Отмена
+                            </button>
+                        </div>
+                    </form>
+                </div>
             </div>
             {% endif %}
         </div>
@@ -240,12 +316,14 @@
                 <div class="grid grid-cols-2 gap-2">
                     {% for photo in product.photo_urls_list[:6] %}
                     <div class="aspect-square bg-gray-100 rounded-lg overflow-hidden relative group">
-                        <img src="/auto-import/photo/padded?url={{ (photo.sexoptovik or '')|urlencode }}"
+                        <img data-src="/auto-import/photo/padded?url={{ (photo.sexoptovik or '')|urlencode }}"
+                             src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect fill='%23f3f4f6' width='200' height='200'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' dy='.3em' fill='%239ca3af' font-size='12'%3EЗагрузка...%3C/text%3E%3C/svg%3E"
                              data-blur="{{ photo.blur or '' }}"
                              data-original="{{ photo.original or '' }}"
                              data-sexoptovik="{{ photo.sexoptovik or '' }}"
                              alt="Фото товара"
-                             class="product-photo w-full h-full object-cover transition-opacity duration-200"
+                             loading="lazy"
+                             class="lazy-photo product-photo w-full h-full object-cover transition-opacity duration-200"
                              onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\'%3E%3Crect fill=\'%23f3f4f6\' width=\'100\' height=\'100\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' dy=\'.3em\' fill=\'%239ca3af\' font-size=\'14\'%3EНет фото%3C/text%3E%3C/svg%3E'">
                         <div class="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all duration-200 pointer-events-none"></div>
                     </div>
@@ -304,6 +382,182 @@
                 </dl>
             </div>
 
+            <!-- AI Оптимизация -->
+            <div class="bg-gradient-to-br from-purple-50 to-indigo-50 shadow-sm rounded-lg border border-purple-200 p-6">
+                <h3 class="text-lg font-medium text-purple-900 mb-4 flex items-center">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    AI Оптимизация
+                </h3>
+                <div class="space-y-2">
+                    <button id="aiRichContentBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gradient-to-r from-pink-500 to-orange-500 hover:from-pink-600 hover:to-orange-600 disabled:opacity-50">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                        </svg>
+                        Rich Контент
+                    </button>
+                    <button id="aiFullOptimizeBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50">
+                        Полная AI-оптимизация
+                    </button>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="aiSeoTitleBtn" class="inline-flex justify-center items-center px-3 py-1.5 border border-purple-300 text-xs font-medium rounded-md text-purple-700 bg-white hover:bg-purple-50 disabled:opacity-50">
+                            SEO заголовок
+                        </button>
+                        <button id="aiKeywordsBtn" class="inline-flex justify-center items-center px-3 py-1.5 border border-purple-300 text-xs font-medium rounded-md text-purple-700 bg-white hover:bg-purple-50 disabled:opacity-50">
+                            Ключевые слова
+                        </button>
+                        <button id="aiBulletPointsBtn" class="inline-flex justify-center items-center px-3 py-1.5 border border-purple-300 text-xs font-medium rounded-md text-purple-700 bg-white hover:bg-purple-50 disabled:opacity-50">
+                            Преимущества
+                        </button>
+                        <button id="aiAnalyzeBtn" class="inline-flex justify-center items-center px-3 py-1.5 border border-purple-300 text-xs font-medium rounded-md text-purple-700 bg-white hover:bg-purple-50 disabled:opacity-50">
+                            Анализ карточки
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI-контент -->
+            {% if product.has_ai_data %}
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center">
+                    <svg class="w-5 h-5 mr-2 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    Сохранённые AI-результаты
+                </h3>
+                <div class="space-y-4">
+                    <!-- SEO заголовок -->
+                    {% if product.ai_seo_title %}
+                    <div class="bg-green-50 p-3 rounded-lg border border-green-200">
+                        <h4 class="text-sm font-medium text-green-700 mb-1">SEO заголовок</h4>
+                        <p class="text-green-800">{{ product.ai_seo_title }}</p>
+                    </div>
+                    {% endif %}
+
+                    <!-- Ключевые слова -->
+                    {% if product.ai_keywords_list and product.ai_keywords_list.keywords %}
+                    {% set keywords = product.ai_keywords_list.keywords %}
+                    <div>
+                        <h4 class="text-sm font-medium text-gray-700 mb-2">Ключевые слова ({{ keywords|length }})</h4>
+                        <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                            {% for keyword in keywords[:20] %}
+                            <span class="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full">{{ keyword }}</span>
+                            {% endfor %}
+                            {% if keywords|length > 20 %}
+                            <span class="px-2 py-0.5 text-gray-500 text-xs">+{{ keywords|length - 20 }} ещё</span>
+                            {% endif %}
+                        </div>
+                        {% if product.ai_keywords_list.search_queries %}
+                        <div class="mt-2">
+                            <span class="text-xs text-gray-500">Поисковые запросы:</span>
+                            <div class="flex flex-wrap gap-1 mt-1">
+                                {% for query in product.ai_keywords_list.search_queries[:5] %}
+                                <span class="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded">{{ query }}</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Преимущества -->
+                    {% if product.ai_bullets_list and product.ai_bullets_list.bullet_points %}
+                    <div>
+                        <h4 class="text-sm font-medium text-gray-700 mb-2">Преимущества</h4>
+                        <ul class="text-sm text-gray-600 space-y-1">
+                            {% for bullet in product.ai_bullets_list.bullet_points %}
+                            <li class="flex items-start">
+                                <span class="text-green-600 mr-1 flex-shrink-0">✓</span>
+                                <span>{{ bullet }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% if product.ai_bullets_list.target_audience %}
+                        <p class="text-xs text-gray-400 mt-2">Целевая аудитория: {{ product.ai_bullets_list.target_audience }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Анализ карточки -->
+                    {% if product.ai_analysis_data %}
+                    <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                        <div class="flex items-center justify-between mb-2">
+                            <h4 class="text-sm font-medium text-gray-700">Анализ карточки</h4>
+                            {% if product.ai_analysis_data.score %}
+                            <span class="px-2 py-1 rounded-full text-sm font-bold
+                                {% if product.ai_analysis_data.score >= 80 %}bg-green-100 text-green-800
+                                {% elif product.ai_analysis_data.score >= 60 %}bg-yellow-100 text-yellow-800
+                                {% else %}bg-red-100 text-red-800{% endif %}">
+                                {{ product.ai_analysis_data.score }}/100
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% if product.ai_analysis_data.issues %}
+                        <div class="text-xs text-gray-600">
+                            <span class="font-medium">Проблемы:</span> {{ product.ai_analysis_data.issues|length }}
+                        </div>
+                        {% endif %}
+                        {% if product.ai_analysis_data.recommendations %}
+                        <div class="text-xs text-gray-600">
+                            <span class="font-medium">Рекомендации:</span> {{ product.ai_analysis_data.recommendations|length }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Rich контент -->
+                    {% if product.ai_rich_content_data %}
+                    <div class="bg-gradient-to-r from-orange-50 to-pink-50 p-3 rounded-lg border border-orange-200">
+                        <div class="flex justify-between items-start mb-2">
+                            <h4 class="text-sm font-medium text-orange-700">Rich-контент</h4>
+                            <button onclick="viewRichContentSlides()" class="text-xs text-orange-600 hover:text-orange-800 underline">
+                                Просмотр слайдов
+                            </button>
+                        </div>
+                        {% if product.ai_rich_content_data.slides %}
+                        <p class="text-xs text-orange-600">{{ product.ai_rich_content_data.slides|length }} слайдов готово</p>
+                        <!-- Кнопка генерации изображений -->
+                        <button id="generateSlideImagesBtn"
+                            onclick="generateSlideImages()"
+                            class="mt-2 w-full inline-flex justify-center items-center px-3 py-1.5 border border-orange-300 text-xs font-medium rounded-md text-orange-700 bg-white hover:bg-orange-50">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                            </svg>
+                            Сгенерировать изображения (AI)
+                        </button>
+                        {% elif product.ai_rich_content_data.blocks %}
+                        <p class="text-xs text-orange-600">{{ product.ai_rich_content_data.blocks|length }} блоков</p>
+                        {% endif %}
+                        {% if product.ai_rich_content_data.main_usp %}
+                        <p class="text-xs text-gray-600 mt-1">УТП: {{ product.ai_rich_content_data.main_usp }}</p>
+                        {% endif %}
+                        {% if product.ai_rich_content_data.target_audience %}
+                        <p class="text-xs text-gray-500">Аудитория: {{ product.ai_rich_content_data.target_audience }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Время анализа -->
+                    {% if product.ai_analysis_at %}
+                    <div class="text-xs text-gray-400 text-right">
+                        Обновлено: {{ product.ai_analysis_at.strftime('%d.%m.%Y %H:%M') }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div class="bg-gray-50 shadow-sm rounded-lg border border-gray-200 p-6">
+                <div class="text-center">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    <h3 class="mt-2 text-sm font-medium text-gray-900">AI-оптимизация</h3>
+                    <p class="mt-1 text-sm text-gray-500">Используйте кнопки выше для генерации SEO-контента, ключевых слов и Rich-контента</p>
+                </div>
+            </div>
+            {% endif %}
+
             <!-- Действия -->
             <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
@@ -323,8 +577,74 @@
     </div>
 </div>
 
+<!-- AI Results Modal -->
+<div id="aiResultsModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full z-50">
+    <div class="relative top-10 mx-auto p-5 border w-11/12 max-w-3xl shadow-lg rounded-lg bg-white">
+        <div class="flex justify-between items-center mb-4">
+            <h3 id="aiModalTitle" class="text-xl font-bold text-gray-900">AI Результаты</h3>
+            <button id="closeAiModal" class="text-gray-400 hover:text-gray-600">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div id="aiModalContent" class="max-h-96 overflow-y-auto">
+            <!-- Content will be inserted here -->
+        </div>
+        <div id="aiModalActions" class="mt-4 flex gap-2 hidden">
+            <button id="applyAiChanges" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700">
+                Применить изменения
+            </button>
+            <button id="cancelAiChanges" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                Отмена
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
+console.log('Script tag loaded');
+
+// Helper functions
+function toggleSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    if (section) {
+        section.classList.toggle('hidden');
+    }
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Скопировано в буфер обмена!');
+    }).catch(err => {
+        console.error('Ошибка копирования:', err);
+    });
+}
+
+// Populate saved AI data - simplified version
+function populateSavedAIData() {
+    console.log('populateSavedAIData called');
+    // AI data will be populated after migration is run
+    // For now, this function is a no-op
+}
+
+function computeContentHash() {
+    // Simple hash based on title and description
+    // Using tojson filter to properly escape for JavaScript
+    const content = {{ (product.title or "")|tojson }} + {{ (product.description or "")|tojson }};
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+        const char = content.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash;
+    }
+    return hash.toString(16);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    // Populate saved AI data
+    populateSavedAIData();
+
     const importBtn = document.getElementById('importSingleBtn');
     const deleteBtn = document.getElementById('deleteSingleBtn');
 
@@ -567,6 +887,668 @@ document.addEventListener('DOMContentLoaded', function() {
     if (togglePadding) {
         togglePadding.addEventListener('change', updatePhotoUrls);
     }
+
+    // Fix errors form functionality
+    const showFixFormBtn = document.getElementById('showFixFormBtn');
+    const fixForm = document.getElementById('fixForm');
+    const cancelFixBtn = document.getElementById('cancelFixBtn');
+    const fixErrorsForm = document.getElementById('fixErrorsForm');
+    const fixCategorySelect = document.getElementById('fix_category');
+
+    // Populate category select for fix form
+    if (fixCategorySelect && wbCategories) {
+        const sortedCategories = Object.entries(wbCategories).sort((a, b) => a[1].localeCompare(b[1]));
+        sortedCategories.forEach(([id, name]) => {
+            const option = document.createElement('option');
+            option.value = id;
+            option.textContent = `${name} (ID: ${id})`;
+            fixCategorySelect.appendChild(option);
+        });
+    }
+
+    if (showFixFormBtn && fixForm) {
+        showFixFormBtn.addEventListener('click', function() {
+            fixForm.classList.remove('hidden');
+            showFixFormBtn.classList.add('hidden');
+        });
+    }
+
+    if (cancelFixBtn && fixForm && showFixFormBtn) {
+        cancelFixBtn.addEventListener('click', function() {
+            fixForm.classList.add('hidden');
+            showFixFormBtn.classList.remove('hidden');
+        });
+    }
+
+    if (fixErrorsForm) {
+        fixErrorsForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(fixErrorsForm);
+            const data = {};
+
+            // Собираем данные из формы
+            for (let [key, value] of formData.entries()) {
+                if (value.trim()) {
+                    data[key] = value.trim();
+                }
+            }
+
+            // Обрабатываем баркоды
+            if (data.barcodes) {
+                data.barcodes = data.barcodes.split(',').map(b => b.trim()).filter(b => b);
+            }
+
+            // Преобразуем wb_subject_id в число
+            if (data.wb_subject_id) {
+                data.wb_subject_id = parseInt(data.wb_subject_id);
+            }
+
+            const saveBtn = document.getElementById('saveFixBtn');
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Сохранение...';
+
+            fetch('{{ url_for("auto_import_update_product", product_id=product.id) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success) {
+                    alert('Данные сохранены и товар повторно проверен!');
+                    window.location.reload();
+                } else {
+                    alert('Ошибка: ' + (result.error || 'Неизвестная ошибка'));
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Сохранить и проверить';
+                }
+            })
+            .catch(error => {
+                alert('Ошибка запроса: ' + error);
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Сохранить и проверить';
+            });
+        });
+    }
 });
+
+// Lazy loading для фото
+document.addEventListener('DOMContentLoaded', function() {
+    const lazyPhotos = document.querySelectorAll('.lazy-photo');
+
+    if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    if (img.dataset.src) {
+                        img.src = img.dataset.src;
+                        img.classList.remove('lazy-photo');
+                        observer.unobserve(img);
+                    }
+                }
+            });
+        }, { rootMargin: '50px' });
+
+        lazyPhotos.forEach(img => observer.observe(img));
+    } else {
+        // Fallback для старых браузеров
+        lazyPhotos.forEach(img => {
+            if (img.dataset.src) {
+                img.src = img.dataset.src;
+            }
+        });
+    }
+});
+
+// AI Optimization Functions
+(function() {
+    console.log('AI Optimization script starting...');
+    const productId = {{ product.id }};
+    console.log('Product ID:', productId);
+    const modal = document.getElementById('aiResultsModal');
+    const modalTitle = document.getElementById('aiModalTitle');
+    const modalContent = document.getElementById('aiModalContent');
+    const modalActions = document.getElementById('aiModalActions');
+    const closeModalBtn = document.getElementById('closeAiModal');
+    const applyBtn = document.getElementById('applyAiChanges');
+    const cancelBtn = document.getElementById('cancelAiChanges');
+
+    let currentAiData = null;
+
+    function showModal(title, content, showActions = false) {
+        modalTitle.textContent = title;
+        modalContent.innerHTML = content;
+        modalActions.classList.toggle('hidden', !showActions);
+        modal.classList.remove('hidden');
+    }
+
+    function hideModal() {
+        modal.classList.add('hidden');
+        currentAiData = null;
+    }
+
+    function showLoading(btn, text = 'Загрузка...') {
+        btn.disabled = true;
+        btn.dataset.originalText = btn.textContent;
+        btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>${text}`;
+    }
+
+    function hideLoading(btn) {
+        btn.disabled = false;
+        btn.textContent = btn.dataset.originalText || btn.textContent;
+    }
+
+    async function callAiEndpoint(endpoint, btn) {
+        showLoading(btn);
+        try {
+            console.log('Calling AI endpoint:', endpoint, 'with product_id:', productId);
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_id: productId })
+            });
+            const result = await response.json();
+            console.log('AI endpoint response:', result);
+            return result;
+        } catch (error) {
+            console.error('AI endpoint error:', error);
+            alert('Ошибка запроса: ' + error.message);
+            return { success: false, error: error.message };
+        } finally {
+            hideLoading(btn);
+        }
+    }
+
+    console.log('AI buttons initializing for product:', productId);
+
+    // SEO Title
+    document.getElementById('aiSeoTitleBtn')?.addEventListener('click', async function() {
+        console.log('SEO Title button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/seo-title', this);
+        if (result.success) {
+            currentAiData = { title: result.data.title };
+            const content = `
+                <div class="space-y-4">
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-gray-700 mb-2">Текущий заголовок:</h4>
+                        <p class="text-gray-600">${result.original_title || '—'}</p>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-green-700 mb-2">SEO-оптимизированный заголовок:</h4>
+                        <p class="text-green-800 font-medium">${result.data.title}</p>
+                    </div>
+                    ${result.data.keywords_used?.length ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Использованные ключевые слова:</h4>
+                        <div class="flex flex-wrap gap-1">
+                            ${result.data.keywords_used.map(k => `<span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">${k}</span>`).join('')}
+                        </div>
+                    </div>` : ''}
+                    ${result.data.improvements?.length ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Улучшения:</h4>
+                        <ul class="list-disc list-inside text-sm text-gray-600">
+                            ${result.data.improvements.map(i => `<li>${i}</li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                </div>
+            `;
+            showModal('SEO-оптимизация заголовка', content, true);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Keywords
+    document.getElementById('aiKeywordsBtn')?.addEventListener('click', async function() {
+        console.log('Keywords button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/keywords', this);
+        if (result.success) {
+            currentAiData = { keywords: result.data.keywords };
+            const content = `
+                <div class="space-y-4">
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Ключевые слова (${result.data.keywords?.length || 0}):</h4>
+                        <div class="flex flex-wrap gap-1 max-h-40 overflow-y-auto">
+                            ${(result.data.keywords || []).map(k => `<span class="px-2 py-1 bg-purple-100 text-purple-800 text-xs rounded-full">${k}</span>`).join('')}
+                        </div>
+                    </div>
+                    ${result.data.search_queries?.length ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Популярные поисковые запросы:</h4>
+                        <ul class="list-disc list-inside text-sm text-gray-600">
+                            ${result.data.search_queries.map(q => `<li>${q}</li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                </div>
+            `;
+            showModal('Ключевые слова', content, true);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Bullet Points
+    document.getElementById('aiBulletPointsBtn')?.addEventListener('click', async function() {
+        const result = await callAiEndpoint('/auto-import/ai/bullet-points', this);
+        if (result.success) {
+            currentAiData = { bullet_points: result.data.bullet_points };
+            const content = `
+                <div class="space-y-4">
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <h4 class="font-medium text-green-700 mb-2">Преимущества товара:</h4>
+                        <ul class="space-y-2">
+                            ${(result.data.bullet_points || []).map(bp => `<li class="flex items-start"><span class="text-green-600 mr-2">✓</span><span>${bp.replace(/^[✓✔] ?/, '')}</span></li>`).join('')}
+                        </ul>
+                    </div>
+                    ${result.data.target_audience ? `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-2">Целевая аудитория:</h4>
+                        <p class="text-gray-600">${result.data.target_audience}</p>
+                    </div>` : ''}
+                </div>
+            `;
+            showModal('Преимущества товара', content, true);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Card Analysis
+    document.getElementById('aiAnalyzeBtn')?.addEventListener('click', async function() {
+        const result = await callAiEndpoint('/auto-import/ai/analyze', this);
+        if (result.success) {
+            const score = result.data.score || 0;
+            const scoreColor = score >= 80 ? 'green' : score >= 60 ? 'yellow' : 'red';
+            const content = `
+                <div class="space-y-4">
+                    <div class="text-center">
+                        <div class="inline-flex items-center justify-center w-20 h-20 rounded-full bg-${scoreColor}-100 text-${scoreColor}-800 text-2xl font-bold">
+                            ${score}
+                        </div>
+                        <p class="mt-2 text-sm text-gray-600">Оценка карточки</p>
+                    </div>
+                    ${result.data.issues?.length ? `
+                    <div>
+                        <h4 class="font-medium text-red-700 mb-2">Проблемы:</h4>
+                        <ul class="space-y-2">
+                            ${result.data.issues.map(issue => `
+                                <li class="bg-red-50 p-2 rounded">
+                                    <span class="inline-block px-1.5 py-0.5 text-xs rounded ${issue.priority === 'high' ? 'bg-red-200 text-red-800' : issue.priority === 'medium' ? 'bg-yellow-200 text-yellow-800' : 'bg-gray-200 text-gray-800'}">${issue.priority}</span>
+                                    <span class="ml-2 font-medium">${issue.issue}</span>
+                                    <p class="text-sm text-gray-600 mt-1">Решение: ${issue.fix}</p>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>` : ''}
+                    ${result.data.recommendations?.length ? `
+                    <div>
+                        <h4 class="font-medium text-blue-700 mb-2">Рекомендации:</h4>
+                        <ul class="list-disc list-inside text-sm text-gray-600 space-y-1">
+                            ${result.data.recommendations.map(r => `<li>${r}</li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                    ${result.data.strengths?.length ? `
+                    <div>
+                        <h4 class="font-medium text-green-700 mb-2">Сильные стороны:</h4>
+                        <ul class="list-disc list-inside text-sm text-green-600 space-y-1">
+                            ${result.data.strengths.map(s => `<li>${s}</li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                </div>
+            `;
+            showModal('Анализ карточки', content, false);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Rich Content
+    document.getElementById('aiRichContentBtn')?.addEventListener('click', async function() {
+        console.log('Rich Content button clicked');
+        const result = await callAiEndpoint('/auto-import/ai/rich-content', this);
+        if (result.success) {
+            currentAiData = { rich_content: result.data };
+            const data = result.data;
+
+            let content = '<div class="space-y-4">';
+
+            // Header with specs
+            content += `
+                <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white p-4 rounded-lg">
+                    <h4 class="font-bold text-lg">Rich-контент для Wildberries</h4>
+                    <p class="text-sm opacity-90">Макеты слайдов инфографики 1440x810px</p>
+                    ${data.total_slides ? `<p class="text-xs mt-1">Всего слайдов: ${data.total_slides}</p>` : ''}
+                </div>
+            `;
+
+            // Design recommendations
+            if (data.design_recommendations) {
+                const dr = data.design_recommendations;
+                content += `
+                    <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                        <h4 class="font-bold text-purple-800 mb-2">Рекомендации по дизайну</h4>
+                        <div class="grid grid-cols-2 gap-3 text-sm">
+                            ${dr.color_palette ? `
+                                <div>
+                                    <span class="text-gray-600">Палитра:</span>
+                                    <div class="flex gap-1 mt-1">
+                                        ${dr.color_palette.map(c => `<span class="inline-block w-6 h-6 rounded border" style="background:${c}" title="${c}"></span>`).join('')}
+                                    </div>
+                                </div>
+                            ` : ''}
+                            ${dr.font_style ? `<div><span class="text-gray-600">Стиль шрифта:</span> <span class="font-medium">${dr.font_style}</span></div>` : ''}
+                            ${dr.overall_mood ? `<div class="col-span-2"><span class="text-gray-600">Настроение:</span> <span class="font-medium">${dr.overall_mood}</span></div>` : ''}
+                            ${dr.key_visual_elements?.length ? `<div class="col-span-2"><span class="text-gray-600">Ключевые элементы:</span> ${dr.key_visual_elements.join(', ')}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Slides (new format) or blocks (old format)
+            const slides = data.slides || data.blocks || [];
+            if (slides.length > 0) {
+                content += `<div class="space-y-3">`;
+                slides.forEach((slide, i) => {
+                    const imgConcept = slide.image_concept || {};
+                    const textLayout = slide.text_layout || {};
+                    const bullets = slide.bullets && slide.bullets.length > 0 ? slide.bullets : null;
+
+                    content += `
+                        <div class="bg-white border-2 border-orange-200 rounded-lg overflow-hidden">
+                            <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2 flex justify-between items-center">
+                                <span class="font-bold">Слайд ${slide.number || i+1}: ${slide.type || ''}</span>
+                                <span class="text-xs opacity-75">1440x810px</span>
+                            </div>
+                            <div class="p-4">
+                                <p class="text-lg font-bold text-gray-900 uppercase">${slide.title}</p>
+                                ${slide.subtitle ? `<p class="text-gray-700 mt-1">${slide.subtitle}</p>` : ''}
+                                ${bullets ? `
+                                    <ul class="mt-2 space-y-1 text-sm text-gray-600">
+                                        ${bullets.map(b => `<li class="flex items-start"><span class="mr-2 text-orange-500">•</span>${b}</li>`).join('')}
+                                    </ul>
+                                ` : ''}
+
+                                ${imgConcept.main_object ? `
+                                    <div class="mt-3 p-3 bg-gray-50 rounded-lg">
+                                        <p class="text-xs font-bold text-gray-700 mb-2">КОНЦЕПЦИЯ ИЗОБРАЖЕНИЯ:</p>
+                                        <div class="grid grid-cols-2 gap-2 text-xs">
+                                            <div><span class="text-gray-500">Объект:</span> <span class="text-gray-800">${imgConcept.main_object}</span></div>
+                                            ${imgConcept.background ? `<div><span class="text-gray-500">Фон:</span> <span class="text-gray-800">${imgConcept.background}</span></div>` : ''}
+                                            ${imgConcept.composition ? `<div><span class="text-gray-500">Композиция:</span> <span class="text-gray-800">${imgConcept.composition}</span></div>` : ''}
+                                            ${imgConcept.mood ? `<div><span class="text-gray-500">Настроение:</span> <span class="text-gray-800">${imgConcept.mood}</span></div>` : ''}
+                                        </div>
+                                    </div>
+                                ` : ''}
+
+                                ${textLayout.title_position ? `
+                                    <div class="mt-2 p-3 bg-blue-50 rounded-lg">
+                                        <p class="text-xs font-bold text-blue-700 mb-2">РАСПОЛОЖЕНИЕ ТЕКСТА:</p>
+                                        <div class="grid grid-cols-2 gap-2 text-xs">
+                                            <div><span class="text-blue-600">Позиция:</span> <span class="text-blue-800">${textLayout.title_position}</span></div>
+                                            ${textLayout.title_color ? `<div><span class="text-blue-600">Цвет:</span> <span class="text-blue-800">${textLayout.title_color}</span></div>` : ''}
+                                            ${textLayout.text_background ? `<div class="col-span-2"><span class="text-blue-600">Подложка:</span> <span class="text-blue-800">${textLayout.text_background}</span></div>` : ''}
+                                        </div>
+                                    </div>
+                                ` : ''}
+
+                                ${slide.image_idea ? `<p class="mt-2 text-xs text-gray-400 italic">Идея: ${slide.image_idea}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                content += `</div>`;
+            }
+
+            // USP and target audience
+            if (data.main_usp || data.main_message || data.target_audience) {
+                content += `
+                    <div class="bg-orange-50 p-4 rounded-lg border border-orange-200">
+                        ${data.main_usp || data.main_message ? `<p class="font-medium text-orange-800"><span class="font-bold">УТП:</span> ${data.main_usp || data.main_message}</p>` : ''}
+                        ${data.target_audience ? `<p class="text-sm text-orange-700 mt-1"><span class="font-bold">Целевая аудитория:</span> ${data.target_audience}</p>` : ''}
+                    </div>
+                `;
+            }
+
+            content += '</div>';
+            showModal('Rich Контент для WB', content, false);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Full Optimize
+    document.getElementById('aiFullOptimizeBtn')?.addEventListener('click', async function() {
+        const result = await callAiEndpoint('/auto-import/ai/full-optimize', this);
+        if (result.success) {
+            const data = result.data;
+            currentAiData = {
+                title: data.seo_title?.title,
+                keywords: data.keywords?.keywords,
+                bullet_points: data.bullet_points?.bullet_points,
+                description: data.enhanced_description?.description
+            };
+
+            let content = '<div class="space-y-4">';
+
+            // Score
+            if (data.analysis) {
+                const score = data.analysis.score || 0;
+                content += `
+                    <div class="text-center p-4 bg-gray-50 rounded-lg">
+                        <div class="text-3xl font-bold ${score >= 80 ? 'text-green-600' : score >= 60 ? 'text-yellow-600' : 'text-red-600'}">${score}/100</div>
+                        <p class="text-sm text-gray-600">Оценка карточки</p>
+                    </div>
+                `;
+            }
+
+            // SEO Title
+            if (data.seo_title?.title) {
+                content += `
+                    <div class="bg-green-50 p-3 rounded-lg">
+                        <h4 class="font-medium text-green-700 text-sm mb-1">SEO заголовок:</h4>
+                        <p class="text-green-800">${data.seo_title.title}</p>
+                    </div>
+                `;
+            }
+
+            // Keywords
+            if (data.keywords?.keywords?.length) {
+                content += `
+                    <div>
+                        <h4 class="font-medium text-gray-700 text-sm mb-1">Ключевые слова:</h4>
+                        <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                            ${data.keywords.keywords.slice(0, 20).map(k => `<span class="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full">${k}</span>`).join('')}
+                            ${data.keywords.keywords.length > 20 ? `<span class="px-2 py-0.5 text-gray-500 text-xs">+${data.keywords.keywords.length - 20} еще</span>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Bullet points
+            if (data.bullet_points?.bullet_points?.length) {
+                content += `
+                    <div>
+                        <h4 class="font-medium text-gray-700 text-sm mb-1">Преимущества:</h4>
+                        <ul class="text-sm text-gray-600 space-y-1">
+                            ${data.bullet_points.bullet_points.map(bp => `<li class="flex items-start"><span class="text-green-600 mr-1">✓</span>${bp.replace(/^[✓✔] ?/, '')}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            // Issues
+            if (data.analysis?.issues?.length) {
+                content += `
+                    <div>
+                        <h4 class="font-medium text-red-700 text-sm mb-1">Проблемы:</h4>
+                        <ul class="text-sm space-y-1">
+                            ${data.analysis.issues.slice(0, 3).map(i => `<li class="text-red-600">• ${i.issue}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            // Errors
+            if (data.errors?.length) {
+                content += `
+                    <div class="bg-yellow-50 p-3 rounded-lg">
+                        <h4 class="font-medium text-yellow-700 text-sm mb-1">Предупреждения:</h4>
+                        <ul class="text-xs text-yellow-600">
+                            ${data.errors.map(e => `<li>• ${e}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            }
+
+            content += '</div>';
+            showModal('Полная AI-оптимизация', content, true);
+        } else {
+            showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+        }
+    });
+
+    // Apply changes
+    applyBtn?.addEventListener('click', async function() {
+        if (!currentAiData) return;
+
+        showLoading(applyBtn, 'Применение...');
+        try {
+            const response = await fetch('/auto-import/ai/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    product_id: productId,
+                    updates: currentAiData
+                })
+            });
+            const result = await response.json();
+            if (result.success) {
+                alert(result.message || 'Изменения применены!');
+                window.location.reload();
+            } else {
+                alert('Ошибка: ' + result.error);
+            }
+        } finally {
+            hideLoading(applyBtn);
+        }
+    });
+
+    // Close modal handlers
+    closeModalBtn?.addEventListener('click', hideModal);
+    cancelBtn?.addEventListener('click', hideModal);
+    modal?.addEventListener('click', function(e) {
+        if (e.target === modal) hideModal();
+    });
+
+    // Генерация изображений для слайдов
+    window.generateSlideImages = async function() {
+        const btn = document.getElementById('generateSlideImagesBtn');
+        if (!btn) return;
+
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `
+            <svg class="animate-spin w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Генерация... (может занять 1-2 мин)
+        `;
+        btn.disabled = true;
+
+        try {
+            const response = await fetch('/auto-import/ai/generate-all-slide-images', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ product_id: productId })
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                let content = `
+                    <div class="mb-4 p-3 bg-green-50 rounded-lg">
+                        <p class="text-green-700 font-medium">Сгенерировано ${result.successful} из ${result.total_slides} изображений</p>
+                        <p class="text-xs text-gray-500 mt-1">Провайдер: ${result.provider}</p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 max-h-96 overflow-y-auto">
+                `;
+
+                result.results.forEach(r => {
+                    if (r.success && r.image_base64) {
+                        content += `
+                            <div class="border rounded-lg overflow-hidden">
+                                <img src="data:image/png;base64,${r.image_base64}" alt="Слайд ${r.slide_number}" class="w-full">
+                                <div class="p-2 bg-gray-50 text-xs">
+                                    <span class="font-medium">Слайд ${r.slide_number}</span>
+                                    <span class="text-gray-500 ml-2">${r.slide_type}</span>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        content += `
+                            <div class="border border-red-200 rounded-lg p-4 bg-red-50">
+                                <p class="text-red-600 text-sm">Слайд ${r.slide_number}: ${r.error || 'Ошибка'}</p>
+                            </div>
+                        `;
+                    }
+                });
+
+                content += '</div>';
+                showModal('Сгенерированные изображения', content, false);
+            } else {
+                showModal('Ошибка', `<p class="text-red-600">${result.error}</p>`);
+            }
+        } catch (e) {
+            showModal('Ошибка', `<p class="text-red-600">${e.message}</p>`);
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    };
+
+    // Просмотр слайдов Rich-контента
+    window.viewRichContentSlides = function() {
+        {% if product.ai_rich_content_data and product.ai_rich_content_data.slides %}
+        const slides = {{ product.ai_rich_content_data.slides|tojson }};
+        let content = '<div class="space-y-4">';
+
+        slides.forEach((slide, i) => {
+            const imgConcept = slide.image_concept || {};
+            const textLayout = slide.text_layout || {};
+            content += `
+                <div class="border-2 border-orange-200 rounded-lg overflow-hidden">
+                    <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2">
+                        <span class="font-bold">Слайд ${slide.number || i+1}: ${slide.type || ''}</span>
+                    </div>
+                    <div class="p-4">
+                        <p class="text-lg font-bold uppercase">${slide.title || ''}</p>
+                        ${slide.subtitle ? `<p class="text-gray-600 mt-1">${slide.subtitle}</p>` : ''}
+                        ${slide.bullets ? `<ul class="mt-2 text-sm">${slide.bullets.map(b => `<li>• ${b}</li>`).join('')}</ul>` : ''}
+                        ${imgConcept.main_object ? `
+                            <div class="mt-3 p-3 bg-gray-50 rounded text-xs">
+                                <p><strong>Изображение:</strong> ${imgConcept.main_object}</p>
+                                ${imgConcept.background ? `<p><strong>Фон:</strong> ${imgConcept.background}</p>` : ''}
+                                ${imgConcept.mood ? `<p><strong>Настроение:</strong> ${imgConcept.mood}</p>` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        });
+
+        content += '</div>';
+        showModal('Слайды Rich-контента', content, false);
+        {% else %}
+        alert('Нет слайдов для отображения');
+        {% endif %}
+    };
+})();
 </script>
 {% endblock %}

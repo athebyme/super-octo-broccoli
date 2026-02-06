@@ -8,11 +8,40 @@ from flask_login import login_required, current_user
 import json
 import threading
 import logging
+import time
+import hashlib
+from datetime import datetime
 
-from models import db, AutoImportSettings, ImportedProduct, CategoryMapping
+from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory
 from auto_import_manager import AutoImportManager, ImageProcessor
 
 logger = logging.getLogger(__name__)
+
+
+def compute_content_hash(product):
+    """Вычисляет хеш контента карточки для отслеживания изменений"""
+    content = f"{product.title or ''}{product.description or ''}{product.characteristics or ''}"
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
+def save_ai_history(seller_id, product_id, action_type, input_data, result_data, success=True, error_message=None):
+    """Сохраняет действие AI в историю"""
+    try:
+        history = AIHistory(
+            seller_id=seller_id,
+            imported_product_id=product_id,
+            action_type=action_type,
+            input_data=json.dumps(input_data, ensure_ascii=False) if input_data else None,
+            result_data=json.dumps(result_data, ensure_ascii=False) if result_data else None,
+            success=success,
+            error_message=error_message
+        )
+        db.session.add(history)
+        db.session.commit()
+        return history
+    except Exception as e:
+        logger.error(f"Error saving AI history: {e}")
+        return None
 
 
 def register_auto_import_routes(app):
@@ -103,6 +132,85 @@ def register_auto_import_routes(app):
             # Авторизация Sexoptovik
             settings.sexoptovik_login = request.form.get('sexoptovik_login', '').strip()
             settings.sexoptovik_password = request.form.get('sexoptovik_password', '').strip()
+
+            # AI настройки
+            settings.ai_enabled = request.form.get('ai_enabled') == 'on'
+            settings.ai_provider = request.form.get('ai_provider', 'cloudru')
+            settings.ai_api_key = request.form.get('ai_api_key', '').strip()
+            settings.ai_api_base_url = request.form.get('ai_api_base_url', '').strip()
+            settings.ai_model = request.form.get('ai_model', 'openai/gpt-oss-120b').strip()
+            settings.ai_use_for_categories = request.form.get('ai_use_for_categories') == 'on'
+            settings.ai_use_for_sizes = request.form.get('ai_use_for_sizes') == 'on'
+            # Cloud.ru OAuth2 credentials
+            settings.ai_client_id = request.form.get('ai_client_id', '').strip()
+            settings.ai_client_secret = request.form.get('ai_client_secret', '').strip()
+
+            try:
+                settings.ai_temperature = float(request.form.get('ai_temperature', 0.3))
+            except ValueError:
+                settings.ai_temperature = 0.3
+
+            try:
+                settings.ai_max_tokens = int(request.form.get('ai_max_tokens', 2000))
+            except ValueError:
+                settings.ai_max_tokens = 2000
+
+            try:
+                settings.ai_timeout = int(request.form.get('ai_timeout', 60))
+            except ValueError:
+                settings.ai_timeout = 60
+
+            try:
+                settings.ai_category_confidence_threshold = float(request.form.get('ai_category_confidence_threshold', 0.7))
+            except ValueError:
+                settings.ai_category_confidence_threshold = 0.7
+
+            # Дополнительные AI параметры
+            try:
+                settings.ai_top_p = float(request.form.get('ai_top_p', 0.95))
+            except ValueError:
+                settings.ai_top_p = 0.95
+
+            try:
+                settings.ai_presence_penalty = float(request.form.get('ai_presence_penalty', 0.0))
+            except ValueError:
+                settings.ai_presence_penalty = 0.0
+
+            try:
+                settings.ai_frequency_penalty = float(request.form.get('ai_frequency_penalty', 0.0))
+            except ValueError:
+                settings.ai_frequency_penalty = 0.0
+
+            # Кастомные инструкции AI
+            settings.ai_category_instruction = request.form.get('ai_category_instruction', '').strip() or None
+            settings.ai_size_instruction = request.form.get('ai_size_instruction', '').strip() or None
+
+            # Настройки генерации изображений
+            settings.image_gen_enabled = request.form.get('image_gen_enabled') == 'on'
+            settings.image_gen_provider = request.form.get('image_gen_provider', 'openai_dalle').strip()
+            settings.openai_api_key = request.form.get('openai_api_key', '').strip()
+            settings.replicate_api_key = request.form.get('replicate_api_key', '').strip()
+
+            try:
+                settings.image_gen_width = int(request.form.get('image_gen_width', 1440))
+            except ValueError:
+                settings.image_gen_width = 1440
+
+            try:
+                settings.image_gen_height = int(request.form.get('image_gen_height', 810))
+            except ValueError:
+                settings.image_gen_height = 810
+
+            settings.openai_image_quality = request.form.get('openai_image_quality', 'standard').strip()
+            settings.openai_image_style = request.form.get('openai_image_style', 'vivid').strip()
+
+            # Сбрасываем AI сервис при изменении настроек
+            if settings.ai_enabled:
+                try:
+                    from ai_service import reset_ai_service
+                    reset_ai_service()
+                except ImportError:
+                    pass
 
             try:
                 settings.auto_import_interval_hours = int(request.form.get('auto_import_interval_hours', 24))
@@ -229,6 +337,55 @@ def register_auto_import_routes(app):
             product.validation_errors_list = json.loads(product.validation_errors) if product.validation_errors else []
         except:
             product.validation_errors_list = []
+
+        # Безопасный доступ к AI-полям (могут не существовать до миграции)
+        product.has_ai_data = False
+        product.ai_keywords_list = None
+        product.ai_bullets_list = None
+        product.ai_rich_content_data = None
+        product.ai_analysis_data = None
+
+        try:
+            # Парсим AI JSON поля
+            ai_keywords_raw = getattr(product, 'ai_keywords', None)
+            ai_bullets_raw = getattr(product, 'ai_bullets', None)
+            ai_rich_content_raw = getattr(product, 'ai_rich_content', None)
+            ai_analysis_raw = getattr(product, 'ai_analysis', None)
+            ai_seo_title = getattr(product, 'ai_seo_title', None)
+
+            if ai_keywords_raw:
+                try:
+                    product.ai_keywords_list = json.loads(ai_keywords_raw)
+                except:
+                    product.ai_keywords_list = None
+
+            if ai_bullets_raw:
+                try:
+                    product.ai_bullets_list = json.loads(ai_bullets_raw)
+                except:
+                    product.ai_bullets_list = None
+
+            if ai_rich_content_raw:
+                try:
+                    product.ai_rich_content_data = json.loads(ai_rich_content_raw)
+                except:
+                    product.ai_rich_content_data = None
+
+            if ai_analysis_raw:
+                try:
+                    product.ai_analysis_data = json.loads(ai_analysis_raw)
+                except:
+                    product.ai_analysis_data = None
+
+            product.has_ai_data = bool(
+                product.ai_keywords_list or
+                product.ai_bullets_list or
+                product.ai_rich_content_data or
+                product.ai_analysis_data or
+                ai_seo_title
+            )
+        except Exception as e:
+            logger.warning(f"Ошибка парсинга AI полей: {e}")
 
         # Получаем список всех WB категорий для dropdown
         from wb_categories_mapping import WB_ADULT_CATEGORIES
@@ -534,6 +691,84 @@ def register_auto_import_routes(app):
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/product/<int:product_id>/update', methods=['POST'])
+    @login_required
+    def auto_import_update_product(product_id):
+        """Обновляет данные товара и перезапускает валидацию"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        try:
+            data = request.get_json()
+
+            # Обновляем поля
+            if 'title' in data:
+                product.title = data['title']
+
+            if 'brand' in data:
+                product.brand = data['brand']
+
+            if 'barcodes' in data:
+                barcodes = data['barcodes']
+                if isinstance(barcodes, str):
+                    barcodes = [b.strip() for b in barcodes.split(',') if b.strip()]
+                product.barcodes = json.dumps(barcodes, ensure_ascii=False)
+
+            if 'wb_subject_id' in data:
+                from wb_categories_mapping import WB_ADULT_CATEGORIES
+                new_id = data['wb_subject_id']
+                if new_id in WB_ADULT_CATEGORIES:
+                    product.wb_subject_id = new_id
+                    product.mapped_wb_category = WB_ADULT_CATEGORIES[new_id]
+                    product.category_confidence = 1.0
+
+            # Перезапускаем валидацию
+            from auto_import_manager import ProductValidator
+
+            # Собираем данные для валидации
+            product_data = {
+                'title': product.title,
+                'external_vendor_code': product.external_vendor_code,
+                'category': product.category,
+                'brand': product.brand,
+                'barcodes': json.loads(product.barcodes) if product.barcodes else [],
+                'photo_urls': json.loads(product.photo_urls) if product.photo_urls else [],
+                'colors': json.loads(product.colors) if product.colors else [],
+                'sizes': json.loads(product.sizes) if product.sizes else [],
+                'wb_subject_id': product.wb_subject_id
+            }
+
+            is_valid, errors = ProductValidator.validate_product(product_data)
+
+            if is_valid:
+                product.import_status = 'validated'
+                product.validation_errors = None
+            else:
+                product.import_status = 'failed'
+                product.validation_errors = json.dumps(errors, ensure_ascii=False)
+
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'is_valid': is_valid,
+                'errors': errors if not is_valid else [],
+                'new_status': product.import_status
+            })
+
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/auto-import/recalculate-categories', methods=['POST'])
     @login_required
     def auto_import_recalculate_categories():
@@ -602,6 +837,17 @@ def register_auto_import_routes(app):
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    # Простой файловый кэш для картинок
+    import hashlib
+    import os
+    PHOTO_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'photo_cache')
+    os.makedirs(PHOTO_CACHE_DIR, exist_ok=True)
+
+    def get_photo_cache_path(url: str) -> str:
+        """Генерирует путь к кэшированному файлу"""
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        return os.path.join(PHOTO_CACHE_DIR, f"{url_hash}.jpg")
+
     @app.route('/auto-import/photo/padded', methods=['GET'])
     def auto_import_photo_padded():
         """
@@ -609,15 +855,48 @@ def register_auto_import_routes(app):
         Query params:
             url: URL исходного фото
             bg_color: Цвет фона для padding (по умолчанию 'white')
+            fallback_blur: URL альтернативного изображения (blur)
+            fallback_original: URL альтернативного изображения (original)
         """
         photo_url = request.args.get('url')
         bg_color = request.args.get('bg_color', 'white')
+        fallback_blur = request.args.get('fallback_blur')
+        fallback_original = request.args.get('fallback_original')
 
         if not photo_url:
             return jsonify({'error': 'URL параметр обязателен'}), 400
 
+        # Проверяем кэш
+        cache_path = get_photo_cache_path(photo_url)
+        if os.path.exists(cache_path):
+            # Проверяем возраст кэша (24 часа)
+            cache_age = time.time() - os.path.getmtime(cache_path)
+            if cache_age < 86400:  # 24 часа
+                logger.info(f"📦 Кэш найден для: {photo_url[:50]}...")
+                return send_file(cache_path, mimetype='image/jpeg')
+
         try:
             logger.info(f"🖼️  Запрос обработки фото: {photo_url}")
+
+            # Собираем fallback URLs
+            fallback_urls = []
+            if fallback_blur:
+                fallback_urls.append(fallback_blur)
+            if fallback_original:
+                fallback_urls.append(fallback_original)
+
+            # Автоматически формируем fallback URLs для sexoptovik
+            if 'sexoptovik.ru' in photo_url and not fallback_urls:
+                # Извлекаем ID и номер из URL
+                import re
+                match = re.search(r'/(\d+)/(\d+)_(\d+)_1200\.jpg', photo_url)
+                if match:
+                    product_id, _, photo_num = match.groups()
+                    fallback_urls = [
+                        f"https://x-story.ru/mp/_project/img_sx0_1200/{product_id}_{photo_num}_1200.jpg",
+                        f"https://x-story.ru/mp/_project/img_sx_1200/{product_id}_{photo_num}_1200.jpg"
+                    ]
+                    logger.info(f"📋 Автоматические fallback URLs: {fallback_urls}")
 
             # Получаем настройки автоимпорта для получения credentials sexoptovik
             seller = current_user.seller if current_user.is_authenticated else None
@@ -641,38 +920,51 @@ def register_auto_import_routes(app):
                             settings.sexoptovik_password
                         )
                         if not auth_cookies:
-                            error_msg = "Не удалось авторизоваться на sexoptovik.ru. Проверьте логин и пароль в настройках."
-                            logger.error(f"❌ {error_msg}")
-                            return jsonify({'error': error_msg, 'details': 'Авторизация не прошла'}), 401
-                        logger.info(f"✅ Авторизация успешна, получены cookies")
+                            logger.warning(f"⚠️  Авторизация не удалась, пробуем fallback URLs")
+                            # Не возвращаем ошибку, пробуем fallback
+                        else:
+                            logger.info(f"✅ Авторизация успешна, получены cookies")
                     else:
-                        error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
-                        logger.warning(f"⚠️  {error_msg}")
-                        return jsonify({'error': error_msg, 'details': 'Отсутствуют учетные данные'}), 403
+                        logger.warning(f"⚠️  Нет credentials для sexoptovik, пробуем fallback URLs")
                 else:
                     logger.info(f"ℹ️  URL не от sexoptovik.ru, авторизация не требуется")
             else:
-                logger.warning(f"⚠️  Seller: {seller is not None}, Auto import settings: {seller.auto_import_settings if seller else None}")
-                if 'sexoptovik.ru' in photo_url:
-                    error_msg = "Для доступа к фото sexoptovik.ru нужно указать логин и пароль в настройках автоимпорта"
-                    logger.warning(f"⚠️  {error_msg}")
-                    return jsonify({'error': error_msg, 'details': 'Настройки не найдены'}), 403
+                logger.warning(f"⚠️  Настройки не найдены, пробуем без авторизации или fallback")
 
-            # Скачиваем и обрабатываем фото
+            # Скачиваем и обрабатываем фото с retry и fallback
             logger.info(f"⬇️  Скачивание и обработка изображения...")
             processed_image = ImageProcessor.download_and_process_image(
                 photo_url,
                 target_size=(1200, 1200),
                 background_color=bg_color,
-                auth_cookies=auth_cookies
+                auth_cookies=auth_cookies,
+                fallback_urls=fallback_urls if fallback_urls else None
             )
 
             if not processed_image:
-                error_msg = "Не удалось скачать или обработать изображение. Проверьте URL и доступность сервера."
-                logger.error(f"❌ {error_msg} URL: {photo_url}")
-                return jsonify({'error': error_msg, 'details': f'URL: {photo_url}'}), 500
+                # Вместо ошибки 500 возвращаем placeholder - это не блокирует UI
+                logger.debug(f"Фото недоступно, возвращаем placeholder: {photo_url[:50]}...")
+                # Создаём простой серый placeholder
+                from PIL import Image
+                from io import BytesIO
+                placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
+                buffer = BytesIO()
+                placeholder.save(buffer, format='JPEG', quality=80)
+                buffer.seek(0)
+                return send_file(buffer, mimetype='image/jpeg')
 
             logger.info(f"✅ Изображение успешно обработано")
+
+            # Сохраняем в кэш
+            try:
+                processed_image.seek(0)
+                with open(cache_path, 'wb') as f:
+                    f.write(processed_image.read())
+                processed_image.seek(0)
+                logger.info(f"💾 Сохранено в кэш: {cache_path}")
+            except Exception as cache_err:
+                logger.warning(f"⚠️  Ошибка сохранения в кэш: {cache_err}")
+
             # Возвращаем обработанное изображение
             return send_file(
                 processed_image,
@@ -682,14 +974,1157 @@ def register_auto_import_routes(app):
             )
 
         except Exception as e:
+            # Вместо ошибки 500 возвращаем placeholder
+            logger.debug(f"Ошибка загрузки фото, возвращаем placeholder: {str(e)[:100]}")
+            from PIL import Image
+            from io import BytesIO
+            placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
+            buffer = BytesIO()
+            placeholder.save(buffer, format='JPEG', quality=80)
+            buffer.seek(0)
+            return send_file(buffer, mimetype='image/jpeg')
+
+
+    @app.route('/auto-import/ai-update', methods=['GET'])
+    @login_required
+    def auto_import_ai_update():
+        """Страница AI обновления товаров"""
+        if not current_user.seller:
+            flash('Для работы с автоимпортом обратитесь к администратору.', 'warning')
+            return redirect(url_for('dashboard'))
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        # Проверяем, настроен ли AI
+        ai_enabled = settings and settings.ai_enabled and settings.ai_api_key
+
+        # Пагинация
+        page = request.args.get('page', 1, type=int)
+        per_page = 50
+
+        # Получаем товары (исключаем уже импортированные)
+        query = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status.in_(['pending', 'validated', 'failed'])
+        )
+
+        pagination = query.order_by(ImportedProduct.created_at.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+
+        return render_template(
+            'auto_import_ai_update.html',
+            products=pagination.items,
+            pagination=pagination,
+            ai_enabled=ai_enabled,
+            settings=settings
+        )
+
+    @app.route('/auto-import/ai-process', methods=['POST'])
+    @login_required
+    def auto_import_ai_process_single():
+        """
+        Обработка одного товара с AI
+
+        POST JSON:
+        {
+            "product_id": int,
+            "operations": ["category", "dimensions", "description", "sizes"]
+        }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled or not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        data = request.get_json()
+        product_id = data.get('product_id')
+        operations = data.get('operations', [])
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'Product ID is required'}), 400
+
+        if not operations:
+            return jsonify({'success': False, 'error': 'No operations specified'}), 400
+
+        # Получаем товар
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+
+        try:
+            from ai_service import get_ai_service, AIConfig
+            ai_service = get_ai_service(settings)
+
+            if not ai_service:
+                return jsonify({'success': False, 'error': 'Не удалось инициализировать AI сервис'}), 500
+
+            results = {}
+            updated_fields = []
+
+            # Парсим JSON поля товара
+            try:
+                all_categories = json.loads(product.all_categories) if product.all_categories else []
+            except:
+                all_categories = []
+
+            # Определение категории
+            if 'category' in operations:
+                try:
+                    cat_id, cat_name, confidence, reasoning = ai_service.detect_category(
+                        product_title=product.title or '',
+                        source_category=product.category or '',
+                        all_categories=all_categories,
+                        brand=product.brand or '',
+                        description=product.description or ''
+                    )
+
+                    if cat_id:
+                        product.wb_subject_id = cat_id
+                        product.mapped_wb_category = cat_name
+                        product.category_confidence = confidence
+                        updated_fields.append('category')
+                        results['category'] = {
+                            'id': cat_id,
+                            'name': cat_name,
+                            'confidence': confidence,
+                            'reasoning': reasoning
+                        }
+                        logger.info(f"AI определил категорию для {product.id}: {cat_name} ({confidence*100:.0f}%)")
+                except Exception as e:
+                    logger.error(f"Ошибка AI определения категории: {e}")
+                    results['category_error'] = str(e)
+
+            # Парсинг размеров и габаритов
+            if 'dimensions' in operations or 'sizes' in operations:
+                try:
+                    # Собираем текст для парсинга
+                    sizes_text = ''
+                    try:
+                        sizes_list = json.loads(product.sizes) if product.sizes else []
+                        sizes_text = ', '.join(str(s) for s in sizes_list)
+                    except:
+                        pass
+
+                    # Получаем список характеристик для категории WB
+                    category_chars = []
+                    if product.wb_subject_id:
+                        try:
+                            from wb_api_client import WBApiClient
+                            # Используем WB API клиент селлера
+                            wb_client = WBApiClient(seller.api_key)
+                            chars_config = wb_client.get_card_characteristics_config(product.wb_subject_id)
+                            if chars_config and chars_config.get('data'):
+                                # Извлекаем названия характеристик (особенно размерные)
+                                size_keywords = ['длина', 'ширина', 'высота', 'диаметр', 'глубина', 'размер', 'вес', 'объем']
+                                for char in chars_config['data']:
+                                    char_name = char.get('name', '')
+                                    # Добавляем размерные характеристики
+                                    if any(kw in char_name.lower() for kw in size_keywords):
+                                        category_chars.append(char_name)
+                                logger.info(f"Загружено {len(category_chars)} размерных характеристик для категории {product.wb_subject_id}")
+                        except Exception as e:
+                            logger.warning(f"Не удалось загрузить характеристики категории: {e}")
+
+                    success, parsed_data, error = ai_service.parse_sizes(
+                        sizes_text=sizes_text,
+                        product_title=product.title or '',
+                        description=product.description or '',
+                        category_characteristics=category_chars if category_chars else None
+                    )
+
+                    if success and parsed_data:
+                        # Сохраняем характеристики
+                        existing_chars = {}
+                        try:
+                            existing_chars = json.loads(product.characteristics) if product.characteristics else {}
+                        except:
+                            existing_chars = {}
+
+                        # Обновляем характеристики из AI
+                        if parsed_data.get('characteristics'):
+                            existing_chars.update(parsed_data['characteristics'])
+                            product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                            updated_fields.append('characteristics')
+
+                        results['sizes'] = parsed_data
+                        logger.info(f"AI распарсил размеры для {product.id}: {parsed_data}")
+                except Exception as e:
+                    logger.error(f"Ошибка AI парсинга размеров: {e}")
+                    results['sizes_error'] = str(e)
+
+            # Генерация описания (TODO: отдельная задача в ai_service)
+            if 'description' in operations:
+                try:
+                    # Простая генерация описания через chat completion
+                    from ai_service import AIClient, AIConfig as AIC
+                    config = AIC.from_settings(settings)
+                    if config:
+                        client = AIClient(config)
+                        prompt = f"""Напиши краткое SEO-оптимизированное описание товара для маркетплейса Wildberries.
+
+Название: {product.title}
+Категория: {product.mapped_wb_category or product.category}
+Бренд: {product.brand or 'Не указан'}
+
+Требования:
+- 2-3 предложения
+- Без воды и общих фраз
+- Упомяни ключевые особенности товара
+- Подходит для карточки товара на Wildberries
+
+Ответь ТОЛЬКО текстом описания, без заголовков и пояснений."""
+
+                        response = client.chat_completion([
+                            {"role": "user", "content": prompt}
+                        ], max_tokens=500)
+
+                        if response:
+                            product.description = response.strip()
+                            updated_fields.append('description')
+                            results['description'] = response.strip()[:200] + '...' if len(response) > 200 else response.strip()
+                            logger.info(f"AI сгенерировал описание для {product.id}")
+
+                        client.close()
+                except Exception as e:
+                    logger.error(f"Ошибка AI генерации описания: {e}")
+                    results['description_error'] = str(e)
+
+            # Сохраняем изменения
+            if updated_fields:
+                db.session.commit()
+                return jsonify({
+                    'success': True,
+                    'updated_fields': updated_fields,
+                    'results': results
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'skipped': True,
+                    'message': 'Нет данных для обновления',
+                    'results': results
+                })
+
+        except Exception as e:
             import traceback
-            error_trace = traceback.format_exc()
-            logger.error(f"❌ Критическая ошибка при обработке фото:\n{error_trace}")
+            logger.error(f"Ошибка AI обработки товара {product_id}: {traceback.format_exc()}")
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/models', methods=['GET'])
+    @login_required
+    def auto_import_ai_models():
+        """Возвращает список доступных AI моделей для провайдера"""
+        provider = request.args.get('provider', 'cloudru')
+
+        try:
+            from ai_service import get_available_models
+            models = get_available_models(provider)
             return jsonify({
-                'error': f'Ошибка обработки изображения: {str(e)}',
-                'details': error_trace.split('\n')[-2] if error_trace else str(e),
-                'url': photo_url
-            }), 500
+                'success': True,
+                'provider': provider,
+                'models': models
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/test-raw', methods=['POST', 'GET'])
+    def auto_import_ai_test_raw():
+        """
+        Тестирует подключение к AI API напрямую (как curl)
+        GET: использует ключ из настроек (требует авторизацию)
+        POST с json: {"api_key": "..."} - тест с переданным ключом
+        """
+        import requests as req
+
+        # Получаем api_key из запроса или из настроек
+        if request.method == 'POST' and request.json and request.json.get('api_key'):
+            api_key = request.json.get('api_key')
+            logger.info(f"🧪 RAW TEST: используем ключ из запроса")
+        elif current_user.is_authenticated and current_user.seller:
+            settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+            if not settings or not settings.ai_api_key:
+                return jsonify({'success': False, 'error': 'API ключ не настроен в настройках'}), 400
+            api_key = settings.ai_api_key
+            logger.info(f"🧪 RAW TEST: используем ключ из настроек")
+        else:
+            return jsonify({'success': False, 'error': 'Передайте api_key в JSON или авторизуйтесь'}), 400
+        url = "https://foundation-models.api.cloud.ru/v1/chat/completions"
+
+        logger.info(f"🧪 RAW TEST: api_key={api_key[:20]}... (len={len(api_key)})")
+        logger.info(f"🧪 RAW TEST: url={url}")
+
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            "model": "openai/gpt-oss-120b",
+            "messages": [{"role": "user", "content": "Ответь одним словом: работает"}],
+            "temperature": 0.7,
+            "max_tokens": 50
+        }
+
+        logger.info(f"🧪 RAW TEST: Authorization header = Bearer {api_key[:20]}...")
+
+        try:
+            response = req.post(url, json=payload, headers=headers, timeout=30)
+            logger.info(f"🧪 RAW TEST: status={response.status_code}")
+            logger.info(f"🧪 RAW TEST: response={response.text[:500]}")
+
+            if response.status_code == 200:
+                return jsonify({'success': True, 'message': 'RAW тест успешен!', 'response': response.json()})
+            else:
+                return jsonify({'success': False, 'error': f'HTTP {response.status_code}: {response.text}'})
+        except Exception as e:
+            logger.error(f"🧪 RAW TEST ERROR: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/auto-import/ai/test', methods=['POST'])
+    @login_required
+    def auto_import_ai_test():
+        """Тестирует подключение к AI API"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings:
+            return jsonify({'success': False, 'error': 'Настройки не найдены'}), 400
+
+        # Все провайдеры используют API ключ
+        if not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'API ключ не настроен. Сохраните настройки перед тестированием.'}), 400
+
+        try:
+            from ai_service import get_ai_service, reset_ai_service
+
+            # Логируем какой ключ используется
+            logger.info(f"🔑 AI Test: provider={settings.ai_provider}")
+            logger.info(f"🔑 API Key: {settings.ai_api_key[:20] if settings.ai_api_key else 'None'}... (длина: {len(settings.ai_api_key) if settings.ai_api_key else 0})")
+            logger.info(f"🔑 Base URL: {settings.ai_api_base_url or 'DEFAULT'}")
+            logger.info(f"🔑 Model: {settings.ai_model or 'DEFAULT'}")
+
+            # Сбрасываем кэш чтобы использовать свежие настройки
+            reset_ai_service()
+            ai_service = get_ai_service(settings)
+
+            if not ai_service:
+                return jsonify({'success': False, 'error': 'Не удалось инициализировать AI сервис'}), 500
+
+            success, message = ai_service.test_connection()
+
+            return jsonify({
+                'success': success,
+                'message': message
+            })
+        except Exception as e:
+            import traceback
+            app.logger.error(f"AI test error: {traceback.format_exc()}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/instructions', methods=['GET'])
+    @login_required
+    def auto_import_ai_instructions():
+        """Возвращает дефолтные инструкции для редактирования"""
+        try:
+            from ai_service import get_default_instructions
+            instructions = get_default_instructions()
+            return jsonify({
+                'success': True,
+                'instructions': instructions
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # ============================================================================
+    # AI ENHANCED ENDPOINTS - Новые AI функции для улучшения карточки
+    # ============================================================================
+
+    @app.route('/auto-import/ai/seo-title', methods=['POST'])
+    @login_required
+    def auto_import_ai_seo_title():
+        """Генерация SEO-оптимизированного заголовка"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            if not config:
+                return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+            ai_service = AIService(config)
+            success, result, error = ai_service.generate_seo_title(
+                title=product.title or '',
+                category=product.mapped_wb_category or '',
+                brand=product.brand or '',
+                description=product.description or ''
+            )
+
+            if success:
+                # Сохраняем результат в кэш продукта
+                if result.get('title'):
+                    product.ai_seo_title = result['title']
+                    product.content_hash = compute_content_hash(product)
+                    db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(
+                    seller_id=seller.id,
+                    product_id=product.id,
+                    action_type='seo_title',
+                    input_data={'title': product.title, 'category': product.mapped_wb_category},
+                    result_data=result
+                )
+
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'original_title': product.title
+                })
+            else:
+                save_ai_history(seller.id, product.id, 'seo_title', None, None, False, error)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI SEO title error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/keywords', methods=['POST'])
+    @login_required
+    def auto_import_ai_keywords():
+        """Генерация ключевых слов для товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+            success, result, error = ai_service.generate_keywords(
+                title=product.title or '',
+                category=product.mapped_wb_category or '',
+                description=product.description or ''
+            )
+
+            if success:
+                # Сохраняем в кэш продукта
+                product.ai_keywords = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'keywords',
+                    {'title': product.title, 'category': product.mapped_wb_category}, result)
+
+                return jsonify({'success': True, 'data': result})
+            else:
+                save_ai_history(seller.id, product.id, 'keywords', None, None, False, error)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI keywords error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/bullet-points', methods=['POST'])
+    @login_required
+    def auto_import_ai_bullet_points():
+        """Генерация bullet points (преимуществ) товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики если есть
+            characteristics = {}
+            if product.characteristics:
+                try:
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            success, result, error = ai_service.generate_bullet_points(
+                title=product.title or '',
+                description=product.description or '',
+                characteristics=characteristics
+            )
+
+            if success:
+                # Сохраняем в кэш продукта
+                product.ai_bullets = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'bullets',
+                    {'title': product.title}, result)
+
+                return jsonify({'success': True, 'data': result})
+            else:
+                save_ai_history(seller.id, product.id, 'bullets', None, None, False, error)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI bullet points error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/enhance-description', methods=['POST'])
+    @login_required
+    def auto_import_ai_enhance_description():
+        """Улучшение описания товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        if not product.description:
+            return jsonify({'success': False, 'error': 'Описание отсутствует'}), 400
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+            success, result, error = ai_service.enhance_description(
+                title=product.title or '',
+                description=product.description,
+                category=product.mapped_wb_category or ''
+            )
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'original_description': product.description
+                })
+            else:
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI enhance description error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/analyze', methods=['POST'])
+    @login_required
+    def auto_import_ai_analyze():
+        """Анализ карточки товара с рекомендациями"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики
+            characteristics = {}
+            if product.characteristics:
+                try:
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            # Считаем фото
+            photos_count = 0
+            if product.photo_urls:
+                try:
+                    photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                    photos_count = len(photos) if photos else 0
+                except:
+                    pass
+
+            success, result, error = ai_service.analyze_card(
+                title=product.title or '',
+                description=product.description or '',
+                category=product.mapped_wb_category or '',
+                characteristics=characteristics,
+                photos_count=photos_count,
+                price=float(getattr(product, 'price', 0) or 0)
+            )
+
+            if success:
+                # Сохраняем анализ в кэш продукта
+                product.ai_analysis = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'analysis',
+                    {'title': product.title, 'photos_count': photos_count}, result)
+
+                return jsonify({'success': True, 'data': result})
+            else:
+                save_ai_history(seller.id, product.id, 'analysis', None, None, False, error)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI analyze error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/rich-content', methods=['POST'])
+    @login_required
+    def auto_import_ai_rich_content():
+        """Генерация продающего rich контента для карточки"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики
+            characteristics = {}
+            if product.characteristics:
+                try:
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            success, result, error = ai_service.generate_rich_content(
+                title=product.title or '',
+                description=product.description or '',
+                category=product.mapped_wb_category or '',
+                brand=product.brand or '',
+                characteristics=characteristics,
+                price=float(getattr(product, 'price', 0) or 0)
+            )
+
+            if success:
+                # Сохраняем rich контент в кэш продукта
+                product.ai_rich_content = json.dumps(result, ensure_ascii=False)
+                product.ai_analysis_at = datetime.utcnow()
+                product.content_hash = compute_content_hash(product)
+                db.session.commit()
+
+                # Сохраняем в историю
+                save_ai_history(seller.id, product.id, 'rich_content',
+                    {'title': product.title, 'category': product.mapped_wb_category}, result)
+
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'original_description': product.description
+                })
+            else:
+                save_ai_history(seller.id, product.id, 'rich_content', None, None, False, error)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI rich content error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/full-optimize', methods=['POST'])
+    @login_required
+    def auto_import_ai_full_optimize():
+        """Полная AI-оптимизация карточки товара"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Получаем характеристики
+            characteristics = {}
+            if product.characteristics:
+                try:
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            # Считаем фото
+            photos_count = 0
+            if product.photo_urls:
+                try:
+                    photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                    photos_count = len(photos) if photos else 0
+                except:
+                    pass
+
+            result = ai_service.full_optimize(
+                title=product.title or '',
+                description=product.description or '',
+                category=product.mapped_wb_category or '',
+                brand=product.brand or '',
+                characteristics=characteristics,
+                photos_count=photos_count,
+                price=float(getattr(product, 'price', 0) or 0)
+            )
+
+            return jsonify({'success': True, 'data': result})
+
+        except Exception as e:
+            logger.error(f"AI full optimize error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/apply', methods=['POST'])
+    @login_required
+    def auto_import_ai_apply():
+        """Применяет AI-улучшения к товару"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        updates = data.get('updates', {})
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            applied = []
+
+            if 'title' in updates and updates['title']:
+                product.title = updates['title']
+                applied.append('title')
+
+            if 'description' in updates and updates['description']:
+                product.description = updates['description']
+                applied.append('description')
+
+            if 'keywords' in updates and updates['keywords']:
+                # Сохраняем ключевые слова в отдельное поле или добавляем к характеристикам
+                existing_chars = {}
+                if product.characteristics:
+                    try:
+                        existing_chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                    except:
+                        pass
+                existing_chars['_keywords'] = updates['keywords']
+                product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                applied.append('keywords')
+
+            if 'bullet_points' in updates and updates['bullet_points']:
+                existing_chars = {}
+                if product.characteristics:
+                    try:
+                        existing_chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                    except:
+                        pass
+                existing_chars['_bullet_points'] = updates['bullet_points']
+                product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                applied.append('bullet_points')
+
+            if applied:
+                db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'applied': applied,
+                'message': f"Применено: {', '.join(applied)}" if applied else "Нет изменений"
+            })
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"AI apply error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/generate-slide-image', methods=['POST'])
+    @login_required
+    def auto_import_ai_generate_slide_image():
+        """Генерация изображения для слайда Rich-контента"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index', 0)
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings:
+            return jsonify({'success': False, 'error': 'Настройки не найдены'}), 400
+
+        # Проверяем настройки генерации изображений
+        image_gen_enabled = getattr(settings, 'image_gen_enabled', False)
+        if not image_gen_enabled:
+            return jsonify({'success': False, 'error': 'Генерация изображений не включена. Настройте провайдер в настройках автоимпорта.'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        # Проверяем наличие Rich content
+        if not product.ai_rich_content:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        try:
+            rich_content = json.loads(product.ai_rich_content)
+            slides = rich_content.get('slides', [])
+
+            if not slides:
+                return jsonify({'success': False, 'error': 'Нет слайдов в Rich-контенте'}), 400
+
+            if slide_index >= len(slides):
+                return jsonify({'success': False, 'error': f'Слайд {slide_index} не найден'}), 400
+
+            slide = slides[slide_index]
+
+            # Получаем фотографии товара
+            product_photos = []
+            if product.photo_urls:
+                try:
+                    product_photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                except:
+                    pass
+
+            # Импортируем сервис генерации изображений
+            from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
+
+            # Создаем конфигурацию
+            provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle') or 'openai_dalle'
+            try:
+                provider = ImageProvider(provider_str)
+            except ValueError:
+                provider = ImageProvider.OPENAI_DALLE
+
+            api_key = ""
+            replicate_key = ""
+
+            if provider == ImageProvider.OPENAI_DALLE:
+                api_key = getattr(settings, 'openai_api_key', '') or ''
+                if not api_key:
+                    return jsonify({'success': False, 'error': 'OpenAI API ключ не настроен'}), 400
+            else:
+                replicate_key = getattr(settings, 'replicate_api_key', '') or ''
+                if not replicate_key:
+                    return jsonify({'success': False, 'error': 'Replicate API ключ не настроен'}), 400
+
+            config = ImageGenerationConfig(
+                provider=provider,
+                api_key=api_key,
+                replicate_api_key=replicate_key,
+                openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
+                openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid',
+                default_width=getattr(settings, 'image_gen_width', 1440) or 1440,
+                default_height=getattr(settings, 'image_gen_height', 810) or 810
+            )
+
+            service = ImageGenerationService(config)
+
+            # Генерируем изображение
+            success, image_bytes, error = service.generate_slide_image(
+                slide_data=slide,
+                product_photos=product_photos,
+                product_title=product.title or ''
+            )
+
+            if not success:
+                return jsonify({'success': False, 'error': error}), 500
+
+            # Конвертируем в base64
+            import base64
+            image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+
+            return jsonify({
+                'success': True,
+                'slide_index': slide_index,
+                'slide_type': slide.get('type', 'unknown'),
+                'image_base64': image_b64,
+                'image_size': len(image_bytes),
+                'provider': provider.value
+            })
+
+        except Exception as e:
+            logger.error(f"Image generation error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/generate-all-slide-images', methods=['POST'])
+    @login_required
+    def auto_import_ai_generate_all_slide_images():
+        """Генерация изображений для всех слайдов Rich-контента"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings:
+            return jsonify({'success': False, 'error': 'Настройки не найдены'}), 400
+
+        image_gen_enabled = getattr(settings, 'image_gen_enabled', False)
+        if not image_gen_enabled:
+            return jsonify({'success': False, 'error': 'Генерация изображений не включена'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        if not product.ai_rich_content:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        try:
+            rich_content = json.loads(product.ai_rich_content)
+            slides = rich_content.get('slides', [])
+
+            if not slides:
+                return jsonify({'success': False, 'error': 'Нет слайдов'}), 400
+
+            # Получаем фотографии товара
+            product_photos = []
+            if product.photo_urls:
+                try:
+                    product_photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                except:
+                    pass
+
+            from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
+
+            provider_str = getattr(settings, 'image_gen_provider', 'openai_dalle') or 'openai_dalle'
+            try:
+                provider = ImageProvider(provider_str)
+            except ValueError:
+                provider = ImageProvider.OPENAI_DALLE
+
+            api_key = getattr(settings, 'openai_api_key', '') if provider == ImageProvider.OPENAI_DALLE else ''
+            replicate_key = getattr(settings, 'replicate_api_key', '') if provider != ImageProvider.OPENAI_DALLE else ''
+
+            if not api_key and not replicate_key:
+                return jsonify({'success': False, 'error': 'API ключ не настроен'}), 400
+
+            config = ImageGenerationConfig(
+                provider=provider,
+                api_key=api_key,
+                replicate_api_key=replicate_key,
+                openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
+                openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid'
+            )
+
+            service = ImageGenerationService(config)
+
+            # Генерируем все изображения
+            results = service.generate_all_slides(
+                slides=slides,
+                product_photos=product_photos,
+                product_title=product.title or ''
+            )
+
+            # Конвертируем в base64
+            import base64
+            output = []
+            for r in results:
+                item = {
+                    'slide_number': r['slide_number'],
+                    'slide_type': r['slide_type'],
+                    'success': r['success'],
+                    'error': r.get('error', '')
+                }
+                if r['success'] and r['image_bytes']:
+                    item['image_base64'] = base64.b64encode(r['image_bytes']).decode('utf-8')
+                    item['image_size'] = len(r['image_bytes'])
+                output.append(item)
+
+            successful = sum(1 for r in results if r['success'])
+
+            return jsonify({
+                'success': True,
+                'total_slides': len(slides),
+                'successful': successful,
+                'failed': len(slides) - successful,
+                'results': output,
+                'provider': provider.value
+            })
+
+        except Exception as e:
+            logger.error(f"Image generation error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/image-providers', methods=['GET'])
+    @login_required
+    def auto_import_ai_image_providers():
+        """Получение списка доступных провайдеров генерации изображений"""
+        try:
+            from image_generation_service import get_available_providers
+            providers = get_available_providers()
+            return jsonify({'success': True, 'providers': providers})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # Пример использования:
