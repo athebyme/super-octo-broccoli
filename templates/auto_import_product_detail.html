@@ -995,11 +995,13 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!brandName || brandName.length < 2) {
             brandValidation.innerHTML = '<span class="text-yellow-600">Введите минимум 2 символа</span>';
             brandValidation.classList.remove('hidden');
+            brandSuggestions.classList.add('hidden');
             return;
         }
 
-        brandValidation.innerHTML = '<span class="text-gray-500">Проверка...</span>';
+        brandValidation.innerHTML = '<span class="text-gray-500">🔄 Поиск в справочнике WB...</span>';
         brandValidation.classList.remove('hidden');
+        brandSuggestions.classList.add('hidden');
 
         try {
             const response = await fetch('/auto-import/validate-brand', {
@@ -1011,20 +1013,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.success) {
                 if (data.valid) {
+                    // Точное совпадение найдено
                     brandValidation.innerHTML = '<span class="text-green-600">✓ Бренд найден в справочнике WB: <strong>' + data.exact_match.name + '</strong></span>';
                     brandInput.value = data.exact_match.name;
+                    brandSuggestions.classList.add('hidden');
                 } else {
-                    let html = '<span class="text-yellow-600">⚠ Бренд не найден в справочнике WB</span>';
+                    // Точное совпадение не найдено - показываем предложения
                     if (data.suggestions && data.suggestions.length > 0) {
-                        html += '<div class="mt-1 text-xs text-gray-500">Похожие бренды:</div>';
-                    }
-                    brandValidation.innerHTML = html;
+                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Точное совпадение не найдено.</span> <span class="text-gray-600">Выберите из похожих брендов WB:</span>';
 
-                    // Show suggestions
-                    if (data.suggestions && data.suggestions.length > 0) {
                         let suggestionsHtml = '';
                         data.suggestions.forEach(brand => {
-                            suggestionsHtml += '<div class="px-3 py-2 hover:bg-gray-100 cursor-pointer border-b border-gray-100 text-sm" data-brand="' + brand.name + '">' + brand.name + '</div>';
+                            suggestionsHtml += '<div class="px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 text-sm flex items-center justify-between" data-brand="' + brand.name + '">';
+                            suggestionsHtml += '<span>' + brand.name + '</span>';
+                            suggestionsHtml += '<span class="text-xs text-indigo-600 hover:text-indigo-800">Выбрать</span>';
+                            suggestionsHtml += '</div>';
                         });
                         brandSuggestions.innerHTML = suggestionsHtml;
                         brandSuggestions.classList.remove('hidden');
@@ -1032,18 +1035,26 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Click handler for suggestions
                         brandSuggestions.querySelectorAll('[data-brand]').forEach(el => {
                             el.addEventListener('click', function() {
-                                brandInput.value = this.dataset.brand;
+                                const selectedBrand = this.dataset.brand;
+                                brandInput.value = selectedBrand;
                                 brandSuggestions.classList.add('hidden');
-                                brandValidation.innerHTML = '<span class="text-green-600">✓ Выбран бренд: <strong>' + this.dataset.brand + '</strong></span>';
+                                brandValidation.innerHTML = '<span class="text-green-600">✓ Выбран бренд: <strong>' + selectedBrand + '</strong></span>';
                             });
                         });
+                    } else {
+                        // Нет предложений
+                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Бренд "' + brandName + '" не найден в справочнике WB.</span><br><span class="text-xs text-gray-500">Попробуйте другое написание или проверьте бренд на сайте WB.</span>';
+                        brandSuggestions.classList.add('hidden');
                     }
                 }
             } else {
                 brandValidation.innerHTML = '<span class="text-red-600">Ошибка: ' + (data.error || 'Неизвестная ошибка') + '</span>';
+                brandSuggestions.classList.add('hidden');
             }
         } catch (error) {
-            brandValidation.innerHTML = '<span class="text-red-600">Ошибка подключения</span>';
+            console.error('Brand validation error:', error);
+            brandValidation.innerHTML = '<span class="text-red-600">Ошибка подключения к API</span>';
+            brandSuggestions.classList.add('hidden');
         }
     }
 

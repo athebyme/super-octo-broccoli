@@ -1743,15 +1743,60 @@ class WildberriesAPIClient:
         logger.info(f"🔍 Validating brand: '{brand_name}'")
 
         try:
-            result = self.search_brands(brand_name, top=20)
-            brands = result.get('data', [])
+            all_brands = []
+            seen_ids = set()
+
+            # Попробуем несколько вариантов поиска для лучшего покрытия
+            search_variants = [
+                brand_name,  # Оригинальный запрос
+                brand_name.lower(),  # Нижний регистр
+                brand_name.upper(),  # Верхний регистр
+                brand_name.capitalize(),  # С заглавной
+            ]
+
+            # Если бренд содержит несколько слов, попробуем первое слово
+            words = brand_name.split()
+            if len(words) > 1:
+                search_variants.append(words[0])
+
+            # Если бренд длинный, попробуем сокращенный вариант
+            if len(brand_name) > 5:
+                search_variants.append(brand_name[:5])
+
+            # Удаляем дубликаты, сохраняя порядок
+            unique_variants = []
+            seen_variants = set()
+            for v in search_variants:
+                v_lower = v.lower()
+                if v_lower not in seen_variants:
+                    seen_variants.add(v_lower)
+                    unique_variants.append(v)
+
+            for variant in unique_variants:
+                try:
+                    result = self.search_brands(variant, top=30)
+                    brands = result.get('data', [])
+                    logger.info(f"   Search '{variant}': found {len(brands)} brands")
+
+                    for brand in brands:
+                        brand_id = brand.get('id')
+                        if brand_id and brand_id not in seen_ids:
+                            seen_ids.add(brand_id)
+                            all_brands.append(brand)
+
+                    # Если нашли достаточно - выходим
+                    if len(all_brands) >= 20:
+                        break
+                except Exception as e:
+                    logger.warning(f"   Search '{variant}' failed: {e}")
+                    continue
 
             # Ищем точное совпадение (регистронезависимо)
             brand_lower = brand_name.lower().strip()
             exact_match = None
             suggestions = []
 
-            for brand in brands:
+            for brand in all_brands:
                 brand_wb_name = brand.get('name', '')
                 if brand_wb_name.lower().strip() == brand_lower:
                     exact_match = brand
@@ -1760,12 +1805,12 @@ class WildberriesAPIClient:
 
             is_valid = exact_match is not None
 
-            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}")
+            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}, {len(suggestions)} suggestions")
 
             return {
                 'valid': is_valid,
                 'exact_match': exact_match,
-                'suggestions': suggestions[:10]  # Максимум 10 предложений
+                'suggestions': suggestions[:15]  # Максимум 15 предложений
             }
         except Exception as e:
             logger.error(f"❌ Failed to validate brand: {str(e)}")
