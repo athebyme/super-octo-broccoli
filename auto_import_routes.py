@@ -3282,7 +3282,8 @@ def register_auto_import_routes(app):
             success, result, error = ai_service.extract_all_characteristics(
                 product_info=product_info,
                 existing_characteristics=product_characteristics,
-                category_characteristics=chars_for_ai
+                category_characteristics=chars_for_ai,
+                original_data=original_data
             )
 
             if success and result:
