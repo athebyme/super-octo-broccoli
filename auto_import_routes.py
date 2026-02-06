@@ -2119,6 +2119,27 @@ def register_auto_import_routes(app):
                 product.sizes = json.dumps(sizes_data, ensure_ascii=False)
                 applied.append('wb_characteristics')
 
+            # Все характеристики (all_characteristics) - аналогично wb_characteristics
+            if 'all_characteristics' in updates and updates['all_characteristics']:
+                all_chars = updates['all_characteristics']
+
+                # Загружаем существующие characteristics
+                existing_chars = {}
+                try:
+                    if product.characteristics:
+                        existing_chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    existing_chars = {}
+
+                # Добавляем все извлечённые характеристики
+                for key, value in all_chars.items():
+                    if 'запас' not in key.lower():  # Пропускаем значения с запасом
+                        existing_chars[key] = value
+
+                product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                product.ai_attributes = json.dumps(all_chars, ensure_ascii=False)
+                applied.append('all_characteristics')
+
             if applied:
                 db.session.commit()
 
@@ -2800,6 +2821,223 @@ def register_auto_import_routes(app):
 
         except Exception as e:
             logger.error(f"AI extract category dimensions error: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/extract-all-characteristics', methods=['POST'])
+    @login_required
+    def auto_import_ai_extract_all_characteristics():
+        """Извлечь ВСЕ характеристики категории WB (обязательные + необязательные)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        weight_margin_percent = data.get('weight_margin', 10)
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        # Получаем ВСЕ характеристики категории из WB API
+        all_wb_characteristics = []
+        required_characteristics = []
+        optional_characteristics = []
+        category_id = product.wb_subject_id
+
+        if category_id and seller.wb_api_key:
+            try:
+                from wb_api_client import WildberriesAPIClient
+                with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                    chars_config = wb_client.get_card_characteristics_config(int(category_id))
+                    raw_chars = chars_config.get('data', [])
+
+                    for char in raw_chars:
+                        char_info = {
+                            'id': char.get('charcID'),
+                            'name': char.get('name'),
+                            'required': char.get('required', False),
+                            'unit': char.get('unitName', ''),
+                            'type': char.get('charcType'),
+                            'maxCount': char.get('maxCount', 1),
+                            'dictionary': char.get('dictionary', [])  # Допустимые значения
+                        }
+                        all_wb_characteristics.append(char_info)
+
+                        if char_info['required']:
+                            required_characteristics.append(char_info)
+                        else:
+                            optional_characteristics.append(char_info)
+
+                    logger.info(f"Загружено {len(all_wb_characteristics)} характеристик для категории {category_id}: {len(required_characteristics)} обязательных, {len(optional_characteristics)} необязательных")
+            except Exception as e:
+                logger.warning(f"Не удалось получить характеристики WB: {e}")
+
+        if not all_wb_characteristics:
+            return jsonify({'success': False, 'error': 'Не удалось получить характеристики категории WB'}), 400
+
+        try:
+            from ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            # Подготавливаем данные товара
+            product_characteristics = {}
+            if product.characteristics:
+                try:
+                    product_characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            # Получаем оригинальные данные поставщика
+            original_data = {}
+            original_description = ''
+            if product.original_data:
+                try:
+                    original_data = json.loads(product.original_data) if isinstance(product.original_data, str) else product.original_data
+                    original_description = original_data.get('description', '')
+                    original_chars = original_data.get('characteristics', {})
+                    for k, v in original_chars.items():
+                        if k not in product_characteristics:
+                            product_characteristics[k] = v
+                except:
+                    pass
+
+            # Формируем список характеристик для AI
+            chars_for_ai = []
+
+            # Сначала обязательные
+            if required_characteristics:
+                chars_for_ai.append("=== ОБЯЗАТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ (нужно заполнить!) ===")
+                for char in required_characteristics:
+                    unit_str = f" ({char['unit']})" if char['unit'] else ""
+                    dict_values = char.get('dictionary', [])
+                    if dict_values and len(dict_values) <= 20:
+                        values_str = f" [допустимые: {', '.join(str(v) for v in dict_values[:10])}{'...' if len(dict_values) > 10 else ''}]"
+                    else:
+                        values_str = ""
+                    chars_for_ai.append(f"- {char['name']}{unit_str}{values_str}")
+
+            # Затем необязательные
+            if optional_characteristics:
+                chars_for_ai.append("\n=== НЕОБЯЗАТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ (заполнить по возможности) ===")
+                for char in optional_characteristics:
+                    unit_str = f" ({char['unit']})" if char['unit'] else ""
+                    dict_values = char.get('dictionary', [])
+                    if dict_values and len(dict_values) <= 20:
+                        values_str = f" [допустимые: {', '.join(str(v) for v in dict_values[:10])}{'...' if len(dict_values) > 10 else ''}]"
+                    else:
+                        values_str = ""
+                    chars_for_ai.append(f"- {char['name']}{unit_str}{values_str}")
+
+            # Комбинируем описание
+            combined_description = product.description or ''
+            if original_description and original_description != combined_description:
+                combined_description = f"{combined_description}\n\n=== ОРИГИНАЛЬНЫЕ ДАННЫЕ ПОСТАВЩИКА ===\n{original_description}"
+
+            # Собираем все доступные данные о товаре
+            product_info = {
+                'title': product.title or '',
+                'description': combined_description,
+                'brand': product.brand or '',
+                'category': product.category or '',
+                'colors': [],
+                'materials': [],
+                'sizes': {}
+            }
+
+            try:
+                if product.colors:
+                    product_info['colors'] = json.loads(product.colors) if isinstance(product.colors, str) else product.colors
+            except:
+                pass
+
+            try:
+                if product.materials:
+                    product_info['materials'] = json.loads(product.materials) if isinstance(product.materials, str) else product.materials
+            except:
+                pass
+
+            try:
+                if product.sizes:
+                    product_info['sizes'] = json.loads(product.sizes) if isinstance(product.sizes, str) else product.sizes
+            except:
+                pass
+
+            # Вызываем AI для извлечения всех характеристик
+            success, result, error = ai_service.extract_all_characteristics(
+                product_info=product_info,
+                existing_characteristics=product_characteristics,
+                category_characteristics=chars_for_ai
+            )
+
+            if success and result:
+                # Добавляем запас к весу
+                if result.get('extracted_values'):
+                    weight_margins = {}
+                    for key, value in result['extracted_values'].items():
+                        if 'вес' in key.lower() or 'масса' in key.lower():
+                            try:
+                                weight = float(str(value).replace(',', '.'))
+                                weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 1)
+                                weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
+                            except:
+                                pass
+                    result['extracted_values'].update(weight_margins)
+
+                # Считаем статистику
+                extracted_count = len(result.get('extracted_values', {}))
+                required_filled = sum(1 for char in required_characteristics
+                                    if char['name'] in result.get('extracted_values', {}))
+
+                result['statistics'] = {
+                    'total_characteristics': len(all_wb_characteristics),
+                    'required_count': len(required_characteristics),
+                    'optional_count': len(optional_characteristics),
+                    'extracted_count': extracted_count,
+                    'required_filled': required_filled,
+                    'fill_rate': round(extracted_count / len(all_wb_characteristics) * 100, 1) if all_wb_characteristics else 0
+                }
+
+                result['wb_category_id'] = category_id
+                result['weight_margin_percent'] = weight_margin_percent
+
+                # Сохраняем результат
+                product.ai_attributes = json.dumps(result, ensure_ascii=False)
+                db.session.commit()
+
+                save_ai_history(seller.id, product.id, 'extract_all_characteristics',
+                              {'title': product.title, 'category_id': category_id}, result,
+                              ai_provider=settings.ai_provider, ai_model=settings.ai_model)
+
+                return jsonify({
+                    'success': True,
+                    'data': result,
+                    'required_characteristics': required_characteristics,
+                    'optional_characteristics': optional_characteristics[:50]  # Ограничиваем для UI
+                })
+            else:
+                save_ai_history(seller.id, product.id, 'extract_all_characteristics',
+                              None, None, False, error,
+                              ai_provider=settings.ai_provider, ai_model=settings.ai_model)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI extract all characteristics error: {e}")
             import traceback
             traceback.print_exc()
             return jsonify({'success': False, 'error': str(e)}), 500

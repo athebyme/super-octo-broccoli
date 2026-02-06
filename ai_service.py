@@ -1921,6 +1921,139 @@ class CategoryDimensionsTask(AITask):
         return match.group() if match else text
 
 
+class AllCharacteristicsTask(AITask):
+    """Задача извлечения ВСЕХ характеристик категории WB (обязательных и необязательных)"""
+
+    def __init__(self, client: 'AIClient', custom_instruction: str = '', category_characteristics: List[str] = None):
+        super().__init__(client, custom_instruction)
+        self.category_characteristics = category_characteristics or []
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+
+        chars_list = "\n".join(self.category_characteristics) if self.category_characteristics else "Характеристики не указаны"
+
+        return f"""Ты эксперт по заполнению карточек товаров для маркетплейса Wildberries.
+
+Твоя задача - извлечь МАКСИМУМ характеристик из данных товара для полного заполнения карточки.
+
+ХАРАКТЕРИСТИКИ КАТЕГОРИИ:
+{chars_list}
+
+ВАЖНЫЕ ПРАВИЛА:
+1. Заполняй ВСЕ характеристики которые можешь определить из текста
+2. ОБЯЗАТЕЛЬНЫЕ характеристики - приоритет! Постарайся найти или логически вывести значение
+3. Необязательные - заполняй если информация есть в тексте
+4. Единицы измерения:
+   - Вес ВСЕГДА в граммах (г)
+   - Длина/ширина/высота в сантиметрах (см)
+   - Объем в миллилитрах (мл)
+5. Числа с запятой (7,5) преобразуй в точку (7.5)
+6. Если характеристика имеет допустимые значения [допустимые: ...] - выбери из них
+7. Бренд - указывай точное название если есть
+8. Материал - указывай основной материал
+9. Цвет - указывай основной цвет товара
+10. Страна производства - если есть в тексте
+
+ТИПЫ ХАРАКТЕРИСТИК И КАК ИХ ЗАПОЛНЯТЬ:
+- Размерные (см, мм, г, мл) - извлекай числовые значения
+- Текстовые (бренд, материал, цвет) - извлекай текст
+- Выбор из списка - выбирай из допустимых значений
+- Да/Нет - указывай "Да" или "Нет"
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{{{{
+    "extracted_values": {{{{
+        "Название характеристики": "значение",
+        "Бренд": "название бренда",
+        "Материал": "материал изделия",
+        "Цвет": "цвет товара",
+        ...
+    }}}},
+    "missing_required": ["обязательные характеристики которые не найдены"],
+    "fill_summary": {{{{
+        "filled_count": <число заполненных>,
+        "total_available": <всего характеристик>,
+        "fill_percentage": <процент заполнения>
+    }}}},
+    "confidence": <число от 0.0 до 1.0>
+}}}}
+
+ВАЖНО:
+- Заполняй МАКСИМУМ характеристик
+- Отвечай ТОЛЬКО валидным JSON
+- Не придумывай данные которых нет в тексте"""
+
+    def build_user_prompt(self, **kwargs) -> str:
+        product_info = kwargs.get('product_info', {})
+        existing_characteristics = kwargs.get('existing_characteristics', {})
+
+        parts = []
+
+        if product_info.get('title'):
+            parts.append(f"НАЗВАНИЕ: {product_info['title']}")
+
+        if product_info.get('brand'):
+            parts.append(f"БРЕНД: {product_info['brand']}")
+
+        if product_info.get('category'):
+            parts.append(f"КАТЕГОРИЯ: {product_info['category']}")
+
+        if product_info.get('colors'):
+            colors = product_info['colors']
+            if isinstance(colors, list):
+                parts.append(f"ЦВЕТА: {', '.join(str(c) for c in colors)}")
+            else:
+                parts.append(f"ЦВЕТА: {colors}")
+
+        if product_info.get('materials'):
+            materials = product_info['materials']
+            if isinstance(materials, list):
+                parts.append(f"МАТЕРИАЛЫ: {', '.join(str(m) for m in materials)}")
+            else:
+                parts.append(f"МАТЕРИАЛЫ: {materials}")
+
+        if product_info.get('sizes'):
+            sizes = product_info['sizes']
+            if isinstance(sizes, dict):
+                sizes_str = json.dumps(sizes, ensure_ascii=False)
+            else:
+                sizes_str = str(sizes)
+            parts.append(f"РАЗМЕРЫ: {sizes_str}")
+
+        if existing_characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in existing_characteristics.items()])
+            parts.append(f"СУЩЕСТВУЮЩИЕ ХАРАКТЕРИСТИКИ:\n{chars_str}")
+
+        if product_info.get('description'):
+            desc = product_info['description'][:2000]
+            parts.append(f"ОПИСАНИЕ:\n{desc}")
+
+        return "Извлеки ВСЕ возможные характеристики из данных товара:\n\n" + "\n\n".join(parts)
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'extracted_values': data.get('extracted_values', {}),
+                'missing_required': data.get('missing_required', []),
+                'fill_summary': data.get('fill_summary', {}),
+                'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
 class ClothingSizesTask(AITask):
     """Задача парсинга и стандартизации размеров одежды"""
 
@@ -2480,6 +2613,36 @@ class AIService:
             description=description,
             characteristics=characteristics or {},
             sizes_text=sizes_text
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
+    def extract_all_characteristics(
+        self,
+        product_info: Dict,
+        existing_characteristics: Optional[Dict] = None,
+        category_characteristics: Optional[List[str]] = None
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Извлекает ВСЕ характеристики категории WB из данных товара
+
+        Args:
+            product_info: Информация о товаре (title, description, brand, colors, materials, sizes)
+            existing_characteristics: Уже существующие характеристики товара
+            category_characteristics: Список характеристик из WB API для категории
+
+        Returns:
+            Tuple[success, {extracted_values, missing_required, fill_summary, confidence}, error]
+        """
+        task = AllCharacteristicsTask(
+            self.client,
+            self.config.custom_attributes_instruction if hasattr(self.config, 'custom_attributes_instruction') else '',
+            category_characteristics or []
+        )
+        success, result, error = task.execute(
+            product_info=product_info,
+            existing_characteristics=existing_characteristics or {}
         )
         if success and result:
             return True, result, ""
