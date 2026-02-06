@@ -2784,135 +2784,235 @@ def register_auto_import_routes(app):
             )
 
             if success:
+                import re
+                import math
                 extracted = result.get('extracted_values', {})
                 suggestions = result.get('suggestions', {})
 
-                # Добавляем предположения AI в extracted_values для обязательных полей (особенно вес)
+                # Строим расширенный маппинг ВСЕХ размерных WB характеристик
+                # wb_dim_chars - список ВСЕХ характеристик связанных с размерами/весом
+                wb_dim_chars = {}  # name -> {char_info, type, is_pack}
+                wb_char_map = {}   # type -> [list of char names] (для заполнения всех похожих)
+
+                # Ключевые слова для размерных характеристик
+                dimension_keywords = [
+                    'длина', 'ширина', 'высота', 'глубина', 'диаметр', 'толщина',
+                    'обхват', 'размер', 'вес', 'масса', 'объем', 'объём', 'радиус',
+                    'минимальн', 'максимальн', 'рабочая', 'общая', 'внутренн', 'внешн'
+                ]
+                # Единицы измерения
+                unit_keywords = ['см', 'мм', 'м', 'г', 'кг', 'мл', 'л']
+
+                for char in size_characteristics:
+                    char_name = char['name']
+                    char_lower = char_name.lower()
+
+                    # Проверяем является ли характеристика размерной
+                    is_dimensional = any(kw in char_lower for kw in dimension_keywords)
+                    has_unit = any(f'({u})' in char_lower or f' {u}' in char_lower for u in unit_keywords)
+
+                    if is_dimensional or has_unit:
+                        is_pack = 'упаков' in char_lower
+
+                        # Определяем тип характеристики
+                        char_type = None
+                        if 'вес' in char_lower or 'масса' in char_lower:
+                            char_type = 'weight_packed' if is_pack else 'weight'
+                        elif 'длина' in char_lower:
+                            if is_pack:
+                                char_type = 'pack_length'
+                            elif 'рабочая' in char_lower or 'рабоч' in char_lower:
+                                char_type = 'working_length'
+                            elif 'минимальн' in char_lower:
+                                char_type = 'min_length'
+                            elif 'максимальн' in char_lower:
+                                char_type = 'max_length'
+                            elif 'общая' in char_lower:
+                                char_type = 'total_length'
+                            elif 'внутренн' in char_lower:
+                                char_type = 'inner_length'
+                            else:
+                                char_type = 'length'
+                        elif 'ширина' in char_lower:
+                            char_type = 'pack_width' if is_pack else 'width'
+                        elif 'высота' in char_lower:
+                            char_type = 'pack_height' if is_pack else 'height'
+                        elif 'диаметр' in char_lower:
+                            if 'минимальн' in char_lower:
+                                char_type = 'min_diameter'
+                            elif 'максимальн' in char_lower:
+                                char_type = 'max_diameter'
+                            elif 'внутренн' in char_lower:
+                                char_type = 'inner_diameter'
+                            else:
+                                char_type = 'diameter'
+                        elif 'глубина' in char_lower:
+                            char_type = 'depth'
+                        elif 'толщина' in char_lower:
+                            char_type = 'thickness'
+                        elif 'обхват' in char_lower:
+                            char_type = 'circumference'
+                        elif 'объем' in char_lower or 'объём' in char_lower:
+                            char_type = 'volume'
+                        elif 'радиус' in char_lower:
+                            char_type = 'radius'
+                        else:
+                            char_type = 'other_dimension'
+
+                        wb_dim_chars[char_name] = {
+                            'char': char,
+                            'type': char_type,
+                            'is_pack': is_pack
+                        }
+
+                        # Добавляем в маппинг типов (один тип может иметь несколько имён)
+                        if char_type not in wb_char_map:
+                            wb_char_map[char_type] = []
+                        wb_char_map[char_type].append(char_name)
+
+                # Результат будет содержать только WB характеристики
+                wb_extracted = {}
+
+                # Добавляем предположения AI для обязательных полей
                 for key, value in suggestions.items():
-                    # Проверяем, нет ли уже этого значения
                     if key not in extracted:
-                        # Извлекаем число из текста предположения
-                        import re
                         numbers = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
                         if numbers:
                             try:
                                 num_value = float(numbers[0].replace(',', '.'))
                                 extracted[key] = num_value
-                                extracted[f"{key} (предположение AI)"] = value
                             except:
                                 pass
 
-                # Расчёт веса на основе размеров если вес не найден
-                weight_found = any('вес' in k.lower() or 'масса' in k.lower() for k in extracted.keys())
-                if not weight_found:
-                    # Пытаемся рассчитать вес по размерам
-                    length = None
-                    diameter = None
-                    for key, value in extracted.items():
-                        key_lower = key.lower()
-                        if 'длина' in key_lower and length is None:
-                            try:
-                                # Берем максимальное значение если диапазон
-                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
-                                if nums:
-                                    length = max(float(n.replace(',', '.')) for n in nums)
-                            except:
-                                pass
-                        if 'диаметр' in key_lower and diameter is None:
-                            try:
-                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
-                                if nums:
-                                    diameter = max(float(n.replace(',', '.')) for n in nums)
-                            except:
-                                pass
+                # Функция для сопоставления AI ключа с WB характеристикой
+                def match_ai_key_to_wb(ai_key):
+                    """Находит WB характеристику по ключу AI (fuzzy match)"""
+                    ai_key_lower = ai_key.lower()
+                    ai_key_normalized = re.sub(r'\s*\([^)]*\)\s*', '', ai_key_lower).strip()
 
-                    if length and diameter:
-                        # Расчет веса для силиконовых изделий: плотность ~1.1 г/см³
-                        # Объем цилиндра: π * r² * h
-                        import math
-                        radius = diameter / 2
-                        volume_cm3 = math.pi * (radius ** 2) * length
-                        # Силикон ~1.1 г/см³, но изделие не сплошное, коэфф ~0.6
-                        estimated_weight = round(volume_cm3 * 1.1 * 0.6, 0)
-                        # Минимум 50г для таких изделий
-                        estimated_weight = max(estimated_weight, 50)
-                        extracted['Вес товара без упаковки (г)'] = estimated_weight
-                        extracted['Вес (расчётный)'] = f"{estimated_weight} г (на основе размеров {length}x{diameter} см)"
+                    matches = []
+                    for wb_name, info in wb_dim_chars.items():
+                        wb_lower = wb_name.lower()
+                        wb_normalized = re.sub(r'\s*\([^)]*\)\s*', '', wb_lower).strip()
 
-                # Добавляем запас к весу
-                weight_margins = {}
-                for key, value in extracted.items():
-                    if ('вес' in key.lower() or 'масса' in key.lower()) and 'запас' not in key.lower() and 'расчёт' not in key.lower():
-                        try:
-                            weight = float(str(value).replace(',', '.').split()[0])
-                            weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 0)
-                            weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
-                        except:
-                            pass
-                weight_margins_to_add = {}
-                for k, v in weight_margins.items():
-                    weight_margins_to_add[k] = v
-                extracted.update(weight_margins_to_add)
+                        # Точное совпадение
+                        if ai_key_lower == wb_lower or ai_key == wb_name:
+                            return [(wb_name, 1.0)]
 
-                # Расчёт размеров упаковки на основе размеров товара
-                # Упаковка должна вмещать товар + запас на упаковочные материалы
-                max_dimension = 0
-                product_length = None
-                product_width = None
-                product_height = None
+                        # Совпадение без единиц измерения
+                        if ai_key_normalized == wb_normalized:
+                            matches.append((wb_name, 0.95))
+                            continue
+
+                        # AI ключ содержится в WB имени или наоборот
+                        if ai_key_normalized in wb_normalized:
+                            matches.append((wb_name, 0.8))
+                        elif wb_normalized in ai_key_normalized:
+                            matches.append((wb_name, 0.7))
+
+                    return sorted(matches, key=lambda x: -x[1]) if matches else []
+
+                # Извлекаем числовые значения из extracted и сопоставляем с WB
+                length_val = None
+                diameter_val = None
+                weight_val = None
+                width_val = None
+                height_val = None
 
                 for key, value in extracted.items():
                     key_lower = key.lower()
                     try:
                         nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
                         if nums:
-                            val = max(float(n.replace(',', '.')) for n in nums)
+                            val = float(nums[0].replace(',', '.'))
+
+                            # Сохраняем значения для расчётов
                             if 'длина' in key_lower and 'упаков' not in key_lower:
-                                product_length = val
-                                max_dimension = max(max_dimension, val)
-                            elif 'ширина' in key_lower and 'упаков' not in key_lower:
-                                product_width = val
-                            elif 'высота' in key_lower and 'упаков' not in key_lower:
-                                product_height = val
-                            elif 'диаметр' in key_lower:
-                                product_width = val
-                                product_height = val
+                                if length_val is None:
+                                    length_val = val
+                            if 'диаметр' in key_lower and 'упаков' not in key_lower:
+                                if diameter_val is None:
+                                    diameter_val = val
+                            if ('вес' in key_lower or 'масса' in key_lower) and 'упаков' not in key_lower:
+                                if weight_val is None:
+                                    weight_val = val
+                            if 'ширина' in key_lower and 'упаков' not in key_lower:
+                                if width_val is None:
+                                    width_val = val
+                            if 'высота' in key_lower and 'упаков' not in key_lower:
+                                if height_val is None:
+                                    height_val = val
+
+                            # Сопоставляем с WB характеристиками
+                            wb_matches = match_ai_key_to_wb(key)
+                            for wb_name, score in wb_matches:
+                                if wb_name not in wb_extracted:
+                                    wb_extracted[wb_name] = val
+                                    break  # Берём только лучшее совпадение
                     except:
                         pass
 
-                # Рассчитываем упаковку
-                if max_dimension > 0:
-                    # Запас на упаковку: +3-5 см с каждой стороны
+                # Расчёт веса если не найден (на основе объёма цилиндра)
+                if not weight_val and length_val and diameter_val:
+                    radius = diameter_val / 2
+                    volume_cm3 = math.pi * (radius ** 2) * length_val
+                    weight_val = round(volume_cm3 * 1.1 * 0.6, 0)
+                    weight_val = max(weight_val, 50)
+
+                # Заполняем ВСЕ характеристики каждого типа
+                def fill_all_chars_of_type(char_type, value, apply_margin=False):
+                    """Заполняет все WB характеристики данного типа"""
+                    if char_type in wb_char_map and value is not None:
+                        final_value = value
+                        if apply_margin:
+                            final_value = int(round(value * (1 + weight_margin_percent / 100), 0))
+                        for wb_name in wb_char_map[char_type]:
+                            if wb_name not in wb_extracted:
+                                wb_extracted[wb_name] = final_value
+
+                # Заполняем базовые размеры
+                fill_all_chars_of_type('length', int(length_val) if length_val else None)
+                fill_all_chars_of_type('total_length', int(length_val) if length_val else None)
+                fill_all_chars_of_type('max_length', int(length_val) if length_val else None)
+                fill_all_chars_of_type('working_length', int(length_val * 0.8) if length_val else None)  # Примерно 80% от общей
+                fill_all_chars_of_type('diameter', diameter_val)
+                fill_all_chars_of_type('max_diameter', diameter_val)
+                fill_all_chars_of_type('width', width_val or diameter_val)
+                fill_all_chars_of_type('height', height_val or diameter_val)
+                fill_all_chars_of_type('thickness', diameter_val)  # Толщина часто равна диаметру
+                fill_all_chars_of_type('weight', weight_val, apply_margin=True)
+
+                # Расчёт размеров упаковки
+                if length_val:
                     pack_margin = 4
-                    pack_length = round((product_length or max_dimension) + pack_margin * 2, 0)
-                    pack_width = round((product_width or 5) + pack_margin * 2, 0)
-                    pack_height = round((product_height or 5) + pack_margin * 2, 0)
+                    pack_length = int(min(max(length_val + pack_margin * 2, 10), 40))
+                    pack_width = int(min(max((diameter_val or width_val or 5) + pack_margin * 2, 8), 25))
+                    pack_height = int(min(max((diameter_val or height_val or 5) + pack_margin * 2, 5), 20))
 
-                    # Минимальные размеры упаковки
-                    pack_length = max(pack_length, 10)
-                    pack_width = max(pack_width, 8)
-                    pack_height = max(pack_height, 5)
+                    fill_all_chars_of_type('pack_length', pack_length)
+                    fill_all_chars_of_type('pack_width', pack_width)
+                    fill_all_chars_of_type('pack_height', pack_height)
 
-                    # Максимальные разумные размеры
-                    pack_length = min(pack_length, 40)
-                    pack_width = min(pack_width, 25)
-                    pack_height = min(pack_height, 20)
+                    # Вес с упаковкой
+                    if weight_val:
+                        weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
+                        fill_all_chars_of_type('weight_packed', weight_with_margin + 30)
 
-                    extracted['Длина упаковки (см)'] = int(pack_length)
-                    extracted['Ширина упаковки (см)'] = int(pack_width)
-                    extracted['Высота упаковки (см)'] = int(pack_height)
+                # Добавляем остальные извлечённые AI значения (если совпадают с WB характеристиками)
+                for key, value in extracted.items():
+                    wb_matches = match_ai_key_to_wb(key)
+                    for wb_name, score in wb_matches:
+                        if wb_name not in wb_extracted:
+                            try:
+                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                if nums:
+                                    wb_extracted[wb_name] = float(nums[0].replace(',', '.'))
+                            except:
+                                wb_extracted[wb_name] = value
+                            break
 
-                    # Вес упаковки (примерно 20-50г для картонной коробки)
-                    pack_weight = 30
-                    if 'Вес товара без упаковки (г)' in extracted:
-                        try:
-                            product_weight = float(str(extracted['Вес товара без упаковки (г)']).split()[0])
-                            total_weight = product_weight + pack_weight
-                            extracted['Вес с упаковкой (г)'] = int(total_weight)
-                        except:
-                            pass
-
-                result['extracted_values'] = extracted
+                result['extracted_values'] = wb_extracted
+                result['_debug_raw_extracted'] = extracted  # Для отладки
 
                 # Сохраняем результат
                 result['wb_category_id'] = category_id
@@ -3105,86 +3205,232 @@ def register_auto_import_routes(app):
                 import re
                 import math
                 extracted = result.get('extracted_values', {})
+                all_chars = required_characteristics + optional_characteristics
 
-                # Расчёт веса на основе размеров если вес не найден
-                weight_found = any('вес' in k.lower() or 'масса' in k.lower() for k in extracted.keys())
-                if not weight_found:
-                    length = None
-                    diameter = None
-                    for key, value in extracted.items():
-                        key_lower = key.lower()
-                        if 'длина' in key_lower and length is None:
-                            try:
-                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
-                                if nums:
-                                    length = max(float(n.replace(',', '.')) for n in nums)
-                            except:
-                                pass
-                        if 'диаметр' in key_lower and diameter is None:
-                            try:
-                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
-                                if nums:
-                                    diameter = max(float(n.replace(',', '.')) for n in nums)
-                            except:
-                                pass
+                # Строим расширенный маппинг ВСЕХ размерных WB характеристик
+                wb_dim_chars = {}  # name -> {char_info, type, is_pack}
+                wb_char_map = {}   # type -> [list of char names]
 
-                    if length and diameter:
-                        radius = diameter / 2
-                        volume_cm3 = math.pi * (radius ** 2) * length
-                        estimated_weight = round(volume_cm3 * 1.1 * 0.6, 0)
-                        estimated_weight = max(estimated_weight, 50)
-                        extracted['Вес товара без упаковки (г)'] = int(estimated_weight)
+                # Ключевые слова для размерных характеристик
+                dimension_keywords = [
+                    'длина', 'ширина', 'высота', 'глубина', 'диаметр', 'толщина',
+                    'обхват', 'размер', 'вес', 'масса', 'объем', 'объём', 'радиус',
+                    'минимальн', 'максимальн', 'рабочая', 'общая', 'внутренн', 'внешн'
+                ]
+                unit_keywords = ['см', 'мм', 'м', 'г', 'кг', 'мл', 'л']
 
-                # Добавляем запас к весу
-                weight_margins = {}
-                for key, value in extracted.items():
-                    if ('вес' in key.lower() or 'масса' in key.lower()) and 'запас' not in key.lower():
-                        try:
-                            weight = float(str(value).replace(',', '.').split()[0])
-                            weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 0)
-                            weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = int(weight_with_margin)
-                        except:
-                            pass
-                extracted.update(weight_margins)
+                for char in all_chars:
+                    char_name = char['name']
+                    char_lower = char_name.lower()
 
-                # Расчёт размеров упаковки
-                max_dimension = 0
-                product_length = None
-                product_width = None
+                    is_dimensional = any(kw in char_lower for kw in dimension_keywords)
+                    has_unit = any(f'({u})' in char_lower or f' {u}' in char_lower for u in unit_keywords)
+
+                    if is_dimensional or has_unit:
+                        is_pack = 'упаков' in char_lower
+
+                        char_type = None
+                        if 'вес' in char_lower or 'масса' in char_lower:
+                            char_type = 'weight_packed' if is_pack else 'weight'
+                        elif 'длина' in char_lower:
+                            if is_pack:
+                                char_type = 'pack_length'
+                            elif 'рабочая' in char_lower or 'рабоч' in char_lower:
+                                char_type = 'working_length'
+                            elif 'минимальн' in char_lower:
+                                char_type = 'min_length'
+                            elif 'максимальн' in char_lower:
+                                char_type = 'max_length'
+                            elif 'общая' in char_lower:
+                                char_type = 'total_length'
+                            elif 'внутренн' in char_lower:
+                                char_type = 'inner_length'
+                            else:
+                                char_type = 'length'
+                        elif 'ширина' in char_lower:
+                            char_type = 'pack_width' if is_pack else 'width'
+                        elif 'высота' in char_lower:
+                            char_type = 'pack_height' if is_pack else 'height'
+                        elif 'диаметр' in char_lower:
+                            if 'минимальн' in char_lower:
+                                char_type = 'min_diameter'
+                            elif 'максимальн' in char_lower:
+                                char_type = 'max_diameter'
+                            elif 'внутренн' in char_lower:
+                                char_type = 'inner_diameter'
+                            else:
+                                char_type = 'diameter'
+                        elif 'глубина' in char_lower:
+                            char_type = 'depth'
+                        elif 'толщина' in char_lower:
+                            char_type = 'thickness'
+                        elif 'обхват' in char_lower:
+                            char_type = 'circumference'
+                        elif 'объем' in char_lower or 'объём' in char_lower:
+                            char_type = 'volume'
+                        elif 'радиус' in char_lower:
+                            char_type = 'radius'
+                        else:
+                            char_type = 'other_dimension'
+
+                        wb_dim_chars[char_name] = {
+                            'char': char,
+                            'type': char_type,
+                            'is_pack': is_pack
+                        }
+
+                        if char_type not in wb_char_map:
+                            wb_char_map[char_type] = []
+                        wb_char_map[char_type].append(char_name)
+
+                wb_extracted = {}
+
+                # Функция для сопоставления AI ключа с WB характеристикой
+                def match_ai_key_to_wb(ai_key):
+                    ai_key_lower = ai_key.lower()
+                    ai_key_normalized = re.sub(r'\s*\([^)]*\)\s*', '', ai_key_lower).strip()
+
+                    matches = []
+                    for wb_name, info in wb_dim_chars.items():
+                        wb_lower = wb_name.lower()
+                        wb_normalized = re.sub(r'\s*\([^)]*\)\s*', '', wb_lower).strip()
+
+                        if ai_key_lower == wb_lower or ai_key == wb_name:
+                            return [(wb_name, 1.0)]
+                        if ai_key_normalized == wb_normalized:
+                            matches.append((wb_name, 0.95))
+                            continue
+                        if ai_key_normalized in wb_normalized:
+                            matches.append((wb_name, 0.8))
+                        elif wb_normalized in ai_key_normalized:
+                            matches.append((wb_name, 0.7))
+
+                    return sorted(matches, key=lambda x: -x[1]) if matches else []
+
+                # Также проверяем точное совпадение с любой характеристикой WB (не только размерной)
+                def match_any_wb_char(ai_key):
+                    ai_key_lower = ai_key.lower()
+                    ai_key_normalized = re.sub(r'\s*\([^)]*\)\s*', '', ai_key_lower).strip()
+
+                    for char in all_chars:
+                        wb_name = char['name']
+                        wb_lower = wb_name.lower()
+                        wb_normalized = re.sub(r'\s*\([^)]*\)\s*', '', wb_lower).strip()
+
+                        if ai_key_lower == wb_lower or ai_key == wb_name:
+                            return wb_name
+                        if ai_key_normalized == wb_normalized:
+                            return wb_name
+                    return None
+
+                # Извлекаем значения и сопоставляем с WB
+                length_val = None
+                diameter_val = None
+                weight_val = None
+                width_val = None
+                height_val = None
+
                 for key, value in extracted.items():
                     key_lower = key.lower()
-                    if 'упаков' in key_lower:
-                        continue
                     try:
+                        # Сначала пробуем сопоставить с WB характеристикой
+                        wb_matches = match_ai_key_to_wb(key)
+                        wb_exact = match_any_wb_char(key)
+
                         nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
                         if nums:
-                            val = max(float(n.replace(',', '.')) for n in nums)
-                            if 'длина' in key_lower:
-                                product_length = val
-                                max_dimension = max(max_dimension, val)
-                            elif 'диаметр' in key_lower:
-                                product_width = val
+                            val = float(nums[0].replace(',', '.'))
+
+                            # Сохраняем значения для расчётов
+                            if 'длина' in key_lower and 'упаков' not in key_lower:
+                                if length_val is None:
+                                    length_val = val
+                            if 'диаметр' in key_lower and 'упаков' not in key_lower:
+                                if diameter_val is None:
+                                    diameter_val = val
+                            if ('вес' in key_lower or 'масса' in key_lower) and 'упаков' not in key_lower:
+                                if weight_val is None:
+                                    weight_val = val
+                            if 'ширина' in key_lower and 'упаков' not in key_lower:
+                                if width_val is None:
+                                    width_val = val
+                            if 'высота' in key_lower and 'упаков' not in key_lower:
+                                if height_val is None:
+                                    height_val = val
+
+                            # Сопоставляем с WB
+                            if wb_matches:
+                                for wb_name, score in wb_matches:
+                                    if wb_name not in wb_extracted:
+                                        wb_extracted[wb_name] = val
+                                        break
+                            elif wb_exact and wb_exact not in wb_extracted:
+                                wb_extracted[wb_exact] = val
+                        else:
+                            # Нечисловое значение
+                            if wb_exact and wb_exact not in wb_extracted:
+                                wb_extracted[wb_exact] = value
                     except:
                         pass
 
-                if max_dimension > 0:
+                # Расчёт веса если не найден
+                if not weight_val and length_val and diameter_val:
+                    radius = diameter_val / 2
+                    volume_cm3 = math.pi * (radius ** 2) * length_val
+                    weight_val = round(volume_cm3 * 1.1 * 0.6, 0)
+                    weight_val = max(weight_val, 50)
+
+                # Заполняем ВСЕ характеристики каждого типа
+                def fill_all_chars_of_type(char_type, value, apply_margin=False):
+                    if char_type in wb_char_map and value is not None:
+                        final_value = value
+                        if apply_margin:
+                            final_value = int(round(value * (1 + weight_margin_percent / 100), 0))
+                        for wb_name in wb_char_map[char_type]:
+                            if wb_name not in wb_extracted:
+                                wb_extracted[wb_name] = final_value
+
+                # Заполняем базовые размеры
+                fill_all_chars_of_type('length', int(length_val) if length_val else None)
+                fill_all_chars_of_type('total_length', int(length_val) if length_val else None)
+                fill_all_chars_of_type('max_length', int(length_val) if length_val else None)
+                fill_all_chars_of_type('working_length', int(length_val * 0.8) if length_val else None)
+                fill_all_chars_of_type('diameter', diameter_val)
+                fill_all_chars_of_type('max_diameter', diameter_val)
+                fill_all_chars_of_type('width', width_val or diameter_val)
+                fill_all_chars_of_type('height', height_val or diameter_val)
+                fill_all_chars_of_type('thickness', diameter_val)
+                fill_all_chars_of_type('weight', weight_val, apply_margin=True)
+
+                # Размеры упаковки
+                if length_val:
                     pack_margin = 4
-                    pack_length = int(min(max((product_length or max_dimension) + pack_margin * 2, 10), 40))
-                    pack_width = int(min(max((product_width or 5) + pack_margin * 2, 8), 25))
-                    pack_height = int(min(max(5 + pack_margin, 5), 20))
+                    pack_length = int(min(max(length_val + pack_margin * 2, 10), 40))
+                    pack_width = int(min(max((diameter_val or width_val or 5) + pack_margin * 2, 8), 25))
+                    pack_height = int(min(max((diameter_val or height_val or 5) + pack_margin * 2, 5), 20))
 
-                    extracted['Длина упаковки (см)'] = pack_length
-                    extracted['Ширина упаковки (см)'] = pack_width
-                    extracted['Высота упаковки (см)'] = pack_height
+                    fill_all_chars_of_type('pack_length', pack_length)
+                    fill_all_chars_of_type('pack_width', pack_width)
+                    fill_all_chars_of_type('pack_height', pack_height)
 
-                    if 'Вес товара без упаковки (г)' in extracted:
+                    if weight_val:
+                        weight_with_margin = int(round(weight_val * (1 + weight_margin_percent / 100), 0))
+                        fill_all_chars_of_type('weight_packed', weight_with_margin + 30)
+
+                # Добавляем остальные характеристики из AI (если совпадают с WB)
+                for key, value in extracted.items():
+                    wb_exact = match_any_wb_char(key)
+                    if wb_exact and wb_exact not in wb_extracted:
                         try:
-                            product_weight = float(str(extracted['Вес товара без упаковки (г)']).split()[0])
-                            extracted['Вес с упаковкой (г)'] = int(product_weight + 30)
+                            nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                            if nums:
+                                wb_extracted[wb_exact] = float(nums[0].replace(',', '.'))
+                            else:
+                                wb_extracted[wb_exact] = value
                         except:
-                            pass
+                            wb_extracted[wb_exact] = value
 
-                result['extracted_values'] = extracted
+                result['extracted_values'] = wb_extracted
 
                 # Считаем статистику
                 extracted_count = len(result.get('extracted_values', {}))
