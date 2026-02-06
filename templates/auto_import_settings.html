@@ -245,6 +245,550 @@
             </div>
         </div>
 
+        <!-- AI Настройки -->
+        <div class="bg-gradient-to-br from-purple-50 to-indigo-50 shadow-sm rounded-lg border border-purple-200 p-6">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center">
+                    <div class="p-2 bg-purple-100 rounded-lg mr-3">
+                        <svg class="h-6 w-6 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">AI-помощник</h3>
+                        <p class="text-xs text-gray-500">Cloud.ru Foundation Models / OpenAI</p>
+                    </div>
+                </div>
+                <!-- Быстрая ссылка на AI обновление -->
+                <a href="{{ url_for('auto_import_ai_update') }}"
+                   class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-purple-700 bg-purple-100 rounded-lg hover:bg-purple-200 transition-colors">
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                    AI Обновление
+                </a>
+            </div>
+
+            <!-- Включить AI -->
+            <div class="mb-4">
+                <label class="flex items-center p-3 bg-white rounded-lg border border-purple-200 cursor-pointer hover:bg-purple-50 transition-colors">
+                    <input type="checkbox" name="ai_enabled" id="ai_enabled" {{ 'checked' if settings.ai_enabled else '' }}
+                           class="h-5 w-5 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                           onchange="toggleAISettings()">
+                    <span class="ml-3 text-sm font-medium text-gray-900">Включить AI-помощник</span>
+                </label>
+            </div>
+
+            <div id="ai_settings_block" class="{{ '' if settings.ai_enabled else 'hidden' }}">
+                <!-- Провайдер и модель в одной строке -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <!-- Провайдер AI -->
+                    <div>
+                        <label for="ai_provider" class="block text-sm font-medium text-gray-700 mb-1">
+                            Провайдер AI
+                        </label>
+                        <select id="ai_provider" name="ai_provider"
+                                class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                onchange="updateAIProviderSettings()">
+                            <option value="cloudru" {{ 'selected' if settings.ai_provider == 'cloudru' else '' }}>
+                                Cloud.ru Foundation Models
+                            </option>
+                            <option value="openai" {{ 'selected' if settings.ai_provider == 'openai' else '' }}>
+                                OpenAI
+                            </option>
+                            <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
+                                Другой (OpenAI-совместимый)
+                            </option>
+                        </select>
+                    </div>
+
+                    <!-- Модель -->
+                    <div>
+                        <label for="ai_model" class="block text-sm font-medium text-gray-700 mb-1">
+                            Модель AI
+                        </label>
+                        <select id="ai_model" name="ai_model"
+                                class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <option value="{{ settings.ai_model or 'openai/gpt-oss-120b' }}">{{ settings.ai_model or 'openai/gpt-oss-120b' }}</option>
+                        </select>
+                        <p id="model_description" class="mt-1 text-xs text-gray-500">
+                            Загрузка моделей...
+                        </p>
+                    </div>
+                </div>
+
+                <!-- API ключ (для всех провайдеров) -->
+                <div id="api_key_block" class="mb-4">
+                    <div id="cloudru_hint" class="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-3">
+                        <div class="flex items-start">
+                            <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <div class="text-sm text-blue-700">
+                                <strong>Cloud.ru API ключ</strong><br>
+                                1. Создайте сервисный аккаунт в <a href="https://console.cloud.ru" target="_blank" class="underline">консоли Cloud.ru</a><br>
+                                2. Сгенерируйте API ключ с ролью <code>ml_inference_ai_marketplace</code><br>
+                                3. Скопируйте Key Secret сразу - он показывается только один раз
+                            </div>
+                        </div>
+                    </div>
+                    <label for="ai_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        API ключ <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="ai_api_key" name="ai_api_key"
+                           value="{{ settings.ai_api_key or '' }}"
+                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="sk-...">
+                </div>
+
+                <!-- Кнопка тестирования -->
+                <div class="mb-4">
+                    <button type="button" onclick="testAIConnection()"
+                            class="inline-flex items-center px-4 py-2 border border-purple-300 shadow-sm text-sm font-medium rounded-md text-purple-700 bg-white hover:bg-purple-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500">
+                        <svg id="test_icon" class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Тестировать подключение
+                    </button>
+                    <p id="test_result" class="mt-2 text-sm"></p>
+                </div>
+
+                <!-- Базовый URL (для custom/cloudru) -->
+                <div class="mb-4" id="ai_base_url_block">
+                    <label for="ai_api_base_url" class="block text-sm font-medium text-gray-700 mb-1">
+                        Базовый URL API
+                    </label>
+                    <input type="url" id="ai_api_base_url" name="ai_api_base_url"
+                           value="{{ settings.ai_api_base_url or 'https://foundation-models.api.cloud.ru/v1' }}"
+                           class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="https://foundation-models.api.cloud.ru/v1">
+                </div>
+
+                <!-- Опции использования -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div class="p-3 bg-white rounded-lg border border-gray-200">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="ai_use_for_categories" {{ 'checked' if settings.ai_use_for_categories else '' }}
+                                   class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
+                            <span class="ml-2 text-sm text-gray-700">Определение категорий</span>
+                        </label>
+                        <p class="ml-6 mt-1 text-xs text-gray-500">AI определит категорию WB</p>
+                    </div>
+                    <div class="p-3 bg-white rounded-lg border border-gray-200">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="ai_use_for_sizes" {{ 'checked' if settings.ai_use_for_sizes else '' }}
+                                   class="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded">
+                            <span class="ml-2 text-sm text-gray-700">Парсинг размеров</span>
+                        </label>
+                        <p class="ml-6 mt-1 text-xs text-gray-500">Извлечение характеристик</p>
+                    </div>
+                </div>
+
+                <!-- Порог уверенности -->
+                <div class="mb-4">
+                    <label for="ai_category_confidence_threshold" class="block text-sm font-medium text-gray-700 mb-1">
+                        Порог уверенности для AI ({{ ((settings.ai_category_confidence_threshold or 0.7) * 100)|int }}%)
+                    </label>
+                    <input type="range" id="ai_category_confidence_threshold" name="ai_category_confidence_threshold"
+                           value="{{ settings.ai_category_confidence_threshold or 0.7 }}"
+                           min="0" max="1" step="0.05"
+                           class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                           oninput="this.previousElementSibling.textContent = 'Порог уверенности для AI (' + Math.round(this.value * 100) + '%)'">
+                    <p class="mt-1 text-xs text-gray-500">
+                        AI используется если уверенность обычного алгоритма ниже этого значения
+                    </p>
+                </div>
+
+                <!-- Расширенные настройки -->
+                <details class="mb-4">
+                    <summary class="text-sm font-medium text-purple-700 cursor-pointer hover:text-purple-800 flex items-center">
+                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                        Расширенные настройки
+                    </summary>
+                    <div class="mt-3 p-4 bg-white rounded-lg border border-gray-200 space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label for="ai_temperature" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Температура
+                                </label>
+                                <input type="number" id="ai_temperature" name="ai_temperature"
+                                       value="{{ settings.ai_temperature or 0.3 }}"
+                                       min="0" max="2" step="0.1"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_max_tokens" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Макс. токенов
+                                </label>
+                                <input type="number" id="ai_max_tokens" name="ai_max_tokens"
+                                       value="{{ settings.ai_max_tokens or 2000 }}"
+                                       min="100" max="8000"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_timeout" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Таймаут (сек)
+                                </label>
+                                <input type="number" id="ai_timeout" name="ai_timeout"
+                                       value="{{ settings.ai_timeout or 60 }}"
+                                       min="10" max="300"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label for="ai_top_p" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Top P
+                                </label>
+                                <input type="number" id="ai_top_p" name="ai_top_p"
+                                       value="{{ settings.ai_top_p or 0.95 }}"
+                                       min="0" max="1" step="0.05"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_presence_penalty" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Presence Penalty
+                                </label>
+                                <input type="number" id="ai_presence_penalty" name="ai_presence_penalty"
+                                       value="{{ settings.ai_presence_penalty or 0.0 }}"
+                                       min="-2" max="2" step="0.1"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                            <div>
+                                <label for="ai_frequency_penalty" class="block text-sm font-medium text-gray-700 mb-1">
+                                    Frequency Penalty
+                                </label>
+                                <input type="number" id="ai_frequency_penalty" name="ai_frequency_penalty"
+                                       value="{{ settings.ai_frequency_penalty or 0.0 }}"
+                                       min="-2" max="2" step="0.1"
+                                       class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Кастомные инструкции -->
+                <details class="mb-4">
+                    <summary class="text-sm font-medium text-purple-700 cursor-pointer hover:text-purple-800 flex items-center">
+                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                        </svg>
+                        Кастомные инструкции AI (для каждой функции)
+                    </summary>
+                    <div class="mt-3 p-4 bg-white rounded-lg border border-gray-200 space-y-4">
+                        <p class="text-xs text-gray-500 mb-2">
+                            Настройте промпты для каждой AI-функции. Оставьте пустым для использования стандартных инструкций.
+                        </p>
+
+                        <!-- Категории -->
+                        <div>
+                            <label for="ai_category_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Определение категорий
+                            </label>
+                            <textarea id="ai_category_instruction" name="ai_category_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для определения категорий товаров...">{{ settings.ai_category_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('category_detection')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- Размеры -->
+                        <div>
+                            <label for="ai_size_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Парсинг размеров
+                            </label>
+                            <textarea id="ai_size_instruction" name="ai_size_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для извлечения размеров...">{{ settings.ai_size_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('size_parsing')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- SEO Заголовок -->
+                        <div>
+                            <label for="ai_seo_title_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                SEO Заголовок
+                            </label>
+                            <textarea id="ai_seo_title_instruction" name="ai_seo_title_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для генерации SEO заголовков...">{{ settings.ai_seo_title_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('seo_title')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- Ключевые слова -->
+                        <div>
+                            <label for="ai_keywords_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Ключевые слова
+                            </label>
+                            <textarea id="ai_keywords_instruction" name="ai_keywords_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для генерации ключевых слов...">{{ settings.ai_keywords_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('keywords')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- Преимущества -->
+                        <div>
+                            <label for="ai_bullets_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Преимущества (Bullets)
+                            </label>
+                            <textarea id="ai_bullets_instruction" name="ai_bullets_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для генерации преимуществ товара...">{{ settings.ai_bullets_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('bullet_points')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- Описание -->
+                        <div>
+                            <label for="ai_description_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Улучшение описания
+                            </label>
+                            <textarea id="ai_description_instruction" name="ai_description_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для улучшения описания товара...">{{ settings.ai_description_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('description_enhance')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- Rich контент -->
+                        <div>
+                            <label for="ai_rich_content_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Rich контент (инфографика)
+                            </label>
+                            <textarea id="ai_rich_content_instruction" name="ai_rich_content_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для генерации Rich контента...">{{ settings.ai_rich_content_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('rich_content')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+
+                        <!-- Анализ карточки -->
+                        <div>
+                            <label for="ai_analysis_instruction" class="block text-sm font-medium text-gray-700 mb-1">
+                                Анализ карточки
+                            </label>
+                            <textarea id="ai_analysis_instruction" name="ai_analysis_instruction" rows="3"
+                                      class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                                      placeholder="Инструкция для анализа карточки товара...">{{ settings.ai_analysis_instruction or '' }}</textarea>
+                            <button type="button" onclick="loadDefaultInstruction('card_analysis')"
+                                    class="mt-1 text-xs text-purple-600 hover:text-purple-800">Стандартная</button>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Ссылка на историю AI -->
+                <div class="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <svg class="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-sm text-blue-800">История AI запросов</span>
+                        </div>
+                        <button type="button" onclick="showAIHistory()"
+                                class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                            Открыть
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Генерация изображений -->
+        <div class="bg-gradient-to-br from-orange-50 to-pink-50 shadow-sm rounded-lg border border-orange-200 p-6">
+            <div class="flex items-center mb-4">
+                <div class="p-2 bg-orange-100 rounded-lg mr-3">
+                    <svg class="h-6 w-6 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-900">Генерация изображений для инфографики</h3>
+                    <p class="text-xs text-gray-500">AI создает картинки для слайдов Rich-контента (1440x810px)</p>
+                </div>
+            </div>
+
+            <!-- Включить генерацию -->
+            <div class="mb-4">
+                <label class="flex items-center p-3 bg-white rounded-lg border border-orange-200 cursor-pointer hover:bg-orange-50 transition-colors">
+                    <input type="checkbox" name="image_gen_enabled" id="image_gen_enabled"
+                           {{ 'checked' if settings.image_gen_enabled else '' }}
+                           class="h-5 w-5 text-orange-600 focus:ring-orange-500 border-gray-300 rounded"
+                           onchange="toggleImageGenSettings()">
+                    <span class="ml-3 text-sm font-medium text-gray-900">Включить генерацию изображений</span>
+                </label>
+            </div>
+
+            <div id="image_gen_settings_block" class="{{ '' if settings.image_gen_enabled else 'hidden' }}">
+                <!-- Провайдер -->
+                <div class="mb-4">
+                    <label for="image_gen_provider" class="block text-sm font-medium text-gray-700 mb-1">
+                        Провайдер генерации
+                    </label>
+                    <select id="image_gen_provider" name="image_gen_provider"
+                            class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                            onchange="updateImageGenProviderHint()">
+                        <option value="together_flux" {{ 'selected' if (settings.image_gen_provider or 'together_flux') == 'together_flux' else '' }}>
+                            ⭐ Together AI Flux (рекомендуется! $5 бесплатно)
+                        </option>
+                        <option value="openai_dalle" {{ 'selected' if settings.image_gen_provider == 'openai_dalle' else '' }}>
+                            OpenAI DALL-E 3 (лучшее качество, ~$0.04-0.12/изображение)
+                        </option>
+                        <option value="flux_pro" {{ 'selected' if settings.image_gen_provider == 'flux_pro' else '' }}>
+                            Flux.1 Pro через Replicate (~$0.05/изображение)
+                        </option>
+                        <option value="sdxl" {{ 'selected' if settings.image_gen_provider == 'sdxl' else '' }}>
+                            Stable Diffusion XL через Replicate (~$0.01/изображение)
+                        </option>
+                    </select>
+                </div>
+
+                <!-- Подсказка для Together AI (по умолчанию видна) -->
+                <div id="together_hint" class="p-4 bg-purple-50 border border-purple-200 rounded-lg mb-3">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-purple-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path>
+                        </svg>
+                        <div class="text-sm text-purple-700">
+                            <strong>⭐ Рекомендуется! Как получить Together AI API ключ:</strong><br>
+                            1. Зарегистрируйтесь на <a href="https://api.together.xyz" target="_blank" class="underline font-medium">api.together.xyz</a><br>
+                            2. Перейдите в <a href="https://api.together.xyz/settings/api-keys" target="_blank" class="underline">Settings → API Keys</a><br>
+                            3. Скопируйте ключ<br>
+                            <span class="text-xs text-purple-600 font-semibold">🎁 $5 бесплатных кредитов при регистрации! Высокий лимит запросов.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Подсказка для OpenAI -->
+                <div id="openai_hint" class="p-4 bg-green-50 border border-green-200 rounded-lg mb-3 hidden">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-green-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div class="text-sm text-green-700">
+                            <strong>Как получить OpenAI API ключ:</strong><br>
+                            1. Зарегистрируйтесь на <a href="https://platform.openai.com" target="_blank" class="underline font-medium">platform.openai.com</a><br>
+                            2. Перейдите в <a href="https://platform.openai.com/api-keys" target="_blank" class="underline">API Keys</a><br>
+                            3. Нажмите "Create new secret key"<br>
+                            4. Скопируйте ключ (начинается с <code class="bg-green-100 px-1">sk-</code>)<br>
+                            <span class="text-xs text-green-600">Нужна привязка карты и баланс от $5</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Подсказка для Replicate -->
+                <div id="replicate_hint" class="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-3 hidden">
+                    <div class="flex items-start">
+                        <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        <div class="text-sm text-blue-700">
+                            <strong>Как получить Replicate API токен:</strong><br>
+                            1. Зарегистрируйтесь на <a href="https://replicate.com" target="_blank" class="underline font-medium">replicate.com</a> (можно через GitHub)<br>
+                            2. Перейдите в <a href="https://replicate.com/account/api-tokens" target="_blank" class="underline">Account → API Tokens</a><br>
+                            3. Нажмите "Create token"<br>
+                            4. Скопируйте токен (начинается с <code class="bg-blue-100 px-1">r8_</code>)<br>
+                            <span class="text-xs text-blue-600">Есть бесплатный тариф на старте</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Together AI API ключ (по умолчанию видим) -->
+                <div id="together_api_key_block" class="mb-4">
+                    <label for="together_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        Together AI API ключ <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="together_api_key" name="together_api_key"
+                           value="{{ settings.together_api_key or '' }}"
+                           class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="Ваш API ключ от Together AI">
+                </div>
+
+                <!-- OpenAI API ключ -->
+                <div id="openai_api_key_block" class="mb-4 hidden">
+                    <label for="openai_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        OpenAI API ключ <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="openai_api_key" name="openai_api_key"
+                           value="{{ settings.openai_api_key or '' }}"
+                           class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="sk-...">
+                </div>
+
+                <!-- Replicate API ключ -->
+                <div id="replicate_api_key_block" class="mb-4 hidden">
+                    <label for="replicate_api_key" class="block text-sm font-medium text-gray-700 mb-1">
+                        Replicate API токен <span class="text-red-500">*</span>
+                    </label>
+                    <input type="password" id="replicate_api_key" name="replicate_api_key"
+                           value="{{ settings.replicate_api_key or '' }}"
+                           class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="r8_...">
+                </div>
+
+                <!-- Настройки DALL-E -->
+                <div id="dalle_settings" class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label for="openai_image_quality" class="block text-sm font-medium text-gray-700 mb-1">
+                            Качество DALL-E
+                        </label>
+                        <select id="openai_image_quality" name="openai_image_quality"
+                                class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <option value="standard" {{ 'selected' if (settings.openai_image_quality or 'standard') == 'standard' else '' }}>
+                                Standard ($0.04)
+                            </option>
+                            <option value="hd" {{ 'selected' if settings.openai_image_quality == 'hd' else '' }}>
+                                HD ($0.08) - больше деталей
+                            </option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="openai_image_style" class="block text-sm font-medium text-gray-700 mb-1">
+                            Стиль DALL-E
+                        </label>
+                        <select id="openai_image_style" name="openai_image_style"
+                                class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                            <option value="vivid" {{ 'selected' if (settings.openai_image_style or 'vivid') == 'vivid' else '' }}>
+                                Vivid - яркий, насыщенный
+                            </option>
+                            <option value="natural" {{ 'selected' if settings.openai_image_style == 'natural' else '' }}>
+                                Natural - естественный, реалистичный
+                            </option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Размер изображения -->
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label for="image_gen_width" class="block text-sm font-medium text-gray-700 mb-1">
+                            Ширина (px)
+                        </label>
+                        <input type="number" id="image_gen_width" name="image_gen_width"
+                               value="{{ settings.image_gen_width or 1440 }}"
+                               class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    </div>
+                    <div>
+                        <label for="image_gen_height" class="block text-sm font-medium text-gray-700 mb-1">
+                            Высота (px)
+                        </label>
+                        <input type="number" id="image_gen_height" name="image_gen_height"
+                               value="{{ settings.image_gen_height or 810 }}"
+                               class="shadow-sm focus:ring-orange-500 focus:border-orange-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    </div>
+                </div>
+
+                <div class="p-3 bg-orange-100 rounded-lg text-sm text-orange-800">
+                    <strong>Как использовать:</strong> после генерации Rich-контента появится кнопка "Сгенерировать изображения" в карточке товара.
+                </div>
+            </div>
+        </div>
+
         <!-- Кнопки -->
         <div class="flex gap-4">
             <button type="submit"
@@ -258,4 +802,405 @@
         </div>
     </form>
 </div>
+
+<script>
+let modelsCache = {};
+
+function toggleAISettings() {
+    const checkbox = document.getElementById('ai_enabled');
+    const settingsBlock = document.getElementById('ai_settings_block');
+    if (checkbox.checked) {
+        settingsBlock.classList.remove('hidden');
+        loadModels();
+    } else {
+        settingsBlock.classList.add('hidden');
+    }
+}
+
+function updateAIProviderSettings() {
+    const provider = document.getElementById('ai_provider').value;
+    const baseUrlBlock = document.getElementById('ai_base_url_block');
+    const baseUrlInput = document.getElementById('ai_api_base_url');
+    const cloudruHint = document.getElementById('cloudru_hint');
+
+    // Показываем/скрываем подсказку для Cloud.ru
+    if (provider === 'cloudru') {
+        cloudruHint.classList.remove('hidden');
+        baseUrlBlock.classList.remove('hidden');
+        if (!baseUrlInput.value || baseUrlInput.value === 'https://api.openai.com/v1') {
+            baseUrlInput.value = 'https://foundation-models.api.cloud.ru/v1';
+        }
+    } else if (provider === 'openai') {
+        cloudruHint.classList.add('hidden');
+        baseUrlBlock.classList.add('hidden');
+        baseUrlInput.value = '';
+    } else {
+        // Custom - скрываем подсказку Cloud.ru, показываем base URL
+        cloudruHint.classList.add('hidden');
+        baseUrlBlock.classList.remove('hidden');
+    }
+
+    // Загружаем модели для выбранного провайдера
+    loadModels();
+}
+
+async function loadModels() {
+    const provider = document.getElementById('ai_provider').value;
+    const modelSelect = document.getElementById('ai_model');
+    const modelDescription = document.getElementById('model_description');
+    const currentValue = modelSelect.value;
+
+    // Проверяем кэш
+    if (modelsCache[provider]) {
+        populateModels(modelsCache[provider], currentValue);
+        return;
+    }
+
+    modelDescription.textContent = 'Загрузка моделей...';
+
+    try {
+        const response = await fetch(`{{ url_for('auto_import_ai_models') }}?provider=${provider}`);
+        const data = await response.json();
+
+        if (data.success && data.models) {
+            modelsCache[provider] = data.models;
+            populateModels(data.models, currentValue);
+        } else {
+            modelDescription.textContent = 'Не удалось загрузить список моделей';
+        }
+    } catch (e) {
+        console.error('Error loading models:', e);
+        modelDescription.textContent = 'Ошибка загрузки моделей';
+    }
+}
+
+function populateModels(models, currentValue) {
+    const modelSelect = document.getElementById('ai_model');
+    const modelDescription = document.getElementById('model_description');
+
+    modelSelect.innerHTML = '';
+
+    for (const [modelId, modelInfo] of Object.entries(models)) {
+        const option = document.createElement('option');
+        option.value = modelId;
+        option.textContent = modelInfo.name + (modelInfo.recommended ? ' (рекомендуется)' : '');
+        option.dataset.description = modelInfo.description || '';
+
+        if (modelId === currentValue || (!currentValue && modelInfo.recommended)) {
+            option.selected = true;
+            modelDescription.textContent = modelInfo.description || '';
+        }
+
+        modelSelect.appendChild(option);
+    }
+
+    // Обновляем описание при смене модели
+    modelSelect.onchange = function() {
+        const selectedOption = this.options[this.selectedIndex];
+        modelDescription.textContent = selectedOption.dataset.description || '';
+    };
+}
+
+async function testAIConnection() {
+    const testIcon = document.getElementById('test_icon');
+    const testResult = document.getElementById('test_result');
+
+    // Анимация загрузки
+    testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>';
+    testIcon.classList.add('animate-spin');
+    testResult.textContent = 'Тестирование подключения...';
+    testResult.className = 'mt-1 text-xs text-gray-500';
+
+    try {
+        const response = await fetch('{{ url_for("auto_import_ai_test") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+
+        const data = await response.json();
+
+        testIcon.classList.remove('animate-spin');
+
+        if (data.success) {
+            testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+            testResult.textContent = data.message;
+            testResult.className = 'mt-1 text-xs text-green-600';
+        } else {
+            testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+            testResult.textContent = data.error || 'Ошибка подключения';
+            testResult.className = 'mt-1 text-xs text-red-600';
+        }
+    } catch (e) {
+        testIcon.classList.remove('animate-spin');
+        testIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+        testResult.textContent = 'Ошибка сети: ' + e.message;
+        testResult.className = 'mt-1 text-xs text-red-600';
+    }
+}
+
+async function loadDefaultInstruction(type) {
+    try {
+        const response = await fetch('{{ url_for("auto_import_ai_instructions") }}');
+        const data = await response.json();
+
+        if (data.success && data.instructions) {
+            // Маппинг типов на элементы формы
+            const instructionMapping = {
+                'category_detection': 'ai_category_instruction',
+                'size_parsing': 'ai_size_instruction',
+                'seo_title': 'ai_seo_title_instruction',
+                'keywords': 'ai_keywords_instruction',
+                'bullet_points': 'ai_bullets_instruction',
+                'description_enhance': 'ai_description_instruction',
+                'rich_content': 'ai_rich_content_instruction',
+                'card_analysis': 'ai_analysis_instruction'
+            };
+
+            const elementId = instructionMapping[type];
+            if (elementId && data.instructions[type]) {
+                document.getElementById(elementId).value = data.instructions[type].template;
+            }
+        }
+    } catch (e) {
+        console.error('Error loading instructions:', e);
+        alert('Не удалось загрузить инструкцию');
+    }
+}
+
+// Показать модальное окно с историей AI запросов
+async function showAIHistory() {
+    // Создаем модальное окно
+    const modal = document.createElement('div');
+    modal.id = 'ai-history-modal';
+    modal.className = 'fixed inset-0 z-50 overflow-y-auto';
+    modal.innerHTML = `
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-black opacity-50" onclick="closeAIHistory()"></div>
+            <div class="relative bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+                <div class="flex items-center justify-between p-4 border-b">
+                    <h3 class="text-lg font-semibold">История AI запросов</h3>
+                    <button onclick="closeAIHistory()" class="text-gray-500 hover:text-gray-700">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div id="ai-history-content" class="p-4 overflow-y-auto max-h-[70vh]">
+                    <div class="flex justify-center py-8">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+                    </div>
+                </div>
+                <div id="ai-history-pagination" class="p-4 border-t bg-gray-50"></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    loadAIHistory(1);
+}
+
+function closeAIHistory() {
+    const modal = document.getElementById('ai-history-modal');
+    if (modal) modal.remove();
+}
+
+async function loadAIHistory(page) {
+    try {
+        const response = await fetch(`/auto-import/ai/history?page=${page}&per_page=15`);
+        const data = await response.json();
+
+        if (data.success) {
+            const content = document.getElementById('ai-history-content');
+            if (data.history.length === 0) {
+                content.innerHTML = '<p class="text-center text-gray-500 py-8">История запросов пуста</p>';
+            } else {
+                content.innerHTML = `
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Действие</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Время</th>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            ${data.history.map(item => `
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-3 py-2 text-sm text-gray-500">${new Date(item.created_at).toLocaleString('ru')}</td>
+                                    <td class="px-3 py-2 text-sm">${item.action_type_display || item.action_type}</td>
+                                    <td class="px-3 py-2 text-sm text-gray-600 truncate max-w-xs">${item.product_title || '-'}</td>
+                                    <td class="px-3 py-2">
+                                        <span class="px-2 py-1 text-xs rounded ${item.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                                            ${item.success ? 'OK' : 'Ошибка'}
+                                        </span>
+                                    </td>
+                                    <td class="px-3 py-2 text-sm text-gray-500">${item.response_time_ms ? item.response_time_ms + 'ms' : '-'}</td>
+                                    <td class="px-3 py-2">
+                                        <button onclick="showAIHistoryDetail(${item.id})" class="text-purple-600 hover:text-purple-800 text-sm">
+                                            Детали
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            // Пагинация
+            const pagination = document.getElementById('ai-history-pagination');
+            if (data.pagination.pages > 1) {
+                pagination.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-500">Всего: ${data.pagination.total}</span>
+                        <div class="flex gap-2">
+                            ${data.pagination.has_prev ? `<button onclick="loadAIHistory(${page - 1})" class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300">Назад</button>` : ''}
+                            <span class="px-3 py-1 text-sm">Стр. ${page} из ${data.pagination.pages}</span>
+                            ${data.pagination.has_next ? `<button onclick="loadAIHistory(${page + 1})" class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300">Вперед</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            } else {
+                pagination.innerHTML = `<span class="text-sm text-gray-500">Всего: ${data.pagination.total}</span>`;
+            }
+        }
+    } catch (e) {
+        console.error('Error loading AI history:', e);
+        document.getElementById('ai-history-content').innerHTML = '<p class="text-center text-red-500 py-8">Ошибка загрузки</p>';
+    }
+}
+
+async function showAIHistoryDetail(id) {
+    try {
+        const response = await fetch(`/auto-import/ai/history/${id}`);
+        const data = await response.json();
+
+        if (data.success) {
+            const item = data.history;
+            const content = document.getElementById('ai-history-content');
+            content.innerHTML = `
+                <div class="space-y-4">
+                    <button onclick="loadAIHistory(1)" class="text-purple-600 hover:text-purple-800 text-sm flex items-center">
+                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                        </svg>
+                        Назад к списку
+                    </button>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><span class="text-gray-500">Действие:</span> <strong>${item.action_type_display || item.action_type}</strong></div>
+                        <div><span class="text-gray-500">Дата:</span> ${new Date(item.created_at).toLocaleString('ru')}</div>
+                        <div><span class="text-gray-500">Провайдер:</span> ${item.ai_provider || '-'}</div>
+                        <div><span class="text-gray-500">Модель:</span> ${item.ai_model || '-'}</div>
+                        <div><span class="text-gray-500">Время ответа:</span> ${item.response_time_ms ? item.response_time_ms + 'ms' : '-'}</div>
+                        <div><span class="text-gray-500">Токенов:</span> ${item.tokens_used || '-'}</div>
+                    </div>
+
+                    ${item.system_prompt ? `
+                        <div>
+                            <h4 class="font-medium text-gray-700 mb-1">Системный промпт:</h4>
+                            <pre class="bg-gray-100 p-3 rounded text-xs overflow-x-auto max-h-40">${escapeHtml(item.system_prompt)}</pre>
+                        </div>
+                    ` : ''}
+
+                    ${item.user_prompt ? `
+                        <div>
+                            <h4 class="font-medium text-gray-700 mb-1">Пользовательский промпт:</h4>
+                            <pre class="bg-gray-100 p-3 rounded text-xs overflow-x-auto max-h-40">${escapeHtml(item.user_prompt)}</pre>
+                        </div>
+                    ` : ''}
+
+                    ${item.raw_response ? `
+                        <div>
+                            <h4 class="font-medium text-gray-700 mb-1">Ответ AI:</h4>
+                            <pre class="bg-gray-100 p-3 rounded text-xs overflow-x-auto max-h-60">${escapeHtml(item.raw_response)}</pre>
+                        </div>
+                    ` : ''}
+
+                    ${item.error_message ? `
+                        <div class="bg-red-50 p-3 rounded border border-red-200">
+                            <h4 class="font-medium text-red-700 mb-1">Ошибка:</h4>
+                            <p class="text-red-600 text-sm">${escapeHtml(item.error_message)}</p>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+    } catch (e) {
+        console.error('Error loading AI history detail:', e);
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener('DOMContentLoaded', function() {
+    updateAIProviderSettings();
+    if (document.getElementById('ai_enabled').checked) {
+        loadModels();
+    }
+    // Инициализация настроек генерации изображений
+    updateImageGenProviderHint();
+});
+
+// =====================================================
+// Функции для генерации изображений
+// =====================================================
+
+function toggleImageGenSettings() {
+    const checkbox = document.getElementById('image_gen_enabled');
+    const settingsBlock = document.getElementById('image_gen_settings_block');
+    if (checkbox.checked) {
+        settingsBlock.classList.remove('hidden');
+        updateImageGenProviderHint();
+    } else {
+        settingsBlock.classList.add('hidden');
+    }
+}
+
+function updateImageGenProviderHint() {
+    const provider = document.getElementById('image_gen_provider')?.value;
+    if (!provider) return;
+
+    const togetherHint = document.getElementById('together_hint');
+    const openaiHint = document.getElementById('openai_hint');
+    const replicateHint = document.getElementById('replicate_hint');
+    const togetherKeyBlock = document.getElementById('together_api_key_block');
+    const openaiKeyBlock = document.getElementById('openai_api_key_block');
+    const replicateKeyBlock = document.getElementById('replicate_api_key_block');
+    const dalleSettings = document.getElementById('dalle_settings');
+
+    // Скрываем все блоки
+    togetherHint?.classList.add('hidden');
+    openaiHint?.classList.add('hidden');
+    replicateHint?.classList.add('hidden');
+    togetherKeyBlock?.classList.add('hidden');
+    openaiKeyBlock?.classList.add('hidden');
+    replicateKeyBlock?.classList.add('hidden');
+    dalleSettings?.classList.add('hidden');
+
+    if (provider === 'together_flux') {
+        // Together AI
+        togetherHint?.classList.remove('hidden');
+        togetherKeyBlock?.classList.remove('hidden');
+    } else if (provider === 'openai_dalle') {
+        // OpenAI DALL-E
+        openaiHint?.classList.remove('hidden');
+        openaiKeyBlock?.classList.remove('hidden');
+        dalleSettings?.classList.remove('hidden');
+    } else {
+        // Flux или SDXL - используют Replicate
+        replicateHint?.classList.remove('hidden');
+        replicateKeyBlock?.classList.remove('hidden');
+    }
+}
+</script>
 {% endblock %}
