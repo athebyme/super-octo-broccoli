@@ -59,38 +59,40 @@
                             <div id="brandDisplay" class="flex items-center justify-between">
                                 <div class="flex items-center gap-2">
                                     <span id="brandValue" class="text-sm text-gray-900">{{ product.brand or '—' }}</span>
-                                    <span id="brandStatus" class="hidden text-xs px-2 py-0.5 rounded-full"></span>
+                                    <span id="brandStatus" class="hidden text-xs px-1.5 py-0.5 rounded font-medium"></span>
                                 </div>
-                                <div class="flex items-center gap-2">
-                                    <button type="button" id="detectBrandAIBtn" class="hidden text-sm text-purple-600 hover:text-purple-900 font-medium" title="Определить бренд с помощью ИИ">
-                                        🤖 ИИ
+                                <div class="flex items-center gap-1">
+                                    <button type="button" id="detectBrandAIBtn" class="hidden inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-gradient-to-r from-violet-500 to-purple-500 text-white hover:from-violet-600 hover:to-purple-600 shadow-sm" title="Определить бренд с помощью ИИ">
+                                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                                        AI
                                     </button>
-                                    <button type="button" id="editBrandBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
+                                    <button type="button" id="editBrandBtn" class="inline-flex items-center px-2 py-1 text-xs font-medium rounded text-gray-600 hover:text-gray-900 hover:bg-gray-100">
+                                        <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                                         Изменить
                                     </button>
                                 </div>
                             </div>
                             <div id="brandMatchInfo" class="hidden mt-1 text-xs text-gray-500"></div>
-                            <div id="brandEditor" class="hidden mt-2">
+                            <div id="brandEditor" class="hidden mt-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
                                 <div class="flex gap-2">
                                     <input type="text" id="brandInput"
                                            value="{{ product.brand or '' }}"
                                            class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                                            placeholder="Введите название бренда">
-                                    <button type="button" id="searchBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50" title="Искать в WB">
-                                        🔍
+                                    <button type="button" id="searchBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 shadow-sm" title="Искать в WB">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                                     </button>
-                                    <button type="button" id="detectBrandAIEditorBtn" class="inline-flex items-center px-3 py-1.5 border border-purple-300 text-xs font-medium rounded-md text-purple-700 bg-purple-50 hover:bg-purple-100" title="Определить с ИИ">
-                                        🤖
+                                    <button type="button" id="detectBrandAIEditorBtn" class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md text-white bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 shadow-sm" title="Определить с ИИ">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
                                     </button>
                                 </div>
                                 <div id="brandSuggestions" class="hidden mt-2 border border-gray-200 rounded-md max-h-40 overflow-y-auto bg-white shadow-sm"></div>
                                 <div id="brandValidation" class="hidden mt-2 text-sm"></div>
-                                <div class="mt-2 flex gap-2">
-                                    <button type="button" id="saveBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                                <div class="mt-3 flex gap-2">
+                                    <button type="button" id="saveBrandBtn" class="inline-flex items-center px-4 py-2 border border-transparent text-xs font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm">
                                         Сохранить
                                     </button>
-                                    <button type="button" id="cancelBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                    <button type="button" id="cancelBrandBtn" class="inline-flex items-center px-4 py-2 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                                         Отмена
                                     </button>
                                 </div>
@@ -986,10 +988,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Brand status colors
     const brandStatusConfig = {
-        'exact': { text: 'WB', bg: 'bg-green-100', color: 'text-green-800', icon: '✓' },
-        'confident': { text: 'WB', bg: 'bg-blue-100', color: 'text-blue-800', icon: '~' },
-        'uncertain': { text: '?', bg: 'bg-yellow-100', color: 'text-yellow-800', icon: '?' },
-        'not_found': { text: '!', bg: 'bg-red-100', color: 'text-red-800', icon: '✗' }
+        'exact': { text: 'WB', bg: 'bg-green-100', color: 'text-green-700' },
+        'confident': { text: 'WB~', bg: 'bg-blue-100', color: 'text-blue-700' },
+        'uncertain': { text: '?', bg: 'bg-amber-100', color: 'text-amber-700' },
+        'not_found': { text: '!', bg: 'bg-red-100', color: 'text-red-700' }
     };
 
     // Match brand on page load
@@ -1024,8 +1026,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const config = brandStatusConfig[status] || brandStatusConfig['uncertain'];
 
         // Update status badge
-        brandStatus.className = `text-xs px-2 py-0.5 rounded-full ${config.bg} ${config.color}`;
-        brandStatus.textContent = config.icon + ' ' + config.text;
+        brandStatus.className = `text-xs px-1.5 py-0.5 rounded font-medium ${config.bg} ${config.color}`;
+        brandStatus.textContent = config.text;
         brandStatus.classList.remove('hidden');
 
         // Show/hide AI button based on status
@@ -1054,7 +1056,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const title = '{{ product.title|e }}';
         const description = '{{ (product.description or "")|e }}';
 
-        brandValidation.innerHTML = '<span class="text-purple-600">🤖 ИИ анализирует товар...</span>';
+        brandValidation.innerHTML = '<span class="text-purple-600"><span class="inline-block animate-pulse">AI анализирует товар...</span></span>';
         brandValidation.classList.remove('hidden');
         brandSuggestions.classList.add('hidden');
 
@@ -1074,17 +1076,17 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.success) {
                 let html = '';
                 if (data.wb_match) {
-                    html = `<span class="text-green-600">🤖 ИИ определил бренд: <strong>${data.wb_match.name}</strong></span>`;
+                    html = `<span class="text-green-600">AI определил бренд: <strong>${data.wb_match.name}</strong></span>`;
                     html += `<br><span class="text-xs text-gray-500">Уверенность: ${Math.round(data.confidence * 100)}%</span>`;
                     brandInput.value = data.wb_match.name;
                     brandValue.textContent = data.wb_match.name;
                     updateBrandStatus('exact', data.wb_match, 1.0, []);
                 } else if (data.detected_brand) {
-                    html = `<span class="text-yellow-600">🤖 ИИ предполагает: <strong>${data.detected_brand}</strong></span>`;
+                    html = `<span class="text-amber-600">AI предполагает: <strong>${data.detected_brand}</strong></span>`;
                     html += `<br><span class="text-xs text-gray-500">${data.reasoning || 'Бренд не найден в справочнике WB'}</span>`;
                     brandInput.value = data.detected_brand;
                 } else {
-                    html = '<span class="text-gray-600">🤖 ИИ не смог определить бренд</span>';
+                    html = '<span class="text-gray-600">AI не смог определить бренд</span>';
                 }
                 brandValidation.innerHTML = html;
             } else {
@@ -1122,7 +1124,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        brandValidation.innerHTML = '<span class="text-gray-500">🔄 Поиск в справочнике WB...</span>';
+        brandValidation.innerHTML = '<span class="text-gray-500"><span class="inline-block animate-pulse">Поиск в справочнике WB...</span></span>';
         brandValidation.classList.remove('hidden');
         brandSuggestions.classList.add('hidden');
 
@@ -1136,19 +1138,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.success) {
                 if (data.status === 'exact') {
-                    brandValidation.innerHTML = '<span class="text-green-600">✓ Бренд найден в справочнике WB: <strong>' + data.match.name + '</strong></span>';
+                    brandValidation.innerHTML = '<span class="text-green-600">Бренд найден в WB: <strong>' + data.match.name + '</strong></span>';
                     brandInput.value = data.match.name;
                     brandSuggestions.classList.add('hidden');
                 } else if (data.status === 'confident') {
-                    brandValidation.innerHTML = '<span class="text-blue-600">~ Похожий бренд: <strong>' + data.match.name + '</strong> (совпадение ' + Math.round(data.confidence * 100) + '%)</span>';
+                    brandValidation.innerHTML = '<span class="text-blue-600">Похожий бренд: <strong>' + data.match.name + '</strong> (' + Math.round(data.confidence * 100) + '%)</span>';
                     showBrandSuggestions([data.match, ...data.suggestions]);
                 } else {
                     // uncertain or not_found
                     if (data.suggestions && data.suggestions.length > 0) {
-                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Точное совпадение не найдено.</span> <span class="text-gray-600">Выберите из похожих или определите с ИИ:</span>';
+                        brandValidation.innerHTML = '<span class="text-amber-600">Точное совпадение не найдено.</span> <span class="text-gray-600">Выберите из похожих:</span>';
                         showBrandSuggestions(data.suggestions);
                     } else {
-                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Бренд "' + brandName + '" не найден.</span> <button type="button" class="text-purple-600 hover:text-purple-800 font-medium ml-2" onclick="detectBrandWithAI()">🤖 Определить с ИИ</button>';
+                        brandValidation.innerHTML = '<span class="text-amber-600">Бренд "' + brandName + '" не найден.</span> <button type="button" class="ml-2 px-2 py-1 text-xs font-medium rounded bg-gradient-to-r from-violet-500 to-purple-500 text-white hover:from-violet-600 hover:to-purple-600" onclick="detectBrandWithAI()">Определить с AI</button>';
                         brandSuggestions.classList.add('hidden');
                     }
                 }

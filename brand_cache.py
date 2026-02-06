@@ -123,7 +123,42 @@ class BrandCache:
             return {'id': brand_id, 'name': self.brands[brand_id]}
         return None
 
-    def find_fuzzy(self, brand_name: str, threshold: float = 0.7, limit: int = 10) -> List[Tuple[Dict, float]]:
+    def find_partial(self, brand_name: str, limit: int = 15) -> List[Tuple[Dict, float]]:
+        """
+        Найти бренды по частичному совпадению (contains).
+
+        Ищет бренды где:
+        - Название бренда содержит поисковую строку
+        - Или поисковая строка содержит название бренда
+        """
+        brand_lower = brand_name.lower().strip()
+        if len(brand_lower) < 2:
+            return []
+
+        results = []
+
+        for brand_id, name in self.brands.items():
+            name_lower = name.lower()
+
+            # Проверяем частичное совпадение
+            if brand_lower in name_lower:
+                # Поисковая строка найдена в названии бренда
+                # Чем больше процент совпадения, тем выше score
+                score = len(brand_lower) / len(name_lower)
+                # Бонус если начинается с поисковой строки
+                if name_lower.startswith(brand_lower):
+                    score = min(1.0, score + 0.3)
+                results.append(({'id': brand_id, 'name': name}, score))
+            elif name_lower in brand_lower:
+                # Название бренда найдено в поисковой строке
+                score = len(name_lower) / len(brand_lower) * 0.8
+                results.append(({'id': brand_id, 'name': name}, score))
+
+        # Сортируем по score
+        results.sort(key=lambda x: (-x[1], len(x[0]['name'])))
+        return results[:limit]
+
+    def find_fuzzy(self, brand_name: str, threshold: float = 0.5, limit: int = 15) -> List[Tuple[Dict, float]]:
         """
         Найти похожие бренды используя fuzzy matching.
 
@@ -136,23 +171,39 @@ class BrandCache:
             Список кортежей (brand_dict, similarity_score)
         """
         brand_lower = brand_name.lower().strip()
+        if len(brand_lower) < 2:
+            return []
+
         results = []
+        brand_first_char = brand_lower[0] if brand_lower else ''
+        brand_prefix = brand_lower[:3] if len(brand_lower) >= 3 else brand_lower
 
         for brand_id, name in self.brands.items():
             name_lower = name.lower()
 
-            # Быстрая проверка - если начинается с той же буквы или содержит подстроку
-            if not (name_lower.startswith(brand_lower[0]) or brand_lower in name_lower or name_lower in brand_lower):
-                # Проверяем только первые несколько символов для оптимизации
-                if len(brand_lower) > 3 and not name_lower.startswith(brand_lower[:3]):
-                    continue
+            # Оптимизация: проверяем только потенциально похожие
+            # Если первая буква или префикс совпадает, или есть пересечение
+            should_check = (
+                name_lower.startswith(brand_first_char) or
+                name_lower.startswith(brand_prefix) or
+                brand_lower in name_lower or
+                name_lower in brand_lower or
+                brand_prefix in name_lower
+            )
+
+            if not should_check:
+                continue
 
             # Вычисляем схожесть
             similarity = SequenceMatcher(None, brand_lower, name_lower).ratio()
 
-            # Бонус если одна строка содержит другую
+            # Бонус за частичное совпадение
             if brand_lower in name_lower or name_lower in brand_lower:
-                similarity = min(1.0, similarity + 0.2)
+                similarity = min(1.0, similarity + 0.25)
+
+            # Бонус за совпадение начала
+            if name_lower.startswith(brand_lower) or brand_lower.startswith(name_lower):
+                similarity = min(1.0, similarity + 0.15)
 
             if similarity >= threshold:
                 results.append(({'id': brand_id, 'name': name}, similarity))
@@ -193,10 +244,29 @@ class BrandCache:
                 'suggestions': []
             }
 
-        # 2. Ищем fuzzy matches
-        fuzzy_results = self.find_fuzzy(brand_name, threshold=0.5, limit=10)
+        # 2. Ищем частичные совпадения (contains)
+        partial_results = self.find_partial(brand_name, limit=15)
 
-        if not fuzzy_results:
+        # 3. Ищем fuzzy matches
+        fuzzy_results = self.find_fuzzy(brand_name, threshold=0.4, limit=15)
+
+        # 4. Объединяем результаты, убирая дубликаты
+        seen_ids = set()
+        all_results = []
+
+        # Сначала partial (они более релевантны для "contains")
+        for brand, score in partial_results:
+            if brand['id'] not in seen_ids:
+                seen_ids.add(brand['id'])
+                all_results.append((brand, score))
+
+        # Затем fuzzy
+        for brand, score in fuzzy_results:
+            if brand['id'] not in seen_ids:
+                seen_ids.add(brand['id'])
+                all_results.append((brand, score))
+
+        if not all_results:
             return {
                 'status': 'not_found',
                 'match': None,
@@ -204,17 +274,20 @@ class BrandCache:
                 'suggestions': []
             }
 
-        best_match, best_score = fuzzy_results[0]
-        suggestions = [r[0] for r in fuzzy_results[1:6]]  # Остальные как предложения
+        # Сортируем по score
+        all_results.sort(key=lambda x: x[1], reverse=True)
 
-        # 3. Определяем уровень уверенности
-        if best_score >= 0.9:
+        best_match, best_score = all_results[0]
+        suggestions = [r[0] for r in all_results[1:8]]  # Остальные как предложения
+
+        # 5. Определяем уровень уверенности
+        if best_score >= 0.85:
             status = 'confident'
-        elif best_score >= 0.7:
+        elif best_score >= 0.6:
             status = 'uncertain'
         else:
             status = 'uncertain'
-            suggestions = [r[0] for r in fuzzy_results[:6]]
+            suggestions = [r[0] for r in all_results[:8]]
             best_match = None
 
         return {

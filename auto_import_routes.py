@@ -4272,9 +4272,9 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'title required'}), 400
 
         seller = current_user.seller
-        settings = get_or_create_auto_import_settings(seller.id)
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
 
-        if not settings.ai_api_key:
+        if not settings or not settings.ai_api_key:
             return jsonify({'success': False, 'error': 'AI API ключ не настроен'}), 400
 
         try:
