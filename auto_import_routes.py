@@ -3971,6 +3971,105 @@ def register_auto_import_routes(app):
             logger.error(f"AI extract all attributes error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/validate-brand', methods=['POST'])
+    @login_required
+    def auto_import_validate_brand():
+        """
+        Валидация бренда через WB API
+
+        Проверяет существует ли бренд в справочнике WB и предлагает похожие.
+
+        Request:
+            {"brand": "Nike"}
+
+        Response:
+            {
+                "success": true,
+                "valid": true,
+                "exact_match": {"id": 1234, "name": "Nike"},
+                "suggestions": []
+            }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        brand_name = data.get('brand', '').strip()
+
+        if not brand_name:
+            return jsonify({'success': False, 'error': 'brand required'}), 400
+
+        seller = current_user.seller
+
+        if not seller.wb_api_key:
+            return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
+
+        try:
+            from wb_api_client import WildberriesAPIClient
+
+            with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                result = wb_client.validate_brand(brand_name)
+
+                return jsonify({
+                    'success': True,
+                    'valid': result.get('valid', False),
+                    'exact_match': result.get('exact_match'),
+                    'suggestions': result.get('suggestions', []),
+                    'searched_brand': brand_name
+                })
+
+        except Exception as e:
+            logger.error(f"Brand validation error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/search-brands', methods=['GET'])
+    @login_required
+    def auto_import_search_brands():
+        """
+        Поиск брендов в справочнике WB
+
+        Query params:
+            q: строка поиска
+            limit: максимум результатов (по умолчанию 20)
+
+        Response:
+            {
+                "success": true,
+                "brands": [{"id": 1234, "name": "Nike"}, ...]
+            }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        query = request.args.get('q', '').strip()
+        limit = min(int(request.args.get('limit', 20)), 100)
+
+        if not query or len(query) < 2:
+            return jsonify({'success': False, 'error': 'Минимум 2 символа для поиска'}), 400
+
+        seller = current_user.seller
+
+        if not seller.wb_api_key:
+            return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
+
+        try:
+            from wb_api_client import WildberriesAPIClient
+
+            with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                result = wb_client.search_brands(query, top=limit)
+                brands = result.get('data', [])
+
+                return jsonify({
+                    'success': True,
+                    'brands': brands,
+                    'count': len(brands),
+                    'query': query
+                })
+
+        except Exception as e:
+            logger.error(f"Brand search error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
 
 # Пример использования:
 # from auto_import_routes import register_auto_import_routes

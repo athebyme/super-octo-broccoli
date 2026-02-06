@@ -1683,6 +1683,99 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get TNVED codes: {str(e)}")
             raise
 
+    def search_brands(self, pattern: str, top: int = 50) -> Dict[str, Any]:
+        """
+        Поиск брендов по названию в справочнике WB
+
+        Args:
+            pattern: Строка поиска (часть названия бренда)
+            top: Максимальное количество результатов (по умолчанию 50)
+
+        Returns:
+            Dict с данными о брендах:
+            {
+                "data": [
+                    {"id": 123, "name": "Brand Name"},
+                    ...
+                ]
+            }
+
+        Example:
+            >>> client.search_brands("Nike")
+            {"data": [{"id": 1234, "name": "Nike"}]}
+        """
+        endpoint = "/content/v2/directory/brands"
+        params = {
+            'pattern': pattern,
+            'top': top
+        }
+
+        logger.info(f"🔍 Searching brands with pattern: '{pattern}'")
+        try:
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            brands_count = len(result.get('data', []))
+            logger.info(f"✅ Found {brands_count} brands matching '{pattern}'")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to search brands: {str(e)}")
+            raise
+
+    def validate_brand(self, brand_name: str) -> Dict[str, Any]:
+        """
+        Проверить существует ли бренд в справочнике WB
+
+        Args:
+            brand_name: Название бренда для проверки
+
+        Returns:
+            Dict с результатом:
+            {
+                "valid": bool,
+                "exact_match": {"id": int, "name": str} или None,
+                "suggestions": [{"id": int, "name": str}, ...]
+            }
+
+        Example:
+            >>> client.validate_brand("Nike")
+            {"valid": True, "exact_match": {"id": 1234, "name": "Nike"}, "suggestions": []}
+        """
+        logger.info(f"🔍 Validating brand: '{brand_name}'")
+
+        try:
+            result = self.search_brands(brand_name, top=20)
+            brands = result.get('data', [])
+
+            # Ищем точное совпадение (регистронезависимо)
+            brand_lower = brand_name.lower().strip()
+            exact_match = None
+            suggestions = []
+
+            for brand in brands:
+                brand_wb_name = brand.get('name', '')
+                if brand_wb_name.lower().strip() == brand_lower:
+                    exact_match = brand
+                else:
+                    suggestions.append(brand)
+
+            is_valid = exact_match is not None
+
+            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}")
+
+            return {
+                'valid': is_valid,
+                'exact_match': exact_match,
+                'suggestions': suggestions[:10]  # Максимум 10 предложений
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to validate brand: {str(e)}")
+            return {
+                'valid': False,
+                'exact_match': None,
+                'suggestions': [],
+                'error': str(e)
+            }
+
     def create_product_card(
         self,
         subject_id: int,
