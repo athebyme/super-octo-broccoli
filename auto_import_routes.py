@@ -491,6 +491,14 @@ def register_auto_import_routes(app):
         except:
             product.validation_errors_list = []
 
+        # Парсим characteristics для отображения дополнительных характеристик
+        try:
+            chars = json.loads(product.characteristics) if product.characteristics else {}
+            # Фильтруем служебные ключи (начинаются с _)
+            product.characteristics_dict = {k: v for k, v in chars.items() if not k.startswith('_')}
+        except:
+            product.characteristics_dict = {}
+
         # Безопасный доступ к AI-полям (могут не существовать до миграции)
         product.has_ai_data = False
         product.ai_keywords_list = None
@@ -2045,9 +2053,70 @@ def register_auto_import_routes(app):
                 product.sizes = updates['sizes_text']
                 applied.append('sizes_text')
 
-            # Характеристики из WB API
+            # Характеристики из WB API - сохраняем в characteristics для отображения
             if 'wb_characteristics' in updates and updates['wb_characteristics']:
-                product.ai_dimensions = json.dumps(updates['wb_characteristics'], ensure_ascii=False)
+                wb_chars = updates['wb_characteristics']
+
+                # Сохраняем в ai_dimensions как backup
+                product.ai_dimensions = json.dumps(wb_chars, ensure_ascii=False)
+
+                # Также добавляем в основные characteristics для отображения в карточке
+                existing_chars = {}
+                try:
+                    if product.characteristics:
+                        existing_chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    existing_chars = {}
+
+                # Маппинг WB характеристик в поля
+                dimension_mapping = {
+                    'объем': 'volume',
+                    'объём': 'volume',
+                    'вес': 'weight',
+                    'масса': 'weight',
+                    'длина': 'length',
+                    'ширина': 'width',
+                    'высота': 'height',
+                    'глубина': 'depth',
+                    'диаметр': 'diameter'
+                }
+
+                # Структура для sizes.dimensions
+                sizes_data = {}
+                try:
+                    if product.sizes:
+                        sizes_data = json.loads(product.sizes) if isinstance(product.sizes, str) else product.sizes
+                        if isinstance(sizes_data, list):
+                            sizes_data = {'simple_sizes': sizes_data}
+                except:
+                    sizes_data = {}
+
+                if 'dimensions' not in sizes_data:
+                    sizes_data['dimensions'] = {}
+
+                # Извлекаем значения из wb_chars
+                if 'extracted_values' in wb_chars:
+                    for key, value in wb_chars['extracted_values'].items():
+                        # Добавляем в characteristics
+                        existing_chars[key] = value
+
+                        # Также маппим на dimensions если это размерная характеристика
+                        key_lower = key.lower()
+                        for rus_name, eng_name in dimension_mapping.items():
+                            if rus_name in key_lower and 'запас' not in key_lower:
+                                try:
+                                    val = float(str(value).replace(',', '.'))
+                                    if eng_name not in sizes_data['dimensions']:
+                                        sizes_data['dimensions'][eng_name] = []
+                                    if val not in sizes_data['dimensions'][eng_name]:
+                                        sizes_data['dimensions'][eng_name].append(val)
+                                except:
+                                    pass
+                                break
+
+                # Сохраняем
+                product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                product.sizes = json.dumps(sizes_data, ensure_ascii=False)
                 applied.append('wb_characteristics')
 
             if applied:
@@ -2633,6 +2702,23 @@ def register_auto_import_routes(app):
                 except:
                     pass
 
+            # Получаем оригинальные данные поставщика как дополнительный источник
+            original_data = {}
+            original_description = ''
+            original_sizes = {}
+            if product.original_data:
+                try:
+                    original_data = json.loads(product.original_data) if isinstance(product.original_data, str) else product.original_data
+                    original_description = original_data.get('description', '')
+                    original_sizes = original_data.get('sizes', {})
+                    original_chars = original_data.get('characteristics', {})
+                    # Объединяем оригинальные характеристики с текущими
+                    for k, v in original_chars.items():
+                        if k not in product_characteristics:
+                            product_characteristics[k] = v
+                except:
+                    pass
+
             # Формируем список характеристик для AI
             chars_list = []
             if size_characteristics:
@@ -2655,12 +2741,24 @@ def register_auto_import_routes(app):
                     "- Толщина (см)"
                 ]
 
+            # Комбинируем описание - текущее + оригинальное (если отличается)
+            combined_description = product.description or ''
+            if original_description and original_description != combined_description:
+                combined_description = f"{combined_description}\n\n=== ОРИГИНАЛЬНЫЕ ДАННЫЕ ПОСТАВЩИКА ===\n{original_description}"
+
+            # Добавляем оригинальные размеры если есть
+            sizes_text = product.sizes or ''
+            if original_sizes:
+                original_sizes_str = json.dumps(original_sizes, ensure_ascii=False) if isinstance(original_sizes, dict) else str(original_sizes)
+                if original_sizes_str not in sizes_text:
+                    sizes_text = f"{sizes_text}\n\nОригинальные размеры: {original_sizes_str}"
+
             # Вызываем AI с характеристиками категории
             success, result, error = ai_service.extract_category_dimensions(
                 title=product.title or '',
-                description=product.description or '',
+                description=combined_description,
                 characteristics=product_characteristics,
-                sizes_text=product.sizes or '',
+                sizes_text=sizes_text,
                 category_characteristics=chars_list
             )
 

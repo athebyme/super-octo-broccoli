@@ -1150,6 +1150,22 @@ class AutoImportManager:
             imported_product.photo_urls = json.dumps(product_data['photo_urls'], ensure_ascii=False)
             imported_product.barcodes = json.dumps(product_data['barcodes'], ensure_ascii=False)
 
+            # Сохраняем оригинальные данные поставщика (до AI модификаций)
+            # Это позволит восстановить данные если AI что-то потеряет
+            original_data = {
+                'title': product_data.get('title', ''),
+                'description': product_data.get('description', ''),
+                'category': product_data.get('category', ''),
+                'brand': product_data.get('brand', ''),
+                'colors': product_data.get('colors', []),
+                'sizes': product_data.get('sizes', {}),
+                'materials': product_data.get('materials', []),
+                'characteristics': product_data.get('characteristics', {}),
+                'country': product_data.get('country', ''),
+                'gender': product_data.get('gender', ''),
+            }
+            imported_product.original_data = json.dumps(original_data, ensure_ascii=False)
+
             # Используем уже сгенерированное описание
             imported_product.description = description
 

@@ -193,6 +193,23 @@
                             {% endif %}
                         </dd>
                     </div>
+
+                    <!-- Дополнительные характеристики (Объем, Вес и т.д.) -->
+                    {% if product.characteristics_dict %}
+                    <div class="sm:col-span-2">
+                        <dt class="text-sm font-medium text-gray-500 mb-2">Дополнительные характеристики</dt>
+                        <dd class="mt-1">
+                            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                {% for key, value in product.characteristics_dict.items() %}
+                                <div class="bg-gray-50 rounded-lg p-2">
+                                    <div class="text-xs text-gray-500">{{ key }}</div>
+                                    <div class="font-medium text-gray-900">{{ value }}</div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </dd>
+                    </div>
+                    {% endif %}
                 </dl>
             </div>
 

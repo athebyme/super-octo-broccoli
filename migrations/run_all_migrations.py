@@ -176,6 +176,8 @@ def migrate(db_path):
             ("ai_age_group", "VARCHAR(20)"),
             ("ai_season", "VARCHAR(20)"),
             ("ai_country", "VARCHAR(100)"),
+            # Оригинальные данные поставщика
+            ("original_data", "TEXT"),
         ]
 
         for col_name, col_type in products_columns:

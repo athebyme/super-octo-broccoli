@@ -873,6 +873,7 @@ class ImportedProduct(db.Model):
     barcodes = db.Column(db.Text)  # Баркоды (JSON)
     characteristics = db.Column(db.Text)  # Полные характеристики (JSON)
     description = db.Column(db.Text)  # Описание
+    original_data = db.Column(db.Text)  # Оригинальные данные от поставщика (JSON) - для отката AI изменений
 
     # Статус импорта
     import_status = db.Column(db.String(50), default='pending')  # 'pending', 'validated', 'imported', 'failed'
