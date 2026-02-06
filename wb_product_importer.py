@@ -148,19 +148,7 @@ class WBProductImporter:
             # Формируем характеристики для WB API v2
             # ВАЖНО: WB API v2 требует характеристики в формате [{id, value}]
             # где id - это числовой ID из справочника WB
-            # Но для начального создания карточки можно передать пустой массив,
-            # а потом обновить характеристики через update_card
-            #
-            # TODO: Реализовать маппинг характеристик на ID из WB API
-            # Для этого нужно:
-            # 1. Получить список характеристик для subject_id: api_client.get_card_characteristics_config(subject_id)
-            # 2. Найти соответствующие ID для каждой характеристики
-            # 3. Преобразовать в формат [{id, value}]
-
-            characteristics = []
-
-            # Пока оставляем пустой массив - характеристики можно добавить позже через update
-            # После создания карточки можно будет получить её ID и обновить характеристики
+            characteristics = self._build_wb_characteristics(imported_product)
 
             # Формируем медиа (фотографии)
             media_urls = []
@@ -298,6 +286,174 @@ class WBProductImporter:
             db.session.commit()
 
             return False, error_msg, None
+
+    def _build_wb_characteristics(self, imported_product: ImportedProduct) -> List[Dict]:
+        """
+        Строит массив характеристик в формате WB API
+
+        Args:
+            imported_product: Импортированный товар
+
+        Returns:
+            Список характеристик в формате [{id: int, value: [str]}]
+        """
+        import re
+
+        if not imported_product.wb_subject_id:
+            logger.warning(f"Товар {imported_product.external_id}: нет wb_subject_id для получения характеристик")
+            return []
+
+        # Загружаем сохранённые характеристики
+        product_chars = {}
+        try:
+            if imported_product.characteristics:
+                product_chars = json.loads(imported_product.characteristics) if isinstance(imported_product.characteristics, str) else imported_product.characteristics
+        except Exception as e:
+            logger.warning(f"Ошибка парсинга характеристик: {e}")
+            product_chars = {}
+
+        if not product_chars:
+            logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
+            return []
+
+        # Получаем конфигурацию характеристик WB для данного предмета
+        try:
+            chars_config = self.api_client.get_card_characteristics_config(imported_product.wb_subject_id)
+            wb_chars_list = chars_config.get('data', [])
+        except Exception as e:
+            logger.error(f"Не удалось получить конфигурацию характеристик: {e}")
+            return []
+
+        if not wb_chars_list:
+            logger.warning(f"Пустая конфигурация характеристик для subject_id={imported_product.wb_subject_id}")
+            return []
+
+        # Создаём словарь: name -> {id, type, dictionary, ...}
+        wb_chars_by_name = {}
+        for char in wb_chars_list:
+            char_name = char.get('name', '').strip()
+            if char_name:
+                wb_chars_by_name[char_name.lower()] = char
+
+        result_characteristics = []
+
+        for char_name, char_value in product_chars.items():
+            # Пропускаем служебные поля
+            if char_name.startswith('_'):
+                continue
+
+            # Находим соответствующую характеристику WB
+            char_name_lower = char_name.lower().strip()
+            wb_char = wb_chars_by_name.get(char_name_lower)
+
+            if not wb_char:
+                # Пробуем частичное совпадение
+                for wb_name, wb_data in wb_chars_by_name.items():
+                    if char_name_lower in wb_name or wb_name in char_name_lower:
+                        wb_char = wb_data
+                        break
+
+            if not wb_char:
+                logger.debug(f"Характеристика '{char_name}' не найдена в WB конфиге")
+                continue
+
+            char_id = wb_char.get('charcID') or wb_char.get('id')
+            if not char_id:
+                continue
+
+            # Форматируем значение
+            formatted_value = self._format_char_value(char_value, wb_char)
+
+            if formatted_value:
+                result_characteristics.append({
+                    'id': int(char_id),
+                    'value': formatted_value if isinstance(formatted_value, list) else [formatted_value]
+                })
+                logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}")
+
+        logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
+        return result_characteristics
+
+    def _format_char_value(self, value, wb_char: Dict) -> any:
+        """
+        Форматирует значение характеристики для WB API
+
+        Args:
+            value: Значение из наших данных
+            wb_char: Конфигурация характеристики WB
+
+        Returns:
+            Отформатированное значение (строка, число или список)
+        """
+        import re
+
+        char_type = wb_char.get('type', 'string')
+        unit_name = wb_char.get('unitName', '')
+        dictionary = wb_char.get('dictionary', [])
+        char_name = wb_char.get('name', '')
+
+        # Если значение уже список - обрабатываем каждый элемент
+        if isinstance(value, list):
+            return [self._format_single_value(v, char_type, unit_name, dictionary, char_name) for v in value if v]
+
+        return self._format_single_value(value, char_type, unit_name, dictionary, char_name)
+
+    def _format_single_value(self, value, char_type: str, unit_name: str, dictionary: List, char_name: str) -> str:
+        """
+        Форматирует одиночное значение характеристики
+        """
+        import re
+
+        if value is None:
+            return None
+
+        str_value = str(value).strip()
+        if not str_value:
+            return None
+
+        # Для числовых типов - извлекаем число
+        if char_type in ('numeric', 'integer', 'float', 'number'):
+            # Убираем единицы измерения и извлекаем число
+            # "6 шт" -> "6", "10 мм" -> "10", "0.1 кг" -> "0.1"
+            match = re.search(r'([\d.,]+)', str_value)
+            if match:
+                num_str = match.group(1).replace(',', '.')
+                try:
+                    # Если целое число - убираем дробную часть
+                    num = float(num_str)
+                    if num == int(num):
+                        return str(int(num))
+                    return str(num)
+                except:
+                    return num_str
+            return str_value
+
+        # Для словарных значений - ищем точное или частичное совпадение
+        if dictionary:
+            str_value_lower = str_value.lower()
+
+            # Сначала ищем точное совпадение
+            for dict_item in dictionary:
+                if isinstance(dict_item, dict):
+                    dict_value = dict_item.get('value', '')
+                else:
+                    dict_value = str(dict_item)
+
+                if dict_value.lower() == str_value_lower:
+                    return dict_value
+
+            # Ищем частичное совпадение
+            for dict_item in dictionary:
+                if isinstance(dict_item, dict):
+                    dict_value = dict_item.get('value', '')
+                else:
+                    dict_value = str(dict_item)
+
+                if str_value_lower in dict_value.lower() or dict_value.lower() in str_value_lower:
+                    return dict_value
+
+        # Возвращаем как есть
+        return str_value
 
     def import_multiple_products(self, imported_product_ids: List[int]) -> Dict:
         """
