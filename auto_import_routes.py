@@ -4158,6 +4158,281 @@ def register_auto_import_routes(app):
             logger.error(f"Brand search error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/match-brand', methods=['POST'])
+    @login_required
+    def auto_import_match_brand():
+        """
+        Матчинг бренда через кэш с fuzzy matching.
+
+        Использует локальный кэш брендов WB для быстрого поиска.
+        Возвращает статус: exact, confident, uncertain, not_found.
+
+        Request:
+            {"brand": "Lovetoys"}
+
+        Response:
+            {
+                "success": true,
+                "status": "confident",
+                "match": {"id": 123, "name": "Lovetoy"},
+                "confidence": 0.85,
+                "suggestions": [...]
+            }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        brand_name = data.get('brand', '').strip()
+
+        if not brand_name:
+            return jsonify({'success': False, 'error': 'brand required'}), 400
+
+        seller = current_user.seller
+
+        if not seller.wb_api_key:
+            return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
+
+        try:
+            from brand_cache import get_brand_cache
+            from wb_api_client import WildberriesAPIClient
+
+            cache = get_brand_cache()
+
+            # Синхронизируем кэш если пустой
+            if not cache.brands:
+                # Запускаем синхронизацию в фоне
+                cache.sync_async(seller.wb_api_key)
+
+                # Пока кэш пустой - используем прямой поиск API
+                with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                    result = wb_client.validate_brand(brand_name)
+                    return jsonify({
+                        'success': True,
+                        'status': 'exact' if result.get('valid') else 'uncertain',
+                        'match': result.get('exact_match'),
+                        'confidence': 1.0 if result.get('valid') else 0.5,
+                        'suggestions': result.get('suggestions', []),
+                        'cache_syncing': True
+                    })
+
+            # Матчим через кэш
+            result = cache.match_brand(brand_name)
+
+            return jsonify({
+                'success': True,
+                'status': result['status'],
+                'match': result['match'],
+                'confidence': result['confidence'],
+                'suggestions': result['suggestions'],
+                'cache_stats': cache.get_stats()
+            })
+
+        except Exception as e:
+            logger.error(f"Brand match error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/detect-brand-ai', methods=['POST'])
+    @login_required
+    def auto_import_detect_brand_ai():
+        """
+        Определение бренда с помощью AI.
+
+        Использует AI для определения бренда из названия, описания и характеристик.
+        После определения пытается сматчить с WB брендами.
+
+        Request:
+            {
+                "product_id": 123,
+                "title": "...",
+                "description": "...",
+                "characteristics": {...}
+            }
+
+        Response:
+            {
+                "success": true,
+                "detected_brand": "Lovetoy",
+                "confidence": 0.9,
+                "wb_match": {"id": 123, "name": "Lovetoy"},
+                "reasoning": "..."
+            }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        title = data.get('title', '')
+        description = data.get('description', '')
+        characteristics = data.get('characteristics', {})
+        category = data.get('category', '')
+
+        if not title:
+            return jsonify({'success': False, 'error': 'title required'}), 400
+
+        seller = current_user.seller
+        settings = get_or_create_auto_import_settings(seller.id)
+
+        if not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'AI API ключ не настроен'}), 400
+
+        try:
+            from ai_service import create_ai_client, BrandDetectionTask, TaskPriority
+            from brand_cache import get_brand_cache
+
+            # Создаем AI клиент и выполняем задачу
+            client = create_ai_client(
+                provider=settings.ai_provider,
+                api_key=settings.ai_api_key,
+                model=settings.ai_model
+            )
+
+            task = BrandDetectionTask(priority=TaskPriority.HIGH)
+            result, error = client.execute_task(
+                task,
+                title=title,
+                description=description,
+                characteristics=characteristics,
+                category=category
+            )
+
+            if error:
+                return jsonify({'success': False, 'error': error}), 500
+
+            if not result:
+                return jsonify({'success': False, 'error': 'AI не смог определить бренд'}), 500
+
+            detected_brand = result.get('brand', '') or result.get('brand_normalized', '')
+            confidence = result.get('confidence', 0.5)
+            reasoning = result.get('reasoning', '')
+
+            # Пытаемся сматчить с WB брендами
+            wb_match = None
+            if detected_brand:
+                cache = get_brand_cache()
+                if cache.brands:
+                    match_result = cache.match_brand(detected_brand)
+                    if match_result['status'] in ('exact', 'confident'):
+                        wb_match = match_result['match']
+
+            # Если нет матча через кэш - пробуем API
+            if not wb_match and detected_brand and seller.wb_api_key:
+                try:
+                    from wb_api_client import WildberriesAPIClient
+                    with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                        api_result = wb_client.validate_brand(detected_brand)
+                        if api_result.get('valid'):
+                            wb_match = api_result.get('exact_match')
+                        elif api_result.get('suggestions'):
+                            # Берем первое предложение если уверенность AI высокая
+                            if confidence >= 0.7:
+                                wb_match = api_result['suggestions'][0]
+                except Exception as e:
+                    logger.warning(f"WB API brand validation failed: {e}")
+
+            # Сохраняем результат если указан product_id
+            if product_id and wb_match:
+                try:
+                    product = AutoImportProduct.query.filter_by(
+                        id=product_id,
+                        seller_id=seller.id
+                    ).first()
+                    if product:
+                        product.brand = wb_match['name']
+                        db.session.commit()
+                        logger.info(f"Updated product {product_id} brand to: {wb_match['name']}")
+                except Exception as e:
+                    logger.warning(f"Failed to update product brand: {e}")
+
+            return jsonify({
+                'success': True,
+                'detected_brand': detected_brand,
+                'confidence': confidence,
+                'reasoning': reasoning,
+                'wb_match': wb_match,
+                'alternative_names': result.get('alternative_names', []),
+                'brand_type': result.get('brand_type', 'unknown')
+            })
+
+        except Exception as e:
+            logger.error(f"AI brand detection error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/sync-brands', methods=['POST'])
+    @login_required
+    def auto_import_sync_brands():
+        """
+        Запустить синхронизацию кэша брендов.
+
+        Response:
+            {
+                "success": true,
+                "status": "started" | "already_syncing",
+                "stats": {...}
+            }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+
+        if not seller.wb_api_key:
+            return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
+
+        try:
+            from brand_cache import get_brand_cache
+
+            cache = get_brand_cache()
+
+            if cache.is_syncing:
+                return jsonify({
+                    'success': True,
+                    'status': 'already_syncing',
+                    'stats': cache.get_stats()
+                })
+
+            cache.sync_async(seller.wb_api_key)
+
+            return jsonify({
+                'success': True,
+                'status': 'started',
+                'stats': cache.get_stats()
+            })
+
+        except Exception as e:
+            logger.error(f"Brand sync error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/brands-stats', methods=['GET'])
+    @login_required
+    def auto_import_brands_stats():
+        """
+        Получить статистику кэша брендов.
+
+        Response:
+            {
+                "success": true,
+                "stats": {
+                    "brands_count": 1234,
+                    "last_sync": 1234567890,
+                    "is_syncing": false
+                }
+            }
+        """
+        try:
+            from brand_cache import get_brand_cache
+
+            cache = get_brand_cache()
+            return jsonify({
+                'success': True,
+                'stats': cache.get_stats()
+            })
+
+        except Exception as e:
+            logger.error(f"Brand stats error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
 
 # Пример использования:
 # from auto_import_routes import register_auto_import_routes

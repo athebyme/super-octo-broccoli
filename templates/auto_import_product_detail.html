@@ -57,24 +57,31 @@
                         <dt class="text-sm font-medium text-gray-500">Бренд</dt>
                         <dd class="mt-1">
                             <div id="brandDisplay" class="flex items-center justify-between">
-                                <span id="brandValue" class="text-sm text-gray-900">{{ product.brand or '—' }}</span>
-                                <div class="flex items-center gap-3">
-                                    <button type="button" id="validateBrandBtn" class="text-sm text-blue-600 hover:text-blue-900 font-medium" title="Проверить в справочнике WB">
-                                        🔍 Проверить
+                                <div class="flex items-center gap-2">
+                                    <span id="brandValue" class="text-sm text-gray-900">{{ product.brand or '—' }}</span>
+                                    <span id="brandStatus" class="hidden text-xs px-2 py-0.5 rounded-full"></span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" id="detectBrandAIBtn" class="hidden text-sm text-purple-600 hover:text-purple-900 font-medium" title="Определить бренд с помощью ИИ">
+                                        🤖 ИИ
                                     </button>
                                     <button type="button" id="editBrandBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
                                         Изменить
                                     </button>
                                 </div>
                             </div>
+                            <div id="brandMatchInfo" class="hidden mt-1 text-xs text-gray-500"></div>
                             <div id="brandEditor" class="hidden mt-2">
                                 <div class="flex gap-2">
                                     <input type="text" id="brandInput"
                                            value="{{ product.brand or '' }}"
                                            class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                                            placeholder="Введите название бренда">
-                                    <button type="button" id="searchBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                                    <button type="button" id="searchBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50" title="Искать в WB">
                                         🔍
+                                    </button>
+                                    <button type="button" id="detectBrandAIEditorBtn" class="inline-flex items-center px-3 py-1.5 border border-purple-300 text-xs font-medium rounded-md text-purple-700 bg-purple-50 hover:bg-purple-100" title="Определить с ИИ">
+                                        🤖
                                     </button>
                                 </div>
                                 <div id="brandSuggestions" class="hidden mt-2 border border-gray-200 rounded-md max-h-40 overflow-y-auto bg-white shadow-sm"></div>
@@ -966,17 +973,133 @@ document.addEventListener('DOMContentLoaded', function() {
     const brandEditor = document.getElementById('brandEditor');
     const brandInput = document.getElementById('brandInput');
     const brandValue = document.getElementById('brandValue');
+    const brandStatus = document.getElementById('brandStatus');
+    const brandMatchInfo = document.getElementById('brandMatchInfo');
     const brandSuggestions = document.getElementById('brandSuggestions');
     const brandValidation = document.getElementById('brandValidation');
     const editBrandBtn = document.getElementById('editBrandBtn');
-    const validateBrandBtn = document.getElementById('validateBrandBtn');
+    const detectBrandAIBtn = document.getElementById('detectBrandAIBtn');
+    const detectBrandAIEditorBtn = document.getElementById('detectBrandAIEditorBtn');
     const searchBrandBtn = document.getElementById('searchBrandBtn');
     const saveBrandBtn = document.getElementById('saveBrandBtn');
     const cancelBrandBtn = document.getElementById('cancelBrandBtn');
 
+    // Brand status colors
+    const brandStatusConfig = {
+        'exact': { text: 'WB', bg: 'bg-green-100', color: 'text-green-800', icon: '✓' },
+        'confident': { text: 'WB', bg: 'bg-blue-100', color: 'text-blue-800', icon: '~' },
+        'uncertain': { text: '?', bg: 'bg-yellow-100', color: 'text-yellow-800', icon: '?' },
+        'not_found': { text: '!', bg: 'bg-red-100', color: 'text-red-800', icon: '✗' }
+    };
+
+    // Match brand on page load
+    async function matchBrandOnLoad() {
+        const currentBrand = brandValue.textContent.trim();
+        if (!currentBrand || currentBrand === '—') {
+            // No brand - show AI button
+            detectBrandAIBtn.classList.remove('hidden');
+            brandStatus.className = 'text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600';
+            brandStatus.textContent = 'Не указан';
+            brandStatus.classList.remove('hidden');
+            return;
+        }
+
+        try {
+            const response = await fetch('/auto-import/match-brand', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ brand: currentBrand })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                updateBrandStatus(data.status, data.match, data.confidence, data.suggestions);
+            }
+        } catch (error) {
+            console.error('Brand match error:', error);
+        }
+    }
+
+    function updateBrandStatus(status, match, confidence, suggestions) {
+        const config = brandStatusConfig[status] || brandStatusConfig['uncertain'];
+
+        // Update status badge
+        brandStatus.className = `text-xs px-2 py-0.5 rounded-full ${config.bg} ${config.color}`;
+        brandStatus.textContent = config.icon + ' ' + config.text;
+        brandStatus.classList.remove('hidden');
+
+        // Show/hide AI button based on status
+        if (status === 'exact' || status === 'confident') {
+            detectBrandAIBtn.classList.add('hidden');
+            if (match && match.name !== brandValue.textContent.trim()) {
+                brandMatchInfo.innerHTML = `Рекомендуется: <strong>${match.name}</strong>`;
+                brandMatchInfo.classList.remove('hidden');
+            }
+        } else {
+            detectBrandAIBtn.classList.remove('hidden');
+            if (suggestions && suggestions.length > 0) {
+                const suggestionNames = suggestions.slice(0, 3).map(s => s.name).join(', ');
+                brandMatchInfo.innerHTML = `Похожие: ${suggestionNames}`;
+                brandMatchInfo.classList.remove('hidden');
+            } else {
+                brandMatchInfo.innerHTML = 'Бренд не найден в справочнике WB';
+                brandMatchInfo.classList.remove('hidden');
+            }
+        }
+    }
+
+    // Detect brand with AI
+    async function detectBrandWithAI() {
+        const productId = {{ product.id }};
+        const title = '{{ product.title|e }}';
+        const description = '{{ (product.description or "")|e }}';
+
+        brandValidation.innerHTML = '<span class="text-purple-600">🤖 ИИ анализирует товар...</span>';
+        brandValidation.classList.remove('hidden');
+        brandSuggestions.classList.add('hidden');
+
+        try {
+            const response = await fetch('/auto-import/detect-brand-ai', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    product_id: productId,
+                    title: title,
+                    description: description,
+                    category: '{{ product.category or "" }}'
+                })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                let html = '';
+                if (data.wb_match) {
+                    html = `<span class="text-green-600">🤖 ИИ определил бренд: <strong>${data.wb_match.name}</strong></span>`;
+                    html += `<br><span class="text-xs text-gray-500">Уверенность: ${Math.round(data.confidence * 100)}%</span>`;
+                    brandInput.value = data.wb_match.name;
+                    brandValue.textContent = data.wb_match.name;
+                    updateBrandStatus('exact', data.wb_match, 1.0, []);
+                } else if (data.detected_brand) {
+                    html = `<span class="text-yellow-600">🤖 ИИ предполагает: <strong>${data.detected_brand}</strong></span>`;
+                    html += `<br><span class="text-xs text-gray-500">${data.reasoning || 'Бренд не найден в справочнике WB'}</span>`;
+                    brandInput.value = data.detected_brand;
+                } else {
+                    html = '<span class="text-gray-600">🤖 ИИ не смог определить бренд</span>';
+                }
+                brandValidation.innerHTML = html;
+            } else {
+                brandValidation.innerHTML = `<span class="text-red-600">Ошибка: ${data.error || 'Неизвестная ошибка'}</span>`;
+            }
+        } catch (error) {
+            console.error('AI brand detection error:', error);
+            brandValidation.innerHTML = '<span class="text-red-600">Ошибка подключения к API</span>';
+        }
+    }
+
     if (editBrandBtn) {
         editBrandBtn.addEventListener('click', function() {
             brandDisplay.classList.add('hidden');
+            brandMatchInfo.classList.add('hidden');
             brandEditor.classList.remove('hidden');
         });
     }
@@ -1004,7 +1127,7 @@ document.addEventListener('DOMContentLoaded', function() {
         brandSuggestions.classList.add('hidden');
 
         try {
-            const response = await fetch('/auto-import/validate-brand', {
+            const response = await fetch('/auto-import/match-brand', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ brand: brandName })
@@ -1012,38 +1135,20 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await response.json();
 
             if (data.success) {
-                if (data.valid) {
-                    // Точное совпадение найдено
-                    brandValidation.innerHTML = '<span class="text-green-600">✓ Бренд найден в справочнике WB: <strong>' + data.exact_match.name + '</strong></span>';
-                    brandInput.value = data.exact_match.name;
+                if (data.status === 'exact') {
+                    brandValidation.innerHTML = '<span class="text-green-600">✓ Бренд найден в справочнике WB: <strong>' + data.match.name + '</strong></span>';
+                    brandInput.value = data.match.name;
                     brandSuggestions.classList.add('hidden');
+                } else if (data.status === 'confident') {
+                    brandValidation.innerHTML = '<span class="text-blue-600">~ Похожий бренд: <strong>' + data.match.name + '</strong> (совпадение ' + Math.round(data.confidence * 100) + '%)</span>';
+                    showBrandSuggestions([data.match, ...data.suggestions]);
                 } else {
-                    // Точное совпадение не найдено - показываем предложения
+                    // uncertain or not_found
                     if (data.suggestions && data.suggestions.length > 0) {
-                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Точное совпадение не найдено.</span> <span class="text-gray-600">Выберите из похожих брендов WB:</span>';
-
-                        let suggestionsHtml = '';
-                        data.suggestions.forEach(brand => {
-                            suggestionsHtml += '<div class="px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 text-sm flex items-center justify-between" data-brand="' + brand.name + '">';
-                            suggestionsHtml += '<span>' + brand.name + '</span>';
-                            suggestionsHtml += '<span class="text-xs text-indigo-600 hover:text-indigo-800">Выбрать</span>';
-                            suggestionsHtml += '</div>';
-                        });
-                        brandSuggestions.innerHTML = suggestionsHtml;
-                        brandSuggestions.classList.remove('hidden');
-
-                        // Click handler for suggestions
-                        brandSuggestions.querySelectorAll('[data-brand]').forEach(el => {
-                            el.addEventListener('click', function() {
-                                const selectedBrand = this.dataset.brand;
-                                brandInput.value = selectedBrand;
-                                brandSuggestions.classList.add('hidden');
-                                brandValidation.innerHTML = '<span class="text-green-600">✓ Выбран бренд: <strong>' + selectedBrand + '</strong></span>';
-                            });
-                        });
+                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Точное совпадение не найдено.</span> <span class="text-gray-600">Выберите из похожих или определите с ИИ:</span>';
+                        showBrandSuggestions(data.suggestions);
                     } else {
-                        // Нет предложений
-                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Бренд "' + brandName + '" не найден в справочнике WB.</span><br><span class="text-xs text-gray-500">Попробуйте другое написание или проверьте бренд на сайте WB.</span>';
+                        brandValidation.innerHTML = '<span class="text-yellow-600">⚠ Бренд "' + brandName + '" не найден.</span> <button type="button" class="text-purple-600 hover:text-purple-800 font-medium ml-2" onclick="detectBrandWithAI()">🤖 Определить с ИИ</button>';
                         brandSuggestions.classList.add('hidden');
                     }
                 }
@@ -1058,19 +1163,45 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    if (validateBrandBtn) {
-        validateBrandBtn.addEventListener('click', function() {
-            const currentBrand = brandValue.textContent.trim();
-            if (currentBrand && currentBrand !== '—') {
-                brandDisplay.classList.add('hidden');
-                brandEditor.classList.remove('hidden');
-                brandInput.value = currentBrand;
-                validateBrand(currentBrand);
-            } else {
-                brandDisplay.classList.add('hidden');
-                brandEditor.classList.remove('hidden');
-            }
+    function showBrandSuggestions(suggestions) {
+        if (!suggestions || suggestions.length === 0) {
+            brandSuggestions.classList.add('hidden');
+            return;
+        }
+
+        let suggestionsHtml = '';
+        suggestions.forEach(brand => {
+            suggestionsHtml += '<div class="px-3 py-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 text-sm flex items-center justify-between" data-brand="' + brand.name + '">';
+            suggestionsHtml += '<span>' + brand.name + '</span>';
+            suggestionsHtml += '<span class="text-xs text-indigo-600 hover:text-indigo-800">Выбрать</span>';
+            suggestionsHtml += '</div>';
         });
+        brandSuggestions.innerHTML = suggestionsHtml;
+        brandSuggestions.classList.remove('hidden');
+
+        // Click handler for suggestions
+        brandSuggestions.querySelectorAll('[data-brand]').forEach(el => {
+            el.addEventListener('click', function() {
+                const selectedBrand = this.dataset.brand;
+                brandInput.value = selectedBrand;
+                brandSuggestions.classList.add('hidden');
+                brandValidation.innerHTML = '<span class="text-green-600">✓ Выбран бренд: <strong>' + selectedBrand + '</strong></span>';
+            });
+        });
+    }
+
+    // AI detection buttons
+    if (detectBrandAIBtn) {
+        detectBrandAIBtn.addEventListener('click', function() {
+            brandDisplay.classList.add('hidden');
+            brandMatchInfo.classList.add('hidden');
+            brandEditor.classList.remove('hidden');
+            detectBrandWithAI();
+        });
+    }
+
+    if (detectBrandAIEditorBtn) {
+        detectBrandAIEditorBtn.addEventListener('click', detectBrandWithAI);
     }
 
     if (searchBrandBtn) {
@@ -1088,6 +1219,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+
+    // Match brand on page load
+    matchBrandOnLoad();
 
     if (saveBrandBtn) {
         saveBrandBtn.addEventListener('click', function() {
