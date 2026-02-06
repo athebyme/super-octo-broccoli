@@ -2659,7 +2659,7 @@ def register_auto_import_routes(app):
 
         data = request.get_json() or {}
         product_id = data.get('product_id')
-        weight_margin_percent = data.get('weight_margin', 10)  # Запас по весу в %
+        weight_margin_percent = data.get('weight_margin', 20)  # Запас по весу в % (по умолчанию 20%)
 
         if not product_id:
             return jsonify({'success': False, 'error': 'product_id required'}), 400
@@ -2784,19 +2784,135 @@ def register_auto_import_routes(app):
             )
 
             if success:
-                # Добавляем запас к весу (собираем изменения отдельно чтобы не менять dict во время итерации)
-                if result.get('extracted_values'):
-                    weight_margins = {}
-                    for key, value in result['extracted_values'].items():
-                        if 'вес' in key.lower() or 'масса' in key.lower():
+                extracted = result.get('extracted_values', {})
+                suggestions = result.get('suggestions', {})
+
+                # Добавляем предположения AI в extracted_values для обязательных полей (особенно вес)
+                for key, value in suggestions.items():
+                    # Проверяем, нет ли уже этого значения
+                    if key not in extracted:
+                        # Извлекаем число из текста предположения
+                        import re
+                        numbers = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                        if numbers:
                             try:
-                                weight = float(str(value).replace(',', '.'))
-                                weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 1)
-                                weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
+                                num_value = float(numbers[0].replace(',', '.'))
+                                extracted[key] = num_value
+                                extracted[f"{key} (предположение AI)"] = value
                             except:
                                 pass
-                    # Добавляем после завершения итерации
-                    result['extracted_values'].update(weight_margins)
+
+                # Расчёт веса на основе размеров если вес не найден
+                weight_found = any('вес' in k.lower() or 'масса' in k.lower() for k in extracted.keys())
+                if not weight_found:
+                    # Пытаемся рассчитать вес по размерам
+                    length = None
+                    diameter = None
+                    for key, value in extracted.items():
+                        key_lower = key.lower()
+                        if 'длина' in key_lower and length is None:
+                            try:
+                                # Берем максимальное значение если диапазон
+                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                if nums:
+                                    length = max(float(n.replace(',', '.')) for n in nums)
+                            except:
+                                pass
+                        if 'диаметр' in key_lower and diameter is None:
+                            try:
+                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                if nums:
+                                    diameter = max(float(n.replace(',', '.')) for n in nums)
+                            except:
+                                pass
+
+                    if length and diameter:
+                        # Расчет веса для силиконовых изделий: плотность ~1.1 г/см³
+                        # Объем цилиндра: π * r² * h
+                        import math
+                        radius = diameter / 2
+                        volume_cm3 = math.pi * (radius ** 2) * length
+                        # Силикон ~1.1 г/см³, но изделие не сплошное, коэфф ~0.6
+                        estimated_weight = round(volume_cm3 * 1.1 * 0.6, 0)
+                        # Минимум 50г для таких изделий
+                        estimated_weight = max(estimated_weight, 50)
+                        extracted['Вес товара без упаковки (г)'] = estimated_weight
+                        extracted['Вес (расчётный)'] = f"{estimated_weight} г (на основе размеров {length}x{diameter} см)"
+
+                # Добавляем запас к весу
+                weight_margins = {}
+                for key, value in extracted.items():
+                    if ('вес' in key.lower() or 'масса' in key.lower()) and 'запас' not in key.lower() and 'расчёт' not in key.lower():
+                        try:
+                            weight = float(str(value).replace(',', '.').split()[0])
+                            weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 0)
+                            weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
+                        except:
+                            pass
+                weight_margins_to_add = {}
+                for k, v in weight_margins.items():
+                    weight_margins_to_add[k] = v
+                extracted.update(weight_margins_to_add)
+
+                # Расчёт размеров упаковки на основе размеров товара
+                # Упаковка должна вмещать товар + запас на упаковочные материалы
+                max_dimension = 0
+                product_length = None
+                product_width = None
+                product_height = None
+
+                for key, value in extracted.items():
+                    key_lower = key.lower()
+                    try:
+                        nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                        if nums:
+                            val = max(float(n.replace(',', '.')) for n in nums)
+                            if 'длина' in key_lower and 'упаков' not in key_lower:
+                                product_length = val
+                                max_dimension = max(max_dimension, val)
+                            elif 'ширина' in key_lower and 'упаков' not in key_lower:
+                                product_width = val
+                            elif 'высота' in key_lower and 'упаков' not in key_lower:
+                                product_height = val
+                            elif 'диаметр' in key_lower:
+                                product_width = val
+                                product_height = val
+                    except:
+                        pass
+
+                # Рассчитываем упаковку
+                if max_dimension > 0:
+                    # Запас на упаковку: +3-5 см с каждой стороны
+                    pack_margin = 4
+                    pack_length = round((product_length or max_dimension) + pack_margin * 2, 0)
+                    pack_width = round((product_width or 5) + pack_margin * 2, 0)
+                    pack_height = round((product_height or 5) + pack_margin * 2, 0)
+
+                    # Минимальные размеры упаковки
+                    pack_length = max(pack_length, 10)
+                    pack_width = max(pack_width, 8)
+                    pack_height = max(pack_height, 5)
+
+                    # Максимальные разумные размеры
+                    pack_length = min(pack_length, 40)
+                    pack_width = min(pack_width, 25)
+                    pack_height = min(pack_height, 20)
+
+                    extracted['Длина упаковки (см)'] = int(pack_length)
+                    extracted['Ширина упаковки (см)'] = int(pack_width)
+                    extracted['Высота упаковки (см)'] = int(pack_height)
+
+                    # Вес упаковки (примерно 20-50г для картонной коробки)
+                    pack_weight = 30
+                    if 'Вес товара без упаковки (г)' in extracted:
+                        try:
+                            product_weight = float(str(extracted['Вес товара без упаковки (г)']).split()[0])
+                            total_weight = product_weight + pack_weight
+                            extracted['Вес с упаковкой (г)'] = int(total_weight)
+                        except:
+                            pass
+
+                result['extracted_values'] = extracted
 
                 # Сохраняем результат
                 result['wb_category_id'] = category_id
@@ -2986,18 +3102,89 @@ def register_auto_import_routes(app):
             )
 
             if success and result:
-                # Добавляем запас к весу
-                if result.get('extracted_values'):
-                    weight_margins = {}
-                    for key, value in result['extracted_values'].items():
-                        if 'вес' in key.lower() or 'масса' in key.lower():
+                import re
+                import math
+                extracted = result.get('extracted_values', {})
+
+                # Расчёт веса на основе размеров если вес не найден
+                weight_found = any('вес' in k.lower() or 'масса' in k.lower() for k in extracted.keys())
+                if not weight_found:
+                    length = None
+                    diameter = None
+                    for key, value in extracted.items():
+                        key_lower = key.lower()
+                        if 'длина' in key_lower and length is None:
                             try:
-                                weight = float(str(value).replace(',', '.'))
-                                weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 1)
-                                weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = weight_with_margin
+                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                if nums:
+                                    length = max(float(n.replace(',', '.')) for n in nums)
                             except:
                                 pass
-                    result['extracted_values'].update(weight_margins)
+                        if 'диаметр' in key_lower and diameter is None:
+                            try:
+                                nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                                if nums:
+                                    diameter = max(float(n.replace(',', '.')) for n in nums)
+                            except:
+                                pass
+
+                    if length and diameter:
+                        radius = diameter / 2
+                        volume_cm3 = math.pi * (radius ** 2) * length
+                        estimated_weight = round(volume_cm3 * 1.1 * 0.6, 0)
+                        estimated_weight = max(estimated_weight, 50)
+                        extracted['Вес товара без упаковки (г)'] = int(estimated_weight)
+
+                # Добавляем запас к весу
+                weight_margins = {}
+                for key, value in extracted.items():
+                    if ('вес' in key.lower() or 'масса' in key.lower()) and 'запас' not in key.lower():
+                        try:
+                            weight = float(str(value).replace(',', '.').split()[0])
+                            weight_with_margin = round(weight * (1 + weight_margin_percent / 100), 0)
+                            weight_margins[f"{key} (с запасом {weight_margin_percent}%)"] = int(weight_with_margin)
+                        except:
+                            pass
+                extracted.update(weight_margins)
+
+                # Расчёт размеров упаковки
+                max_dimension = 0
+                product_length = None
+                product_width = None
+                for key, value in extracted.items():
+                    key_lower = key.lower()
+                    if 'упаков' in key_lower:
+                        continue
+                    try:
+                        nums = re.findall(r'(\d+(?:[.,]\d+)?)', str(value))
+                        if nums:
+                            val = max(float(n.replace(',', '.')) for n in nums)
+                            if 'длина' in key_lower:
+                                product_length = val
+                                max_dimension = max(max_dimension, val)
+                            elif 'диаметр' in key_lower:
+                                product_width = val
+                    except:
+                        pass
+
+                if max_dimension > 0:
+                    pack_margin = 4
+                    pack_length = int(min(max((product_length or max_dimension) + pack_margin * 2, 10), 40))
+                    pack_width = int(min(max((product_width or 5) + pack_margin * 2, 8), 25))
+                    pack_height = int(min(max(5 + pack_margin, 5), 20))
+
+                    extracted['Длина упаковки (см)'] = pack_length
+                    extracted['Ширина упаковки (см)'] = pack_width
+                    extracted['Высота упаковки (см)'] = pack_height
+
+                    if 'Вес товара без упаковки (г)' in extracted:
+                        try:
+                            product_weight = float(str(extracted['Вес товара без упаковки (г)']).split()[0])
+                            extracted['Вес с упаковкой (г)'] = int(product_weight + 30)
+                        except:
+                            pass
+
+                result['extracted_values'] = extracted
 
                 # Считаем статистику
                 extracted_count = len(result.get('extracted_values', {}))
