@@ -1010,6 +1010,7 @@ def register_auto_import_routes(app):
         return os.path.join(PHOTO_CACHE_DIR, f"{url_hash}.jpg")
 
     @app.route('/auto-import/photo/padded', methods=['GET'])
+    @login_required
     def auto_import_photo_padded():
         """
         Возвращает фото с примененным padding до 1200x1200
@@ -4333,7 +4334,7 @@ def register_auto_import_routes(app):
             # Сохраняем результат если указан product_id
             if product_id and wb_match:
                 try:
-                    product = AutoImportProduct.query.filter_by(
+                    product = ImportedProduct.query.filter_by(
                         id=product_id,
                         seller_id=seller.id
                     ).first()
