@@ -42,6 +42,56 @@
         </div>
     </div>
 
+    <!-- Предупреждения о настройках -->
+    {% if seller_config %}
+    <div class="mb-6 space-y-2">
+        {% if not seller_config.ai_enabled or not seller_config.has_ai_key %}
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start">
+            <svg class="w-5 h-5 text-amber-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <div>
+                <h4 class="text-sm font-medium text-amber-800">AI не настроен</h4>
+                <p class="text-sm text-amber-700 mt-1">
+                    Кнопки AI не будут работать. Настройте API ключи в
+                    <a href="{{ url_for('auto_import_settings') }}" class="underline font-medium hover:text-amber-900">настройках автоимпорта</a>.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if not seller_config.sexoptovik_configured %}
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start">
+            <svg class="w-5 h-5 text-blue-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+                <h4 class="text-sm font-medium text-blue-800">Sexoptovik не настроен</h4>
+                <p class="text-sm text-blue-700 mt-1">
+                    Фотографии могут не загружаться. Укажите логин/пароль от sexoptovik.ru в
+                    <a href="{{ url_for('auto_import_settings') }}" class="underline font-medium hover:text-blue-900">настройках</a>.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if not seller_config.wb_api_configured %}
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start">
+            <svg class="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+                <h4 class="text-sm font-medium text-red-800">WB API не настроен</h4>
+                <p class="text-sm text-red-700 mt-1">
+                    Импорт в WB невозможен. Добавьте WB API ключ в
+                    <a href="{{ url_for('seller_settings') }}" class="underline font-medium hover:text-red-900">настройках продавца</a>.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <!-- Основная информация -->
         <div class="lg:col-span-2 space-y-6">

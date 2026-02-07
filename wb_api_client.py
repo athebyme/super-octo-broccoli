@@ -1748,21 +1748,36 @@ class WildberriesAPIClient:
             seen_ids = set()
 
             # Попробуем несколько вариантов поиска для лучшего покрытия
+            # ВАЖНО: WB API чувствителен к регистру, поэтому пробуем разные варианты
             search_variants = [
                 brand_name,  # Оригинальный запрос
                 brand_name.lower(),  # Нижний регистр
                 brand_name.upper(),  # Верхний регистр
-                brand_name.capitalize(),  # С заглавной
+                brand_name.capitalize(),  # С заглавной буквы
+                brand_name.title(),  # Каждое слово с заглавной
             ]
+
+            # CamelCase вариант (JoyHyper из JOYHYPER)
+            # Для брендов типа JOYHYPER -> JoyHyper
+            if brand_name.isupper() and len(brand_name) > 3:
+                # Попробуем разбить на части и сделать CamelCase
+                # Ищем паттерны типа JOY+HYPER
+                import re
+                # Попытка разбить по известным словам
+                camel = brand_name.capitalize()  # Joyhyper
+                search_variants.append(camel)
 
             # Если бренд содержит несколько слов, попробуем первое слово
             words = brand_name.split()
             if len(words) > 1:
                 search_variants.append(words[0])
+                search_variants.append(words[0].capitalize())
 
-            # Если бренд длинный, попробуем сокращенный вариант
+            # Если бренд длинный, попробуем разные длины
             if len(brand_name) > 5:
                 search_variants.append(brand_name[:5])
+                search_variants.append(brand_name[:5].capitalize())
+                search_variants.append(brand_name[:3])  # Короткий префикс для широкого поиска
 
             # Удаляем дубликаты, сохраняя порядок
             unique_variants = []
@@ -1794,19 +1809,44 @@ class WildberriesAPIClient:
 
             # Ищем точное совпадение (регистронезависимо)
             brand_lower = brand_name.lower().strip()
+            # Нормализуем - убираем пробелы и спецсимволы для сравнения
+            brand_normalized = ''.join(c.lower() for c in brand_name if c.isalnum())
+
             exact_match = None
+            close_match = None  # Для почти точных совпадений
             suggestions = []
 
             for brand in all_brands:
                 brand_wb_name = brand.get('name', '')
-                if brand_wb_name.lower().strip() == brand_lower:
+                wb_name_lower = brand_wb_name.lower().strip()
+                wb_name_normalized = ''.join(c.lower() for c in brand_wb_name if c.isalnum())
+
+                # Точное совпадение по lowercase
+                if wb_name_lower == brand_lower:
                     exact_match = brand
-                else:
-                    suggestions.append(brand)
+                    continue
+
+                # Совпадение без учёта регистра и спецсимволов (JOYHYPER == JoyHyper)
+                if wb_name_normalized == brand_normalized and not exact_match:
+                    exact_match = brand
+                    logger.info(f"   Found normalized match: '{brand_wb_name}' for '{brand_name}'")
+                    continue
+
+                # Частичное совпадение - один содержит другой
+                if brand_normalized in wb_name_normalized or wb_name_normalized in brand_normalized:
+                    if not close_match:
+                        close_match = brand
+
+                suggestions.append(brand)
+
+            # Если точное не найдено, но есть близкое - используем его
+            if not exact_match and close_match:
+                exact_match = close_match
+                logger.info(f"   Using close match: '{close_match.get('name')}' for '{brand_name}'")
 
             is_valid = exact_match is not None
 
-            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}, {len(suggestions)} suggestions")
+            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}, exact='{exact_match.get('name') if exact_match else None}', {len(suggestions)} suggestions")
 
             return {
                 'valid': is_valid,

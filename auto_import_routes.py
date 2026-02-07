@@ -552,7 +552,20 @@ def register_auto_import_routes(app):
         from wb_categories_mapping import WB_ADULT_CATEGORIES
         wb_categories = WB_ADULT_CATEGORIES
 
-        return render_template('auto_import_product_detail.html', product=product, wb_categories=wb_categories)
+        # Проверяем настройки продавца для диагностики
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+        seller_config = {
+            'ai_enabled': settings.ai_enabled if settings else False,
+            'ai_provider': settings.ai_provider if settings else None,
+            'has_ai_key': bool(settings and (settings.openai_api_key or settings.anthropic_api_key or settings.google_api_key)) if settings else False,
+            'sexoptovik_configured': bool(settings and settings.sexoptovik_login and settings.sexoptovik_password) if settings else False,
+            'wb_api_configured': bool(seller.wb_api_key)
+        }
+
+        return render_template('auto_import_product_detail.html',
+                             product=product,
+                             wb_categories=wb_categories,
+                             seller_config=seller_config)
 
     @app.route('/auto-import/validate', methods=['GET'])
     @login_required
@@ -1061,37 +1074,51 @@ def register_auto_import_routes(app):
                     logger.info(f"📋 Автоматические fallback URLs: {fallback_urls}")
 
             # Получаем настройки автоимпорта для получения credentials sexoptovik
+            # ВАЖНО: Фотографии одинаковые для всех продавцов, поэтому можем использовать
+            # credentials от любого настроенного продавца
             seller = current_user.seller if current_user.is_authenticated else None
             logger.info(f"👤 Current user authenticated: {current_user.is_authenticated}, seller: {seller is not None}")
             auth_cookies = None
 
-            if seller and seller.auto_import_settings:
-                settings = seller.auto_import_settings
-                logger.info(f"⚙️  Настройки найдены. Проверяем URL...")
+            # Если URL от sexoptovik - нужна авторизация
+            if 'sexoptovik.ru' in photo_url:
+                logger.info(f"🌐 URL от sexoptovik.ru обнаружен")
 
-                # Если URL от sexoptovik и есть логин/пароль - авторизуемся
-                if 'sexoptovik.ru' in photo_url:
-                    logger.info(f"🌐 URL от sexoptovik.ru обнаружен")
-                    logger.info(f"🔑 Login: {settings.sexoptovik_login}, Password: {'***' if settings.sexoptovik_password else None}")
+                # Сначала пробуем credentials текущего продавца
+                settings = seller.auto_import_settings if seller else None
+                sexoptovik_login = None
+                sexoptovik_password = None
 
-                    if settings.sexoptovik_login and settings.sexoptovik_password:
-                        logger.info(f"🔐 Авторизация на sexoptovik с логином: {settings.sexoptovik_login}")
-                        from auto_import_manager import SexoptovikAuth
-                        auth_cookies = SexoptovikAuth.get_auth_cookies(
-                            settings.sexoptovik_login,
-                            settings.sexoptovik_password
-                        )
-                        if not auth_cookies:
-                            logger.warning(f"⚠️  Авторизация не удалась, пробуем fallback URLs")
-                            # Не возвращаем ошибку, пробуем fallback
-                        else:
-                            logger.info(f"✅ Авторизация успешна, получены cookies")
-                    else:
-                        logger.warning(f"⚠️  Нет credentials для sexoptovik, пробуем fallback URLs")
+                if settings and settings.sexoptovik_login and settings.sexoptovik_password:
+                    sexoptovik_login = settings.sexoptovik_login
+                    sexoptovik_password = settings.sexoptovik_password
+                    logger.info(f"🔑 Используем credentials текущего продавца: {sexoptovik_login}")
                 else:
-                    logger.info(f"ℹ️  URL не от sexoptovik.ru, авторизация не требуется")
-            else:
-                logger.warning(f"⚠️  Настройки не найдены, пробуем без авторизации или fallback")
+                    # Если у текущего нет - ищем у любого настроенного продавца
+                    logger.info(f"🔍 Ищем credentials у других продавцов...")
+                    other_settings = AutoImportSettings.query.filter(
+                        AutoImportSettings.sexoptovik_login.isnot(None),
+                        AutoImportSettings.sexoptovik_password.isnot(None)
+                    ).first()
+
+                    if other_settings:
+                        sexoptovik_login = other_settings.sexoptovik_login
+                        sexoptovik_password = other_settings.sexoptovik_password
+                        logger.info(f"✅ Найдены credentials от другого продавца: {sexoptovik_login}")
+
+                if sexoptovik_login and sexoptovik_password:
+                    logger.info(f"🔐 Авторизация на sexoptovik с логином: {sexoptovik_login}")
+                    from auto_import_manager import SexoptovikAuth
+                    auth_cookies = SexoptovikAuth.get_auth_cookies(
+                        sexoptovik_login,
+                        sexoptovik_password
+                    )
+                    if not auth_cookies:
+                        logger.warning(f"⚠️  Авторизация не удалась, пробуем fallback URLs")
+                    else:
+                        logger.info(f"✅ Авторизация успешна, получены cookies")
+                else:
+                    logger.warning(f"⚠️  Нет credentials для sexoptovik ни у одного продавца, пробуем fallback URLs")
 
             # Скачиваем и обрабатываем фото с retry и fallback
             logger.info(f"⬇️  Скачивание и обработка изображения...")

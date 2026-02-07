@@ -361,15 +361,27 @@ class WBProductImporter:
             if not char_id:
                 continue
 
+            # Получаем maxCount - максимальное количество значений для характеристики
+            max_count = wb_char.get('maxCount', 1)
+
             # Форматируем значение
             formatted_value = self._format_char_value(char_value, wb_char)
 
             if formatted_value:
+                # Приводим к списку если нужно
+                if not isinstance(formatted_value, list):
+                    formatted_value = [formatted_value]
+
+                # ВАЖНО: Обрезаем до maxCount (например, Особенности max 3)
+                if len(formatted_value) > max_count:
+                    logger.info(f"Характеристика '{char_name}': обрезаем с {len(formatted_value)} до {max_count} значений (maxCount)")
+                    formatted_value = formatted_value[:max_count]
+
                 result_characteristics.append({
                     'id': int(char_id),
-                    'value': formatted_value if isinstance(formatted_value, list) else [formatted_value]
+                    'value': formatted_value
                 })
-                logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}")
+                logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}, maxCount={max_count}")
 
         logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
         return result_characteristics
