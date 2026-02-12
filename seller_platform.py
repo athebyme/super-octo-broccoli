@@ -2704,16 +2704,13 @@ def products_bulk_edit():
                         products_to_update = [p for p in products if p.object_name == selected_category]
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
-                    # Определяем тип значения: ID из справочника или текст
-                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
-                    # вызовет clean_characteristics_for_update для оборачивания в массив
+                    # Определяем тип значения
+                    # WB API различает charcType=1 (массив строк) и charcType=4 (число)
+                    # clean_characteristics_for_update() определит тип автоматически
                     app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    # Форматируем как строку, позже автоматически обернется в массив
-                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
+                    app.logger.info(f"Formatted value: '{formatted_value}' (type detection in clean_characteristics_for_update)")
 
                     # ==================== БАТЧИНГ ====================
                     # Подготавливаем все карточки для обновления
@@ -2741,15 +2738,35 @@ def products_bulk_edit():
                             current_characteristics = full_card.get('characteristics', [])
 
                             # Обновляем значение характеристики
+                            # ВАЖНО: сохраняем правильный тип значения для WB API
+                            # charcType=4 (числовая) -> передаём число
+                            # charcType=1 (строковая) -> передаём строку (clean_characteristics_for_update обернёт в массив)
                             char_found = False
                             for char in current_characteristics:
                                 if str(char.get('id')) == characteristic_id:
-                                    char['value'] = formatted_value
+                                    existing_value = char.get('value')
+                                    # Определяем тип по текущему значению из WB
+                                    if isinstance(existing_value, (int, float)):
+                                        # Числовая характеристика (charcType=4) — конвертируем в число
+                                        try:
+                                            char['value'] = float(formatted_value) if '.' in formatted_value else int(formatted_value)
+                                        except (ValueError, TypeError):
+                                            char['value'] = formatted_value
+                                    elif isinstance(existing_value, list) and len(existing_value) == 1 and isinstance(existing_value[0], (int, float)):
+                                        # Числовая характеристика ошибочно обёрнутая в массив
+                                        try:
+                                            char['value'] = float(formatted_value) if '.' in formatted_value else int(formatted_value)
+                                        except (ValueError, TypeError):
+                                            char['value'] = formatted_value
+                                    else:
+                                        # Строковая характеристика (charcType=1) — оставляем строкой
+                                        char['value'] = formatted_value
                                     char_found = True
                                     break
 
                             if not char_found:
-                                # Добавляем новую характеристику если не нашли
+                                # Добавляем новую характеристику
+                                # clean_characteristics_for_update определит тип по значению
                                 current_characteristics.append({
                                     'id': int(characteristic_id),
                                     'value': formatted_value
@@ -2892,16 +2909,13 @@ def products_bulk_edit():
                         products_to_update = [p for p in products if p.object_name == selected_category]
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
-                    # Определяем тип значения: ID из справочника или текст
-                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
-                    # вызовет clean_characteristics_for_update для оборачивания в массив
+                    # Определяем тип значения
+                    # WB API различает charcType=1 (массив строк) и charcType=4 (число)
+                    # clean_characteristics_for_update() определит тип автоматически
                     app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
 
-                    # Форматируем как строку, позже автоматически обернется в массив
-                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
+                    app.logger.info(f"Formatted value: '{formatted_value}' (type detection in clean_characteristics_for_update)")
 
                     for product in products_to_update:
                         try:

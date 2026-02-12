@@ -264,13 +264,18 @@ def clean_characteristics_for_update(
     """
     Очистка характеристик для отправки в WB API
 
-    КРИТИЧНО: WB API для характеристик типа 1 (большинство) ожидает массив строк,
-    а не просто строку. Эта функция оборачивает строки в массивы.
+    КРИТИЧНО: WB API различает два типа характеристик:
+      - charcType=1 (большинство): ожидает массив строк ["значение"]
+      - charcType=4 (числовые): ожидает голое число 15.5
 
-    Примеры:
-        "Россия" -> ["Россия"]
-        "123" -> ["123"]
-        ["Хлопок", "Эластан"] -> ["Хлопок", "Эластан"] (без изменений)
+    Числовые характеристики (Длина, Диаметр, Объем, Вес и т.д.)
+    НЕ ДОЛЖНЫ оборачиваться в массив или быть строками.
+
+    Логика определения типа:
+      - Если value уже число (int/float) — это charcType=4, оставляем как есть
+      - Если value строка, которая целиком является числом — это charcType=4
+      - Если value массив — это charcType=1, приводим элементы к строкам
+      - Если value строка (не число) — это charcType=1, оборачиваем в массив
 
     Args:
         characteristics: Список характеристик
@@ -280,6 +285,7 @@ def clean_characteristics_for_update(
     """
     cleaned = []
     wrapped_count = 0
+    numeric_count = 0
 
     logger.info(f"🧹 Cleaning {len(characteristics)} characteristics for WB API update")
 
@@ -295,34 +301,75 @@ def clean_characteristics_for_update(
             logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): Skipping (empty value)")
             continue
 
-        # КРИТИЧНО: Если value - строка, оборачиваем в массив
-        # WB API ожидает массив для характеристик типа 1
-        if isinstance(cleaned_char['value'], str):
-            original_value = cleaned_char['value']
-            cleaned_char['value'] = [cleaned_char['value']]
-            wrapped_count += 1
-            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): '{original_value}' -> ['{original_value}']")
-        elif isinstance(cleaned_char['value'], (int, float)):
-            # Числа тоже оборачиваем в массив (на всякий случай)
-            original_value = cleaned_char['value']
-            cleaned_char['value'] = [str(original_value)]
-            wrapped_count += 1
-            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): {original_value} -> ['{original_value}']")
-        elif isinstance(cleaned_char['value'], list):
-            # Уже массив - проверяем что элементы строки
-            for j, item in enumerate(cleaned_char['value']):
-                if not isinstance(item, str):
-                    cleaned_char['value'][j] = str(item)
-            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): Already a list with {len(cleaned_char['value'])} items")
+        value = cleaned_char['value']
+
+        if isinstance(value, (int, float)):
+            # Уже число — charcType=4, оставляем как есть
+            numeric_count += 1
+            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): numeric {value} (kept as-is)")
+
+        elif isinstance(value, str):
+            # Строка — проверяем, не число ли это
+            numeric_val = _try_parse_number(value)
+            if numeric_val is not None:
+                # Строка-число → charcType=4
+                cleaned_char['value'] = numeric_val
+                numeric_count += 1
+                logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): '{value}' -> {numeric_val} (parsed as number)")
+            else:
+                # Обычная строка → charcType=1, оборачиваем в массив
+                cleaned_char['value'] = [value]
+                wrapped_count += 1
+                logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): '{value}' -> ['{value}']")
+
+        elif isinstance(value, list):
+            # Уже массив — это charcType=1 (WB API отдаёт числовые как числа, не массивы)
+            if len(value) == 1 and isinstance(value[0], (int, float)):
+                # [15.5] -> числовая характеристика, ранее ошибочно обёрнутая в массив
+                cleaned_char['value'] = value[0]
+                numeric_count += 1
+                logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): unwrapped [{value[0]}] -> {value[0]}")
+            else:
+                # Массив строк — оставляем, приводим элементы к строкам
+                cleaned_char['value'] = [str(item) for item in value]
+                logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): list with {len(value)} items (ensured strings)")
         else:
-            logger.warning(f"  Char #{i+1} (id={cleaned_char['id']}): Unknown type {type(cleaned_char['value']).__name__}, converting to string array")
-            cleaned_char['value'] = [str(cleaned_char['value'])]
+            logger.warning(f"  Char #{i+1} (id={cleaned_char['id']}): Unknown type {type(value).__name__}, converting to string array")
+            cleaned_char['value'] = [str(value)]
             wrapped_count += 1
 
         cleaned.append(cleaned_char)
 
-    logger.info(f"✅ Cleaned {len(cleaned)} characteristics: {wrapped_count} wrapped in arrays, {len(characteristics) - len(cleaned)} skipped")
+    logger.info(f"✅ Cleaned {len(cleaned)} characteristics: {numeric_count} numeric, {wrapped_count} wrapped in arrays, {len(characteristics) - len(cleaned)} skipped")
     return cleaned
+
+
+def _try_parse_number(s: str) -> Any:
+    """
+    Пытается распарсить строку как число.
+    Возвращает int/float или None если это не число.
+
+    Учитывает что артикулы типа "id-28030-1277" или размеры "XL" — не числа.
+    """
+    s = s.strip()
+    if not s:
+        return None
+    # Числа не начинаются с букв, не содержат пробелов, дефисов в середине и т.д.
+    # Допустимые форматы: "123", "12.5", "-5", "0.001"
+    try:
+        # Пробуем int
+        if '.' not in s and 'e' not in s.lower():
+            val = int(s)
+            return val
+        # Пробуем float
+        val = float(s)
+        # Не принимаем inf, nan
+        import math
+        if math.isinf(val) or math.isnan(val):
+            return None
+        return val
+    except (ValueError, TypeError):
+        return None
 
 
 def validate_and_log_errors(
