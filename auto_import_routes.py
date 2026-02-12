@@ -791,7 +791,7 @@ def register_auto_import_routes(app):
         seller_config = {
             'ai_enabled': settings.ai_enabled if settings else False,
             'ai_provider': settings.ai_provider if settings else None,
-            'has_ai_key': bool(settings and (settings.openai_api_key or settings.anthropic_api_key or settings.google_api_key)) if settings else False,
+            'has_ai_key': bool(settings and settings.ai_api_key) if settings else False,
             'sexoptovik_configured': bool(settings and settings.sexoptovik_login and settings.sexoptovik_password) if settings else False,
             'wb_api_configured': bool(seller.wb_api_key)
         }
