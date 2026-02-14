@@ -2807,6 +2807,7 @@ def products_bulk_edit():
                     app.logger.info(f"📦 Split into {len(batches)} batches (batch size: {BATCH_SIZE})")
 
                     # Обновляем батчами
+                    from wb_api_client import WBAPIException
                     for batch_num, batch in enumerate(batches, 1):
                         try:
                             app.logger.info(f"📤 Batch {batch_num}/{len(batches)}: updating {len(batch)} cards...")
@@ -2846,6 +2847,32 @@ def products_bulk_edit():
 
                             db.session.commit()
                             app.logger.info(f"✅ Batch {batch_num}/{len(batches)} completed: {len(batch)} cards updated")
+
+                        except WBAPIException as e:
+                            # Извлекаем ошибки по каждому артикулу из additional_errors
+                            additional = getattr(e, 'additional_errors', {})
+                            if additional:
+                                failed_vendor_codes = set(additional.keys())
+                                for card in batch:
+                                    vc = card.get('vendorCode', '')
+                                    if vc in failed_vendor_codes:
+                                        error_count += 1
+                                        card_errors = additional[vc]
+                                        if isinstance(card_errors, list):
+                                            card_errors = '; '.join(str(err) for err in card_errors)
+                                        errors.append(f"Артикул {vc}: {card_errors}")
+                                    else:
+                                        # Карточка не в списке ошибок — считаем успешной
+                                        product = product_map.get(card['nmID'])
+                                        if product:
+                                            product.set_characteristics(card['characteristics'])
+                                            product.last_sync = datetime.utcnow()
+                                            success_count += 1
+                                db.session.commit()
+                            else:
+                                error_count += len(batch)
+                                errors.append(f"Batch {batch_num}: {str(e)}")
+                            app.logger.error(f"❌ Batch {batch_num} WB error: {str(e)}")
 
                         except Exception as e:
                             error_count += len(batch)

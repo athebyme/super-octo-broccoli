@@ -39,7 +39,9 @@ def chunk_list(items: List, chunk_size: int) -> List[List]:
 
 class WBAPIException(Exception):
     """Базовое исключение для WB API"""
-    pass
+    def __init__(self, message='', additional_errors=None):
+        super().__init__(message)
+        self.additional_errors = additional_errors or {}
 
 
 class WBAuthException(WBAPIException):
@@ -709,6 +711,16 @@ class WildberriesAPIClient:
             )
             result = response.json()
             logger.info(f"✅ Card nmID={nm_id} update response: {result}")
+
+            # КРИТИЧНО: WB API возвращает 200 даже при ошибках (бренд не найден и т.д.)
+            if result.get('error'):
+                error_text = result.get('errorText', 'Unknown error')
+                additional = result.get('additionalErrors', {})
+                logger.error(f"❌ WB API returned error for nmID={nm_id}: {error_text}")
+                if additional:
+                    logger.error(f"   Additional errors: {additional}")
+                raise WBAPIException(f"WB API: {error_text}" + (f" | {additional}" if additional else ""))
+
             return result
         except WBAPIException as e:
             logger.error(f"❌ WB API error updating card nmID={nm_id}: {str(e)}")
@@ -812,6 +824,20 @@ class WildberriesAPIClient:
             )
             result = response.json()
             logger.info(f"✅ Batch update result: {result}")
+
+            # КРИТИЧНО: WB API возвращает 200 даже при ошибках внутри
+            if result.get('error'):
+                error_text = result.get('errorText', 'Unknown error')
+                additional = result.get('additionalErrors', {})
+                logger.error(f"❌ WB API batch update error: {error_text}")
+                if additional:
+                    for vendor_code, errs in additional.items():
+                        logger.error(f"   {vendor_code}: {errs}")
+                raise WBAPIException(
+                    f"WB API batch error: {error_text}",
+                    additional_errors=additional
+                )
+
             return result
         except WBAPIException as e:
             logger.error(f"❌ WB API error in batch update: {str(e)}")
