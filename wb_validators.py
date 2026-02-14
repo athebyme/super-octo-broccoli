@@ -189,55 +189,44 @@ def prepare_card_for_update(
     updates: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Подготовка карточки для обновления в WB API
+    Подготовка карточки для обновления в WB API.
 
-    Согласно документации WB API, при обновлении нужно отправлять
-    ВСЕ поля карточки, включая те, которые не меняются.
+    Отправляет ТОЛЬКО обязательные поля + изменяемые поля.
+    Это предотвращает ошибки WB API из-за невалидных данных
+    в полях, которые мы не трогаем (например, бренд не найден).
 
     Args:
-        full_card: Полная карточка товара из WB API
+        full_card: Полная карточка товара (из БД или WB API)
         updates: Поля которые нужно обновить
 
     Returns:
-        Подготовленная карточка для отправки в API
+        Минимальная карточка для отправки в API
     """
-    # Копируем полную карточку
-    prepared = full_card.copy()
+    # Обязательные поля — всегда включаются
+    prepared = {
+        'nmID': full_card.get('nmID'),
+        'vendorCode': full_card.get('vendorCode', ''),
+        'sizes': full_card.get('sizes', []),
+    }
 
-    # Применяем обновления
+    # Добавляем только изменяемые поля
     for key, value in updates.items():
         prepared[key] = value
 
-    # Удаляем поля которые нельзя редактировать через update API
-    fields_to_remove = [
-        'photos',  # Фото редактируются отдельно
-        'video',   # Видео редактируется отдельно
-        'tags',    # Теги редактируются отдельно
-        'mediaFiles',  # Медиа редактируется отдельно
-        'createdAt',
-        'updatedAt',
-        'nmUUID',
-        'imtID',
-        'subjectID',
-        'subjectName',
-        'wholesale',
-        'needKiz',
-    ]
-
-    for field in fields_to_remove:
-        prepared.pop(field, None)
+    # Если updates пуст (вызов из batch с предварительно модифицированной карточкой) —
+    # берём характеристики из full_card, т.к. они уже были изменены вызывающим кодом
+    if not updates and 'characteristics' in full_card:
+        prepared['characteristics'] = full_card['characteristics']
 
     # Проверяем обязательные поля
-    required_fields = ['nmID', 'vendorCode', 'sizes']
-    for field in required_fields:
+    for field in ['nmID', 'vendorCode', 'sizes']:
         if field not in prepared or prepared[field] is None:
             logger.error(f"Отсутствует обязательное поле: {field}")
 
-    # Исправляем некорректные габариты
+    # Исправляем некорректные габариты (если обновляются)
     if 'dimensions' in prepared and prepared['dimensions']:
         dims = prepared['dimensions']
 
-        # Проверяем вес - если <= 0, удаляем или ставим дефолт
         if 'weightBrutto' in dims:
             try:
                 weight = float(dims['weightBrutto'])
@@ -248,16 +237,16 @@ def prepare_card_for_update(
                 logger.warning(f"Invalid weight value {dims.get('weightBrutto')}, removing")
                 dims.pop('weightBrutto', None)
 
-        # Если dimensions пустой после очистки - удаляем его
         if not dims or all(v is None or v == '' for v in dims.values()):
             prepared.pop('dimensions', None)
             logger.info("Removed empty dimensions")
 
-    # КРИТИЧНО: Очищаем характеристики - оборачиваем строки в массивы
+    # Очищаем характеристики — числовые оставляем числами, строковые → массивы
     if 'characteristics' in prepared and prepared['characteristics']:
         logger.info(f"🧹 Cleaning {len(prepared['characteristics'])} characteristics before API call")
         prepared['characteristics'] = clean_characteristics_for_update(prepared['characteristics'])
 
+    logger.info(f"📦 Prepared card nmID={prepared.get('nmID')}: sending fields {list(prepared.keys())}")
     return prepared
 
 
