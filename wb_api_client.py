@@ -1713,6 +1713,12 @@ class WildberriesAPIClient:
         """
         Поиск брендов по названию в справочнике WB
 
+        Использует актуальный endpoint: GET /api/content/v1/brands
+        с параметром name для фильтрации по названию.
+
+        Fallback: если новый endpoint не работает, пробует старый
+        GET /content/v2/directory/brands
+
         Args:
             pattern: Строка поиска (часть названия бренда)
             top: Максимальное количество результатов (по умолчанию 50)
@@ -1730,27 +1736,42 @@ class WildberriesAPIClient:
             >>> client.search_brands("Nike")
             {"data": [{"id": 1234, "name": "Nike"}]}
         """
-        endpoint = "/content/v2/directory/brands"
-        # WB API использует 'name' для поиска, не 'pattern'
-        params = {
-            'name': pattern,
-            'top': top
-        }
-
         logger.info(f"🔍 Searching brands with name: '{pattern}'")
-        try:
-            response = self._make_request('GET', 'content', endpoint, params=params)
-            result = response.json()
-            brands_count = len(result.get('data', []))
-            logger.info(f"✅ Found {brands_count} brands matching '{pattern}'")
-            return result
-        except Exception as e:
-            logger.error(f"❌ Failed to search brands: {str(e)}")
-            raise
+
+        # Пробуем актуальный endpoint (2025+)
+        endpoints_to_try = [
+            ("/api/content/v1/brands", {'name': pattern, 'top': top}),
+            ("/content/v2/directory/brands", {'name': pattern, 'top': top}),
+            ("/content/v2/directory/brands", {'pattern': pattern, 'top': top}),
+        ]
+
+        last_error = None
+        for endpoint, params in endpoints_to_try:
+            try:
+                response = self._make_request('GET', 'content', endpoint, params=params)
+                result = response.json()
+                brands = result.get('data', [])
+                if brands is not None:
+                    logger.info(f"✅ Found {len(brands)} brands matching '{pattern}' via {endpoint}")
+                    return result
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ Brand search via {endpoint} failed: {e}")
+                continue
+
+        # Все endpoints не сработали
+        if last_error:
+            logger.error(f"❌ All brand search endpoints failed for '{pattern}': {last_error}")
+            raise last_error
+        return {'data': []}
 
     def validate_brand(self, brand_name: str) -> Dict[str, Any]:
         """
         Проверить существует ли бренд в справочнике WB
+
+        Использует search_brands() с несколькими вариантами запроса
+        (оригинал, capitalize, первые буквы) для компенсации
+        регистрозависимости WB API.
 
         Args:
             brand_name: Название бренда для проверки
@@ -1762,10 +1783,6 @@ class WildberriesAPIClient:
                 "exact_match": {"id": int, "name": str} или None,
                 "suggestions": [{"id": int, "name": str}, ...]
             }
-
-        Example:
-            >>> client.validate_brand("Nike")
-            {"valid": True, "exact_match": {"id": 1234, "name": "Nike"}, "suggestions": []}
         """
         logger.info(f"🔍 Validating brand: '{brand_name}'")
 
@@ -1773,50 +1790,17 @@ class WildberriesAPIClient:
             all_brands = []
             seen_ids = set()
 
-            # Попробуем несколько вариантов поиска для лучшего покрытия
-            # ВАЖНО: WB API чувствителен к регистру, поэтому пробуем разные варианты
-            search_variants = [
-                brand_name,  # Оригинальный запрос
-                brand_name.lower(),  # Нижний регистр
-                brand_name.upper(),  # Верхний регистр
-                brand_name.capitalize(),  # С заглавной буквы
-                brand_name.title(),  # Каждое слово с заглавной
-            ]
+            # Минимальный набор поисковых вариантов (WB может быть регистрозависим)
+            search_variants = list(dict.fromkeys([
+                brand_name,
+                brand_name.capitalize(),
+                brand_name.upper(),
+                brand_name.lower(),
+            ]))
 
-            # CamelCase вариант (JoyHyper из JOYHYPER)
-            # Для брендов типа JOYHYPER -> JoyHyper
-            if brand_name.isupper() and len(brand_name) > 3:
-                # Попробуем разбить на части и сделать CamelCase
-                # Ищем паттерны типа JOY+HYPER
-                import re
-                # Попытка разбить по известным словам
-                camel = brand_name.capitalize()  # Joyhyper
-                search_variants.append(camel)
-
-            # Если бренд содержит несколько слов, попробуем первое слово
-            words = brand_name.split()
-            if len(words) > 1:
-                search_variants.append(words[0])
-                search_variants.append(words[0].capitalize())
-
-            # Если бренд длинный, попробуем разные длины
-            if len(brand_name) > 5:
-                search_variants.append(brand_name[:5])
-                search_variants.append(brand_name[:5].capitalize())
-                search_variants.append(brand_name[:3])  # Короткий префикс для широкого поиска
-
-            # Удаляем дубликаты, сохраняя порядок
-            unique_variants = []
-            seen_variants = set()
-            for v in search_variants:
-                v_lower = v.lower()
-                if v_lower not in seen_variants:
-                    seen_variants.add(v_lower)
-                    unique_variants.append(v)
-
-            for variant in unique_variants:
+            for variant in search_variants:
                 try:
-                    result = self.search_brands(variant, top=30)
+                    result = self.search_brands(variant, top=50)
                     brands = result.get('data', [])
                     logger.info(f"   Search '{variant}': found {len(brands)} brands")
 
@@ -1826,58 +1810,46 @@ class WildberriesAPIClient:
                             seen_ids.add(brand_id)
                             all_brands.append(brand)
 
-                    # Если нашли достаточно - выходим
-                    if len(all_brands) >= 20:
+                    # Нашли результаты — хватит
+                    if all_brands:
                         break
                 except Exception as e:
                     logger.warning(f"   Search '{variant}' failed: {e}")
                     continue
 
             # Ищем точное совпадение (регистронезависимо)
-            brand_lower = brand_name.lower().strip()
-            # Нормализуем - убираем пробелы и спецсимволы для сравнения
             brand_normalized = ''.join(c.lower() for c in brand_name if c.isalnum())
 
             exact_match = None
-            close_match = None  # Для почти точных совпадений
+            close_match = None
             suggestions = []
 
             for brand in all_brands:
-                brand_wb_name = brand.get('name', '')
-                wb_name_lower = brand_wb_name.lower().strip()
-                wb_name_normalized = ''.join(c.lower() for c in brand_wb_name if c.isalnum())
+                wb_name = brand.get('name', '')
+                wb_normalized = ''.join(c.lower() for c in wb_name if c.isalnum())
 
-                # Точное совпадение по lowercase
-                if wb_name_lower == brand_lower:
+                if wb_normalized == brand_normalized:
                     exact_match = brand
                     continue
 
-                # Совпадение без учёта регистра и спецсимволов (JOYHYPER == JoyHyper)
-                if wb_name_normalized == brand_normalized and not exact_match:
-                    exact_match = brand
-                    logger.info(f"   Found normalized match: '{brand_wb_name}' for '{brand_name}'")
-                    continue
-
-                # Частичное совпадение - один содержит другой
-                if brand_normalized in wb_name_normalized or wb_name_normalized in brand_normalized:
+                # Частичное совпадение
+                if brand_normalized in wb_normalized or wb_normalized in brand_normalized:
                     if not close_match:
                         close_match = brand
 
                 suggestions.append(brand)
 
-            # Если точное не найдено, но есть близкое - используем его
             if not exact_match and close_match:
                 exact_match = close_match
                 logger.info(f"   Using close match: '{close_match.get('name')}' for '{brand_name}'")
 
             is_valid = exact_match is not None
-
-            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}, exact='{exact_match.get('name') if exact_match else None}', {len(suggestions)} suggestions")
+            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}': {'found' if is_valid else 'not found'} (exact='{exact_match.get('name') if exact_match else None}', {len(suggestions)} suggestions)")
 
             return {
                 'valid': is_valid,
                 'exact_match': exact_match,
-                'suggestions': suggestions[:15]  # Максимум 15 предложений
+                'suggestions': suggestions[:15]
             }
         except Exception as e:
             logger.error(f"❌ Failed to validate brand: {str(e)}")
