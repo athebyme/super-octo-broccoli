@@ -93,24 +93,27 @@ def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
                 else:
                     # Проверяем формат value
                     value = char['value']
-                    # WB API ожидает массив для большинства характеристик (тип 1)
-                    if not isinstance(value, list):
+                    # WB API: charcType=1 -> массив строк, charcType=4 -> число
+                    if isinstance(value, (int, float)):
+                        # charcType=4 — числовое значение, OK
+                        pass
+                    elif isinstance(value, list):
+                        if len(value) == 0:
+                            logger.warning(f"Характеристика #{i+1} (id={char.get('id')}): пустой массив значений")
+                        else:
+                            # Проверяем что все элементы - строки или числа
+                            for j, item in enumerate(value):
+                                if not isinstance(item, (str, int, float)):
+                                    errors.append(
+                                        f"Характеристика #{i+1} (id={char.get('id')}), "
+                                        f"элемент #{j+1}: должен быть строкой или числом, "
+                                        f"получено {type(item).__name__}"
+                                    )
+                    else:
                         errors.append(
                             f"Характеристика #{i+1} (id={char.get('id')}): "
-                            f"'value' должно быть массивом, получено {type(value).__name__}. "
-                            f"Используйте clean_characteristics_for_update() перед валидацией."
+                            f"'value' должно быть массивом или числом, получено {type(value).__name__}."
                         )
-                    elif len(value) == 0:
-                        logger.warning(f"Характеристика #{i+1} (id={char.get('id')}): пустой массив значений")
-                    else:
-                        # Проверяем что все элементы - строки или числа
-                        for j, item in enumerate(value):
-                            if not isinstance(item, (str, int, float)):
-                                errors.append(
-                                    f"Характеристика #{i+1} (id={char.get('id')}), "
-                                    f"элемент #{j+1}: должен быть строкой или числом, "
-                                    f"получено {type(item).__name__}"
-                                )
 
     # Валидация sizes
     if 'sizes' in card_data and card_data['sizes']:
