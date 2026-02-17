@@ -4802,6 +4802,10 @@ register_merge_routes(app)
 from routes_safe_prices import register_routes as register_safe_prices_routes
 register_safe_prices_routes(app)
 
+# ============= РОУТЫ ЗАБЛОКИРОВАННЫХ КАРТОЧЕК И ЭКСПОРТА =============
+from routes_blocked_cards import register_blocked_cards_routes
+register_blocked_cards_routes(app)
+
 
 if __name__ == '__main__':
     with app.app_context():

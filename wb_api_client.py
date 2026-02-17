@@ -103,6 +103,7 @@ class WildberriesAPIClient:
     STATISTICS_API_URL = "https://statistics-api.wildberries.ru"
     MARKETPLACE_API_URL = "https://marketplace-api.wildberries.ru"
     DISCOUNTS_API_URL = "https://discounts-prices-api.wildberries.ru"  # Prices API v2
+    ANALYTICS_API_URL = "https://seller-analytics-api.wildberries.ru"  # Analytics/Reports API
 
     # Sandbox URLs для тестирования
     CONTENT_API_SANDBOX = "https://content-api-sandbox.wildberries.ru"
@@ -175,7 +176,8 @@ class WildberriesAPIClient:
             'content': self.CONTENT_API_SANDBOX if self.sandbox else self.CONTENT_API_URL,
             'statistics': self.STATISTICS_API_SANDBOX if self.sandbox else self.STATISTICS_API_URL,
             'marketplace': self.MARKETPLACE_API_URL,  # Нет sandbox для marketplace
-            'discounts': self.DISCOUNTS_API_URL  # Prices API v2
+            'discounts': self.DISCOUNTS_API_URL,  # Prices API v2
+            'analytics': self.ANALYTICS_API_URL  # Analytics/Reports API
         }
         return urls.get(api_type, self.CONTENT_API_URL)
 
@@ -1991,6 +1993,126 @@ class WildberriesAPIClient:
 
         except Exception as e:
             logger.error(f"❌ Failed to get cards errors list: {str(e)}")
+            raise
+
+    # ==================== ЗАБЛОКИРОВАННЫЕ / СКРЫТЫЕ КАРТОЧКИ ====================
+
+    def get_blocked_cards(
+        self,
+        sort: str = 'nmId',
+        order: str = 'asc',
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить список заблокированных карточек товаров с причинами блокировки
+
+        API: GET https://seller-analytics-api.wildberries.ru/api/v1/analytics/banned-products/blocked
+        Лимит: 1 запрос в 10 секунд, всплеск 6
+
+        Args:
+            sort: Поле сортировки (brand, nmId, title, vendorCode, reason)
+            order: Порядок сортировки (asc, desc)
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Список заблокированных карточек:
+            [
+                {
+                    "brand": "Бренд",
+                    "nmId": 82722944,
+                    "title": "Наименование товара",
+                    "vendorCode": "артикул-продавца",
+                    "reason": "Причина блокировки"
+                }
+            ]
+        """
+        endpoint = "/api/v1/analytics/banned-products/blocked"
+
+        valid_sort = ['brand', 'nmId', 'title', 'vendorCode', 'reason']
+        if sort not in valid_sort:
+            sort = 'nmId'
+
+        params = {
+            'sort': sort,
+            'order': order if order in ('asc', 'desc') else 'asc'
+        }
+
+        logger.info(f"📋 Getting blocked cards (sort={sort}, order={order})")
+
+        try:
+            response = self._make_request(
+                'GET', 'analytics', endpoint,
+                params=params,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            cards = result.get('report', [])
+            logger.info(f"✅ Blocked cards loaded: {len(cards)} items")
+            return cards
+        except Exception as e:
+            logger.error(f"❌ Failed to get blocked cards: {str(e)}")
+            raise
+
+    def get_shadowed_cards(
+        self,
+        sort: str = 'nmId',
+        order: str = 'asc',
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить список товаров, скрытых из каталога
+
+        API: GET https://seller-analytics-api.wildberries.ru/api/v1/analytics/banned-products/shadowed
+        Лимит: 1 запрос в 10 секунд, всплеск 6
+
+        Args:
+            sort: Поле сортировки (brand, nmId, title, vendorCode, nmRating)
+            order: Порядок сортировки (asc, desc)
+            log_to_db: Логировать запрос в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Список скрытых карточек:
+            [
+                {
+                    "brand": "Бренд",
+                    "nmId": 166658151,
+                    "title": "Наименование товара",
+                    "vendorCode": "артикул-продавца",
+                    "nmRating": 3.1
+                }
+            ]
+        """
+        endpoint = "/api/v1/analytics/banned-products/shadowed"
+
+        valid_sort = ['brand', 'nmId', 'title', 'vendorCode', 'nmRating']
+        if sort not in valid_sort:
+            sort = 'nmId'
+
+        params = {
+            'sort': sort,
+            'order': order if order in ('asc', 'desc') else 'asc'
+        }
+
+        logger.info(f"📋 Getting shadowed cards (sort={sort}, order={order})")
+
+        try:
+            response = self._make_request(
+                'GET', 'analytics', endpoint,
+                params=params,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            cards = result.get('report', [])
+            logger.info(f"✅ Shadowed cards loaded: {len(cards)} items")
+            return cards
+        except Exception as e:
+            logger.error(f"❌ Failed to get shadowed cards: {str(e)}")
             raise
 
     # ==================== УТИЛИТЫ ====================
