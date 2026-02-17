@@ -2,6 +2,7 @@
 """
 Платформа для продавцов WB - основной файл приложения
 """
+import hashlib
 import os
 from datetime import datetime
 from functools import wraps
@@ -1663,16 +1664,25 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         if not product:
                             continue
 
-                        # Генерируем warehouse_id из имени (для уникальности)
-                        warehouse_id = hash(warehouse_name) % 1000000
+                        # Генерируем стабильный warehouse_id из имени (hashlib вместо hash())
+                        warehouse_id = int(hashlib.md5(warehouse_name.encode('utf-8')).hexdigest(), 16) % 1000000
 
-                        # Ищем существующую запись об остатках
-                        stock = ProductStock.query.filter_by(
+                        # Удаляем дубликаты по warehouse_name (оставляем только одну запись)
+                        duplicates = ProductStock.query.filter_by(
                             product_id=product.id,
-                            warehouse_id=warehouse_id
-                        ).first()
+                            warehouse_name=warehouse_name
+                        ).all()
+                        if len(duplicates) > 1:
+                            for dup in duplicates[1:]:
+                                db.session.delete(dup)
+                            stock = duplicates[0]
+                        elif duplicates:
+                            stock = duplicates[0]
+                        else:
+                            stock = None
 
                         if stock:
+                            stock.warehouse_id = warehouse_id
                             stock.warehouse_name = warehouse_name
                             stock.quantity = stock_data['quantity']
                             stock.quantity_full = stock_data['quantity_full']
@@ -1903,21 +1913,29 @@ def sync_warehouse_stocks():
                     # Товар не найден - пропускаем (возможно не синхронизированы карточки)
                     continue
 
-                # Генерируем warehouse_id из имени (для уникальности)
-                # WB не возвращает ID склада в Statistics API, используем хеш имени
-                warehouse_id = hash(warehouse_name) % 1000000
+                # Генерируем стабильный warehouse_id из имени (hashlib вместо hash())
+                warehouse_id = int(hashlib.md5(warehouse_name.encode('utf-8')).hexdigest(), 16) % 1000000
 
-                # Ищем существующую запись об остатках для этого товара и склада
-                stock = ProductStock.query.filter_by(
+                # Удаляем дубликаты по warehouse_name (оставляем только одну запись)
+                duplicates = ProductStock.query.filter_by(
                     product_id=product.id,
-                    warehouse_id=warehouse_id
-                ).first()
+                    warehouse_name=warehouse_name
+                ).all()
+                if len(duplicates) > 1:
+                    for dup in duplicates[1:]:
+                        db.session.delete(dup)
+                    stock = duplicates[0]
+                elif duplicates:
+                    stock = duplicates[0]
+                else:
+                    stock = None
 
                 quantity = stock_data['quantity']
                 quantity_full = stock_data['quantity_full']
 
                 if stock:
                     # Обновляем существующую запись
+                    stock.warehouse_id = warehouse_id
                     stock.warehouse_name = warehouse_name
                     stock.quantity = quantity
                     stock.quantity_full = quantity_full
@@ -2216,8 +2234,20 @@ def product_detail(product_id):
     characteristics = json.loads(product.characteristics_json) if product.characteristics_json else []
     dimensions = json.loads(product.dimensions_json) if product.dimensions_json else {}
 
-    # Получаем остатки по складам для этого товара
-    warehouse_stocks = ProductStock.query.filter_by(product_id=product.id).all()
+    # Получаем остатки по складам для этого товара (агрегируем дубликаты по warehouse_name)
+    all_stocks = ProductStock.query.filter_by(product_id=product.id).all()
+    stocks_by_name = {}
+    for stock in all_stocks:
+        name = stock.warehouse_name or f'Склад {stock.warehouse_id}'
+        if name in stocks_by_name:
+            existing = stocks_by_name[name]
+            existing.quantity += stock.quantity
+            existing.quantity_full += stock.quantity_full
+            existing.in_way_to_client = (existing.in_way_to_client or 0) + (stock.in_way_to_client or 0)
+            existing.in_way_from_client = (existing.in_way_from_client or 0) + (stock.in_way_from_client or 0)
+        else:
+            stocks_by_name[name] = stock
+    warehouse_stocks = list(stocks_by_name.values())
 
     # Вычисляем общие остатки
     total_quantity = sum(stock.quantity for stock in warehouse_stocks)
