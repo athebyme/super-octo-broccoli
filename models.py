@@ -1730,6 +1730,76 @@ class AIHistory(db.Model):
         db.Index('idx_ai_history_created', 'created_at'),
     )
 
+
+class BlockedCard(db.Model):
+    """Заблокированная карточка товара WB (кэш из seller-analytics-api)"""
+    __tablename__ = 'blocked_cards'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    nm_id = db.Column(db.BigInteger, nullable=False)
+    vendor_code = db.Column(db.String(200))
+    title = db.Column(db.String(500))
+    brand = db.Column(db.String(200))
+    reason = db.Column(db.Text)
+
+    # Отслеживание
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)  # False = разблокирована
+
+    __table_args__ = (
+        db.Index('idx_blocked_seller_nm', 'seller_id', 'nm_id'),
+        db.Index('idx_blocked_seller_active', 'seller_id', 'is_active'),
+    )
+
+    def __repr__(self):
+        return f'<BlockedCard nm_id={self.nm_id} reason={self.reason[:30] if self.reason else "N/A"}>'
+
+
+class ShadowedCard(db.Model):
+    """Карточка товара WB, скрытая из каталога (кэш из seller-analytics-api)"""
+    __tablename__ = 'shadowed_cards'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    nm_id = db.Column(db.BigInteger, nullable=False)
+    vendor_code = db.Column(db.String(200))
+    title = db.Column(db.String(500))
+    brand = db.Column(db.String(200))
+    nm_rating = db.Column(db.Float)
+
+    # Отслеживание
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)  # False = вернулась в каталог
+
+    __table_args__ = (
+        db.Index('idx_shadowed_seller_nm', 'seller_id', 'nm_id'),
+        db.Index('idx_shadowed_seller_active', 'seller_id', 'is_active'),
+    )
+
+    def __repr__(self):
+        return f'<ShadowedCard nm_id={self.nm_id} rating={self.nm_rating}>'
+
+
+class BlockedCardsSyncSettings(db.Model):
+    """Настройки и статус синхронизации заблокированных карточек"""
+    __tablename__ = 'blocked_cards_sync_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True)
+
+    last_sync_at = db.Column(db.DateTime)
+    last_sync_status = db.Column(db.String(20))  # 'success', 'error', 'running'
+    last_sync_error = db.Column(db.Text)
+    blocked_count = db.Column(db.Integer, default=0)
+    shadowed_count = db.Column(db.Integer, default=0)
+
+    seller = db.relationship('Seller', backref=db.backref('blocked_cards_sync', uselist=False))
+
     def __repr__(self) -> str:
         return f'<AIHistory {self.action_type} product_id={self.imported_product_id}>'
 

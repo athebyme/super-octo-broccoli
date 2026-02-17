@@ -1102,6 +1102,7 @@ def products_list():
         filter_brand = request.args.get('brand', '').strip()
         filter_category = request.args.get('category', '').strip()
         filter_has_stock = request.args.get('has_stock', '').strip()  # 'yes', 'no', ''
+        filter_block_status = request.args.get('block_status', '').strip()  # 'blocked', 'shadowed', 'ok', ''
 
         # Сортировка
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
@@ -1155,6 +1156,34 @@ def products_list():
                 )
             )
 
+        # Фильтр по статусу блокировки
+        if filter_block_status in ('blocked', 'shadowed', 'ok'):
+            try:
+                from models import BlockedCard, ShadowedCard
+                if filter_block_status == 'blocked':
+                    _blocked_ids = db.session.query(BlockedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    query = query.filter(Product.nm_id.in_(_blocked_ids))
+                elif filter_block_status == 'shadowed':
+                    _shadowed_ids = db.session.query(ShadowedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    query = query.filter(Product.nm_id.in_(_shadowed_ids))
+                elif filter_block_status == 'ok':
+                    _blocked_ids = db.session.query(BlockedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    _shadowed_ids = db.session.query(ShadowedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    query = query.filter(
+                        ~Product.nm_id.in_(_blocked_ids),
+                        ~Product.nm_id.in_(_shadowed_ids),
+                    )
+            except Exception:
+                pass  # Таблицы могут не существовать
+
         # Сортировка
         sort_column = {
             'updated_at': Product.updated_at,
@@ -1201,6 +1230,20 @@ def products_list():
         ).distinct().order_by(Product.object_name).all()
         categories = [c[0] for c in categories]
 
+        # Получаем nm_id заблокированных и скрытых карточек для отметки в списке
+        blocked_nm_ids = set()
+        shadowed_nm_ids = set()
+        try:
+            from models import BlockedCard, ShadowedCard
+            blocked_nm_ids = {r[0] for r in BlockedCard.query.filter_by(
+                seller_id=current_user.seller.id, is_active=True
+            ).with_entities(BlockedCard.nm_id).all()}
+            shadowed_nm_ids = {r[0] for r in ShadowedCard.query.filter_by(
+                seller_id=current_user.seller.id, is_active=True
+            ).with_entities(ShadowedCard.nm_id).all()}
+        except Exception:
+            pass  # Таблицы могут не существовать при первом запуске
+
         return render_template(
             'products.html',
             products=products,
@@ -1216,7 +1259,10 @@ def products_list():
             sort_order=sort_order,
             brands=brands,
             categories=categories,
-            seller=current_user.seller
+            seller=current_user.seller,
+            blocked_nm_ids=blocked_nm_ids,
+            shadowed_nm_ids=shadowed_nm_ids,
+            filter_block_status=filter_block_status,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")

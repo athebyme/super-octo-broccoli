@@ -2050,6 +2050,14 @@ class WildberriesAPIClient:
             )
             result = response.json()
             cards = result.get('report', [])
+            if cards is None:
+                cards = []
+            if not cards and result:
+                logger.warning(
+                    f"⚠️ Blocked cards API returned empty report. "
+                    f"Response keys: {list(result.keys())}. "
+                    f"Check that API token has 'contentanalytics' category permission."
+                )
             logger.info(f"✅ Blocked cards loaded: {len(cards)} items")
             return cards
         except Exception as e:
@@ -2109,6 +2117,14 @@ class WildberriesAPIClient:
             )
             result = response.json()
             cards = result.get('report', [])
+            if cards is None:
+                cards = []
+            if not cards and result:
+                logger.warning(
+                    f"⚠️ Shadowed cards API returned empty report. "
+                    f"Response keys: {list(result.keys())}. "
+                    f"Check that API token has 'contentanalytics' category permission."
+                )
             logger.info(f"✅ Shadowed cards loaded: {len(cards)} items")
             return cards
         except Exception as e:
