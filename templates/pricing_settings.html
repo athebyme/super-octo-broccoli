@@ -1,0 +1,475 @@
+{% extends "base.html" %}
+
+{% block title %}Ценообразование - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="pricingApp()">
+    <!-- Заголовок -->
+    <div class="mb-6 flex items-center justify-between">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900">Ценообразование</h1>
+            <p class="mt-1 text-sm text-gray-600">
+                Расчёт розничных цен из закупочных по настраиваемой формуле
+            </p>
+        </div>
+        <a href="{{ url_for('auto_import_dashboard') }}"
+           class="text-sm text-indigo-600 hover:text-indigo-700">
+            &larr; Назад к автоимпорту
+        </a>
+    </div>
+
+    <form method="POST" action="{{ url_for('auto_import_pricing') }}">
+        <!-- Основные настройки -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Основные настройки</h3>
+
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" name="is_enabled" {{ 'checked' if pricing and pricing.is_enabled else '' }}
+                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <span class="ml-2 text-sm text-gray-700">Включить расчёт цен</span>
+                </label>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">URL файла цен поставщика</label>
+                    <input type="text" name="supplier_price_url"
+                           value="{{ pricing.supplier_price_url or 'http://sexoptovik.ru/files/all_prod_prices__.csv' if not pricing else pricing.supplier_price_url or '' }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="http://sexoptovik.ru/files/all_prod_prices__.csv">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">URL INF файла (для отслеживания обновлений)</label>
+                    <input type="text" name="supplier_price_inf_url"
+                           value="{{ pricing.supplier_price_inf_url or 'http://sexoptovik.ru/files/all_prod_prices__.inf' if not pricing else pricing.supplier_price_inf_url or '' }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                           placeholder="http://sexoptovik.ru/files/all_prod_prices__.inf">
+                </div>
+            </div>
+
+            {% if pricing and pricing.last_price_sync_at %}
+            <p class="mt-2 text-xs text-gray-500">
+                Последняя синхронизация цен: {{ pricing.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }}
+            </p>
+            {% endif %}
+        </div>
+
+        <!-- Параметры формулы -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Параметры формулы</h3>
+            <p class="text-xs text-gray-500 mb-4">
+                Z = (P + Q + S + эквайринг + доп.) &times; 100 / (100 - комиссия) &times; налог. коэф.
+            </p>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Комиссия WB (%)</label>
+                    <input type="number" step="0.1" name="wb_commission_pct"
+                           value="{{ pricing.wb_commission_pct if pricing else 40.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Налоговый коэф.</label>
+                    <input type="number" step="0.01" name="tax_rate"
+                           value="{{ pricing.tax_rate if pricing else 1.13 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Колонка прибыли</label>
+                    <select name="profit_column"
+                            class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                        {% for col in ['a', 'b', 'c', 'd'] %}
+                        <option value="{{ col }}" {{ 'selected' if pricing and pricing.profit_column == col else ('selected' if not pricing and col == 'd' else '') }}>
+                            {{ col|upper }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Тип формулы</label>
+                    <select name="formula_type"
+                            class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                        <option value="standard" {{ 'selected' if not pricing or pricing.formula_type == 'standard' else '' }}>Стандартная</option>
+                        <option value="custom" {{ 'selected' if pricing and pricing.formula_type == 'custom' else '' }}>Пользовательская</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Константы R -->
+            <h4 class="text-sm font-medium text-gray-800 mt-6 mb-3">Расходы (формула R — цена без доставки)</h4>
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Логистика (руб.)</label>
+                    <input type="number" step="0.1" name="logistics_cost"
+                           value="{{ pricing.logistics_cost if pricing else 55.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Хранение (руб.)</label>
+                    <input type="number" step="0.1" name="storage_cost"
+                           value="{{ pricing.storage_cost if pricing else 0.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Упаковка (руб.)</label>
+                    <input type="number" step="0.1" name="packaging_cost"
+                           value="{{ pricing.packaging_cost if pricing else 20.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+            </div>
+
+            <!-- Константы Z -->
+            <h4 class="text-sm font-medium text-gray-800 mt-6 mb-3">Доп. расходы (формула Z — итоговая цена)</h4>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Эквайринг (руб.)</label>
+                    <input type="number" step="0.1" name="acquiring_cost"
+                           value="{{ pricing.acquiring_cost if pricing else 25.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Доп. расходы (руб.)</label>
+                    <input type="number" step="0.1" name="extra_cost"
+                           value="{{ pricing.extra_cost if pricing else 20.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+            </div>
+
+            <!-- Доставка S -->
+            <h4 class="text-sm font-medium text-gray-800 mt-6 mb-3">Доставка (формула S)</h4>
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">% от цены</label>
+                    <input type="number" step="0.1" name="delivery_pct"
+                           value="{{ pricing.delivery_pct if pricing else 5.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Мин. (руб.)</label>
+                    <input type="number" step="0.1" name="delivery_min"
+                           value="{{ pricing.delivery_min if pricing else 55.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Макс. (руб.)</label>
+                    <input type="number" step="0.1" name="delivery_max"
+                           value="{{ pricing.delivery_max if pricing else 205.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+            </div>
+
+            <!-- Прибыль Q -->
+            <h4 class="text-sm font-medium text-gray-800 mt-6 mb-3">Желаемая прибыль (Q)</h4>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Мин. прибыль (руб.)</label>
+                    <input type="number" step="0.1" name="min_profit"
+                           value="{{ pricing.min_profit if pricing else 30.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Макс. прибыль (руб.)</label>
+                    <input type="number" step="0.1" name="max_profit"
+                           value="{{ pricing.max_profit if pricing and pricing.max_profit else '' }}"
+                           placeholder="Без ограничения"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="flex items-center mt-5">
+                        <input type="checkbox" name="use_random" {{ 'checked' if pricing and pricing.use_random else '' }}
+                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                        <span class="ml-2 text-xs text-gray-700">Разброс цен</span>
+                    </label>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Разброс (мин-макс)</label>
+                    <div class="flex gap-2">
+                        <input type="number" name="random_min"
+                               value="{{ pricing.random_min if pricing else 1 }}"
+                               class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                        <input type="number" name="random_max"
+                               value="{{ pricing.random_max if pricing else 10 }}"
+                               class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                    </div>
+                </div>
+            </div>
+
+            <!-- SPP -->
+            <h4 class="text-sm font-medium text-gray-800 mt-6 mb-3">SPP (Скидка постоянного покупателя)</h4>
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">SPP %</label>
+                    <input type="number" step="0.1" name="spp_pct"
+                           value="{{ pricing.spp_pct if pricing else 5.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Мин. скидка (руб.)</label>
+                    <input type="number" step="0.1" name="spp_min"
+                           value="{{ pricing.spp_min if pricing else 20.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Макс. скидка (руб.)</label>
+                    <input type="number" step="0.1" name="spp_max"
+                           value="{{ pricing.spp_max if pricing else 500.0 }}"
+                           class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+                </div>
+            </div>
+
+            <!-- Множитель Y -->
+            <h4 class="text-sm font-medium text-gray-800 mt-6 mb-3">Завышенная цена (Y = Z &times; множитель)</h4>
+            <div class="w-48">
+                <label class="block text-xs font-medium text-gray-600 mb-1">Множитель</label>
+                <input type="number" step="0.01" name="inflated_multiplier"
+                       value="{{ pricing.inflated_multiplier if pricing else 1.55 }}"
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md">
+            </div>
+        </div>
+
+        <!-- Таблица наценок -->
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-medium text-gray-900">Таблица наценок по диапазонам</h3>
+                <button type="button" @click="addRange()"
+                        class="px-3 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                    + Добавить диапазон
+                </button>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">От (руб.)</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">До (руб.)</th>
+                            <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">A %</th>
+                            <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">B %</th>
+                            <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">C %</th>
+                            <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">D %</th>
+                            <th class="px-3 py-2 w-10"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(range, idx) in ranges" :key="idx">
+                            <tr class="border-t border-gray-100">
+                                <td class="px-2 py-1">
+                                    <input type="number" x-model.number="range.from"
+                                           class="w-full px-2 py-1 text-sm border-gray-300 rounded focus:ring-indigo-500 focus:border-indigo-500">
+                                </td>
+                                <td class="px-2 py-1">
+                                    <input type="number" x-model.number="range.to"
+                                           class="w-full px-2 py-1 text-sm border-gray-300 rounded focus:ring-indigo-500 focus:border-indigo-500">
+                                </td>
+                                <td class="px-2 py-1">
+                                    <input type="number" step="0.1" x-model.number="range.a"
+                                           class="w-full px-2 py-1 text-sm border-gray-300 rounded text-center focus:ring-indigo-500 focus:border-indigo-500">
+                                </td>
+                                <td class="px-2 py-1">
+                                    <input type="number" step="0.1" x-model.number="range.b"
+                                           class="w-full px-2 py-1 text-sm border-gray-300 rounded text-center focus:ring-indigo-500 focus:border-indigo-500">
+                                </td>
+                                <td class="px-2 py-1">
+                                    <input type="number" step="0.1" x-model.number="range.c"
+                                           class="w-full px-2 py-1 text-sm border-gray-300 rounded text-center focus:ring-indigo-500 focus:border-indigo-500">
+                                </td>
+                                <td class="px-2 py-1">
+                                    <input type="number" step="0.1" x-model.number="range.d"
+                                           class="w-full px-2 py-1 text-sm border-gray-300 rounded text-center focus:ring-indigo-500 focus:border-indigo-500">
+                                </td>
+                                <td class="px-2 py-1 text-center">
+                                    <button type="button" @click="ranges.splice(idx, 1)"
+                                            class="text-red-400 hover:text-red-600">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                        </svg>
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Скрытое поле с JSON таблицы -->
+            <input type="hidden" name="price_ranges" :value="JSON.stringify(ranges)">
+        </div>
+
+        <!-- Кнопки -->
+        <div class="flex items-center gap-4 mb-6">
+            <button type="submit"
+                    class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium">
+                Сохранить настройки
+            </button>
+            <button type="button" @click="resetToDefaults()"
+                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm">
+                Сбросить таблицу по умолчанию
+            </button>
+        </div>
+    </form>
+
+    <!-- Действия -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
+        <div class="flex flex-wrap gap-3">
+            <button @click="syncPrices()" :disabled="syncing"
+                    class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors text-sm font-medium">
+                <span x-show="!syncing">Загрузить цены поставщика</span>
+                <span x-show="syncing">Загрузка...</span>
+            </button>
+            <button @click="recalculate()" :disabled="recalculating"
+                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium">
+                <span x-show="!recalculating">Пересчитать все цены</span>
+                <span x-show="recalculating">Пересчёт...</span>
+            </button>
+        </div>
+        <div x-show="actionResult" x-cloak class="mt-3 p-3 rounded-lg text-sm"
+             :class="actionSuccess ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'"
+             x-text="actionResult">
+        </div>
+    </div>
+
+    <!-- Калькулятор -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <h3 class="text-lg font-medium text-gray-900 mb-4">Калькулятор цены</h3>
+        <p class="text-xs text-gray-500 mb-4">Введите закупочную цену для предпросмотра расчёта</p>
+        <div class="flex items-end gap-4 mb-4">
+            <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Закупочная цена (руб.)</label>
+                <input type="number" x-model="previewPrice" @keyup.enter="previewCalc()"
+                       class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm border-gray-300 rounded-md w-40"
+                       placeholder="Например: 1500">
+            </div>
+            <button @click="previewCalc()" :disabled="!previewPrice"
+                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm font-medium">
+                Рассчитать
+            </button>
+        </div>
+
+        <div x-show="previewResult" x-cloak>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <div class="text-xs text-gray-500">Закупочная (P)</div>
+                    <div class="text-lg font-bold text-gray-900" x-text="previewResult?.purchase_price + ' &#8381;'"></div>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <div class="text-xs text-gray-500">Прибыль (Q)</div>
+                    <div class="text-lg font-bold text-green-600" x-text="previewResult?.profit_q + ' &#8381; (' + previewResult?.profit_pct_d + '%)'"></div>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <div class="text-xs text-gray-500">Доставка (S)</div>
+                    <div class="text-lg font-bold text-gray-900" x-text="previewResult?.delivery_s + ' &#8381;'"></div>
+                </div>
+                <div class="bg-blue-50 rounded-lg p-3 ring-2 ring-blue-200">
+                    <div class="text-xs text-blue-600 font-medium">Итоговая цена (Z)</div>
+                    <div class="text-xl font-bold text-blue-700" x-text="previewResult?.final_price + ' &#8381;'"></div>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <div class="text-xs text-gray-500">SPP скидка (T)</div>
+                    <div class="text-lg font-bold text-orange-600" x-text="previewResult?.spp_discount_t + ' &#8381;'"></div>
+                </div>
+                <div class="bg-green-50 rounded-lg p-3">
+                    <div class="text-xs text-green-600">Цена с SPP (X)</div>
+                    <div class="text-lg font-bold text-green-700" x-text="previewResult?.discount_price ? previewResult.discount_price + ' &#8381;' : 'Невыгодно'"></div>
+                </div>
+                <div class="bg-purple-50 rounded-lg p-3">
+                    <div class="text-xs text-purple-600">Цена до скидки (Y)</div>
+                    <div class="text-lg font-bold text-purple-700" x-text="previewResult?.price_before_discount + ' &#8381;'"></div>
+                </div>
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <div class="text-xs text-gray-500">Комиссия WB</div>
+                    <div class="text-lg font-bold text-gray-600" x-text="previewResult?.wb_commission + '%'"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function pricingApp() {
+    return {
+        ranges: {{ ranges|tojson }},
+        defaultRanges: {{ default_ranges|tojson }},
+        syncing: false,
+        recalculating: false,
+        actionResult: '',
+        actionSuccess: false,
+        previewPrice: '',
+        previewResult: null,
+
+        addRange() {
+            const last = this.ranges.length ? this.ranges[this.ranges.length - 1] : null;
+            this.ranges.push({
+                from: last ? last.to + 1 : 1,
+                to: last ? last.to + 1000 : 100,
+                a: 20, b: 0, c: 0, d: 20
+            });
+        },
+
+        resetToDefaults() {
+            if (confirm('Сбросить таблицу наценок к значениям по умолчанию?')) {
+                this.ranges = JSON.parse(JSON.stringify(this.defaultRanges));
+            }
+        },
+
+        async syncPrices() {
+            this.syncing = true;
+            this.actionResult = '';
+            try {
+                const resp = await fetch('/api/pricing/sync-prices', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    this.actionSuccess = true;
+                    this.actionResult = `Загружено ${data.total_prices} цен. Обновлено: ${data.updated_imported} импортированных, ${data.updated_products} товаров WB.`;
+                } else {
+                    this.actionSuccess = false;
+                    this.actionResult = 'Ошибка: ' + data.error;
+                }
+            } catch (e) {
+                this.actionSuccess = false;
+                this.actionResult = 'Ошибка сети: ' + e.message;
+            }
+            this.syncing = false;
+        },
+
+        async recalculate() {
+            this.recalculating = true;
+            this.actionResult = '';
+            try {
+                const resp = await fetch('/api/pricing/recalculate', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    this.actionSuccess = true;
+                    this.actionResult = `Пересчитано ${data.recalculated} товаров.`;
+                } else {
+                    this.actionSuccess = false;
+                    this.actionResult = 'Ошибка: ' + data.error;
+                }
+            } catch (e) {
+                this.actionSuccess = false;
+                this.actionResult = 'Ошибка сети: ' + e.message;
+            }
+            this.recalculating = false;
+        },
+
+        async previewCalc() {
+            if (!this.previewPrice) return;
+            try {
+                const resp = await fetch('/api/pricing/calculate-preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ purchase_price: parseFloat(this.previewPrice) })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.previewResult = data.result;
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

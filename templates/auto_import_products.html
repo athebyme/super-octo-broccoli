@@ -176,6 +176,9 @@
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Бренд
                         </th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Цена
+                        </th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Статус
                         </th>
@@ -216,6 +219,16 @@
                         </td>
                         <td class="px-6 py-4 text-sm text-gray-500">
                             {{ product.brand or '—' }}
+                        </td>
+                        <td class="px-6 py-4 text-right text-sm">
+                            {% if product.supplier_price and product.supplier_price > 0 %}
+                            <div class="text-gray-500">{{ "%.0f"|format(product.supplier_price) }} &#8381;</div>
+                            {% if product.calculated_price %}
+                            <div class="text-blue-600 font-medium">{{ "%.0f"|format(product.calculated_price) }} &#8381;</div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-gray-300">—</span>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4">
                             {% if product.import_status == 'imported' %}

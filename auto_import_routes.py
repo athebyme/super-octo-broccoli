@@ -12,8 +12,12 @@ import time
 import hashlib
 from datetime import datetime
 
-from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory
+from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory, PricingSettings, Product
 from auto_import_manager import AutoImportManager, ImageProcessor
+from pricing_engine import (
+    SupplierPriceLoader, calculate_price, extract_supplier_product_id,
+    DEFAULT_PRICE_RANGES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -4459,6 +4463,221 @@ def register_auto_import_routes(app):
         except Exception as e:
             logger.error(f"Brand stats error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
+
+
+    # ==================== ЦЕНООБРАЗОВАНИЕ ====================
+
+    @app.route('/auto-import/pricing', methods=['GET', 'POST'])
+    @login_required
+    def auto_import_pricing():
+        """Настройки формулы ценообразования"""
+        if not current_user.seller:
+            flash('Нет профиля продавца', 'warning')
+            return redirect(url_for('dashboard'))
+
+        seller = current_user.seller
+        pricing = PricingSettings.query.filter_by(seller_id=seller.id).first()
+
+        if request.method == 'POST':
+            if not pricing:
+                pricing = PricingSettings(seller_id=seller.id)
+                db.session.add(pricing)
+
+            pricing.is_enabled = 'is_enabled' in request.form
+            pricing.formula_type = request.form.get('formula_type', 'standard')
+
+            # URL файлов цен
+            pricing.supplier_price_url = request.form.get('supplier_price_url', '').strip() or None
+            pricing.supplier_price_inf_url = request.form.get('supplier_price_inf_url', '').strip() or None
+
+            # Числовые параметры
+            float_fields = [
+                'wb_commission_pct', 'tax_rate', 'logistics_cost', 'storage_cost',
+                'packaging_cost', 'acquiring_cost', 'extra_cost', 'delivery_pct',
+                'delivery_min', 'delivery_max', 'min_profit', 'max_profit',
+                'spp_pct', 'spp_min', 'spp_max', 'inflated_multiplier',
+            ]
+            for field in float_fields:
+                val = request.form.get(field, '').strip()
+                if val:
+                    try:
+                        setattr(pricing, field, float(val))
+                    except ValueError:
+                        pass
+                elif field == 'max_profit':
+                    pricing.max_profit = None
+
+            pricing.profit_column = request.form.get('profit_column', 'd').lower()
+            pricing.use_random = 'use_random' in request.form
+
+            int_fields = ['random_min', 'random_max']
+            for field in int_fields:
+                val = request.form.get(field, '').strip()
+                if val:
+                    try:
+                        setattr(pricing, field, int(val))
+                    except ValueError:
+                        pass
+
+            # Таблица наценок (JSON)
+            ranges_json = request.form.get('price_ranges', '').strip()
+            if ranges_json:
+                try:
+                    parsed = json.loads(ranges_json)
+                    if isinstance(parsed, list):
+                        pricing.price_ranges = json.dumps(parsed, ensure_ascii=False)
+                except json.JSONDecodeError:
+                    flash('Ошибка формата таблицы наценок (невалидный JSON)', 'danger')
+
+            db.session.commit()
+            flash('Настройки ценообразования сохранены', 'success')
+            return redirect(url_for('auto_import_pricing'))
+
+        # Подготавливаем данные для шаблона
+        ranges = []
+        if pricing and pricing.price_ranges:
+            try:
+                ranges = json.loads(pricing.price_ranges)
+            except json.JSONDecodeError:
+                ranges = DEFAULT_PRICE_RANGES
+        else:
+            ranges = DEFAULT_PRICE_RANGES
+
+        return render_template(
+            'pricing_settings.html',
+            pricing=pricing,
+            ranges=ranges,
+            default_ranges=DEFAULT_PRICE_RANGES,
+        )
+
+    @app.route('/api/pricing/sync-prices', methods=['POST'])
+    @login_required
+    def api_sync_supplier_prices():
+        """Синхронизировать цены поставщика из CSV"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Нет профиля продавца'}), 400
+
+        seller = current_user.seller
+        pricing = PricingSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not pricing or not pricing.supplier_price_url:
+            return jsonify({'success': False, 'error': 'Не настроен URL файла цен'}), 400
+
+        try:
+            loader = SupplierPriceLoader(
+                price_url=pricing.supplier_price_url,
+                inf_url=pricing.supplier_price_inf_url,
+            )
+            prices = loader.load_prices()
+
+            updated_imported = 0
+            updated_products = 0
+            now = datetime.utcnow()
+
+            # Обновляем ImportedProduct
+            imported_products = ImportedProduct.query.filter_by(
+                seller_id=seller.id
+            ).all()
+            for ip in imported_products:
+                supplier_pid = extract_supplier_product_id(ip.external_id)
+                if supplier_pid and supplier_pid in prices:
+                    new_price = prices[supplier_pid]['price']
+                    if ip.supplier_price != new_price:
+                        ip.supplier_price = new_price
+                        # Пересчитываем розничную цену
+                        result = calculate_price(new_price, pricing, product_id=supplier_pid)
+                        if result:
+                            ip.calculated_price = result['final_price']
+                            ip.calculated_discount_price = result['discount_price']
+                            ip.calculated_price_before_discount = result['price_before_discount']
+                        updated_imported += 1
+
+            # Обновляем Product (уже импортированные на WB)
+            products = Product.query.filter_by(seller_id=seller.id).all()
+            for p in products:
+                supplier_pid = extract_supplier_product_id(p.vendor_code)
+                if supplier_pid and supplier_pid in prices:
+                    new_price = prices[supplier_pid]['price']
+                    if p.supplier_price != new_price:
+                        p.supplier_price = new_price
+                        p.supplier_price_updated_at = now
+                        updated_products += 1
+
+            pricing.last_price_sync_at = now
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'total_prices': len(prices),
+                'updated_imported': updated_imported,
+                'updated_products': updated_products,
+            })
+
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации цен поставщика: {e}", exc_info=True)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/pricing/recalculate', methods=['POST'])
+    @login_required
+    def api_recalculate_prices():
+        """Пересчитать все розничные цены по текущей формуле"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Нет профиля продавца'}), 400
+
+        seller = current_user.seller
+        pricing = PricingSettings.query.filter_by(seller_id=seller.id).first()
+        if not pricing or not pricing.is_enabled:
+            return jsonify({'success': False, 'error': 'Ценообразование не настроено'}), 400
+
+        recalculated = 0
+        imported_products = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.supplier_price.isnot(None),
+            ImportedProduct.supplier_price > 0,
+        ).all()
+
+        for ip in imported_products:
+            supplier_pid = extract_supplier_product_id(ip.external_id) or ip.id
+            result = calculate_price(ip.supplier_price, pricing, product_id=supplier_pid)
+            if result:
+                ip.calculated_price = result['final_price']
+                ip.calculated_discount_price = result['discount_price']
+                ip.calculated_price_before_discount = result['price_before_discount']
+                recalculated += 1
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'recalculated': recalculated,
+        })
+
+    @app.route('/api/pricing/calculate-preview', methods=['POST'])
+    @login_required
+    def api_pricing_preview():
+        """Предпросмотр расчёта цены для заданной закупочной цены"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Нет профиля продавца'}), 400
+
+        data = request.get_json()
+        if not data or 'purchase_price' not in data:
+            return jsonify({'success': False, 'error': 'Не указана закупочная цена'}), 400
+
+        purchase_price = float(data['purchase_price'])
+
+        seller = current_user.seller
+        pricing = PricingSettings.query.filter_by(seller_id=seller.id).first()
+
+        # Используем либо сохранённые настройки, либо значения по умолчанию
+        if pricing:
+            result = calculate_price(purchase_price, pricing, product_id=0)
+        else:
+            result = calculate_price(purchase_price, {}, product_id=0)
+
+        if not result:
+            return jsonify({'success': False, 'error': 'Не удалось рассчитать цену'}), 400
+
+        return jsonify({'success': True, 'result': result})
 
 
 # Пример использования:

@@ -27,6 +27,7 @@ from models import (
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
+    PricingSettings,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -4572,6 +4573,23 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
             print(msg, flush=True)
             # Продолжаем без цен - будем использовать только данные карточек
 
+        # Загружаем цены поставщика для сравнения
+        supplier_prices = {}
+        supplier_prices_updated = 0
+        try:
+            from pricing_engine import SupplierPriceLoader, extract_supplier_product_id
+            from models import PricingSettings
+            pricing_settings = PricingSettings.query.filter_by(seller_id=seller.id).first()
+            if pricing_settings and pricing_settings.is_enabled and pricing_settings.supplier_price_url:
+                loader = SupplierPriceLoader(
+                    price_url=pricing_settings.supplier_price_url,
+                    inf_url=pricing_settings.supplier_price_inf_url,
+                )
+                supplier_prices = loader.load_prices()
+                app.logger.info(f"Loaded {len(supplier_prices)} supplier prices for comparison")
+        except Exception as sp_error:
+            app.logger.warning(f"Failed to load supplier prices: {sp_error}")
+
         changes_detected = 0
         suspicious_changes = 0
         products_checked = 0
@@ -4697,34 +4715,52 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
                 db.session.add(history)
                 db.session.flush()  # Чтобы получить ID истории
 
+                # Проверяем, менялась ли цена поставщика
+                supplier_price_changed = False
+                if supplier_prices and product.vendor_code:
+                    sp_id = extract_supplier_product_id(product.vendor_code)
+                    if sp_id and sp_id in supplier_prices:
+                        new_sp = supplier_prices[sp_id]['price']
+                        old_sp = product.supplier_price
+                        if old_sp and new_sp != old_sp:
+                            supplier_price_changed = True
+                        # Обновляем цену поставщика на продукте
+                        product.supplier_price = new_sp
+                        product.supplier_price_updated_at = datetime.utcnow()
+                        supplier_prices_updated += 1
+
                 # Проверяем, есть ли подозрительные скачки
+                # Если цена поставщика тоже менялась — изменение цены на WB ожидаемо
                 if price_change_percent and abs(price_change_percent) > settings.price_change_threshold_percent:
-                    suspicious = SuspiciousPriceChange(
-                        price_history_id=history.id,
-                        product_id=product.id,
-                        seller_id=seller.id,
-                        change_type='price',
-                        old_value=old_price,
-                        new_value=new_price,
-                        change_percent=price_change_percent,
-                        threshold_percent=settings.price_change_threshold_percent
-                    )
-                    db.session.add(suspicious)
-                    suspicious_changes += 1
+                    if not supplier_price_changed:
+                        # Цена на WB изменилась сильно, а у поставщика — нет. Алерт!
+                        suspicious = SuspiciousPriceChange(
+                            price_history_id=history.id,
+                            product_id=product.id,
+                            seller_id=seller.id,
+                            change_type='price',
+                            old_value=old_price,
+                            new_value=new_price,
+                            change_percent=price_change_percent,
+                            threshold_percent=settings.price_change_threshold_percent
+                        )
+                        db.session.add(suspicious)
+                        suspicious_changes += 1
 
                 if discount_price_change_percent and abs(discount_price_change_percent) > settings.price_change_threshold_percent:
-                    suspicious = SuspiciousPriceChange(
-                        price_history_id=history.id,
-                        product_id=product.id,
-                        seller_id=seller.id,
-                        change_type='discount_price',
-                        old_value=old_discount_price,
-                        new_value=new_discount_price,
-                        change_percent=discount_price_change_percent,
-                        threshold_percent=settings.price_change_threshold_percent
-                    )
-                    db.session.add(suspicious)
-                    suspicious_changes += 1
+                    if not supplier_price_changed:
+                        suspicious = SuspiciousPriceChange(
+                            price_history_id=history.id,
+                            product_id=product.id,
+                            seller_id=seller.id,
+                            change_type='discount_price',
+                            old_value=old_discount_price,
+                            new_value=new_discount_price,
+                            change_percent=discount_price_change_percent,
+                            threshold_percent=settings.price_change_threshold_percent
+                        )
+                        db.session.add(suspicious)
+                        suspicious_changes += 1
 
                 if quantity_change_percent and abs(quantity_change_percent) > settings.stock_change_threshold_percent:
                     suspicious = SuspiciousPriceChange(
@@ -4853,6 +4889,37 @@ def apply_migrations():
             cursor.execute("ALTER TABLE products ADD COLUMN subject_id INTEGER")
             conn.commit()
             print("  ✅ Колонка subject_id добавлена")
+
+        # Миграция: supplier_price для products
+        if 'supplier_price' not in columns:
+            print("  ➕ Добавление колонки supplier_price в products...")
+            cursor.execute("ALTER TABLE products ADD COLUMN supplier_price FLOAT")
+            cursor.execute("ALTER TABLE products ADD COLUMN supplier_price_updated_at DATETIME")
+            conn.commit()
+            print("  ✅ Колонки supplier_price добавлены")
+        else:
+            print("  ✓ Колонка supplier_price уже существует в products")
+
+        # Миграция: pricing поля для imported_products
+        cursor.execute("PRAGMA table_info(imported_products)")
+        ip_columns = {row[1] for row in cursor.fetchall()}
+        if ip_columns and 'supplier_price' not in ip_columns:
+            print("  ➕ Добавление колонок ценообразования в imported_products...")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN supplier_price FLOAT")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN calculated_price FLOAT")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN calculated_discount_price FLOAT")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN calculated_price_before_discount FLOAT")
+            conn.commit()
+            print("  ✅ Колонки ценообразования добавлены в imported_products")
+        elif ip_columns:
+            print("  ✓ Колонки ценообразования уже существуют в imported_products")
+
+        # Создаём таблицу pricing_settings если не существует
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pricing_settings'")
+        if not cursor.fetchone():
+            print("  ➕ Таблица pricing_settings будет создана через db.create_all()")
+        else:
+            print("  ✓ Таблица pricing_settings уже существует")
 
         print("\n✅ Миграции успешно применены!")
 
