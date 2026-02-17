@@ -143,7 +143,7 @@
                                 Карточки товаров
                             </dt>
                             <dd class="text-lg font-semibold text-gray-900">
-                                {{ current_user.seller.products.count() }}
+                                {{ products_count }}
                             </dd>
                         </dl>
                     </div>
@@ -165,7 +165,7 @@
                                 API запросов
                             </dt>
                             <dd class="text-lg font-semibold text-gray-900">
-                                {{ current_user.seller.api_logs.count() }}
+                                {{ api_logs_count }}
                             </dd>
                         </dl>
                     </div>

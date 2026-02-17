@@ -240,8 +240,8 @@ def sync_blocked_cards_all_sellers(flask_app):
     with flask_app.app_context():
         try:
             sellers = Seller.query.filter(
-                Seller.wb_api_key.isnot(None),
-                Seller.wb_api_key != ''
+                Seller._wb_api_key_encrypted.isnot(None),
+                Seller._wb_api_key_encrypted != ''
             ).all()
 
             logger.info(f"📋 Syncing blocked cards for {len(sellers)} sellers")

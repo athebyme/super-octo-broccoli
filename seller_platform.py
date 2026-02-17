@@ -433,12 +433,16 @@ def dashboard():
     latest_report = None
     summary = None
     latest_filename = None
+    products_count = 0
+    api_logs_count = 0
     if current_user.seller:
         latest_report = get_latest_report(current_user.seller.id)
         if latest_report:
             summary = latest_report.summary or {}
             processed_path = Path(latest_report.processed_path)
             latest_filename = processed_path.name if processed_path.exists() else None
+        products_count = Product.query.filter_by(seller_id=current_user.seller.id).count()
+        api_logs_count = APILog.query.filter_by(seller_id=current_user.seller.id).count()
 
     return render_template(
         'dashboard.html',
@@ -446,6 +450,8 @@ def dashboard():
         latest_report=latest_report,
         summary=summary,
         latest_filename=latest_filename,
+        products_count=products_count,
+        api_logs_count=api_logs_count,
     )
 
 
@@ -1215,7 +1221,7 @@ def products_list():
         total_products = pagination.total  # Количество товаров после применения всех фильтров
 
         # Для активных товаров - всегда показываем общее количество активных (без фильтров)
-        active_products = current_user.seller.products.filter_by(is_active=True).count()
+        active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
 
         # Получаем уникальные бренды и категории для фильтров
         brands = db.session.query(Product.brand).filter(
@@ -3494,8 +3500,8 @@ def api_logs():
     logs = pagination.items
 
     # Статистика
-    total_requests = current_user.seller.api_logs.count()
-    failed_requests = current_user.seller.api_logs.filter_by(success=False).count()
+    total_requests = APILog.query.filter_by(seller_id=current_user.seller.id).count()
+    failed_requests = APILog.query.filter_by(seller_id=current_user.seller.id, success=False).count()
     success_rate = ((total_requests - failed_requests) / total_requests * 100) if total_requests > 0 else 0
 
     return render_template(
