@@ -47,11 +47,23 @@ SHADOWED_CARD_COLUMNS = {
     'nm_rating': {'label': 'Рейтинг', 'getter': lambda p: p.get('nmRating', '')},
 }
 
+# Колонки для экспорта товаров из массовых операций
+BULK_EDIT_COLUMNS = {
+    'nm_id': {'label': 'Артикул WB', 'getter': lambda p: p.get('nm_id', '')},
+    'vendor_code': {'label': 'Артикул продавца', 'getter': lambda p: p.get('vendor_code', '')},
+    'title': {'label': 'Наименование', 'getter': lambda p: p.get('title', '')},
+    'brand': {'label': 'Бренд', 'getter': lambda p: p.get('brand', '')},
+    'changed_fields': {'label': 'Изменённые поля', 'getter': lambda p: p.get('changed_fields_str', '')},
+    'status': {'label': 'Статус', 'getter': lambda p: p.get('status', '')},
+    'error': {'label': 'Ошибка', 'getter': lambda p: p.get('error', '')},
+}
+
 # Реестр всех наборов колонок
 COLUMN_SETS = {
     'products': PRODUCT_COLUMNS,
     'blocked': BLOCKED_CARD_COLUMNS,
     'shadowed': SHADOWED_CARD_COLUMNS,
+    'bulk_edit': BULK_EDIT_COLUMNS,
 }
 
 

@@ -13,11 +13,13 @@ from sqlalchemy import or_
 
 from models import (
     db, Product, APILog, BlockedCard, ShadowedCard, BlockedCardsSyncSettings,
+    BulkEditHistory, CardEditHistory,
 )
 from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 from data_export import (
     export_data, get_available_columns,
-    BLOCKED_CARD_COLUMNS, SHADOWED_CARD_COLUMNS, PRODUCT_COLUMNS, COLUMN_SETS,
+    BLOCKED_CARD_COLUMNS, SHADOWED_CARD_COLUMNS, PRODUCT_COLUMNS,
+    BULK_EDIT_COLUMNS, COLUMN_SETS,
 )
 
 logger = logging.getLogger('blocked_cards')
@@ -388,6 +390,71 @@ def register_blocked_cards_routes(app):
             column_defs=PRODUCT_COLUMNS,
             fmt=fmt,
             filename_prefix='products',
+            separator=separator,
+            single_column_for_text=text_column if text_column else None,
+        )
+
+    # ==================== ЭКСПОРТ ИЗ МАССОВЫХ ОПЕРАЦИЙ ====================
+
+    @app.route('/bulk-history/<int:bulk_id>/export')
+    @login_required
+    def bulk_edit_export(bulk_id):
+        """Экспорт товаров из массовой операции"""
+        if not current_user.seller:
+            flash('Нет профиля продавца', 'warning')
+            return redirect(url_for('dashboard'))
+
+        seller = current_user.seller
+        bulk_op = BulkEditHistory.query.filter_by(
+            id=bulk_id, seller_id=seller.id
+        ).first_or_404()
+
+        fmt = request.args.get('format', 'csv')
+        columns = request.args.getlist('columns')
+        separator = request.args.get('separator', ', ')
+        text_column = request.args.get('text_column', '')
+
+        changes = CardEditHistory.query.filter_by(
+            bulk_edit_id=bulk_id
+        ).all()
+
+        field_labels = {
+            'vendor_code': 'Артикул', 'title': 'Название',
+            'description': 'Описание', 'brand': 'Бренд',
+            'characteristics': 'Характеристики',
+        }
+
+        data = []
+        for ch in changes:
+            product = ch.product
+            status = 'Откачено' if ch.reverted else (
+                'Синхронизировано' if ch.wb_synced else 'Ошибка'
+            )
+            changed = ', '.join(
+                field_labels.get(f, f) for f in (ch.changed_fields or [])
+            )
+            data.append({
+                'nm_id': product.nm_id if product else '',
+                'vendor_code': product.vendor_code if product else '',
+                'title': product.title if product else '',
+                'brand': product.brand if product else '',
+                'changed_fields_str': changed,
+                'status': status,
+                'error': ch.wb_error_message or '',
+            })
+
+        if not columns:
+            columns = list(BULK_EDIT_COLUMNS.keys())
+
+        desc = bulk_op.description or f'bulk_op_{bulk_id}'
+        safe_prefix = 'bulk_edit_' + str(bulk_id)
+
+        return export_data(
+            data=data,
+            columns=columns,
+            column_defs=BULK_EDIT_COLUMNS,
+            fmt=fmt,
+            filename_prefix=safe_prefix,
             separator=separator,
             single_column_for_text=text_column if text_column else None,
         )
