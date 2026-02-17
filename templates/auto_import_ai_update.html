@@ -5,17 +5,17 @@
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Заголовок -->
-    <div class="mb-8">
+    <div class="mb-6">
         <div class="flex items-center justify-between">
             <div>
-                <h1 class="text-3xl font-bold text-gray-900 flex items-center gap-3">
-                    <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                    <svg class="w-7 h-7 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
                     </svg>
-                    AI Обновление товаров
+                    AI Обработка товаров
                 </h1>
-                <p class="mt-2 text-sm text-gray-600">
-                    Выберите товары и укажите, какие данные обновить с помощью AI
+                <p class="mt-1 text-sm text-gray-500">
+                    Параллельная обработка с помощью AI. Поддерживает массовые операции.
                 </p>
             </div>
             <a href="{{ url_for('auto_import_products') }}"
@@ -32,7 +32,7 @@
     <!-- AI не настроен -->
     <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mb-6">
         <div class="flex items-start">
-            <svg class="w-6 h-6 text-yellow-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="w-6 h-6 text-yellow-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
             </svg>
             <div class="ml-4">
@@ -44,490 +44,751 @@
             </div>
         </div>
     </div>
-    {% endif %}
+    {% else %}
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- Левая колонка - выбор операций -->
-        <div class="lg:col-span-1">
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 sticky top-6">
-                <div class="px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                        </svg>
-                        Операции AI
-                    </h2>
-                </div>
+    <!-- Переключатель режимов -->
+    <div class="mb-6 bg-white shadow-sm rounded-lg border border-gray-200">
+        <div class="flex border-b border-gray-200">
+            <button id="tabBatch" onclick="switchTab('batch')"
+                    class="flex-1 px-6 py-3 text-sm font-medium border-b-2 border-indigo-500 text-indigo-600 bg-indigo-50/50 transition-colors">
+                <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                </svg>
+                Массовая обработка
+            </button>
+            <button id="tabManual" onclick="switchTab('manual')"
+                    class="flex-1 px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+                <svg class="w-4 h-4 inline mr-1.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                </svg>
+                Выбрать вручную (стр. {{ pagination.page }})
+            </button>
+        </div>
 
-                <div class="p-6 space-y-4">
-                    <!-- Категория -->
-                    <div class="relative flex items-start p-4 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors cursor-pointer"
-                         onclick="toggleOperation('category')">
-                        <div class="flex items-center h-5">
-                            <input id="op_category" type="checkbox" name="operations[]" value="category"
-                                   class="focus:ring-indigo-500 h-5 w-5 text-indigo-600 border-gray-300 rounded">
-                        </div>
-                        <div class="ml-3">
-                            <label for="op_category" class="text-sm font-medium text-gray-900 cursor-pointer">
-                                Определить категорию
+        <!-- ============================================================ -->
+        <!-- TAB 1: МАССОВАЯ ОБРАБОТКА -->
+        <!-- ============================================================ -->
+        <div id="panelBatch" class="p-6">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Левая часть: Фильтры + Операции -->
+                <div class="space-y-5">
+                    <!-- Фильтр товаров -->
+                    <div>
+                        <h3 class="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-3">Какие товары обработать</h3>
+                        <div class="space-y-2">
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30 cursor-pointer transition-colors">
+                                <input type="radio" name="batch_filter" value="all" checked
+                                       class="text-indigo-600 focus:ring-indigo-500" onchange="updateBatchCount()">
+                                <span class="ml-3 text-sm text-gray-800">Все необработанные товары</span>
+                                <span class="ml-auto text-xs text-gray-400">(pending, validated, failed)</span>
                             </label>
-                            <p class="text-xs text-gray-500 mt-1">AI определит наиболее подходящую категорию WB</p>
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30 cursor-pointer transition-colors">
+                                <input type="radio" name="batch_filter" value="pending"
+                                       class="text-indigo-600 focus:ring-indigo-500" onchange="updateBatchCount()">
+                                <span class="ml-3 text-sm text-gray-800">Только ожидающие</span>
+                                <span class="ml-auto text-xs text-gray-400">(pending)</span>
+                            </label>
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30 cursor-pointer transition-colors">
+                                <input type="radio" name="batch_filter" value="no_category"
+                                       class="text-indigo-600 focus:ring-indigo-500" onchange="updateBatchCount()">
+                                <span class="ml-3 text-sm text-gray-800">Без категории WB</span>
+                                <span class="ml-auto text-xs text-gray-400">(wb_subject_id пуст)</span>
+                            </label>
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30 cursor-pointer transition-colors">
+                                <input type="radio" name="batch_filter" value="failed"
+                                       class="text-indigo-600 focus:ring-indigo-500" onchange="updateBatchCount()">
+                                <span class="ml-3 text-sm text-gray-800">Только с ошибками</span>
+                                <span class="ml-auto text-xs text-gray-400">(failed)</span>
+                            </label>
                         </div>
-                        <div class="ml-auto">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                ~500 токенов
+                        <div class="mt-3 flex items-center gap-2 text-sm">
+                            <span class="text-gray-500">Подходит:</span>
+                            <span id="batchFilterCount" class="font-semibold text-indigo-600">
+                                <svg class="animate-spin inline w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             </span>
+                            <span class="text-gray-500">товаров</span>
                         </div>
                     </div>
 
-                    <!-- Вес и размеры -->
-                    <div class="relative flex items-start p-4 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors cursor-pointer"
-                         onclick="toggleOperation('dimensions')">
-                        <div class="flex items-center h-5">
-                            <input id="op_dimensions" type="checkbox" name="operations[]" value="dimensions"
-                                   class="focus:ring-indigo-500 h-5 w-5 text-indigo-600 border-gray-300 rounded">
-                        </div>
-                        <div class="ml-3">
-                            <label for="op_dimensions" class="text-sm font-medium text-gray-900 cursor-pointer">
-                                Вес и габариты
+                    <!-- Операции AI -->
+                    <div>
+                        <h3 class="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-3">Какие операции выполнить</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 cursor-pointer transition-colors"
+                                   onclick="event.stopPropagation()">
+                                <input type="checkbox" name="batch_ops" value="category" checked
+                                       class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateBatchEstimate()">
+                                <div class="ml-3">
+                                    <span class="text-sm font-medium text-gray-800">Категория</span>
+                                    <span class="block text-xs text-gray-400">~500 токенов</span>
+                                </div>
                             </label>
-                            <p class="text-xs text-gray-500 mt-1">Определит вес, длину, диаметр из описания</p>
-                        </div>
-                        <div class="ml-auto">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
-                                ~300 токенов
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Описание -->
-                    <div class="relative flex items-start p-4 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors cursor-pointer"
-                         onclick="toggleOperation('description')">
-                        <div class="flex items-center h-5">
-                            <input id="op_description" type="checkbox" name="operations[]" value="description"
-                                   class="focus:ring-indigo-500 h-5 w-5 text-indigo-600 border-gray-300 rounded">
-                        </div>
-                        <div class="ml-3">
-                            <label for="op_description" class="text-sm font-medium text-gray-900 cursor-pointer">
-                                Сгенерировать описание
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 cursor-pointer transition-colors"
+                                   onclick="event.stopPropagation()">
+                                <input type="checkbox" name="batch_ops" value="dimensions"
+                                       class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateBatchEstimate()">
+                                <div class="ml-3">
+                                    <span class="text-sm font-medium text-gray-800">Габариты</span>
+                                    <span class="block text-xs text-gray-400">~300 токенов</span>
+                                </div>
                             </label>
-                            <p class="text-xs text-gray-500 mt-1">AI создаст SEO-оптимизированное описание</p>
-                        </div>
-                        <div class="ml-auto">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
-                                ~800 токенов
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Размеры одежды -->
-                    <div class="relative flex items-start p-4 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50 transition-colors cursor-pointer"
-                         onclick="toggleOperation('sizes')">
-                        <div class="flex items-center h-5">
-                            <input id="op_sizes" type="checkbox" name="operations[]" value="sizes"
-                                   class="focus:ring-indigo-500 h-5 w-5 text-indigo-600 border-gray-300 rounded">
-                        </div>
-                        <div class="ml-3">
-                            <label for="op_sizes" class="text-sm font-medium text-gray-900 cursor-pointer">
-                                Парсинг размеров
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 cursor-pointer transition-colors"
+                                   onclick="event.stopPropagation()">
+                                <input type="checkbox" name="batch_ops" value="description"
+                                       class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateBatchEstimate()">
+                                <div class="ml-3">
+                                    <span class="text-sm font-medium text-gray-800">Описание</span>
+                                    <span class="block text-xs text-gray-400">~800 токенов</span>
+                                </div>
                             </label>
-                            <p class="text-xs text-gray-500 mt-1">Извлечет размеры и характеристики из текста</p>
+                            <label class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-indigo-300 cursor-pointer transition-colors"
+                                   onclick="event.stopPropagation()">
+                                <input type="checkbox" name="batch_ops" value="sizes"
+                                       class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateBatchEstimate()">
+                                <div class="ml-3">
+                                    <span class="text-sm font-medium text-gray-800">Размеры</span>
+                                    <span class="block text-xs text-gray-400">~400 токенов</span>
+                                </div>
+                            </label>
                         </div>
-                        <div class="ml-auto">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
-                                ~400 токенов
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- Все сразу -->
-                    <div class="pt-4 border-t border-gray-200">
-                        <button type="button" onclick="selectAllOperations()"
-                                class="w-full px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors">
+                        <button type="button" onclick="document.querySelectorAll('input[name=batch_ops]').forEach(c=>c.checked=true);updateBatchEstimate()"
+                                class="mt-2 text-xs text-indigo-600 hover:text-indigo-800 transition-colors">
                             Выбрать все операции
                         </button>
                     </div>
                 </div>
 
-                <!-- Оценка стоимости -->
-                <div class="px-6 py-4 bg-gray-50 border-t border-gray-200 rounded-b-lg">
-                    <div class="flex items-center justify-between text-sm">
-                        <span class="text-gray-600">Выбрано товаров:</span>
-                        <span id="selectedProductsCount" class="font-semibold text-gray-900">0</span>
-                    </div>
-                    <div class="flex items-center justify-between text-sm mt-2">
-                        <span class="text-gray-600">Примерно токенов:</span>
-                        <span id="estimatedTokens" class="font-semibold text-indigo-600">0</span>
-                    </div>
-                    <div class="mt-4">
-                        <button id="runAIBtn" type="button" onclick="runAIUpdate()" disabled
-                                class="w-full inline-flex justify-center items-center px-4 py-3 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors">
+                <!-- Правая часть: Сводка + Кнопка запуска -->
+                <div>
+                    <div class="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl border border-indigo-100 p-6">
+                        <h3 class="text-sm font-semibold text-indigo-900 uppercase tracking-wider mb-4">Сводка перед запуском</h3>
+
+                        <div class="space-y-3">
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm text-gray-600">Товаров к обработке:</span>
+                                <span id="batchSummaryCount" class="text-lg font-bold text-indigo-700">0</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm text-gray-600">Выбрано операций:</span>
+                                <span id="batchSummaryOps" class="text-lg font-bold text-indigo-700">1</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm text-gray-600">Примерно токенов:</span>
+                                <span id="batchSummaryTokens" class="text-lg font-bold text-purple-600">0</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm text-gray-600">Параллельность:</span>
+                                <span class="text-sm font-medium text-gray-700">3 потока</span>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 p-3 bg-white/60 rounded-lg border border-indigo-100">
+                            <div class="flex items-start gap-2">
+                                <svg class="w-4 h-4 text-indigo-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                                <p class="text-xs text-gray-600">
+                                    Обработка выполняется в фоне параллельно. Вы можете следить за прогрессом в реальном времени. Страницу можно закрыть - обработка продолжится.
+                                </p>
+                            </div>
+                        </div>
+
+                        <button id="batchRunBtn" type="button" onclick="startBatchProcessing()"
+                                class="w-full mt-5 inline-flex justify-center items-center px-6 py-3.5 border border-transparent shadow-sm text-sm font-semibold rounded-xl text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all transform hover:scale-[1.02] active:scale-[0.98]">
                             <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                             </svg>
-                            Запустить AI
+                            Запустить массовую обработку
                         </button>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Правая колонка - список товаров -->
-        <div class="lg:col-span-2">
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
-                <!-- Заголовок таблицы -->
-                <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                    <h3 class="text-lg font-semibold text-gray-900">Товары для обработки</h3>
-                    <div class="flex items-center gap-3">
-                        <span class="text-sm text-gray-500">Всего: {{ products|length }}</span>
-                        <button type="button" onclick="selectAllProducts()"
-                                class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors">
-                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            Выбрать все
-                        </button>
-                        <button type="button" onclick="deselectAllProducts()"
-                                class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">
-                            Снять выбор
-                        </button>
+        <!-- ============================================================ -->
+        <!-- TAB 2: РУЧНОЙ ВЫБОР (текущая страница) -->
+        <!-- ============================================================ -->
+        <div id="panelManual" class="hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-0">
+                <!-- Операции (compact sidebar) -->
+                <div class="lg:col-span-1 border-r border-gray-200 p-5">
+                    <h3 class="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-3">Операции</h3>
+                    <div class="space-y-2">
+                        <label class="flex items-center gap-2 text-sm cursor-pointer p-2 rounded hover:bg-gray-50">
+                            <input type="checkbox" name="manual_ops" value="category" class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateManualEstimate()">
+                            <span>Категория</span>
+                            <span class="ml-auto text-xs text-gray-400">~500</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-sm cursor-pointer p-2 rounded hover:bg-gray-50">
+                            <input type="checkbox" name="manual_ops" value="dimensions" class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateManualEstimate()">
+                            <span>Габариты</span>
+                            <span class="ml-auto text-xs text-gray-400">~300</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-sm cursor-pointer p-2 rounded hover:bg-gray-50">
+                            <input type="checkbox" name="manual_ops" value="description" class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateManualEstimate()">
+                            <span>Описание</span>
+                            <span class="ml-auto text-xs text-gray-400">~800</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-sm cursor-pointer p-2 rounded hover:bg-gray-50">
+                            <input type="checkbox" name="manual_ops" value="sizes" class="rounded text-indigo-600 focus:ring-indigo-500" onchange="updateManualEstimate()">
+                            <span>Размеры</span>
+                            <span class="ml-auto text-xs text-gray-400">~400</span>
+                        </label>
                     </div>
+
+                    <div class="mt-4 pt-4 border-t border-gray-200 space-y-2 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Выбрано:</span>
+                            <span id="manualSelectedCount" class="font-semibold text-gray-900">0 товаров</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Токенов:</span>
+                            <span id="manualTokenEstimate" class="font-semibold text-indigo-600">0</span>
+                        </div>
+                    </div>
+
+                    <button id="manualRunBtn" type="button" onclick="startManualProcessing()" disabled
+                            class="w-full mt-4 inline-flex justify-center items-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                        </svg>
+                        Обработать выбранные
+                    </button>
                 </div>
 
-                {% if products %}
-                <div class="overflow-x-auto max-h-[600px] overflow-y-auto">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50 sticky top-0">
-                            <tr>
-                                <th scope="col" class="px-4 py-3 text-left">
-                                    <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"
-                                           class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                </th>
-                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Товар
-                                </th>
-                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Категория
-                                </th>
-                                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    AI Статус
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                            {% for product in products %}
-                            <tr class="hover:bg-gray-50 transition-colors product-row" data-product-id="{{ product.id }}">
-                                <td class="px-4 py-3">
-                                    <input type="checkbox" name="product_ids[]" value="{{ product.id }}"
-                                           onchange="updateSelection()"
-                                           class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                                </td>
-                                <td class="px-4 py-3">
-                                    <div class="flex items-center">
-                                        {% set photos = (product.photo_urls or '[]')|from_json if product.photo_urls else [] %}
-                                        {% if photos and photos|length > 0 and photos[0] %}
-                                        {% set photo_url = photos[0].sexoptovik if photos[0] is mapping else photos[0] %}
-                                        <img data-src="{{ url_for('auto_import_photo_padded', url=photo_url) }}"
-                                             src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect fill='%23e5e7eb' width='48' height='48'/%3E%3C/svg%3E"
-                                             loading="lazy"
-                                             class="lazy-photo w-12 h-12 object-cover rounded-lg mr-3"
-                                             onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect fill=%22%23e5e7eb%22 width=%2248%22 height=%2248%22/></svg>'">
-                                        {% else %}
-                                        <div class="w-12 h-12 bg-gray-200 rounded-lg mr-3 flex items-center justify-center">
-                                            <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
-                                            </svg>
+                <!-- Таблица товаров -->
+                <div class="lg:col-span-2">
+                    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+                        <div class="flex items-center gap-3">
+                            <input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)"
+                                   class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                            <span class="text-sm text-gray-600">Стр. {{ pagination.page }} из {{ pagination.pages }} ({{ pagination.total }} товаров)</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button type="button" onclick="selectAllProducts()"
+                                    class="text-xs text-indigo-600 hover:text-indigo-800">Выбрать все</button>
+                            <span class="text-gray-300">|</span>
+                            <button type="button" onclick="deselectAllProducts()"
+                                    class="text-xs text-gray-500 hover:text-gray-700">Снять</button>
+                        </div>
+                    </div>
+
+                    {% if products %}
+                    <div class="overflow-y-auto max-h-[500px]">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50 sticky top-0 z-10">
+                                <tr>
+                                    <th class="w-10 px-3 py-2"></th>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Категория</th>
+                                    <th class="w-24 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                {% for product in products %}
+                                <tr class="hover:bg-gray-50/50 transition-colors product-row" data-product-id="{{ product.id }}">
+                                    <td class="px-3 py-2">
+                                        <input type="checkbox" name="product_ids[]" value="{{ product.id }}"
+                                               onchange="updateManualSelection()"
+                                               class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <div class="flex items-center gap-2">
+                                            {% set photos = (product.photo_urls or '[]')|from_json if product.photo_urls else [] %}
+                                            {% if photos and photos|length > 0 and photos[0] %}
+                                            {% set photo_url = photos[0].sexoptovik if photos[0] is mapping else photos[0] %}
+                                            <img data-src="{{ url_for('auto_import_photo_padded', url=photo_url) }}"
+                                                 src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36'%3E%3Crect fill='%23f3f4f6' width='36' height='36' rx='4'/%3E%3C/svg%3E"
+                                                 loading="lazy"
+                                                 class="lazy-photo w-9 h-9 object-cover rounded flex-shrink-0"
+                                                 onerror="this.style.display='none'">
+                                            {% endif %}
+                                            <div class="min-w-0">
+                                                <p class="text-sm font-medium text-gray-900 truncate max-w-[280px]" title="{{ product.title }}">{{ product.title|truncate(55) }}</p>
+                                                <p class="text-xs text-gray-400">ID: {{ product.external_id }}</p>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <div class="text-xs text-gray-600 truncate max-w-[160px]">{{ product.mapped_wb_category or product.category or '—' }}</div>
+                                        {% if product.category_confidence %}
+                                        <div class="flex items-center mt-0.5 gap-1">
+                                            <div class="w-12 h-1 bg-gray-200 rounded-full overflow-hidden">
+                                                <div class="h-full rounded-full {% if product.category_confidence >= 0.8 %}bg-green-500{% elif product.category_confidence >= 0.5 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
+                                                     style="width: {{ (product.category_confidence * 100)|int }}%"></div>
+                                            </div>
+                                            <span class="text-[10px] text-gray-400">{{ (product.category_confidence * 100)|int }}%</span>
                                         </div>
                                         {% endif %}
-                                        <div class="min-w-0 flex-1">
-                                            <p class="text-sm font-medium text-gray-900 truncate" title="{{ product.title }}">
-                                                {{ product.title|truncate(50) }}
-                                            </p>
-                                            <p class="text-xs text-gray-500">ID: {{ product.external_id }}</p>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <div id="ai-status-{{ product.id }}" class="text-xs">
+                                            <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">Ожидает</span>
                                         </div>
-                                    </div>
-                                </td>
-                                <td class="px-4 py-3">
-                                    <div class="text-sm text-gray-900">{{ product.mapped_wb_category or product.category or '—' }}</div>
-                                    {% if product.category_confidence %}
-                                    <div class="flex items-center mt-1">
-                                        <div class="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                                            <div class="h-full rounded-full {% if product.category_confidence >= 0.8 %}bg-green-500{% elif product.category_confidence >= 0.5 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
-                                                 style="width: {{ (product.category_confidence * 100)|int }}%"></div>
-                                        </div>
-                                        <span class="text-xs text-gray-500 ml-2">{{ (product.category_confidence * 100)|int }}%</span>
-                                    </div>
-                                    {% endif %}
-                                </td>
-                                <td class="px-4 py-3">
-                                    <div id="ai-status-{{ product.id }}" class="text-sm text-gray-500">
-                                        <span class="inline-flex items-center px-2 py-1 rounded text-xs bg-gray-100 text-gray-600">
-                                            Ожидает
-                                        </span>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Пагинация -->
-                {% if pagination and pagination.pages > 1 %}
-                <div class="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-                    <div class="text-sm text-gray-500">
-                        Страница {{ pagination.page }} из {{ pagination.pages }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
                     </div>
-                    <div class="flex gap-2">
-                        {% if pagination.has_prev %}
-                        <a href="{{ url_for('auto_import_ai_update', page=pagination.prev_num) }}"
-                           class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
-                            Назад
-                        </a>
-                        {% endif %}
-                        {% if pagination.has_next %}
-                        <a href="{{ url_for('auto_import_ai_update', page=pagination.next_num) }}"
-                           class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
-                            Вперед
-                        </a>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endif %}
 
-                {% else %}
-                <div class="text-center py-12">
-                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
-                    </svg>
-                    <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
-                    <p class="mt-1 text-sm text-gray-500">Сначала импортируйте товары из источника</p>
+                    <!-- Пагинация -->
+                    {% if pagination and pagination.pages > 1 %}
+                    <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
+                        <span class="text-xs text-gray-500">Стр. {{ pagination.page }} / {{ pagination.pages }}</span>
+                        <div class="flex gap-1.5">
+                            {% if pagination.has_prev %}
+                            <a href="{{ url_for('auto_import_ai_update', page=pagination.prev_num) }}"
+                               class="px-2.5 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100 transition-colors">← Назад</a>
+                            {% endif %}
+                            {% if pagination.has_next %}
+                            <a href="{{ url_for('auto_import_ai_update', page=pagination.next_num) }}"
+                               class="px-2.5 py-1 text-xs border border-gray-300 rounded hover:bg-gray-100 transition-colors">Вперед →</a>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div class="text-center py-12 text-gray-400">
+                        <svg class="mx-auto h-10 w-10 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+                        </svg>
+                        <p class="text-sm">Нет товаров для обработки</p>
+                    </div>
+                    {% endif %}
                 </div>
-                {% endif %}
             </div>
         </div>
     </div>
+    {% endif %}
 </div>
 
-<!-- Модальное окно прогресса -->
-<div id="progressModal" class="fixed inset-0 bg-gray-500 bg-opacity-75 hidden items-center justify-center z-50" style="display: none;">
-    <div class="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6">
-        <div class="text-center">
-            <div class="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-indigo-100 mb-4">
-                <svg class="animate-spin h-8 w-8 text-indigo-600" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+<!-- ================================================================== -->
+<!-- МОДАЛЬНОЕ ОКНО ПРОГРЕССА (SSE) -->
+<!-- ================================================================== -->
+<div id="progressModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden items-center justify-center z-50" style="display:none">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden">
+        <!-- Header -->
+        <div class="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4">
+            <div class="flex items-center justify-between">
+                <h3 class="text-white font-semibold" id="progressTitle">AI обработка...</h3>
+                <span class="text-indigo-200 text-sm" id="progressTimer">0:00</span>
             </div>
-            <h3 class="text-lg font-semibold text-gray-900" id="progressTitle">AI обработка...</h3>
-            <p class="text-sm text-gray-500 mt-1" id="progressSubtitle">Подождите, идет обработка товаров</p>
+            <p class="text-indigo-100 text-sm mt-0.5" id="progressSubtitle">Параллельная обработка товаров</p>
+        </div>
 
+        <div class="px-6 py-5">
             <!-- Прогресс бар -->
-            <div class="mt-6">
-                <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
-                    <span>Обработано:</span>
-                    <span id="progressCount">0 / 0</span>
+            <div>
+                <div class="flex items-center justify-between text-sm text-gray-600 mb-1.5">
+                    <span>Прогресс</span>
+                    <span id="progressCount" class="font-mono font-medium">0 / 0</span>
                 </div>
-                <div class="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
-                    <div id="progressBar" class="h-full bg-indigo-600 rounded-full transition-all duration-300" style="width: 0%"></div>
+                <div class="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+                    <div id="progressBar" class="h-full rounded-full transition-all duration-500 ease-out bg-gradient-to-r from-indigo-500 to-purple-500" style="width:0%"></div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-400 mt-1">
+                    <span id="progressPercent">0%</span>
+                    <span id="progressSpeed"></span>
                 </div>
             </div>
 
             <!-- Текущий товар -->
-            <div class="mt-4 text-left bg-gray-50 rounded-lg p-3">
-                <p class="text-xs text-gray-500">Текущий товар:</p>
-                <p id="currentProduct" class="text-sm font-medium text-gray-800 truncate">—</p>
+            <div class="mt-4 bg-gray-50 rounded-lg p-3">
+                <p class="text-xs text-gray-400 mb-0.5">Последний обработанный:</p>
+                <p id="currentProduct" class="text-sm font-medium text-gray-700 truncate">Ожидание запуска...</p>
             </div>
 
-            <!-- Результаты -->
-            <div class="mt-4 grid grid-cols-3 gap-3 text-center">
-                <div class="bg-green-50 rounded-lg p-2">
-                    <p id="successCount" class="text-lg font-bold text-green-600">0</p>
-                    <p class="text-xs text-green-700">Успешно</p>
+            <!-- Счетчики результатов -->
+            <div class="mt-4 grid grid-cols-3 gap-3">
+                <div class="text-center p-3 rounded-xl bg-green-50 border border-green-100">
+                    <p id="successCount" class="text-2xl font-bold text-green-600">0</p>
+                    <p class="text-xs text-green-600 font-medium">Успешно</p>
                 </div>
-                <div class="bg-yellow-50 rounded-lg p-2">
-                    <p id="skipCount" class="text-lg font-bold text-yellow-600">0</p>
-                    <p class="text-xs text-yellow-700">Пропущено</p>
+                <div class="text-center p-3 rounded-xl bg-amber-50 border border-amber-100">
+                    <p id="skipCount" class="text-2xl font-bold text-amber-500">0</p>
+                    <p class="text-xs text-amber-600 font-medium">Пропущено</p>
                 </div>
-                <div class="bg-red-50 rounded-lg p-2">
-                    <p id="errorCount" class="text-lg font-bold text-red-600">0</p>
-                    <p class="text-xs text-red-700">Ошибки</p>
+                <div class="text-center p-3 rounded-xl bg-red-50 border border-red-100">
+                    <p id="errorCount" class="text-2xl font-bold text-red-500">0</p>
+                    <p class="text-xs text-red-600 font-medium">Ошибки</p>
                 </div>
             </div>
+
+            <!-- Лог последних операций -->
+            <div id="progressLog" class="mt-4 max-h-32 overflow-y-auto space-y-1 text-xs hidden">
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="px-6 py-3 bg-gray-50 border-t border-gray-100 flex justify-end">
+            <button id="progressCloseBtn" onclick="closeProgressModal()" class="hidden px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                Закрыть
+            </button>
         </div>
     </div>
 </div>
 
 <script>
-// Token estimates per operation
-const TOKEN_ESTIMATES = {
-    category: 500,
-    dimensions: 300,
-    description: 800,
-    sizes: 400
-};
+const TOKEN_ESTIMATES = { category: 500, dimensions: 300, description: 800, sizes: 400 };
+let currentEventSource = null;
+let progressStartTime = null;
+let timerInterval = null;
 
-function toggleOperation(opName) {
-    const checkbox = document.getElementById('op_' + opName);
-    checkbox.checked = !checkbox.checked;
-    updateEstimates();
+// ================================================================
+// TAB SWITCHING
+// ================================================================
+function switchTab(tab) {
+    const batchTab = document.getElementById('tabBatch');
+    const manualTab = document.getElementById('tabManual');
+    const batchPanel = document.getElementById('panelBatch');
+    const manualPanel = document.getElementById('panelManual');
+
+    if (tab === 'batch') {
+        batchTab.className = 'flex-1 px-6 py-3 text-sm font-medium border-b-2 border-indigo-500 text-indigo-600 bg-indigo-50/50 transition-colors';
+        manualTab.className = 'flex-1 px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors';
+        batchPanel.classList.remove('hidden');
+        manualPanel.classList.add('hidden');
+    } else {
+        manualTab.className = 'flex-1 px-6 py-3 text-sm font-medium border-b-2 border-indigo-500 text-indigo-600 bg-indigo-50/50 transition-colors';
+        batchTab.className = 'flex-1 px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors';
+        manualPanel.classList.remove('hidden');
+        batchPanel.classList.add('hidden');
+    }
 }
 
-function selectAllOperations() {
-    document.querySelectorAll('input[name="operations[]"]').forEach(cb => cb.checked = true);
-    updateEstimates();
+// ================================================================
+// BATCH MODE
+// ================================================================
+let batchProductCount = 0;
+
+async function updateBatchCount() {
+    const filter = document.querySelector('input[name=batch_filter]:checked').value;
+    const el = document.getElementById('batchFilterCount');
+    el.innerHTML = '<svg class="animate-spin inline w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>';
+
+    let payload = {};
+    if (filter === 'all') {
+        payload = { filter_status: ['pending', 'validated', 'failed'] };
+    } else if (filter === 'pending') {
+        payload = { filter_status: ['pending'] };
+    } else if (filter === 'no_category') {
+        payload = { filter_status: ['pending', 'validated', 'failed'], filter_no_category: true };
+    } else if (filter === 'failed') {
+        payload = { filter_status: ['failed'] };
+    }
+
+    try {
+        const resp = await fetch('{{ url_for("auto_import_ai_batch_count") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        batchProductCount = data.count || 0;
+        el.textContent = batchProductCount.toLocaleString();
+    } catch (e) {
+        el.textContent = '?';
+        batchProductCount = 0;
+    }
+    updateBatchEstimate();
 }
 
+function updateBatchEstimate() {
+    const ops = document.querySelectorAll('input[name=batch_ops]:checked');
+    let tokensPerProduct = 0;
+    ops.forEach(cb => { tokensPerProduct += TOKEN_ESTIMATES[cb.value] || 0; });
+
+    document.getElementById('batchSummaryCount').textContent = batchProductCount.toLocaleString();
+    document.getElementById('batchSummaryOps').textContent = ops.length;
+    document.getElementById('batchSummaryTokens').textContent = (tokensPerProduct * batchProductCount).toLocaleString();
+
+    const btn = document.getElementById('batchRunBtn');
+    btn.disabled = batchProductCount === 0 || ops.length === 0;
+}
+
+async function startBatchProcessing() {
+    const filter = document.querySelector('input[name=batch_filter]:checked').value;
+    const ops = Array.from(document.querySelectorAll('input[name=batch_ops]:checked')).map(c => c.value);
+
+    if (ops.length === 0) { alert('Выберите хотя бы одну операцию'); return; }
+    if (batchProductCount === 0) { alert('Нет товаров для обработки'); return; }
+
+    let payload = { product_ids: 'all', operations: ops };
+    if (filter === 'all') {
+        payload.filter_status = ['pending', 'validated', 'failed'];
+    } else if (filter === 'pending') {
+        payload.filter_status = ['pending'];
+    } else if (filter === 'no_category') {
+        payload.filter_status = ['pending', 'validated', 'failed'];
+        payload.filter_no_category = true;
+    } else if (filter === 'failed') {
+        payload.filter_status = ['failed'];
+    }
+
+    document.getElementById('batchRunBtn').disabled = true;
+    document.getElementById('batchRunBtn').innerHTML = '<svg class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Запуск...';
+
+    try {
+        const resp = await fetch('{{ url_for("auto_import_ai_batch_start") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (data.success) {
+            openProgressModal(data.job_id, data.total);
+        } else {
+            alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+        }
+    } catch (e) {
+        alert('Ошибка сети: ' + e.message);
+    }
+
+    document.getElementById('batchRunBtn').disabled = false;
+    document.getElementById('batchRunBtn').innerHTML = '<svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>Запустить массовую обработку';
+}
+
+// ================================================================
+// MANUAL MODE
+// ================================================================
 function selectAllProducts() {
     document.querySelectorAll('.product-checkbox').forEach(cb => cb.checked = true);
     document.getElementById('selectAllCheckbox').checked = true;
-    updateSelection();
+    updateManualSelection();
 }
 
 function deselectAllProducts() {
     document.querySelectorAll('.product-checkbox').forEach(cb => cb.checked = false);
     document.getElementById('selectAllCheckbox').checked = false;
-    updateSelection();
+    updateManualSelection();
 }
 
-function toggleSelectAll(masterCheckbox) {
-    document.querySelectorAll('.product-checkbox').forEach(cb => cb.checked = masterCheckbox.checked);
-    updateSelection();
+function toggleSelectAll(master) {
+    document.querySelectorAll('.product-checkbox').forEach(cb => cb.checked = master.checked);
+    updateManualSelection();
 }
 
-function updateSelection() {
-    const checkedProducts = document.querySelectorAll('.product-checkbox:checked').length;
-    const totalProducts = document.querySelectorAll('.product-checkbox').length;
+function updateManualSelection() {
+    const checked = document.querySelectorAll('.product-checkbox:checked').length;
+    const total = document.querySelectorAll('.product-checkbox').length;
+    const chk = document.getElementById('selectAllCheckbox');
 
-    document.getElementById('selectedProductsCount').textContent = checkedProducts;
-    document.getElementById('selectAllCheckbox').checked = checkedProducts === totalProducts;
-    document.getElementById('selectAllCheckbox').indeterminate = checkedProducts > 0 && checkedProducts < totalProducts;
+    chk.checked = checked === total && total > 0;
+    chk.indeterminate = checked > 0 && checked < total;
 
-    updateEstimates();
+    document.getElementById('manualSelectedCount').textContent = checked + ' товаров';
+    updateManualEstimate();
 }
 
-function updateEstimates() {
-    const selectedProducts = document.querySelectorAll('.product-checkbox:checked').length;
-    const selectedOperations = Array.from(document.querySelectorAll('input[name="operations[]"]:checked')).map(cb => cb.value);
+function updateManualEstimate() {
+    const selected = document.querySelectorAll('.product-checkbox:checked').length;
+    const ops = document.querySelectorAll('input[name=manual_ops]:checked');
+    let tokensPerProduct = 0;
+    ops.forEach(cb => { tokensPerProduct += TOKEN_ESTIMATES[cb.value] || 0; });
 
-    let totalTokens = 0;
-    selectedOperations.forEach(op => {
-        totalTokens += TOKEN_ESTIMATES[op] || 0;
-    });
-    totalTokens *= selectedProducts;
-
-    document.getElementById('estimatedTokens').textContent = totalTokens.toLocaleString();
-
-    // Enable/disable run button
-    const runBtn = document.getElementById('runAIBtn');
-    runBtn.disabled = selectedProducts === 0 || selectedOperations.length === 0;
+    document.getElementById('manualTokenEstimate').textContent = (tokensPerProduct * selected).toLocaleString();
+    document.getElementById('manualRunBtn').disabled = selected === 0 || ops.length === 0;
 }
 
-async function runAIUpdate() {
-    const selectedProducts = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.value);
-    const selectedOperations = Array.from(document.querySelectorAll('input[name="operations[]"]:checked')).map(cb => cb.value);
+async function startManualProcessing() {
+    const productIds = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(c => parseInt(c.value));
+    const ops = Array.from(document.querySelectorAll('input[name=manual_ops]:checked')).map(c => c.value);
 
-    if (selectedProducts.length === 0 || selectedOperations.length === 0) {
-        alert('Выберите товары и операции для обработки');
-        return;
+    if (productIds.length === 0 || ops.length === 0) { alert('Выберите товары и операции'); return; }
+
+    document.getElementById('manualRunBtn').disabled = true;
+
+    try {
+        const resp = await fetch('{{ url_for("auto_import_ai_batch_start") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_ids: productIds, operations: ops })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            openProgressModal(data.job_id, data.total);
+        } else {
+            alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+        }
+    } catch (e) {
+        alert('Ошибка сети: ' + e.message);
     }
 
-    // Show progress modal
+    document.getElementById('manualRunBtn').disabled = false;
+}
+
+// ================================================================
+// PROGRESS MODAL (SSE)
+// ================================================================
+function openProgressModal(jobId, total) {
     const modal = document.getElementById('progressModal');
     modal.style.display = 'flex';
     modal.classList.remove('hidden');
 
-    // Reset counters
-    let processed = 0;
-    let success = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    document.getElementById('progressCount').textContent = `0 / ${selectedProducts.length}`;
+    // Reset
+    document.getElementById('progressTitle').textContent = 'AI обработка...';
+    document.getElementById('progressSubtitle').textContent = `Обработка ${total} товаров (3 параллельных потока)`;
+    document.getElementById('progressCount').textContent = `0 / ${total}`;
     document.getElementById('progressBar').style.width = '0%';
+    document.getElementById('progressPercent').textContent = '0%';
+    document.getElementById('progressSpeed').textContent = '';
     document.getElementById('successCount').textContent = '0';
     document.getElementById('skipCount').textContent = '0';
     document.getElementById('errorCount').textContent = '0';
+    document.getElementById('currentProduct').textContent = 'Запуск обработки...';
+    document.getElementById('progressCloseBtn').classList.add('hidden');
+    document.getElementById('progressLog').innerHTML = '';
+    document.getElementById('progressLog').classList.add('hidden');
 
-    // Process products one by one
-    for (const productId of selectedProducts) {
-        const row = document.querySelector(`tr[data-product-id="${productId}"]`);
-        const productTitle = row ? row.querySelector('.text-sm.font-medium').textContent.trim() : 'Товар ' + productId;
+    // Timer
+    progressStartTime = Date.now();
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(updateTimer, 1000);
 
-        document.getElementById('currentProduct').textContent = productTitle;
-
-        // Update row status
-        const statusCell = document.getElementById(`ai-status-${productId}`);
-        if (statusCell) {
-            statusCell.innerHTML = '<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-100 text-blue-600"><svg class="animate-spin w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Обработка</span>';
-        }
-
-        try {
-            const response = await fetch('{{ url_for("auto_import_ai_process_single") }}', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    product_id: productId,
-                    operations: selectedOperations
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                success++;
-                if (statusCell) {
-                    statusCell.innerHTML = '<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-green-100 text-green-600">Готово</span>';
-                }
-            } else if (result.skipped) {
-                skipped++;
-                if (statusCell) {
-                    statusCell.innerHTML = '<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-yellow-100 text-yellow-600">Пропущен</span>';
-                }
-            } else {
-                errors++;
-                if (statusCell) {
-                    statusCell.innerHTML = `<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-red-100 text-red-600" title="${result.error || 'Ошибка'}">Ошибка</span>`;
-                }
-            }
-        } catch (e) {
-            errors++;
-            if (statusCell) {
-                statusCell.innerHTML = '<span class="inline-flex items-center px-2 py-1 rounded text-xs bg-red-100 text-red-600">Ошибка сети</span>';
-            }
-        }
-
-        processed++;
-        const percent = Math.round((processed / selectedProducts.length) * 100);
-        document.getElementById('progressCount').textContent = `${processed} / ${selectedProducts.length}`;
-        document.getElementById('progressBar').style.width = `${percent}%`;
-        document.getElementById('successCount').textContent = success;
-        document.getElementById('skipCount').textContent = skipped;
-        document.getElementById('errorCount').textContent = errors;
-    }
-
-    // Completion
-    document.getElementById('progressTitle').textContent = 'Обработка завершена!';
-    document.getElementById('progressSubtitle').textContent = `Успешно: ${success}, Ошибок: ${errors}`;
-    document.getElementById('currentProduct').textContent = '—';
-
-    // Auto close after 3 seconds
-    setTimeout(() => {
-        modal.style.display = 'none';
-        modal.classList.add('hidden');
-        document.getElementById('progressTitle').textContent = 'AI обработка...';
-        document.getElementById('progressSubtitle').textContent = 'Подождите, идет обработка товаров';
-    }, 3000);
+    // Connect SSE
+    connectSSE(jobId, total);
 }
 
-// Initialize
-document.addEventListener('DOMContentLoaded', function() {
-    updateSelection();
+function updateTimer() {
+    if (!progressStartTime) return;
+    const elapsed = Math.floor((Date.now() - progressStartTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    document.getElementById('progressTimer').textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+}
 
-    // Lazy loading для фото
+function connectSSE(jobId, total) {
+    if (currentEventSource) { currentEventSource.close(); }
+
+    const url = `{{ url_for("auto_import_ai_batch_stream", job_id="__JOB__") }}`.replace('__JOB__', jobId);
+    currentEventSource = new EventSource(url);
+
+    currentEventSource.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+
+            if (data.error) {
+                document.getElementById('progressTitle').textContent = 'Ошибка';
+                document.getElementById('progressSubtitle').textContent = data.error;
+                finishProgress();
+                return;
+            }
+
+            const processed = data.processed || 0;
+            const totalCount = data.total || total;
+            const percent = totalCount > 0 ? Math.round((processed / totalCount) * 100) : 0;
+
+            document.getElementById('progressCount').textContent = `${processed} / ${totalCount}`;
+            document.getElementById('progressBar').style.width = `${percent}%`;
+            document.getElementById('progressPercent').textContent = `${percent}%`;
+            document.getElementById('successCount').textContent = data.success_count || 0;
+            document.getElementById('skipCount').textContent = data.skip_count || 0;
+            document.getElementById('errorCount').textContent = data.error_count || 0;
+
+            if (data.current_product) {
+                document.getElementById('currentProduct').textContent = data.current_product;
+            }
+
+            // Speed calculation
+            if (processed > 0 && progressStartTime) {
+                const elapsed = (Date.now() - progressStartTime) / 1000;
+                const speed = (processed / elapsed).toFixed(1);
+                const remaining = Math.round((totalCount - processed) / (processed / elapsed));
+                const remMins = Math.floor(remaining / 60);
+                const remSecs = remaining % 60;
+                document.getElementById('progressSpeed').textContent = `~${speed} шт/с, осталось ~${remMins}:${remSecs.toString().padStart(2, '0')}`;
+            }
+
+            // Log
+            if (data.results && data.results.length > 0) {
+                const logEl = document.getElementById('progressLog');
+                logEl.classList.remove('hidden');
+                logEl.innerHTML = '';
+                data.results.forEach(r => {
+                    const icon = r.success ? '<span class="text-green-500">+</span>' : (r.skipped ? '<span class="text-amber-500">~</span>' : '<span class="text-red-500">x</span>');
+                    const title = r.title || `ID ${r.product_id}`;
+                    const detail = r.error ? ` - ${r.error}` : '';
+                    logEl.innerHTML += `<div class="text-gray-500 font-mono">${icon} ${title}${detail}</div>`;
+                });
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+
+            if (data.status === 'completed') {
+                finishProgress();
+            }
+        } catch (e) {
+            console.error('SSE parse error:', e);
+        }
+    };
+
+    currentEventSource.onerror = function() {
+        // SSE connection lost - fallback to polling
+        currentEventSource.close();
+        currentEventSource = null;
+        pollJobStatus(jobId, total);
+    };
+}
+
+async function pollJobStatus(jobId, total) {
+    const url = `{{ url_for("auto_import_ai_batch_status", job_id="__JOB__") }}`.replace('__JOB__', jobId);
+    try {
+        const resp = await fetch(url);
+        const data = await resp.json();
+        if (data.success && data.status !== 'completed') {
+            // Retry SSE after 2 seconds
+            setTimeout(() => connectSSE(jobId, total), 2000);
+        } else if (data.status === 'completed') {
+            finishProgress();
+        }
+    } catch (e) {
+        setTimeout(() => pollJobStatus(jobId, total), 3000);
+    }
+}
+
+function finishProgress() {
+    if (currentEventSource) { currentEventSource.close(); currentEventSource = null; }
+    if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+
+    const success = parseInt(document.getElementById('successCount').textContent) || 0;
+    const errors = parseInt(document.getElementById('errorCount').textContent) || 0;
+    const skipped = parseInt(document.getElementById('skipCount').textContent) || 0;
+
+    document.getElementById('progressTitle').textContent = 'Обработка завершена';
+    document.getElementById('progressSubtitle').textContent = `Успешно: ${success}, Ошибок: ${errors}, Пропущено: ${skipped}`;
+    document.getElementById('progressSpeed').textContent = '';
+    document.getElementById('progressCloseBtn').classList.remove('hidden');
+
+    // Change progress bar color based on results
+    const bar = document.getElementById('progressBar');
+    if (errors > success) {
+        bar.className = bar.className.replace('from-indigo-500 to-purple-500', 'from-red-400 to-red-500');
+    } else {
+        bar.className = bar.className.replace('from-indigo-500 to-purple-500', 'from-green-400 to-green-500');
+    }
+}
+
+function closeProgressModal() {
+    const modal = document.getElementById('progressModal');
+    modal.style.display = 'none';
+    modal.classList.add('hidden');
+    // Reset bar colors
+    const bar = document.getElementById('progressBar');
+    bar.className = bar.className.replace(/from-\w+-\d+ to-\w+-\d+/, 'from-indigo-500 to-purple-500');
+    // Reload page to see updated data
+    location.reload();
+}
+
+// ================================================================
+// INIT
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    // Load batch count on init
+    {% if ai_enabled %}
+    updateBatchCount();
+    {% endif %}
+
+    // Lazy loading
     const lazyPhotos = document.querySelectorAll('.lazy-photo');
     if ('IntersectionObserver' in window) {
         const observer = new IntersectionObserver((entries) => {

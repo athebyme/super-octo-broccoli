@@ -3,14 +3,16 @@
 Роуты для автоимпорта товаров
 Эти роуты нужно добавить в seller_platform.py
 """
-from flask import render_template, redirect, url_for, flash, request, jsonify, send_file
+from flask import render_template, redirect, url_for, flash, request, jsonify, send_file, Response, stream_with_context
 from flask_login import login_required, current_user
 import json
 import threading
 import logging
 import time
 import hashlib
+import uuid
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory
 from auto_import_manager import AutoImportManager, ImageProcessor
@@ -86,6 +88,238 @@ def save_ai_history(
         logger.error(f"Error saving AI history: {e}")
         db.session.rollback()
         return None
+
+
+# ============================================================================
+# BATCH AI PROCESSING - Глобальное хранилище задач для параллельной обработки
+# ============================================================================
+
+# Хранилище задач: job_id -> {status, progress, results, ...}
+_ai_batch_jobs = {}
+_ai_batch_jobs_lock = threading.Lock()
+
+# Максимум параллельных AI запросов (ограничено API rate limits)
+AI_MAX_PARALLEL_WORKERS = 3
+
+
+def _get_batch_job(job_id):
+    """Получает состояние batch job"""
+    with _ai_batch_jobs_lock:
+        return _ai_batch_jobs.get(job_id)
+
+
+def _update_batch_job(job_id, **kwargs):
+    """Обновляет состояние batch job"""
+    with _ai_batch_jobs_lock:
+        if job_id in _ai_batch_jobs:
+            _ai_batch_jobs[job_id].update(kwargs)
+
+
+def _process_single_product_ai(app, seller_id, product_id, operations, settings_id, job_id):
+    """
+    Обрабатывает один товар с AI (для использования в ThreadPoolExecutor).
+    Работает в отдельном потоке с собственным app context.
+    """
+    with app.app_context():
+        try:
+            settings = AutoImportSettings.query.get(settings_id)
+            product = ImportedProduct.query.get(product_id)
+            if not product or not settings:
+                return {'product_id': product_id, 'success': False, 'error': 'Not found'}
+
+            from ai_service import get_ai_service, AIClient, AIConfig as AIC
+
+            ai_service = get_ai_service(settings)
+            if not ai_service:
+                return {'product_id': product_id, 'success': False, 'error': 'AI service init failed'}
+
+            results = {}
+            updated_fields = []
+
+            # Парсим JSON поля товара
+            try:
+                all_categories = json.loads(product.all_categories) if product.all_categories else []
+            except:
+                all_categories = []
+
+            # Определение категории
+            if 'category' in operations:
+                try:
+                    cat_id, cat_name, confidence, reasoning = ai_service.detect_category(
+                        product_title=product.title or '',
+                        source_category=product.category or '',
+                        all_categories=all_categories,
+                        brand=product.brand or '',
+                        description=product.description or ''
+                    )
+                    if cat_id:
+                        product.wb_subject_id = cat_id
+                        product.mapped_wb_category = cat_name
+                        product.category_confidence = confidence
+                        updated_fields.append('category')
+                        results['category'] = {'id': cat_id, 'name': cat_name, 'confidence': confidence}
+                except Exception as e:
+                    results['category_error'] = str(e)
+
+            # Парсинг размеров и габаритов
+            if 'dimensions' in operations or 'sizes' in operations:
+                try:
+                    sizes_text = ''
+                    try:
+                        sizes_list = json.loads(product.sizes) if product.sizes else []
+                        sizes_text = ', '.join(str(s) for s in sizes_list)
+                    except:
+                        pass
+
+                    category_chars = []
+                    if product.wb_subject_id:
+                        try:
+                            from wb_api_client import WBApiClient
+                            from models import Seller
+                            seller = Seller.query.get(seller_id)
+                            if seller:
+                                wb_client = WBApiClient(seller.api_key)
+                                chars_config = wb_client.get_card_characteristics_config(product.wb_subject_id)
+                                if chars_config and chars_config.get('data'):
+                                    size_keywords = ['длина', 'ширина', 'высота', 'диаметр', 'глубина', 'размер', 'вес', 'объем']
+                                    for char in chars_config['data']:
+                                        char_name = char.get('name', '')
+                                        if any(kw in char_name.lower() for kw in size_keywords):
+                                            category_chars.append(char_name)
+                        except Exception:
+                            pass
+
+                    success_parse, parsed_data, error = ai_service.parse_sizes(
+                        sizes_text=sizes_text,
+                        product_title=product.title or '',
+                        description=product.description or '',
+                        category_characteristics=category_chars if category_chars else None
+                    )
+
+                    if success_parse and parsed_data:
+                        existing_chars = {}
+                        try:
+                            existing_chars = json.loads(product.characteristics) if product.characteristics else {}
+                        except:
+                            existing_chars = {}
+                        if parsed_data.get('characteristics'):
+                            existing_chars.update(parsed_data['characteristics'])
+                            product.characteristics = json.dumps(existing_chars, ensure_ascii=False)
+                            updated_fields.append('characteristics')
+                        results['sizes'] = parsed_data
+                except Exception as e:
+                    results['sizes_error'] = str(e)
+
+            # Генерация описания
+            if 'description' in operations:
+                try:
+                    config = AIC.from_settings(settings)
+                    if config:
+                        client = AIClient(config)
+                        prompt = f"""Напиши краткое SEO-оптимизированное описание товара для маркетплейса Wildberries.
+
+Название: {product.title}
+Категория: {product.mapped_wb_category or product.category}
+Бренд: {product.brand or 'Не указан'}
+
+Требования:
+- 2-3 предложения
+- Без воды и общих фраз
+- Упомяни ключевые особенности товара
+- Подходит для карточки товара на Wildberries
+
+Ответь ТОЛЬКО текстом описания, без заголовков и пояснений."""
+                        response = client.chat_completion([
+                            {"role": "user", "content": prompt}
+                        ], max_tokens=500)
+                        if response:
+                            product.description = response.strip()
+                            updated_fields.append('description')
+                            results['description'] = response.strip()[:100] + '...' if len(response) > 100 else response.strip()
+                        client.close()
+                except Exception as e:
+                    results['description_error'] = str(e)
+
+            if updated_fields:
+                db.session.commit()
+
+            return {
+                'product_id': product_id,
+                'title': (product.title or '')[:60],
+                'success': len(updated_fields) > 0,
+                'skipped': len(updated_fields) == 0,
+                'updated_fields': updated_fields,
+                'results': results
+            }
+
+        except Exception as e:
+            try:
+                db.session.rollback()
+            except:
+                pass
+            return {'product_id': product_id, 'success': False, 'error': str(e)}
+
+
+def _run_batch_ai_job(app, job_id, seller_id, product_ids, operations, settings_id):
+    """
+    Выполняет batch AI обработку в фоне с параллельными запросами.
+    Обновляет состояние job в _ai_batch_jobs.
+    """
+    total = len(product_ids)
+    _update_batch_job(job_id,
+        status='running',
+        total=total,
+        processed=0,
+        success_count=0,
+        error_count=0,
+        skip_count=0,
+        current_product='',
+        results=[]
+    )
+
+    processed = 0
+    success_count = 0
+    error_count = 0
+    skip_count = 0
+    all_results = []
+
+    with ThreadPoolExecutor(max_workers=AI_MAX_PARALLEL_WORKERS) as executor:
+        # Отправляем все задачи в пул
+        future_to_pid = {
+            executor.submit(
+                _process_single_product_ai,
+                app, seller_id, pid, operations, settings_id, job_id
+            ): pid
+            for pid in product_ids
+        }
+
+        for future in as_completed(future_to_pid):
+            pid = future_to_pid[future]
+            try:
+                result = future.result(timeout=120)
+            except Exception as e:
+                result = {'product_id': pid, 'success': False, 'error': str(e)}
+
+            processed += 1
+            if result.get('success'):
+                success_count += 1
+            elif result.get('skipped'):
+                skip_count += 1
+            else:
+                error_count += 1
+
+            all_results.append(result)
+
+            _update_batch_job(job_id,
+                processed=processed,
+                success_count=success_count,
+                error_count=error_count,
+                skip_count=skip_count,
+                current_product=result.get('title', f'ID {pid}'),
+                results=all_results[-20:]  # Последние 20 результатов
+            )
+
+    _update_batch_job(job_id, status='completed')
 
 
 def ai_request_logger_callback(**kwargs):
@@ -557,7 +791,7 @@ def register_auto_import_routes(app):
         seller_config = {
             'ai_enabled': settings.ai_enabled if settings else False,
             'ai_provider': settings.ai_provider if settings else None,
-            'has_ai_key': bool(settings and (settings.openai_api_key or settings.anthropic_api_key or settings.google_api_key)) if settings else False,
+            'has_ai_key': bool(settings and settings.ai_api_key) if settings else False,
             'sexoptovik_configured': bool(settings and settings.sexoptovik_login and settings.sexoptovik_password) if settings else False,
             'wb_api_configured': bool(seller.wb_api_key)
         }
@@ -1409,6 +1643,202 @@ def register_auto_import_routes(app):
             logger.error(f"Ошибка AI обработки товара {product_id}: {traceback.format_exc()}")
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
+
+    # ============================================================================
+    # BATCH AI PROCESSING ENDPOINTS
+    # ============================================================================
+
+    @app.route('/auto-import/ai-batch-start', methods=['POST'])
+    @login_required
+    def auto_import_ai_batch_start():
+        """
+        Запускает batch AI обработку товаров в фоне с параллельным выполнением.
+
+        POST JSON:
+        {
+            "product_ids": [1, 2, 3, ...],  // или "all" для всех подходящих
+            "operations": ["category", "dimensions", "description", "sizes"],
+            "filter_status": ["pending", "validated", "failed"],  // опционально
+            "filter_no_category": true  // опционально - только без категории
+        }
+        """
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled or not settings.ai_api_key:
+            return jsonify({'success': False, 'error': 'AI не настроен. Настройте API ключ в настройках.'}), 400
+
+        data = request.get_json()
+        operations = data.get('operations', [])
+        if not operations:
+            return jsonify({'success': False, 'error': 'Не выбраны операции'}), 400
+
+        # Определяем список product_ids
+        raw_ids = data.get('product_ids', [])
+        filter_status = data.get('filter_status', [])
+        filter_no_category = data.get('filter_no_category', False)
+
+        if raw_ids == 'all' or not raw_ids:
+            # Собираем все подходящие товары
+            query = ImportedProduct.query.filter(
+                ImportedProduct.seller_id == seller.id
+            )
+            if filter_status:
+                query = query.filter(ImportedProduct.import_status.in_(filter_status))
+            else:
+                query = query.filter(
+                    ImportedProduct.import_status.in_(['pending', 'validated', 'failed'])
+                )
+
+            if filter_no_category:
+                query = query.filter(
+                    db.or_(
+                        ImportedProduct.wb_subject_id.is_(None),
+                        ImportedProduct.wb_subject_id == 0
+                    )
+                )
+
+            product_ids = [p.id for p in query.all()]
+        else:
+            # Проверяем принадлежность товаров
+            product_ids = [
+                p.id for p in ImportedProduct.query.filter(
+                    ImportedProduct.id.in_(raw_ids),
+                    ImportedProduct.seller_id == seller.id
+                ).all()
+            ]
+
+        if not product_ids:
+            return jsonify({'success': False, 'error': 'Нет товаров для обработки'}), 400
+
+        # Создаем задачу
+        job_id = str(uuid.uuid4())[:8]
+        with _ai_batch_jobs_lock:
+            _ai_batch_jobs[job_id] = {
+                'status': 'starting',
+                'total': len(product_ids),
+                'processed': 0,
+                'success_count': 0,
+                'error_count': 0,
+                'skip_count': 0,
+                'current_product': '',
+                'results': [],
+                'operations': operations,
+                'created_at': time.time()
+            }
+
+        # Запускаем в фоновом потоке
+        thread = threading.Thread(
+            target=_run_batch_ai_job,
+            args=(app._get_current_object(), job_id, seller.id, product_ids, operations, settings.id),
+            daemon=True
+        )
+        thread.start()
+
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'total': len(product_ids),
+            'message': f'Запущена обработка {len(product_ids)} товаров'
+        })
+
+    @app.route('/auto-import/ai-batch-status/<job_id>', methods=['GET'])
+    @login_required
+    def auto_import_ai_batch_status(job_id):
+        """Возвращает текущий статус batch job"""
+        job = _get_batch_job(job_id)
+        if not job:
+            return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'status': job.get('status', 'unknown'),
+            'total': job.get('total', 0),
+            'processed': job.get('processed', 0),
+            'success_count': job.get('success_count', 0),
+            'error_count': job.get('error_count', 0),
+            'skip_count': job.get('skip_count', 0),
+            'current_product': job.get('current_product', ''),
+            'results': job.get('results', [])
+        })
+
+    @app.route('/auto-import/ai-batch-stream/<job_id>')
+    @login_required
+    def auto_import_ai_batch_stream(job_id):
+        """SSE endpoint для real-time обновления прогресса batch job"""
+        def generate():
+            last_processed = -1
+            while True:
+                job = _get_batch_job(job_id)
+                if not job:
+                    yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
+                    break
+
+                current_processed = job.get('processed', 0)
+                status = job.get('status', 'unknown')
+
+                # Отправляем обновление при изменении
+                if current_processed != last_processed or status in ('completed', 'error'):
+                    event_data = {
+                        'status': status,
+                        'total': job.get('total', 0),
+                        'processed': current_processed,
+                        'success_count': job.get('success_count', 0),
+                        'error_count': job.get('error_count', 0),
+                        'skip_count': job.get('skip_count', 0),
+                        'current_product': job.get('current_product', ''),
+                        'results': job.get('results', [])[-5:]  # Последние 5
+                    }
+                    yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+                    last_processed = current_processed
+
+                if status in ('completed', 'error'):
+                    break
+
+                time.sleep(0.5)
+
+        return Response(
+            stream_with_context(generate()),
+            content_type='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'X-Accel-Buffering': 'no',
+                'Connection': 'keep-alive'
+            }
+        )
+
+    @app.route('/auto-import/ai-batch-count', methods=['POST'])
+    @login_required
+    def auto_import_ai_batch_count():
+        """Возвращает количество товаров, подходящих под фильтр (для preview)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        seller = current_user.seller
+        data = request.get_json() or {}
+
+        filter_status = data.get('filter_status', ['pending', 'validated', 'failed'])
+        filter_no_category = data.get('filter_no_category', False)
+
+        query = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status.in_(filter_status)
+        )
+
+        if filter_no_category:
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.wb_subject_id.is_(None),
+                    ImportedProduct.wb_subject_id == 0
+                )
+            )
+
+        count = query.count()
+        return jsonify({'success': True, 'count': count})
 
     @app.route('/auto-import/ai/models', methods=['GET'])
     @login_required
