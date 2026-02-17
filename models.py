@@ -698,6 +698,57 @@ class AutoImportSettings(db.Model):
     resize_images_to_1200 = db.Column(db.Boolean, default=True, nullable=False)  # Приводить к 1200x1200
     image_background_color = db.Column(db.String(20), default='white')  # Цвет фона для дорисовки
 
+    # AI настройки
+    ai_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Использовать AI для определения категорий/размеров
+    ai_provider = db.Column(db.String(50), default='openai')  # Провайдер AI (openai, cloudru, custom)
+    ai_api_key = db.Column(db.String(500))  # API ключ для AI
+    ai_api_base_url = db.Column(db.String(500))  # Базовый URL API (для custom провайдеров)
+    ai_model = db.Column(db.String(100), default='gpt-4o-mini')  # Модель AI
+    ai_temperature = db.Column(db.Float, default=0.3)  # Температура для AI
+    ai_max_tokens = db.Column(db.Integer, default=2000)  # Максимум токенов
+    ai_timeout = db.Column(db.Integer, default=60)  # Таймаут запросов в секундах
+    ai_use_for_categories = db.Column(db.Boolean, default=True, nullable=False)  # Использовать AI для категорий
+    ai_use_for_sizes = db.Column(db.Boolean, default=True, nullable=False)  # Использовать AI для размеров
+    ai_category_confidence_threshold = db.Column(db.Float, default=0.7)  # Минимальная уверенность AI для принятия категории
+    # Дополнительные параметры AI для Cloud.ru
+    ai_top_p = db.Column(db.Float, default=0.95)  # Top P для семплирования
+    ai_presence_penalty = db.Column(db.Float, default=0.0)  # Штраф за присутствие
+    ai_frequency_penalty = db.Column(db.Float, default=0.0)  # Штраф за частоту
+    # Кастомные инструкции AI для каждой функции
+    ai_category_instruction = db.Column(db.Text)  # Кастомная инструкция для определения категорий
+    ai_size_instruction = db.Column(db.Text)  # Кастомная инструкция для парсинга размеров
+    ai_seo_title_instruction = db.Column(db.Text)  # Кастомная инструкция для SEO заголовков
+    ai_keywords_instruction = db.Column(db.Text)  # Кастомная инструкция для ключевых слов
+    ai_bullets_instruction = db.Column(db.Text)  # Кастомная инструкция для преимуществ
+    ai_description_instruction = db.Column(db.Text)  # Кастомная инструкция для описания
+    ai_rich_content_instruction = db.Column(db.Text)  # Кастомная инструкция для Rich контента
+    ai_analysis_instruction = db.Column(db.Text)  # Кастомная инструкция для анализа карточки
+    # Новые кастомные инструкции для расширенного анализа
+    ai_dimensions_instruction = db.Column(db.Text)  # Инструкция для извлечения габаритов
+    ai_clothing_sizes_instruction = db.Column(db.Text)  # Инструкция для размеров одежды
+    ai_brand_instruction = db.Column(db.Text)  # Инструкция для определения бренда
+    ai_material_instruction = db.Column(db.Text)  # Инструкция для определения материалов
+    ai_color_instruction = db.Column(db.Text)  # Инструкция для определения цвета
+    ai_attributes_instruction = db.Column(db.Text)  # Инструкция для комплексного анализа
+    # Cloud.ru OAuth2 credentials (вместо простого API ключа)
+    ai_client_id = db.Column(db.String(500))  # Client ID для Cloud.ru OAuth2
+    ai_client_secret = db.Column(db.String(500))  # Client Secret для Cloud.ru OAuth2
+
+    # Настройки генерации изображений для инфографики
+    image_gen_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Включена генерация картинок
+    image_gen_provider = db.Column(db.String(50), default='fluxapi')  # Провайдер (fluxapi рекомендуется!)
+    # API ключи для разных провайдеров
+    fluxapi_key = db.Column(db.String(500))  # FluxAPI.ai (рекомендуется - есть trial)
+    tensorart_app_id = db.Column(db.String(500))  # Tensor.art App ID
+    tensorart_api_key = db.Column(db.String(500))  # Tensor.art API Key
+    together_api_key = db.Column(db.String(500))  # Together AI
+    openai_api_key = db.Column(db.String(500))  # OpenAI DALL-E
+    replicate_api_key = db.Column(db.String(500))  # Replicate (Flux/SDXL)
+    image_gen_width = db.Column(db.Integer, default=1440)  # Ширина изображения
+    image_gen_height = db.Column(db.Integer, default=810)  # Высота изображения
+    openai_image_quality = db.Column(db.String(20), default='standard')  # standard или hd
+    openai_image_style = db.Column(db.String(20), default='vivid')  # vivid или natural
+
     # Частота автоимпорта (в часах)
     auto_import_interval_hours = db.Column(db.Integer, default=24, nullable=False)  # По умолчанию раз в сутки
 
@@ -741,6 +792,37 @@ class AutoImportSettings(db.Model):
             'use_blurred_images': self.use_blurred_images,
             'resize_images_to_1200': self.resize_images_to_1200,
             'image_background_color': self.image_background_color,
+            # AI настройки
+            'ai_enabled': self.ai_enabled,
+            'ai_provider': self.ai_provider,
+            'ai_api_base_url': self.ai_api_base_url,
+            'ai_model': self.ai_model,
+            'ai_temperature': self.ai_temperature,
+            'ai_max_tokens': self.ai_max_tokens,
+            'ai_timeout': self.ai_timeout,
+            'ai_use_for_categories': self.ai_use_for_categories,
+            'ai_use_for_sizes': self.ai_use_for_sizes,
+            'ai_category_confidence_threshold': self.ai_category_confidence_threshold,
+            'ai_top_p': self.ai_top_p,
+            'ai_presence_penalty': self.ai_presence_penalty,
+            'ai_frequency_penalty': self.ai_frequency_penalty,
+            'ai_category_instruction': self.ai_category_instruction,
+            'ai_size_instruction': self.ai_size_instruction,
+            'ai_seo_title_instruction': self.ai_seo_title_instruction,
+            'ai_keywords_instruction': self.ai_keywords_instruction,
+            'ai_bullets_instruction': self.ai_bullets_instruction,
+            'ai_description_instruction': self.ai_description_instruction,
+            'ai_rich_content_instruction': self.ai_rich_content_instruction,
+            'ai_analysis_instruction': self.ai_analysis_instruction,
+            # Не отдаем ai_api_key в JSON из соображений безопасности
+            # Настройки генерации изображений
+            'image_gen_enabled': self.image_gen_enabled,
+            'image_gen_provider': self.image_gen_provider,
+            'image_gen_width': self.image_gen_width,
+            'image_gen_height': self.image_gen_height,
+            'openai_image_quality': self.openai_image_quality,
+            'openai_image_style': self.openai_image_style,
+            # Не отдаем API ключи в JSON
             'auto_import_interval_hours': self.auto_import_interval_hours,
             'last_import_at': self.last_import_at.isoformat() if self.last_import_at else None,
             'next_import_at': self.next_import_at.isoformat() if self.next_import_at else None,
@@ -791,11 +873,33 @@ class ImportedProduct(db.Model):
     barcodes = db.Column(db.Text)  # Баркоды (JSON)
     characteristics = db.Column(db.Text)  # Полные характеристики (JSON)
     description = db.Column(db.Text)  # Описание
+    original_data = db.Column(db.Text)  # Оригинальные данные от поставщика (JSON) - для отката AI изменений
 
     # Статус импорта
     import_status = db.Column(db.String(50), default='pending')  # 'pending', 'validated', 'imported', 'failed'
     validation_errors = db.Column(db.Text)  # Ошибки валидации (JSON)
     import_error = db.Column(db.Text)  # Ошибка импорта
+
+    # AI-оптимизация (кэшированные результаты)
+    ai_keywords = db.Column(db.Text)  # Ключевые слова (JSON)
+    ai_bullets = db.Column(db.Text)  # Преимущества/буллиты (JSON)
+    ai_rich_content = db.Column(db.Text)  # Rich контент (JSON)
+    ai_seo_title = db.Column(db.String(500))  # SEO заголовок
+    ai_analysis = db.Column(db.Text)  # Последний анализ карточки (JSON)
+    ai_analysis_at = db.Column(db.DateTime)  # Когда был сделан анализ
+    content_hash = db.Column(db.String(64))  # Хеш контента для отслеживания изменений
+
+    # Новые AI поля для расширенного анализа
+    ai_dimensions = db.Column(db.Text)  # Габариты (JSON) - length, width, height, weight
+    ai_clothing_sizes = db.Column(db.Text)  # Размеры одежды (JSON) - стандартизированные
+    ai_detected_brand = db.Column(db.Text)  # Определенный AI бренд (JSON)
+    ai_materials = db.Column(db.Text)  # Материалы и состав (JSON)
+    ai_colors = db.Column(db.Text)  # Цвета товара (JSON)
+    ai_attributes = db.Column(db.Text)  # Полный набор атрибутов (JSON)
+    ai_gender = db.Column(db.String(20))  # Пол: male/female/unisex
+    ai_age_group = db.Column(db.String(20))  # Возрастная группа
+    ai_season = db.Column(db.String(20))  # Сезон: all_season/summer/winter/demi
+    ai_country = db.Column(db.String(100))  # Страна производства
 
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -1574,6 +1678,110 @@ class SystemSettings(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+
+
+class AIHistory(db.Model):
+    """История AI-действий для товаров (расширенная версия для полного логирования)"""
+    __tablename__ = 'ai_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=True, index=True)
+
+    # Тип действия
+    action_type = db.Column(db.String(50), nullable=False, index=True)  # 'seo_title', 'keywords', 'bullets', 'rich_content', 'analysis', 'full_optimize', 'description', 'category', 'sizes'
+
+    # AI провайдер и модель
+    ai_provider = db.Column(db.String(50))  # 'cloudru', 'openai', 'custom'
+    ai_model = db.Column(db.String(100))  # Использованная модель
+
+    # Промпты (полные тексты для воспроизведения)
+    system_prompt = db.Column(db.Text)  # Системный промпт (инструкция)
+    user_prompt = db.Column(db.Text)  # Пользовательский промпт
+
+    # Входные данные (для воспроизведения) - JSON
+    input_data = db.Column(db.Text)  # JSON с входными данными
+
+    # Результат
+    result_data = db.Column(db.Text)  # JSON с результатом
+    raw_response = db.Column(db.Text)  # Сырой ответ от AI (до парсинга)
+    success = db.Column(db.Boolean, default=True)
+    error_message = db.Column(db.Text)
+
+    # Статистика
+    tokens_used = db.Column(db.Integer, default=0)  # Использовано токенов (всего)
+    tokens_prompt = db.Column(db.Integer, default=0)  # Токенов в промпте
+    tokens_completion = db.Column(db.Integer, default=0)  # Токенов в ответе
+    response_time_ms = db.Column(db.Integer, default=0)  # Время ответа в мс
+
+    # Источник запроса
+    source_module = db.Column(db.String(100))  # Модуль откуда пришел запрос (auto_import, product_edit, etc.)
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Связи
+    imported_product = db.relationship('ImportedProduct', backref=db.backref('ai_history', lazy='dynamic', order_by='AIHistory.created_at.desc()'))
+
+    # Индексы
+    __table_args__ = (
+        db.Index('idx_ai_history_seller_action', 'seller_id', 'action_type'),
+        db.Index('idx_ai_history_product_created', 'imported_product_id', 'created_at'),
+        db.Index('idx_ai_history_created', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<AIHistory {self.action_type} product_id={self.imported_product_id}>'
+
+    def to_dict(self, include_prompts: bool = False) -> dict:
+        """
+        Конвертировать в словарь для JSON
+
+        Args:
+            include_prompts: Включать ли полные промпты (для детального просмотра)
+        """
+        import json
+        result = {
+            'id': self.id,
+            'action_type': self.action_type,
+            'ai_provider': self.ai_provider,
+            'ai_model': self.ai_model,
+            'input_data': json.loads(self.input_data) if self.input_data else None,
+            'result_data': json.loads(self.result_data) if self.result_data else None,
+            'success': self.success,
+            'error_message': self.error_message,
+            'tokens_used': self.tokens_used,
+            'tokens_prompt': self.tokens_prompt,
+            'tokens_completion': self.tokens_completion,
+            'response_time_ms': self.response_time_ms,
+            'source_module': self.source_module,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'imported_product_id': self.imported_product_id
+        }
+        if include_prompts:
+            result['system_prompt'] = self.system_prompt
+            result['user_prompt'] = self.user_prompt
+            result['raw_response'] = self.raw_response
+        return result
+
+    @staticmethod
+    def get_action_type_display(action_type: str) -> str:
+        """Возвращает человекочитаемое название действия"""
+        action_names = {
+            'seo_title': 'SEO Заголовок',
+            'keywords': 'Ключевые слова',
+            'bullets': 'Преимущества',
+            'bullet_points': 'Преимущества',
+            'rich_content': 'Rich контент',
+            'analysis': 'Анализ карточки',
+            'full_optimize': 'Полная оптимизация',
+            'description': 'Генерация описания',
+            'enhance_description': 'Улучшение описания',
+            'category': 'Определение категории',
+            'sizes': 'Парсинг размеров',
+            'dimensions': 'Характеристики'
+        }
+        return action_names.get(action_type, action_type)
 
 
 # ============= HELPER FUNCTIONS FOR LOGGING =============
