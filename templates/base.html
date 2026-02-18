@@ -145,6 +145,14 @@
                     <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Изменение цен</span>
                 </a>
 
+                <a href="{{ url_for('auto_import_pricing') }}"
+                   class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'auto_import_pricing' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Ценообразование</span>
+                </a>
+
                 <a href="{{ url_for('price_monitor_settings') }}"
                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['price_monitor_settings', 'suspicious_price_changes'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
