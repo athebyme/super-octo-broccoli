@@ -1201,6 +1201,8 @@ def products_list():
             'brand': Product.brand,
             'nm_id': Product.nm_id,
             'category': Product.object_name,
+            'price': Product.price,
+            'supplier_price': Product.supplier_price,
         }.get(sort_by, Product.updated_at)
 
         if sort_order == 'asc':

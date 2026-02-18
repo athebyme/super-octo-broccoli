@@ -271,6 +271,8 @@
                                 <option value="brand" {% if sort_by == 'brand' %}selected{% endif %}>Бренд</option>
                                 <option value="category" {% if sort_by == 'category' %}selected{% endif %}>Категория</option>
                                 <option value="nm_id" {% if sort_by == 'nm_id' %}selected{% endif %}>NM ID</option>
+                                <option value="price" {% if sort_by == 'price' %}selected{% endif %}>Цена WB</option>
+                                <option value="supplier_price" {% if sort_by == 'supplier_price' %}selected{% endif %}>Цена поставщика</option>
                             </select>
                             <select name="order"
                                     class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
@@ -396,6 +398,12 @@
                         <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Тип
                         </th>
+                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                            Цена WB
+                        </th>
+                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                            Цена пост.
+                        </th>
                         <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Обновлено
                         </th>
@@ -469,6 +477,23 @@
                         </td>
                         <td class="px-4 py-3 text-sm text-gray-500">
                             {{ product.object_name or '—' }}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            {% if product.price %}
+                            <div class="text-sm font-medium text-gray-900">{{ "%.0f"|format(product.price) }} &#8381;</div>
+                            {% if product.discount_price and product.discount_price != product.price %}
+                            <div class="text-xs text-green-600">{{ "%.0f"|format(product.discount_price) }} &#8381;</div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-sm text-gray-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            {% if product.supplier_price %}
+                            <div class="text-sm font-medium text-gray-900">{{ "%.0f"|format(product.supplier_price) }} &#8381;</div>
+                            {% else %}
+                            <span class="text-sm text-gray-400">—</span>
+                            {% endif %}
                         </td>
                         <td class="px-4 py-3 text-sm text-gray-500">
                             {% if product.last_sync %}
