@@ -315,6 +315,7 @@ def register_auto_import_routes(app):
         category_filter = request.args.get('category', '')
         brand_filter = request.args.get('brand', '')
         has_ai_filter = request.args.get('has_ai', '')  # 'yes', 'no', ''
+        stock_filter = request.args.get('stock', '')  # 'in_stock', 'out_of_stock', ''
         sort_by = request.args.get('sort', 'created_at')  # created_at, title, category
         sort_order = request.args.get('order', 'desc')  # asc, desc
         page = int(request.args.get('page', 1))
@@ -367,6 +368,19 @@ def register_auto_import_routes(app):
                 ImportedProduct.ai_rich_content.is_(None)
             )
 
+        if stock_filter == 'in_stock':
+            query = query.filter(
+                ImportedProduct.supplier_quantity.isnot(None),
+                ImportedProduct.supplier_quantity > 0
+            )
+        elif stock_filter == 'out_of_stock':
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.supplier_quantity.is_(None),
+                    ImportedProduct.supplier_quantity == 0
+                )
+            )
+
         # Сортировка
         sort_column = getattr(ImportedProduct, sort_by, ImportedProduct.created_at)
         if sort_order == 'asc':
@@ -389,12 +403,23 @@ def register_auto_import_routes(app):
         brands = sorted(set(b[0] for b in all_brands if b[0]))
 
         # Статистика
+        base_q = ImportedProduct.query.filter_by(seller_id=seller.id)
         stats = {
-            'total': ImportedProduct.query.filter_by(seller_id=seller.id).count(),
-            'pending': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='pending').count(),
-            'validated': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='validated').count(),
-            'imported': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='imported').count(),
-            'failed': ImportedProduct.query.filter_by(seller_id=seller.id, import_status='failed').count(),
+            'total': base_q.count(),
+            'pending': base_q.filter_by(import_status='pending').count(),
+            'validated': base_q.filter_by(import_status='validated').count(),
+            'imported': base_q.filter_by(import_status='imported').count(),
+            'failed': base_q.filter_by(import_status='failed').count(),
+            'in_stock': base_q.filter(
+                ImportedProduct.supplier_quantity.isnot(None),
+                ImportedProduct.supplier_quantity > 0
+            ).count(),
+            'out_of_stock': base_q.filter(
+                db.or_(
+                    ImportedProduct.supplier_quantity.is_(None),
+                    ImportedProduct.supplier_quantity == 0
+                )
+            ).count(),
         }
 
         return render_template(
@@ -406,6 +431,7 @@ def register_auto_import_routes(app):
             category_filter=category_filter,
             brand_filter=brand_filter,
             has_ai_filter=has_ai_filter,
+            stock_filter=stock_filter,
             sort_by=sort_by,
             sort_order=sort_order,
             categories=categories,
@@ -4582,14 +4608,24 @@ def register_auto_import_routes(app):
                 supplier_pid = extract_supplier_product_id(ip.external_id)
                 if supplier_pid and supplier_pid in prices:
                     new_price = prices[supplier_pid]['price']
-                    if ip.supplier_price != new_price:
+                    new_qty = prices[supplier_pid].get('quantity', 0)
+                    price_changed = ip.supplier_price != new_price
+                    qty_changed = ip.supplier_quantity != new_qty
+                    if price_changed or qty_changed:
                         ip.supplier_price = new_price
-                        # Пересчитываем розничную цену
-                        result = calculate_price(new_price, pricing, product_id=supplier_pid)
-                        if result:
-                            ip.calculated_price = result['final_price']
-                            ip.calculated_discount_price = result['discount_price']
-                            ip.calculated_price_before_discount = result['price_before_discount']
+                        ip.supplier_quantity = new_qty
+                        if price_changed:
+                            # Пересчитываем розничную цену
+                            result = calculate_price(new_price, pricing, product_id=supplier_pid)
+                            if result:
+                                ip.calculated_price = result['final_price']
+                                ip.calculated_discount_price = result['discount_price']
+                                ip.calculated_price_before_discount = result['price_before_discount']
+                        updated_imported += 1
+                elif supplier_pid:
+                    # Товара нет в прайсе — нет в наличии
+                    if ip.supplier_quantity != 0:
+                        ip.supplier_quantity = 0
                         updated_imported += 1
 
             # Обновляем Product (уже импортированные на WB)

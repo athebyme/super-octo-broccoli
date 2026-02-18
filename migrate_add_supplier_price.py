@@ -71,6 +71,14 @@ def migrate():
                     print("  ✅ Колонки ценообразования добавлены в imported_products")
                 else:
                     print("  ✓ Колонки ценообразования уже существуют в imported_products")
+
+                if 'supplier_quantity' not in ip_columns:
+                    print("  ➕ Добавление колонки supplier_quantity в imported_products...")
+                    cursor.execute("ALTER TABLE imported_products ADD COLUMN supplier_quantity INTEGER DEFAULT 0")
+                    conn.commit()
+                    print("  ✅ Колонка supplier_quantity добавлена в imported_products")
+                else:
+                    print("  ✓ Колонка supplier_quantity уже существует в imported_products")
             else:
                 print("  ⚠️ Таблица imported_products не найдена, пропускаем")
 

@@ -64,7 +64,7 @@
             </div>
 
             <!-- Фильтры -->
-            <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+            <div class="grid grid-cols-2 sm:grid-cols-6 gap-4">
                 <!-- Статус -->
                 <div>
                     <label class="block text-xs font-medium text-gray-500 mb-1">Статус</label>
@@ -74,6 +74,16 @@
                         <option value="validated" {{ 'selected' if status_filter == 'validated' }}>Готово</option>
                         <option value="imported" {{ 'selected' if status_filter == 'imported' }}>Импортировано</option>
                         <option value="failed" {{ 'selected' if status_filter == 'failed' }}>Ошибки</option>
+                    </select>
+                </div>
+
+                <!-- Наличие -->
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Наличие</label>
+                    <select name="stock" class="w-full border-gray-300 rounded-md text-sm focus:ring-indigo-500 focus:border-indigo-500" onchange="this.form.submit()">
+                        <option value="">Все</option>
+                        <option value="in_stock" {{ 'selected' if stock_filter == 'in_stock' }}>В наличии ({{ stats.in_stock }})</option>
+                        <option value="out_of_stock" {{ 'selected' if stock_filter == 'out_of_stock' }}>Нет в наличии ({{ stats.out_of_stock }})</option>
                     </select>
                 </div>
 
@@ -179,6 +189,9 @@
                         <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Цена
                         </th>
+                        <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Наличие
+                        </th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Статус
                         </th>
@@ -226,6 +239,19 @@
                             {% if product.calculated_price %}
                             <div class="text-blue-600 font-medium">{{ "%.0f"|format(product.calculated_price) }} &#8381;</div>
                             {% endif %}
+                            {% else %}
+                            <span class="text-gray-300">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 text-center text-sm">
+                            {% if product.supplier_quantity is not none and product.supplier_quantity > 0 %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                {{ product.supplier_quantity }} шт
+                            </span>
+                            {% elif product.supplier_quantity is not none %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-700">
+                                Нет
+                            </span>
                             {% else %}
                             <span class="text-gray-300">—</span>
                             {% endif %}

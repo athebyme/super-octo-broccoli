@@ -333,7 +333,7 @@
                     </div>
                 </div>
                 {% if product.supplier_price and product.supplier_price > 0 %}
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
                     <div class="bg-gray-50 rounded-lg p-3">
                         <div class="text-xs text-gray-500">Закупочная</div>
                         <div class="text-lg font-bold text-gray-900">{{ "%.0f"|format(product.supplier_price) }} &#8381;</div>
@@ -356,6 +356,16 @@
                         <div class="text-lg font-bold text-purple-700">{{ "%.0f"|format(product.calculated_price_before_discount) }} &#8381;</div>
                     </div>
                     {% endif %}
+                    <div class="{{ 'bg-green-50 ring-1 ring-green-200' if product.supplier_quantity and product.supplier_quantity > 0 else 'bg-red-50 ring-1 ring-red-200' }} rounded-lg p-3">
+                        <div class="text-xs {{ 'text-green-600' if product.supplier_quantity and product.supplier_quantity > 0 else 'text-red-500' }}">Остаток поставщика</div>
+                        {% if product.supplier_quantity is not none and product.supplier_quantity > 0 %}
+                        <div class="text-lg font-bold text-green-700">{{ product.supplier_quantity }} шт</div>
+                        {% elif product.supplier_quantity is not none %}
+                        <div class="text-lg font-bold text-red-600">Нет в наличии</div>
+                        {% else %}
+                        <div class="text-lg font-bold text-gray-400">Нет данных</div>
+                        {% endif %}
+                    </div>
                 </div>
                 {% else %}
                 <div class="text-center py-6 text-gray-500">

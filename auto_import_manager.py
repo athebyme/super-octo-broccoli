@@ -1022,8 +1022,10 @@ class AutoImportManager:
         supplier_id = extract_supplier_product_id(ext_id)
         if supplier_id and supplier_id in supplier_prices:
             product_data['supplier_price'] = supplier_prices[supplier_id]['price']
+            product_data['supplier_quantity'] = supplier_prices[supplier_id].get('quantity', 0)
         else:
             product_data['supplier_price'] = None
+            product_data['supplier_quantity'] = 0
 
     def _download_csv(self) -> str:
         """Скачивает CSV файл"""
@@ -1191,8 +1193,10 @@ class AutoImportManager:
             imported_product.photo_urls = json.dumps(product_data['photo_urls'], ensure_ascii=False)
             imported_product.barcodes = json.dumps(product_data['barcodes'], ensure_ascii=False)
 
-            # Сохраняем цену поставщика и рассчитываем розничные цены
+            # Сохраняем цену поставщика, кол-во и рассчитываем розничные цены
             sp = product_data.get('supplier_price')
+            sq = product_data.get('supplier_quantity')
+            imported_product.supplier_quantity = sq if sq is not None else 0
             if sp and sp > 0:
                 imported_product.supplier_price = sp
                 pricing = PricingSettings.query.filter_by(

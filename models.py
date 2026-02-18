@@ -881,6 +881,7 @@ class ImportedProduct(db.Model):
 
     # Цена поставщика и рассчитанные цены
     supplier_price = db.Column(db.Float, nullable=True)  # Закупочная цена из CSV поставщика
+    supplier_quantity = db.Column(db.Integer, nullable=True, default=None)  # Остаток на складе поставщика
     calculated_price = db.Column(db.Float, nullable=True)  # Z — итоговая цена
     calculated_discount_price = db.Column(db.Float, nullable=True)  # X — цена с SPP скидкой
     calculated_price_before_discount = db.Column(db.Float, nullable=True)  # Y — завышенная цена до скидки
