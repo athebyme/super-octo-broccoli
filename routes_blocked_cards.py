@@ -32,9 +32,7 @@ def register_blocked_cards_routes(app):
         """Создать WB API клиент для продавца"""
         return WildberriesAPIClient(
             api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(
-                seller_id=seller.id, **kwargs
-            )
+            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
         )
 
     # ==================== ЗАБЛОКИРОВАННЫЕ КАРТОЧКИ ====================

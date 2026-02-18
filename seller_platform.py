@@ -2045,7 +2045,7 @@ def product_create():
         try:
             wb_client = WildberriesAPIClient(
                 api_key=seller.wb_api_key,
-                db_logger_callback=lambda **kwargs: APILog.log_request(seller_id=seller.id, **kwargs)
+                db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
             )
 
             # Получаем список родительских категорий
@@ -2168,7 +2168,7 @@ def product_create():
         # Создаем карточку через API
         wb_client = WildberriesAPIClient(
             api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(seller_id=seller.id, **kwargs)
+            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
         )
 
         logger.info(f"Creating product card: subjectID={subject_id}, vendorCode={vendor_code}")
@@ -3939,7 +3939,7 @@ def api_get_characteristics_by_subject(subject_id):
     try:
         wb_client = WildberriesAPIClient(
             api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(seller_id=seller.id, **kwargs)
+            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
         )
 
         # Получаем конфигурацию характеристик для этой категории
