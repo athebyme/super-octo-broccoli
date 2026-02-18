@@ -306,14 +306,33 @@
             </div>
 
             <!-- Ценообразование -->
-            {% if product.supplier_price and product.supplier_price > 0 %}
-            <div class="bg-white shadow-sm rounded-lg border border-green-200 p-6">
-                <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center gap-2">
-                    <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    Ценообразование
-                </h3>
+            <div class="bg-white shadow-sm rounded-lg border {{ 'border-green-200' if product.supplier_price and product.supplier_price > 0 else 'border-gray-200' }} p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-gray-900 flex items-center gap-2">
+                        <svg class="w-5 h-5 {{ 'text-green-600' if product.supplier_price else 'text-gray-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Ценообразование
+                    </h3>
+                    <div class="flex items-center gap-2">
+                        <button onclick="syncSupplierPrices()" id="syncPricesBtn"
+                                class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+                            <svg class="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Обновить цены
+                        </button>
+                        <a href="{{ url_for('auto_import_pricing') }}"
+                           class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
+                            <svg class="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            </svg>
+                            Настройки
+                        </a>
+                    </div>
+                </div>
+                {% if product.supplier_price and product.supplier_price > 0 %}
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div class="bg-gray-50 rounded-lg p-3">
                         <div class="text-xs text-gray-500">Закупочная</div>
@@ -338,8 +357,19 @@
                     </div>
                     {% endif %}
                 </div>
+                {% else %}
+                <div class="text-center py-6 text-gray-500">
+                    <svg class="mx-auto h-10 w-10 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <p class="text-sm font-medium">Цена поставщика не загружена</p>
+                    <p class="text-xs mt-1">Нажмите "Обновить цены" или настройте URL прайс-листа в
+                        <a href="{{ url_for('auto_import_pricing') }}" class="text-indigo-600 hover:underline">настройках ценообразования</a>
+                    </p>
+                </div>
+                {% endif %}
+                <div id="syncPricesResult" class="hidden mt-3 p-3 rounded-lg text-sm"></div>
             </div>
-            {% endif %}
 
             <!-- Описание -->
             {% if product.description %}
@@ -2553,5 +2583,36 @@ document.addEventListener('DOMContentLoaded', function() {
         {% endif %}
     };
 })();
+
+// Синхронизация цен поставщика
+function syncSupplierPrices() {
+    const btn = document.getElementById('syncPricesBtn');
+    const result = document.getElementById('syncPricesResult');
+    btn.disabled = true;
+    btn.innerHTML = '<svg class="animate-spin w-3.5 h-3.5 mr-1.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Загрузка...';
+
+    fetch('{{ url_for("api_sync_supplier_prices") }}', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+        .then(r => r.json())
+        .then(data => {
+            result.classList.remove('hidden', 'bg-red-50', 'text-red-700', 'bg-green-50', 'text-green-700');
+            if (data.success) {
+                result.classList.add('bg-green-50', 'text-green-700');
+                result.textContent = 'Обновлено: ' + data.updated_imported + ' импорт., ' + data.updated_products + ' товаров (из ' + data.total_prices + ' позиций в файле)';
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                result.classList.add('bg-red-50', 'text-red-700');
+                result.textContent = data.error || 'Ошибка синхронизации';
+            }
+        })
+        .catch(err => {
+            result.classList.remove('hidden', 'bg-green-50', 'text-green-700');
+            result.classList.add('bg-red-50', 'text-red-700');
+            result.textContent = 'Ошибка сети: ' + err.message;
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.innerHTML = '<svg class="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>Обновить цены';
+        });
+}
 </script>
 {% endblock %}
