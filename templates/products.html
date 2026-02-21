@@ -58,6 +58,77 @@
                     <span class="hidden sm:inline">Остатки</span>
                 </button>
             </form>
+            <!-- Экспорт -->
+            <div x-data="productsExport()" class="relative">
+                <button @click="open = !open"
+                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <span class="hidden sm:inline">Экспорт</span>
+                </button>
+                <div x-show="open" @click.away="open = false" x-cloak x-transition
+                     class="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-200 z-50 p-4">
+                    <h3 class="text-sm font-semibold text-gray-900 mb-3">Экспорт карточек</h3>
+                    <form action="{{ url_for('export_products') }}" method="GET">
+                        <!-- Передаём текущие фильтры -->
+                        {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
+                        {% if filter_brand %}<input type="hidden" name="brand" value="{{ filter_brand }}">{% endif %}
+                        {% if active_only %}<input type="hidden" name="active_only" value="1">{% endif %}
+                        <div class="mb-3">
+                            <label class="block text-xs font-medium text-gray-600 mb-1.5">Формат</label>
+                            <div class="flex gap-2">
+                                <label class="flex items-center gap-1.5 cursor-pointer">
+                                    <input type="radio" name="format" value="csv" checked @change="fmt = 'csv'" class="text-indigo-600 focus:ring-indigo-500">
+                                    <span class="text-sm text-gray-700">CSV</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 cursor-pointer">
+                                    <input type="radio" name="format" value="xlsx" @change="fmt = 'xlsx'" class="text-indigo-600 focus:ring-indigo-500">
+                                    <span class="text-sm text-gray-700">Excel</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 cursor-pointer">
+                                    <input type="radio" name="format" value="text" @change="fmt = 'text'" class="text-indigo-600 focus:ring-indigo-500">
+                                    <span class="text-sm text-gray-700">Текст</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div x-show="fmt !== 'text'" class="mb-3">
+                            <label class="block text-xs font-medium text-gray-600 mb-1.5">Колонки</label>
+                            <div class="space-y-1.5 max-h-40 overflow-y-auto">
+                                {% set pcols = {'nm_id': 'Артикул WB', 'vendor_code': 'Артикул продавца', 'title': 'Наименование', 'brand': 'Бренд', 'category': 'Категория', 'price': 'Цена', 'barcode': 'Баркод'} %}
+                                {% for key, label in pcols.items() %}
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" name="columns" value="{{ key }}" checked class="rounded text-indigo-600 focus:ring-indigo-500">
+                                    <span class="text-sm text-gray-700">{{ label }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div x-show="fmt === 'text'" class="mb-3 space-y-2">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Колонка</label>
+                                <select name="text_column" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                                    {% for key, label in pcols.items() %}
+                                    <option value="{{ key }}" {% if key == 'vendor_code' %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Разделитель</label>
+                                <select name="separator" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                                    <option value=", ">Запятая (,)</option>
+                                    <option value="; ">Точка с запятой (;)</option>
+                                    <option value="&#10;">Каждый с новой строки</option>
+                                    <option value=" ">Пробел</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium">
+                            Скачать
+                        </button>
+                    </form>
+                </div>
+            </div>
             {% else %}
             <a href="{{ url_for('api_settings') }}"
                class="px-6 py-2.5 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors flex items-center gap-2">
@@ -109,7 +180,7 @@
                     </svg>
                     Применить
                 </button>
-                {% if search or filter_brand or filter_category or filter_has_stock or active_only %}
+                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or active_only %}
                 <a href="{{ url_for('products_list') }}"
                    class="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium">
                     Сбросить
@@ -118,7 +189,7 @@
             </div>
 
             <!-- Расширенные фильтры -->
-            <details class="group" {% if filter_brand or filter_category or filter_has_stock or sort_by != 'updated_at' %}open{% endif %}>
+            <details class="group" {% if filter_brand or filter_category or filter_has_stock or filter_block_status or sort_by != 'updated_at' %}open{% endif %}>
                 <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
                     <svg class="w-5 h-5 transform group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
@@ -171,6 +242,20 @@
                         </select>
                     </div>
 
+                    <!-- Фильтр по статусу блокировки -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Статус
+                        </label>
+                        <select name="block_status"
+                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                            <option value="">Все статусы</option>
+                            <option value="blocked" {% if filter_block_status == 'blocked' %}selected{% endif %}>Заблокированные</option>
+                            <option value="shadowed" {% if filter_block_status == 'shadowed' %}selected{% endif %}>Скрытые из каталога</option>
+                            <option value="ok" {% if filter_block_status == 'ok' %}selected{% endif %}>Без проблем</option>
+                        </select>
+                    </div>
+
                     <!-- Сортировка -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -186,6 +271,8 @@
                                 <option value="brand" {% if sort_by == 'brand' %}selected{% endif %}>Бренд</option>
                                 <option value="category" {% if sort_by == 'category' %}selected{% endif %}>Категория</option>
                                 <option value="nm_id" {% if sort_by == 'nm_id' %}selected{% endif %}>NM ID</option>
+                                <option value="price" {% if sort_by == 'price' %}selected{% endif %}>Цена WB</option>
+                                <option value="supplier_price" {% if sort_by == 'supplier_price' %}selected{% endif %}>Цена поставщика</option>
                             </select>
                             <select name="order"
                                     class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
@@ -311,6 +398,12 @@
                         <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Тип
                         </th>
+                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                            Цена WB
+                        </th>
+                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                            Цена пост.
+                        </th>
                         <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Обновлено
                         </th>
@@ -356,6 +449,17 @@
                             <div class="text-xs text-gray-500 font-mono mt-0.5">
                                 NM: {{ product.nm_id }}
                             </div>
+                            {% if product.nm_id in blocked_nm_ids %}
+                            <span class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700" title="Карточка заблокирована на WB">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path></svg>
+                                Заблокирована
+                            </span>
+                            {% elif product.nm_id in shadowed_nm_ids %}
+                            <span class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700" title="Карточка скрыта из каталога WB">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
+                                Скрыта
+                            </span>
+                            {% endif %}
                         </td>
                         <td class="px-4 py-3">
                             <div class="text-sm text-gray-900 max-w-xs truncate group-hover:text-indigo-700 transition" title="{{ product.title }}">
@@ -373,6 +477,23 @@
                         </td>
                         <td class="px-4 py-3 text-sm text-gray-500">
                             {{ product.object_name or '—' }}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            {% if product.price %}
+                            <div class="text-sm font-medium text-gray-900">{{ "%.0f"|format(product.price) }} &#8381;</div>
+                            {% if product.discount_price and product.discount_price != product.price %}
+                            <div class="text-xs text-green-600">{{ "%.0f"|format(product.discount_price) }} &#8381;</div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-sm text-gray-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            {% if product.supplier_price %}
+                            <div class="text-sm font-medium text-gray-900">{{ "%.0f"|format(product.supplier_price) }} &#8381;</div>
+                            {% else %}
+                            <span class="text-sm text-gray-400">—</span>
+                            {% endif %}
                         </td>
                         <td class="px-4 py-3 text-sm text-gray-500">
                             {% if product.last_sync %}
@@ -402,13 +523,13 @@
             <div class="flex items-center justify-between">
                 <div class="flex-1 flex justify-between sm:hidden">
                     {% if pagination.has_prev %}
-                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                         Назад
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
                        class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                         Вперед
                     </a>
@@ -429,7 +550,7 @@
                     <div>
                         <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                             {% if pagination.has_prev %}
-                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
                                class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
                                 ‹
                             </a>
@@ -442,7 +563,7 @@
                                         {{ page_num }}
                                     </span>
                                     {% else %}
-                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
                                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600">
                                         {{ page_num }}
                                     </a>
@@ -455,7 +576,7 @@
                             {% endfor %}
 
                             {% if pagination.has_next %}
-                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, sort=sort_by, order=sort_order) }}"
+                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
                                class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
                                 ›
                             </a>
@@ -594,5 +715,10 @@ document.getElementById('bulkActionForm').addEventListener('submit', function(e)
         }
     }
 });
+
+// Экспорт
+function productsExport() {
+    return { open: false, fmt: 'csv' };
+}
 </script>
 {% endblock %}

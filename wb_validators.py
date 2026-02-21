@@ -303,11 +303,8 @@ def clean_characteristics_for_update(
             wrapped_count += 1
             logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): '{original_value}' -> ['{original_value}']")
         elif isinstance(cleaned_char['value'], (int, float)):
-            # Числа тоже оборачиваем в массив (на всякий случай)
-            original_value = cleaned_char['value']
-            cleaned_char['value'] = [str(original_value)]
-            wrapped_count += 1
-            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): {original_value} -> ['{original_value}']")
+            # Числовое значение (charcType=4) — оставляем как есть, WB ожидает число
+            logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): numeric value {cleaned_char['value']} — keeping as number")
         elif isinstance(cleaned_char['value'], list):
             # Уже массив - проверяем что элементы строки
             for j, item in enumerate(cleaned_char['value']):

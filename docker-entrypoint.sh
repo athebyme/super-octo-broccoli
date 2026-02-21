@@ -80,6 +80,10 @@ python migrate_add_price_monitoring.py || echo "⚠️ Price monitoring migratio
 python migrate_add_product_sync_settings.py || echo "⚠️ Product sync settings migration skipped (already applied or error)"
 python migrate_add_admin_features.py || echo "⚠️ Admin features migration skipped (already applied or error)"
 python migrate_add_card_merge_history.py --db-path /app/data/seller_platform.db || echo "⚠️ Card merge history migration skipped (already applied or error)"
+python migrate_add_supplier_price.py || echo "⚠️ Supplier price migration skipped (already applied or error)"
+python migrate_add_safe_price_change.py || echo "⚠️ Safe price change migration skipped (already applied or error)"
+python migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch migration skipped (already applied or error)"
+python migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
 else

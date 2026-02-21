@@ -365,23 +365,39 @@ class WBProductImporter:
             max_count = wb_char.get('maxCount', 1)
 
             # Форматируем значение
+            charc_type = wb_char.get('charcType', 1)
             formatted_value = self._format_char_value(char_value, wb_char)
 
-            if formatted_value:
-                # Приводим к списку если нужно
-                if not isinstance(formatted_value, list):
-                    formatted_value = [formatted_value]
+            if formatted_value is not None and formatted_value != '':
+                # charcType=4 (числовой) — WB ожидает число, НЕ массив
+                if charc_type == 4:
+                    if isinstance(formatted_value, list):
+                        formatted_value = formatted_value[0]
+                    # Убеждаемся что это число
+                    if isinstance(formatted_value, str):
+                        try:
+                            n = float(formatted_value)
+                            formatted_value = int(n) if n == int(n) else n
+                        except ValueError:
+                            logger.warning(f"Характеристика '{char_name}': не удалось привести '{formatted_value}' к числу")
+                            continue
+                else:
+                    # charcType=1 (строки) — WB ожидает массив строк
+                    if not isinstance(formatted_value, list):
+                        formatted_value = [str(formatted_value)]
+                    else:
+                        formatted_value = [str(v) for v in formatted_value]
 
-                # ВАЖНО: Обрезаем до maxCount (например, Особенности max 3)
-                if len(formatted_value) > max_count:
-                    logger.info(f"Характеристика '{char_name}': обрезаем с {len(formatted_value)} до {max_count} значений (maxCount)")
-                    formatted_value = formatted_value[:max_count]
+                    # ВАЖНО: Обрезаем до maxCount (например, Особенности max 3)
+                    if len(formatted_value) > max_count:
+                        logger.info(f"Характеристика '{char_name}': обрезаем с {len(formatted_value)} до {max_count} значений (maxCount)")
+                        formatted_value = formatted_value[:max_count]
 
                 result_characteristics.append({
                     'id': int(char_id),
                     'value': formatted_value
                 })
-                logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}, maxCount={max_count}")
+                logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}, charcType={charc_type}")
 
         logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
         return result_characteristics
@@ -399,20 +415,21 @@ class WBProductImporter:
         """
         import re
 
-        char_type = wb_char.get('type', 'string')
+        charc_type = wb_char.get('charcType', 1)  # 1=строки, 4=число
         unit_name = wb_char.get('unitName', '')
         dictionary = wb_char.get('dictionary', [])
         char_name = wb_char.get('name', '')
 
         # Если значение уже список - обрабатываем каждый элемент
         if isinstance(value, list):
-            return [self._format_single_value(v, char_type, unit_name, dictionary, char_name) for v in value if v]
+            return [self._format_single_value(v, charc_type, unit_name, dictionary, char_name) for v in value if v]
 
-        return self._format_single_value(value, char_type, unit_name, dictionary, char_name)
+        return self._format_single_value(value, charc_type, unit_name, dictionary, char_name)
 
-    def _format_single_value(self, value, char_type: str, unit_name: str, dictionary: List, char_name: str) -> str:
+    def _format_single_value(self, value, charc_type, unit_name: str, dictionary: List, char_name: str):
         """
-        Форматирует одиночное значение характеристики
+        Форматирует одиночное значение характеристики.
+        charc_type: int (1=массив строк, 4=число) или str для legacy
         """
         import re
 
@@ -423,21 +440,24 @@ class WBProductImporter:
         if not str_value:
             return None
 
-        # Для числовых типов - извлекаем число
-        if char_type in ('numeric', 'integer', 'float', 'number'):
+        # Для числовых типов (charcType=4) - извлекаем число и возвращаем как число
+        is_numeric = (charc_type == 4) or (isinstance(charc_type, str) and charc_type in ('numeric', 'integer', 'float', 'number'))
+        if is_numeric:
             # Убираем единицы измерения и извлекаем число
-            # "6 шт" -> "6", "10 мм" -> "10", "0.1 кг" -> "0.1"
+            # "6 шт" -> 6, "10 мм" -> 10, "0.1 кг" -> 0.1, "250 мл" -> 250
             match = re.search(r'([\d.,]+)', str_value)
             if match:
                 num_str = match.group(1).replace(',', '.')
                 try:
-                    # Если целое число - убираем дробную часть
                     num = float(num_str)
                     if num == int(num):
-                        return str(int(num))
-                    return str(num)
+                        return int(num)
+                    return num
                 except:
-                    return num_str
+                    pass
+            # Если не удалось распарсить, пробуем вернуть как число напрямую
+            if isinstance(value, (int, float)):
+                return value
             return str_value
 
         # Для словарных значений - ищем точное или частичное совпадение

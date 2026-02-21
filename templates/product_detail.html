@@ -221,6 +221,15 @@
                         </div>
                         {% endif %}
                     </div>
+                    {% if product.supplier_price and product.supplier_price > 0 %}
+                    <div class="mt-4 pt-4 border-t border-gray-100">
+                        <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Цена поставщика</span>
+                        <p class="mt-1 text-lg font-semibold text-green-600">{{ "{:,.0f}".format(product.supplier_price) }} ₽</p>
+                        {% if product.supplier_price_updated_at %}
+                        <p class="text-xs text-gray-400">обновлено {{ product.supplier_price_updated_at.strftime('%d.%m.%Y %H:%M') }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}

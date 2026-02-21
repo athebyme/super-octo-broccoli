@@ -15,7 +15,11 @@ import logging
 
 from models import (
     db, AutoImportSettings, ImportedProduct, CategoryMapping,
-    Product, Seller
+    Product, Seller, PricingSettings
+)
+from pricing_engine import (
+    SupplierPriceLoader, calculate_price, extract_supplier_product_id,
+    DEFAULT_PRICE_RANGES,
 )
 
 logger = logging.getLogger(__name__)
@@ -934,12 +938,17 @@ class AutoImportManager:
             self.settings.total_products_found = len(products)
             db.session.commit()
 
+            # Загружаем цены поставщика (если настроено)
+            supplier_prices = self._load_supplier_prices()
+
             # Обрабатываем каждый товар
             imported_count = 0
             skipped_count = 0
             failed_count = 0
 
             for product_data in products:
+                # Подставляем цену поставщика если есть
+                self._attach_supplier_price(product_data, supplier_prices)
                 result = self._process_product(product_data)
                 if result == 'imported':
                     imported_count += 1
@@ -983,6 +992,40 @@ class AutoImportManager:
                 'success': False,
                 'error': str(e)
             }
+
+    def _load_supplier_prices(self) -> Dict[int, Dict]:
+        """Загрузить цены поставщика из отдельного CSV если настроено."""
+        pricing = PricingSettings.query.filter_by(seller_id=self.seller.id).first()
+        if not pricing or not pricing.is_enabled or not pricing.supplier_price_url:
+            return {}
+
+        try:
+            loader = SupplierPriceLoader(
+                price_url=pricing.supplier_price_url,
+                inf_url=pricing.supplier_price_inf_url,
+            )
+            prices = loader.load_prices()
+            pricing.last_price_sync_at = datetime.utcnow()
+            db.session.commit()
+            logger.info(f"Загружено {len(prices)} цен поставщика")
+            return prices
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить цены поставщика: {e}")
+            return {}
+
+    def _attach_supplier_price(self, product_data: Dict, supplier_prices: Dict[int, Dict]):
+        """Подставить цену поставщика и рассчитать розничную цену."""
+        if not supplier_prices:
+            return
+
+        ext_id = product_data.get('external_id', '')
+        supplier_id = extract_supplier_product_id(ext_id)
+        if supplier_id and supplier_id in supplier_prices:
+            product_data['supplier_price'] = supplier_prices[supplier_id]['price']
+            product_data['supplier_quantity'] = supplier_prices[supplier_id].get('quantity', 0)
+        else:
+            product_data['supplier_price'] = None
+            product_data['supplier_quantity'] = 0
 
     def _download_csv(self) -> str:
         """Скачивает CSV файл"""
@@ -1149,6 +1192,23 @@ class AutoImportManager:
             imported_product.materials = json.dumps(product_data['materials'], ensure_ascii=False)
             imported_product.photo_urls = json.dumps(product_data['photo_urls'], ensure_ascii=False)
             imported_product.barcodes = json.dumps(product_data['barcodes'], ensure_ascii=False)
+
+            # Сохраняем цену поставщика, кол-во и рассчитываем розничные цены
+            sp = product_data.get('supplier_price')
+            sq = product_data.get('supplier_quantity')
+            imported_product.supplier_quantity = sq if sq is not None else 0
+            if sp and sp > 0:
+                imported_product.supplier_price = sp
+                pricing = PricingSettings.query.filter_by(
+                    seller_id=self.seller.id
+                ).first()
+                if pricing and pricing.is_enabled:
+                    supplier_pid = extract_supplier_product_id(external_id)
+                    result = calculate_price(sp, pricing, product_id=supplier_pid or 0)
+                    if result:
+                        imported_product.calculated_price = result['final_price']
+                        imported_product.calculated_discount_price = result['discount_price']
+                        imported_product.calculated_price_before_discount = result['price_before_discount']
 
             # Сохраняем оригинальные данные поставщика (до AI модификаций)
             # Это позволит восстановить данные если AI что-то потеряет

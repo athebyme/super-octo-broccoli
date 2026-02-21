@@ -52,6 +52,15 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Задача синхронизации заблокированных карточек (каждые 10 минут)
+    scheduler.add_job(
+        func=lambda: sync_blocked_cards_all_sellers(flask_app),
+        trigger=IntervalTrigger(minutes=10),
+        id='sync_blocked_cards',
+        name='Sync blocked/shadowed cards for all sellers',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
@@ -218,6 +227,181 @@ def _perform_price_monitoring_task(seller_id, flask_app):
 
         except Exception as e:
             logger.exception(f"❌ Price monitoring failed for seller {seller_id}: {str(e)}")
+
+
+def sync_blocked_cards_all_sellers(flask_app):
+    """
+    Синхронизировать заблокированные и скрытые карточки для всех продавцов с валидным API ключом.
+    Запускается каждые 10 минут планировщиком.
+    """
+    from models import Seller, BlockedCard, ShadowedCard, BlockedCardsSyncSettings, APILog, db
+    from wb_api_client import WildberriesAPIClient
+
+    with flask_app.app_context():
+        try:
+            sellers = Seller.query.filter(
+                Seller._wb_api_key_encrypted.isnot(None),
+                Seller._wb_api_key_encrypted != ''
+            ).all()
+
+            logger.info(f"📋 Syncing blocked cards for {len(sellers)} sellers")
+
+            for seller in sellers:
+                if not seller.has_valid_api_key():
+                    continue
+
+                # Получаем или создаём настройки синка
+                sync_settings = BlockedCardsSyncSettings.query.filter_by(
+                    seller_id=seller.id
+                ).first()
+                if not sync_settings:
+                    sync_settings = BlockedCardsSyncSettings(seller_id=seller.id)
+                    db.session.add(sync_settings)
+                    db.session.flush()
+
+                if sync_settings.last_sync_status == 'running':
+                    logger.debug(f"⏳ Blocked cards sync already running for seller {seller.id}")
+                    continue
+
+                sync_settings.last_sync_status = 'running'
+                db.session.commit()
+
+                try:
+                    client = WildberriesAPIClient(
+                        api_key=seller.wb_api_key,
+                        db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
+                    )
+
+                    # --- Заблокированные ---
+                    blocked_api = client.get_blocked_cards(
+                        sort='nmId', order='asc',
+                        log_to_db=True, seller_id=seller.id
+                    )
+                    _upsert_blocked_cards(seller.id, blocked_api, db)
+
+                    # --- Скрытые ---
+                    shadowed_api = client.get_shadowed_cards(
+                        sort='nmId', order='asc',
+                        log_to_db=True, seller_id=seller.id
+                    )
+                    _upsert_shadowed_cards(seller.id, shadowed_api, db)
+
+                    sync_settings.last_sync_at = datetime.utcnow()
+                    sync_settings.last_sync_status = 'success'
+                    sync_settings.last_sync_error = None
+                    sync_settings.blocked_count = len(blocked_api)
+                    sync_settings.shadowed_count = len(shadowed_api)
+                    db.session.commit()
+
+                    logger.info(
+                        f"✅ Blocked cards synced for seller {seller.id}: "
+                        f"{len(blocked_api)} blocked, {len(shadowed_api)} shadowed"
+                    )
+
+                except Exception as e:
+                    logger.error(f"❌ Blocked cards sync failed for seller {seller.id}: {e}")
+                    sync_settings.last_sync_status = 'error'
+                    sync_settings.last_sync_error = str(e)[:500]
+                    db.session.commit()
+
+        except Exception as e:
+            logger.exception(f"❌ Error in sync_blocked_cards_all_sellers: {e}")
+
+
+def _upsert_blocked_cards(seller_id, api_data, db):
+    """Обновить таблицу blocked_cards по данным из API"""
+    from models import BlockedCard
+
+    now = datetime.utcnow()
+    api_nm_ids = set()
+
+    for item in api_data:
+        nm_id = item.get('nmId')
+        if not nm_id:
+            continue
+        api_nm_ids.add(nm_id)
+
+        existing = BlockedCard.query.filter_by(
+            seller_id=seller_id, nm_id=nm_id
+        ).first()
+
+        if existing:
+            existing.vendor_code = item.get('vendorCode', existing.vendor_code)
+            existing.title = item.get('title', existing.title)
+            existing.brand = item.get('brand', existing.brand)
+            existing.reason = item.get('reason', existing.reason)
+            existing.last_seen_at = now
+            existing.is_active = True
+        else:
+            card = BlockedCard(
+                seller_id=seller_id,
+                nm_id=nm_id,
+                vendor_code=item.get('vendorCode'),
+                title=item.get('title'),
+                brand=item.get('brand'),
+                reason=item.get('reason'),
+                first_seen_at=now,
+                last_seen_at=now,
+                is_active=True,
+            )
+            db.session.add(card)
+
+    # Помечаем карточки, которых нет в API, как неактивные (разблокированы)
+    BlockedCard.query.filter(
+        BlockedCard.seller_id == seller_id,
+        BlockedCard.is_active == True,
+        ~BlockedCard.nm_id.in_(api_nm_ids) if api_nm_ids else True
+    ).update({'is_active': False, 'last_seen_at': now}, synchronize_session='fetch')
+
+    db.session.commit()
+
+
+def _upsert_shadowed_cards(seller_id, api_data, db):
+    """Обновить таблицу shadowed_cards по данным из API"""
+    from models import ShadowedCard
+
+    now = datetime.utcnow()
+    api_nm_ids = set()
+
+    for item in api_data:
+        nm_id = item.get('nmId')
+        if not nm_id:
+            continue
+        api_nm_ids.add(nm_id)
+
+        existing = ShadowedCard.query.filter_by(
+            seller_id=seller_id, nm_id=nm_id
+        ).first()
+
+        if existing:
+            existing.vendor_code = item.get('vendorCode', existing.vendor_code)
+            existing.title = item.get('title', existing.title)
+            existing.brand = item.get('brand', existing.brand)
+            existing.nm_rating = item.get('nmRating', existing.nm_rating)
+            existing.last_seen_at = now
+            existing.is_active = True
+        else:
+            card = ShadowedCard(
+                seller_id=seller_id,
+                nm_id=nm_id,
+                vendor_code=item.get('vendorCode'),
+                title=item.get('title'),
+                brand=item.get('brand'),
+                nm_rating=item.get('nmRating'),
+                first_seen_at=now,
+                last_seen_at=now,
+                is_active=True,
+            )
+            db.session.add(card)
+
+    # Помечаем карточки, которых нет в API, как неактивные (вернулись в каталог)
+    ShadowedCard.query.filter(
+        ShadowedCard.seller_id == seller_id,
+        ShadowedCard.is_active == True,
+        ~ShadowedCard.nm_id.in_(api_nm_ids) if api_nm_ids else True
+    ).update({'is_active': False, 'last_seen_at': now}, synchronize_session='fetch')
+
+    db.session.commit()
 
 
 def shutdown_scheduler():

@@ -187,6 +187,10 @@ class Product(db.Model):
     discount_price = db.Column(db.Numeric(10, 2))  # Цена со скидкой
     quantity = db.Column(db.Integer, default=0)  # Остаток
 
+    # Цена поставщика (из CSV поставщика)
+    supplier_price = db.Column(db.Float, nullable=True)
+    supplier_price_updated_at = db.Column(db.DateTime, nullable=True)
+
     # Медиа
     photos_json = db.Column(db.Text)  # JSON с URL фотографий
     video_url = db.Column(db.String(500))  # URL видео
@@ -875,6 +879,13 @@ class ImportedProduct(db.Model):
     description = db.Column(db.Text)  # Описание
     original_data = db.Column(db.Text)  # Оригинальные данные от поставщика (JSON) - для отката AI изменений
 
+    # Цена поставщика и рассчитанные цены
+    supplier_price = db.Column(db.Float, nullable=True)  # Закупочная цена из CSV поставщика
+    supplier_quantity = db.Column(db.Integer, nullable=True, default=None)  # Остаток на складе поставщика
+    calculated_price = db.Column(db.Float, nullable=True)  # Z — итоговая цена
+    calculated_discount_price = db.Column(db.Float, nullable=True)  # X — цена с SPP скидкой
+    calculated_price_before_discount = db.Column(db.Float, nullable=True)  # Y — завышенная цена до скидки
+
     # Статус импорта
     import_status = db.Column(db.String(50), default='pending')  # 'pending', 'validated', 'imported', 'failed'
     validation_errors = db.Column(db.Text)  # Ошибки валидации (JSON)
@@ -934,6 +945,75 @@ class ImportedProduct(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'imported_at': self.imported_at.isoformat() if self.imported_at else None
         }
+
+
+class PricingSettings(db.Model):
+    """Настройки формулы ценообразования для продавца"""
+    __tablename__ = 'pricing_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    formula_type = db.Column(db.String(50), default='standard')  # standard, custom
+
+    # URL файлов цен поставщика
+    supplier_price_url = db.Column(db.String(500))
+    supplier_price_inf_url = db.Column(db.String(500))
+    last_price_sync_at = db.Column(db.DateTime)
+    last_price_file_hash = db.Column(db.String(64))
+
+    # Комиссия WB (%)
+    wb_commission_pct = db.Column(db.Float, default=40.0, nullable=False)
+
+    # Налоговый коэффициент
+    tax_rate = db.Column(db.Float, default=1.13, nullable=False)
+
+    # Константы формулы R (цена без доставки)
+    logistics_cost = db.Column(db.Float, default=55.0, nullable=False)
+    storage_cost = db.Column(db.Float, default=0.0, nullable=False)
+    packaging_cost = db.Column(db.Float, default=20.0, nullable=False)
+
+    # Константы формулы Z (итоговая цена)
+    acquiring_cost = db.Column(db.Float, default=25.0, nullable=False)
+    extra_cost = db.Column(db.Float, default=20.0, nullable=False)
+
+    # Формула S (стоимость доставки)
+    delivery_pct = db.Column(db.Float, default=5.0, nullable=False)
+    delivery_min = db.Column(db.Float, default=55.0, nullable=False)
+    delivery_max = db.Column(db.Float, default=205.0, nullable=False)
+
+    # Колонка прибыли из таблицы наценок (A/B/C/D)
+    profit_column = db.Column(db.String(1), default='d', nullable=False)
+
+    # Желаемая прибыль Q
+    min_profit = db.Column(db.Float, default=30.0, nullable=False)
+    max_profit = db.Column(db.Float, nullable=True)
+
+    # Случайная добавка к Q
+    use_random = db.Column(db.Boolean, default=False, nullable=False)
+    random_min = db.Column(db.Integer, default=1, nullable=False)
+    random_max = db.Column(db.Integer, default=10, nullable=False)
+
+    # SPP (Скидка постоянного покупателя)
+    spp_pct = db.Column(db.Float, default=5.0, nullable=False)
+    spp_min = db.Column(db.Float, default=20.0, nullable=False)
+    spp_max = db.Column(db.Float, default=500.0, nullable=False)
+
+    # Множитель завышенной цены (Y = Z * множитель)
+    inflated_multiplier = db.Column(db.Float, default=1.55, nullable=False)
+
+    # Таблица наценок (JSON)
+    # Формат: [{"from": 1, "to": 100, "a": 35, "b": 0, "c": 0, "d": 38}, ...]
+    price_ranges = db.Column(db.Text)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('pricing_settings', uselist=False))
+
+    def __repr__(self) -> str:
+        return f'<PricingSettings seller_id={self.seller_id} enabled={self.is_enabled}>'
 
 
 class CategoryMapping(db.Model):
@@ -1729,6 +1809,76 @@ class AIHistory(db.Model):
         db.Index('idx_ai_history_product_created', 'imported_product_id', 'created_at'),
         db.Index('idx_ai_history_created', 'created_at'),
     )
+
+
+class BlockedCard(db.Model):
+    """Заблокированная карточка товара WB (кэш из seller-analytics-api)"""
+    __tablename__ = 'blocked_cards'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    nm_id = db.Column(db.BigInteger, nullable=False)
+    vendor_code = db.Column(db.String(200))
+    title = db.Column(db.String(500))
+    brand = db.Column(db.String(200))
+    reason = db.Column(db.Text)
+
+    # Отслеживание
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)  # False = разблокирована
+
+    __table_args__ = (
+        db.Index('idx_blocked_seller_nm', 'seller_id', 'nm_id'),
+        db.Index('idx_blocked_seller_active', 'seller_id', 'is_active'),
+    )
+
+    def __repr__(self):
+        return f'<BlockedCard nm_id={self.nm_id} reason={self.reason[:30] if self.reason else "N/A"}>'
+
+
+class ShadowedCard(db.Model):
+    """Карточка товара WB, скрытая из каталога (кэш из seller-analytics-api)"""
+    __tablename__ = 'shadowed_cards'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    nm_id = db.Column(db.BigInteger, nullable=False)
+    vendor_code = db.Column(db.String(200))
+    title = db.Column(db.String(500))
+    brand = db.Column(db.String(200))
+    nm_rating = db.Column(db.Float)
+
+    # Отслеживание
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)  # False = вернулась в каталог
+
+    __table_args__ = (
+        db.Index('idx_shadowed_seller_nm', 'seller_id', 'nm_id'),
+        db.Index('idx_shadowed_seller_active', 'seller_id', 'is_active'),
+    )
+
+    def __repr__(self):
+        return f'<ShadowedCard nm_id={self.nm_id} rating={self.nm_rating}>'
+
+
+class BlockedCardsSyncSettings(db.Model):
+    """Настройки и статус синхронизации заблокированных карточек"""
+    __tablename__ = 'blocked_cards_sync_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True)
+
+    last_sync_at = db.Column(db.DateTime)
+    last_sync_status = db.Column(db.String(20))  # 'success', 'error', 'running'
+    last_sync_error = db.Column(db.Text)
+    blocked_count = db.Column(db.Integer, default=0)
+    shadowed_count = db.Column(db.Integer, default=0)
+
+    seller = db.relationship('Seller', backref=db.backref('blocked_cards_sync', uselist=False))
 
     def __repr__(self) -> str:
         return f'<AIHistory {self.action_type} product_id={self.imported_product_id}>'

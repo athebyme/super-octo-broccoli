@@ -2,6 +2,7 @@
 """
 Платформа для продавцов WB - основной файл приложения
 """
+import hashlib
 import os
 from datetime import datetime
 from functools import wraps
@@ -26,6 +27,7 @@ from models import (
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
+    PricingSettings,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -431,12 +433,16 @@ def dashboard():
     latest_report = None
     summary = None
     latest_filename = None
+    products_count = 0
+    api_logs_count = 0
     if current_user.seller:
         latest_report = get_latest_report(current_user.seller.id)
         if latest_report:
             summary = latest_report.summary or {}
             processed_path = Path(latest_report.processed_path)
             latest_filename = processed_path.name if processed_path.exists() else None
+        products_count = Product.query.filter_by(seller_id=current_user.seller.id).count()
+        api_logs_count = APILog.query.filter_by(seller_id=current_user.seller.id).count()
 
     return render_template(
         'dashboard.html',
@@ -444,6 +450,8 @@ def dashboard():
         latest_report=latest_report,
         summary=summary,
         latest_filename=latest_filename,
+        products_count=products_count,
+        api_logs_count=api_logs_count,
     )
 
 
@@ -1102,6 +1110,7 @@ def products_list():
         filter_brand = request.args.get('brand', '').strip()
         filter_category = request.args.get('category', '').strip()
         filter_has_stock = request.args.get('has_stock', '').strip()  # 'yes', 'no', ''
+        filter_block_status = request.args.get('block_status', '').strip()  # 'blocked', 'shadowed', 'ok', ''
 
         # Сортировка
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
@@ -1155,6 +1164,34 @@ def products_list():
                 )
             )
 
+        # Фильтр по статусу блокировки
+        if filter_block_status in ('blocked', 'shadowed', 'ok'):
+            try:
+                from models import BlockedCard, ShadowedCard
+                if filter_block_status == 'blocked':
+                    _blocked_ids = db.session.query(BlockedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    query = query.filter(Product.nm_id.in_(_blocked_ids))
+                elif filter_block_status == 'shadowed':
+                    _shadowed_ids = db.session.query(ShadowedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    query = query.filter(Product.nm_id.in_(_shadowed_ids))
+                elif filter_block_status == 'ok':
+                    _blocked_ids = db.session.query(BlockedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    _shadowed_ids = db.session.query(ShadowedCard.nm_id).filter_by(
+                        seller_id=current_user.seller.id, is_active=True
+                    ).subquery()
+                    query = query.filter(
+                        ~Product.nm_id.in_(_blocked_ids),
+                        ~Product.nm_id.in_(_shadowed_ids),
+                    )
+            except Exception:
+                pass  # Таблицы могут не существовать
+
         # Сортировка
         sort_column = {
             'updated_at': Product.updated_at,
@@ -1164,6 +1201,8 @@ def products_list():
             'brand': Product.brand,
             'nm_id': Product.nm_id,
             'category': Product.object_name,
+            'price': Product.price,
+            'supplier_price': Product.supplier_price,
         }.get(sort_by, Product.updated_at)
 
         if sort_order == 'asc':
@@ -1184,7 +1223,7 @@ def products_list():
         total_products = pagination.total  # Количество товаров после применения всех фильтров
 
         # Для активных товаров - всегда показываем общее количество активных (без фильтров)
-        active_products = current_user.seller.products.filter_by(is_active=True).count()
+        active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
 
         # Получаем уникальные бренды и категории для фильтров
         brands = db.session.query(Product.brand).filter(
@@ -1201,6 +1240,20 @@ def products_list():
         ).distinct().order_by(Product.object_name).all()
         categories = [c[0] for c in categories]
 
+        # Получаем nm_id заблокированных и скрытых карточек для отметки в списке
+        blocked_nm_ids = set()
+        shadowed_nm_ids = set()
+        try:
+            from models import BlockedCard, ShadowedCard
+            blocked_nm_ids = {r[0] for r in BlockedCard.query.filter_by(
+                seller_id=current_user.seller.id, is_active=True
+            ).with_entities(BlockedCard.nm_id).all()}
+            shadowed_nm_ids = {r[0] for r in ShadowedCard.query.filter_by(
+                seller_id=current_user.seller.id, is_active=True
+            ).with_entities(ShadowedCard.nm_id).all()}
+        except Exception:
+            pass  # Таблицы могут не существовать при первом запуске
+
         return render_template(
             'products.html',
             products=products,
@@ -1216,7 +1269,10 @@ def products_list():
             sort_order=sort_order,
             brands=brands,
             categories=categories,
-            seller=current_user.seller
+            seller=current_user.seller,
+            blocked_nm_ids=blocked_nm_ids,
+            shadowed_nm_ids=shadowed_nm_ids,
+            filter_block_status=filter_block_status,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -1617,16 +1673,25 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         if not product:
                             continue
 
-                        # Генерируем warehouse_id из имени (для уникальности)
-                        warehouse_id = hash(warehouse_name) % 1000000
+                        # Генерируем стабильный warehouse_id из имени (hashlib вместо hash())
+                        warehouse_id = int(hashlib.md5(warehouse_name.encode('utf-8')).hexdigest(), 16) % 1000000
 
-                        # Ищем существующую запись об остатках
-                        stock = ProductStock.query.filter_by(
+                        # Удаляем дубликаты по warehouse_name (оставляем только одну запись)
+                        duplicates = ProductStock.query.filter_by(
                             product_id=product.id,
-                            warehouse_id=warehouse_id
-                        ).first()
+                            warehouse_name=warehouse_name
+                        ).all()
+                        if len(duplicates) > 1:
+                            for dup in duplicates[1:]:
+                                db.session.delete(dup)
+                            stock = duplicates[0]
+                        elif duplicates:
+                            stock = duplicates[0]
+                        else:
+                            stock = None
 
                         if stock:
+                            stock.warehouse_id = warehouse_id
                             stock.warehouse_name = warehouse_name
                             stock.quantity = stock_data['quantity']
                             stock.quantity_full = stock_data['quantity_full']
@@ -1857,21 +1922,29 @@ def sync_warehouse_stocks():
                     # Товар не найден - пропускаем (возможно не синхронизированы карточки)
                     continue
 
-                # Генерируем warehouse_id из имени (для уникальности)
-                # WB не возвращает ID склада в Statistics API, используем хеш имени
-                warehouse_id = hash(warehouse_name) % 1000000
+                # Генерируем стабильный warehouse_id из имени (hashlib вместо hash())
+                warehouse_id = int(hashlib.md5(warehouse_name.encode('utf-8')).hexdigest(), 16) % 1000000
 
-                # Ищем существующую запись об остатках для этого товара и склада
-                stock = ProductStock.query.filter_by(
+                # Удаляем дубликаты по warehouse_name (оставляем только одну запись)
+                duplicates = ProductStock.query.filter_by(
                     product_id=product.id,
-                    warehouse_id=warehouse_id
-                ).first()
+                    warehouse_name=warehouse_name
+                ).all()
+                if len(duplicates) > 1:
+                    for dup in duplicates[1:]:
+                        db.session.delete(dup)
+                    stock = duplicates[0]
+                elif duplicates:
+                    stock = duplicates[0]
+                else:
+                    stock = None
 
                 quantity = stock_data['quantity']
                 quantity_full = stock_data['quantity_full']
 
                 if stock:
                     # Обновляем существующую запись
+                    stock.warehouse_id = warehouse_id
                     stock.warehouse_name = warehouse_name
                     stock.quantity = quantity
                     stock.quantity_full = quantity_full
@@ -1974,7 +2047,7 @@ def product_create():
         try:
             wb_client = WildberriesAPIClient(
                 api_key=seller.wb_api_key,
-                db_logger_callback=lambda **kwargs: APILog.log_request(seller_id=seller.id, **kwargs)
+                db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
             )
 
             # Получаем список родительских категорий
@@ -2097,7 +2170,7 @@ def product_create():
         # Создаем карточку через API
         wb_client = WildberriesAPIClient(
             api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(seller_id=seller.id, **kwargs)
+            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
         )
 
         logger.info(f"Creating product card: subjectID={subject_id}, vendorCode={vendor_code}")
@@ -2170,8 +2243,20 @@ def product_detail(product_id):
     characteristics = json.loads(product.characteristics_json) if product.characteristics_json else []
     dimensions = json.loads(product.dimensions_json) if product.dimensions_json else {}
 
-    # Получаем остатки по складам для этого товара
-    warehouse_stocks = ProductStock.query.filter_by(product_id=product.id).all()
+    # Получаем остатки по складам для этого товара (агрегируем дубликаты по warehouse_name)
+    all_stocks = ProductStock.query.filter_by(product_id=product.id).all()
+    stocks_by_name = {}
+    for stock in all_stocks:
+        name = stock.warehouse_name or f'Склад {stock.warehouse_id}'
+        if name in stocks_by_name:
+            existing = stocks_by_name[name]
+            existing.quantity += stock.quantity
+            existing.quantity_full += stock.quantity_full
+            existing.in_way_to_client = (existing.in_way_to_client or 0) + (stock.in_way_to_client or 0)
+            existing.in_way_from_client = (existing.in_way_from_client or 0) + (stock.in_way_from_client or 0)
+        else:
+            stocks_by_name[name] = stock
+    warehouse_stocks = list(stocks_by_name.values())
 
     # Вычисляем общие остатки
     total_quantity = sum(stock.quantity for stock in warehouse_stocks)
@@ -3417,8 +3502,8 @@ def api_logs():
     logs = pagination.items
 
     # Статистика
-    total_requests = current_user.seller.api_logs.count()
-    failed_requests = current_user.seller.api_logs.filter_by(success=False).count()
+    total_requests = APILog.query.filter_by(seller_id=current_user.seller.id).count()
+    failed_requests = APILog.query.filter_by(seller_id=current_user.seller.id, success=False).count()
     success_rate = ((total_requests - failed_requests) / total_requests * 100) if total_requests > 0 else 0
 
     return render_template(
@@ -3856,7 +3941,7 @@ def api_get_characteristics_by_subject(subject_id):
     try:
         wb_client = WildberriesAPIClient(
             api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(seller_id=seller.id, **kwargs)
+            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
         )
 
         # Получаем конфигурацию характеристик для этой категории
@@ -4496,6 +4581,23 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
             print(msg, flush=True)
             # Продолжаем без цен - будем использовать только данные карточек
 
+        # Загружаем цены поставщика для сравнения
+        supplier_prices = {}
+        supplier_prices_updated = 0
+        try:
+            from pricing_engine import SupplierPriceLoader, extract_supplier_product_id
+            from models import PricingSettings
+            pricing_settings = PricingSettings.query.filter_by(seller_id=seller.id).first()
+            if pricing_settings and pricing_settings.is_enabled and pricing_settings.supplier_price_url:
+                loader = SupplierPriceLoader(
+                    price_url=pricing_settings.supplier_price_url,
+                    inf_url=pricing_settings.supplier_price_inf_url,
+                )
+                supplier_prices = loader.load_prices()
+                app.logger.info(f"Loaded {len(supplier_prices)} supplier prices for comparison")
+        except Exception as sp_error:
+            app.logger.warning(f"Failed to load supplier prices: {sp_error}")
+
         changes_detected = 0
         suspicious_changes = 0
         products_checked = 0
@@ -4621,34 +4723,52 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
                 db.session.add(history)
                 db.session.flush()  # Чтобы получить ID истории
 
+                # Проверяем, менялась ли цена поставщика
+                supplier_price_changed = False
+                if supplier_prices and product.vendor_code:
+                    sp_id = extract_supplier_product_id(product.vendor_code)
+                    if sp_id and sp_id in supplier_prices:
+                        new_sp = supplier_prices[sp_id]['price']
+                        old_sp = product.supplier_price
+                        if old_sp and new_sp != old_sp:
+                            supplier_price_changed = True
+                        # Обновляем цену поставщика на продукте
+                        product.supplier_price = new_sp
+                        product.supplier_price_updated_at = datetime.utcnow()
+                        supplier_prices_updated += 1
+
                 # Проверяем, есть ли подозрительные скачки
+                # Если цена поставщика тоже менялась — изменение цены на WB ожидаемо
                 if price_change_percent and abs(price_change_percent) > settings.price_change_threshold_percent:
-                    suspicious = SuspiciousPriceChange(
-                        price_history_id=history.id,
-                        product_id=product.id,
-                        seller_id=seller.id,
-                        change_type='price',
-                        old_value=old_price,
-                        new_value=new_price,
-                        change_percent=price_change_percent,
-                        threshold_percent=settings.price_change_threshold_percent
-                    )
-                    db.session.add(suspicious)
-                    suspicious_changes += 1
+                    if not supplier_price_changed:
+                        # Цена на WB изменилась сильно, а у поставщика — нет. Алерт!
+                        suspicious = SuspiciousPriceChange(
+                            price_history_id=history.id,
+                            product_id=product.id,
+                            seller_id=seller.id,
+                            change_type='price',
+                            old_value=old_price,
+                            new_value=new_price,
+                            change_percent=price_change_percent,
+                            threshold_percent=settings.price_change_threshold_percent
+                        )
+                        db.session.add(suspicious)
+                        suspicious_changes += 1
 
                 if discount_price_change_percent and abs(discount_price_change_percent) > settings.price_change_threshold_percent:
-                    suspicious = SuspiciousPriceChange(
-                        price_history_id=history.id,
-                        product_id=product.id,
-                        seller_id=seller.id,
-                        change_type='discount_price',
-                        old_value=old_discount_price,
-                        new_value=new_discount_price,
-                        change_percent=discount_price_change_percent,
-                        threshold_percent=settings.price_change_threshold_percent
-                    )
-                    db.session.add(suspicious)
-                    suspicious_changes += 1
+                    if not supplier_price_changed:
+                        suspicious = SuspiciousPriceChange(
+                            price_history_id=history.id,
+                            product_id=product.id,
+                            seller_id=seller.id,
+                            change_type='discount_price',
+                            old_value=old_discount_price,
+                            new_value=new_discount_price,
+                            change_percent=discount_price_change_percent,
+                            threshold_percent=settings.price_change_threshold_percent
+                        )
+                        db.session.add(suspicious)
+                        suspicious_changes += 1
 
                 if quantity_change_percent and abs(quantity_change_percent) > settings.stock_change_threshold_percent:
                     suspicious = SuspiciousPriceChange(
@@ -4778,6 +4898,37 @@ def apply_migrations():
             conn.commit()
             print("  ✅ Колонка subject_id добавлена")
 
+        # Миграция: supplier_price для products
+        if 'supplier_price' not in columns:
+            print("  ➕ Добавление колонки supplier_price в products...")
+            cursor.execute("ALTER TABLE products ADD COLUMN supplier_price FLOAT")
+            cursor.execute("ALTER TABLE products ADD COLUMN supplier_price_updated_at DATETIME")
+            conn.commit()
+            print("  ✅ Колонки supplier_price добавлены")
+        else:
+            print("  ✓ Колонка supplier_price уже существует в products")
+
+        # Миграция: pricing поля для imported_products
+        cursor.execute("PRAGMA table_info(imported_products)")
+        ip_columns = {row[1] for row in cursor.fetchall()}
+        if ip_columns and 'supplier_price' not in ip_columns:
+            print("  ➕ Добавление колонок ценообразования в imported_products...")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN supplier_price FLOAT")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN calculated_price FLOAT")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN calculated_discount_price FLOAT")
+            cursor.execute("ALTER TABLE imported_products ADD COLUMN calculated_price_before_discount FLOAT")
+            conn.commit()
+            print("  ✅ Колонки ценообразования добавлены в imported_products")
+        elif ip_columns:
+            print("  ✓ Колонки ценообразования уже существуют в imported_products")
+
+        # Создаём таблицу pricing_settings если не существует
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pricing_settings'")
+        if not cursor.fetchone():
+            print("  ➕ Таблица pricing_settings будет создана через db.create_all()")
+        else:
+            print("  ✓ Таблица pricing_settings уже существует")
+
         print("\n✅ Миграции успешно применены!")
 
     except Exception as e:
@@ -4801,6 +4952,10 @@ register_merge_routes(app)
 # Регистрация роутов для безопасного изменения цен
 from routes_safe_prices import register_routes as register_safe_prices_routes
 register_safe_prices_routes(app)
+
+# ============= РОУТЫ ЗАБЛОКИРОВАННЫХ КАРТОЧЕК И ЭКСПОРТА =============
+from routes_blocked_cards import register_blocked_cards_routes
+register_blocked_cards_routes(app)
 
 
 if __name__ == '__main__':
