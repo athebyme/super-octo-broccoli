@@ -219,6 +219,11 @@ def prepare_card_for_update(
         'subjectName',
         'wholesale',
         'needKiz',
+        # brand намеренно исключается: WB API валидирует бренд через справочник
+        # и может отклонить карточку даже если бренд существует (баг WB API).
+        # При отсутствии поля WB сохраняет существующий бренд на карточке.
+        # Для явного обновления бренда используется операция update_brand (update_card).
+        'brand',
     ]
 
     for field in fields_to_remove:
