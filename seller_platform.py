@@ -2650,43 +2650,68 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> (product, new_desc)
+
                     for product in products:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
+                            full_card = product.to_wb_card_format()
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
 
                             current_desc = product.description or ''
                             new_desc = f"{current_desc}\n\n{append_text}".strip()
-                            client.update_card(
-                                product.nm_id,
-                                {'description': new_desc},
-                                log_to_db=True,
-                                seller_id=current_user.seller.id
-                            )
-                            product.description = new_desc
-                            product.last_sync = datetime.utcnow()
+                            full_card['description'] = new_desc
 
-                            snapshot_after = _create_product_snapshot(product)
-
-                            card_history = CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['description'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=True,
-                                wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
-
-                            success_count += 1
+                            card_ready = prepare_card_for_update(full_card, {})
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = (product, new_desc)
                         except Exception as e:
                             error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
-                            errors.append(error_msg)
+                            errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
 
-                    db.session.commit()
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                product, new_desc = product_map.get(nm_id, (None, None))
+                                if product:
+                                    snapshot_before = _create_product_snapshot(product)
+                                    product.description = new_desc
+                                    product.last_sync = datetime.utcnow()
+                                    snapshot_after = _create_product_snapshot(product)
+                                    db.session.add(CardEditHistory(
+                                        product_id=product.id,
+                                        seller_id=current_user.seller.id,
+                                        bulk_edit_id=bulk_operation.id,
+                                        action='update',
+                                        changed_fields=['description'],
+                                        snapshot_before=snapshot_before,
+                                        snapshot_after=snapshot_after,
+                                        wb_synced=True,
+                                        wb_sync_status='success'
+                                    ))
+                                    success_count += 1
+                            db.session.commit()
+                        except Exception as e:
+                            error_count += len(batch)
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
 
                 elif operation == 'replace_description':
                     new_description = operation_value
@@ -2699,41 +2724,65 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> product
+
                     for product in products:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
+                            full_card = product.to_wb_card_format()
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
 
-                            client.update_card(
-                                product.nm_id,
-                                {'description': new_description},
-                                log_to_db=True,
-                                seller_id=current_user.seller.id
-                            )
-                            product.description = new_description
-                            product.last_sync = datetime.utcnow()
-
-                            snapshot_after = _create_product_snapshot(product)
-
-                            card_history = CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['description'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=True,
-                                wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
-
-                            success_count += 1
+                            full_card['description'] = new_description
+                            card_ready = prepare_card_for_update(full_card, {})
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = product
                         except Exception as e:
                             error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
-                            errors.append(error_msg)
+                            errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
 
-                    db.session.commit()
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                product = product_map.get(nm_id)
+                                if product:
+                                    snapshot_before = _create_product_snapshot(product)
+                                    product.description = new_description
+                                    product.last_sync = datetime.utcnow()
+                                    snapshot_after = _create_product_snapshot(product)
+                                    db.session.add(CardEditHistory(
+                                        product_id=product.id,
+                                        seller_id=current_user.seller.id,
+                                        bulk_edit_id=bulk_operation.id,
+                                        action='update',
+                                        changed_fields=['description'],
+                                        snapshot_before=snapshot_before,
+                                        snapshot_after=snapshot_after,
+                                        wb_synced=True,
+                                        wb_sync_status='success'
+                                    ))
+                                    success_count += 1
+                            db.session.commit()
+                        except Exception as e:
+                            error_count += len(batch)
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
 
                 elif operation == 'update_characteristic':
                     selected_category = request.form.get('selected_category', '').strip()
