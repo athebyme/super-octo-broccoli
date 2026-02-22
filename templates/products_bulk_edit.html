@@ -200,7 +200,12 @@
             }
 
             if (this.operation === 'update_brand' || this.operation === 'append_description' || this.operation === 'replace_description') {
-                const valueField = document.querySelector('[name=\"value\"]');
+                const idMap = {
+                    'update_brand': 'value_brand',
+                    'append_description': 'value_append',
+                    'replace_description': 'value_replace',
+                };
+                const valueField = document.getElementById(idMap[this.operation]);
                 if (!valueField || !valueField.value.trim()) {
                     alert('Заполните значение для операции');
                     return false;
