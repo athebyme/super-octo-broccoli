@@ -3428,71 +3428,107 @@ def revert_bulk_edit(bulk_id):
         error_count = 0
         errors = []
 
+        from wb_api_client import chunk_list
+        from wb_validators import prepare_card_for_update, clean_characteristics_for_update
+
+        # Готовим карточки для батч-обновления из локальной БД (без лишних GET-запросов к WB)
+        cards_to_update = []
+        change_map = {}  # nmID -> (change, product, reverted_fields, snapshot_to_restore)
+
+        for change in product_changes:
+            if not change.can_revert():
+                continue
+
+            product = Product.query.get(change.product_id)
+            if not product:
+                continue
+
+            snapshot_to_restore = change.snapshot_before
+            reverted_fields = []
+
+            try:
+                full_card = product.to_wb_card_format()
+                if not full_card or not full_card.get('sizes'):
+                    error_count += 1
+                    errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                    continue
+
+                # Применяем snapshot_before к полной карточке из БД
+                for field in change.changed_fields:
+                    if field not in snapshot_to_restore:
+                        continue
+                    if field == 'vendor_code':
+                        full_card['vendorCode'] = snapshot_to_restore[field]
+                    elif field == 'characteristics':
+                        chars = snapshot_to_restore[field]
+                        full_card['characteristics'] = clean_characteristics_for_update(chars) if chars else chars
+                    elif field in ['title', 'description', 'brand']:
+                        full_card[field] = snapshot_to_restore[field]
+                    reverted_fields.append(field)
+
+                if not reverted_fields:
+                    continue
+
+                card_ready = prepare_card_for_update(full_card, {})
+                cards_to_update.append(card_ready)
+                change_map[product.nm_id] = (change, product, reverted_fields, snapshot_to_restore)
+
+            except Exception as e:
+                error_count += 1
+                errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
+
+        app.logger.info(f"📦 Prepared {len(cards_to_update)} cards for batch revert")
+
         with WildberriesAPIClient(
             current_user.seller.wb_api_key,
             db_logger_callback=APILog.log_request
         ) as client:
-            for change in product_changes:
+            BATCH_SIZE = 100
+            for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
                 try:
-                    if not change.can_revert():
-                        continue
+                    app.logger.info(f"📤 Revert batch {batch_num}: {len(batch)} cards")
+                    client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
 
-                    product = Product.query.get(change.product_id)
-                    if not product:
-                        continue
+                    for card in batch:
+                        nm_id = card['nmID']
+                        entry = change_map.get(nm_id)
+                        if not entry:
+                            continue
+                        change, product, reverted_fields, snapshot_to_restore = entry
 
-                    # Подготавливаем данные для отката
-                    snapshot_to_restore = change.snapshot_before
-                    updates = {}
-                    reverted_fields = []
-
-                    for field in change.changed_fields:
-                        if field in snapshot_to_restore:
+                        for field in reverted_fields:
                             if field == 'vendor_code':
-                                updates['vendorCode'] = snapshot_to_restore[field]
-                            elif field in ['title', 'description', 'brand', 'characteristics']:
-                                updates[field] = snapshot_to_restore[field]
-                            reverted_fields.append(field)
+                                product.vendor_code = snapshot_to_restore[field]
+                            elif field == 'title':
+                                product.title = snapshot_to_restore[field]
+                            elif field == 'description':
+                                product.description = snapshot_to_restore[field]
+                            elif field == 'brand':
+                                product.brand = snapshot_to_restore[field]
+                            elif field == 'characteristics':
+                                product.characteristics_json = json.dumps(
+                                    snapshot_to_restore[field],
+                                    ensure_ascii=False
+                                )
 
-                    if not updates:
-                        continue
+                        product.last_sync = datetime.utcnow()
+                        change.reverted = True
+                        change.reverted_at = datetime.utcnow()
+                        success_count += 1
 
-                    # Откатываем через WB API
-                    result = client.update_card(
-                        product.nm_id,
-                        updates,
-                        log_to_db=True,
-                        seller_id=current_user.seller.id
-                    )
-
-                    # Обновляем локальную БД
-                    for field in reverted_fields:
-                        if field == 'vendor_code':
-                            product.vendor_code = snapshot_to_restore[field]
-                        elif field == 'title':
-                            product.title = snapshot_to_restore[field]
-                        elif field == 'description':
-                            product.description = snapshot_to_restore[field]
-                        elif field == 'brand':
-                            product.brand = snapshot_to_restore[field]
-                        elif field == 'characteristics':
-                            product.characteristics_json = json.dumps(
-                                snapshot_to_restore[field],
-                                ensure_ascii=False
-                            )
-
-                    product.last_sync = datetime.utcnow()
-
-                    # Помечаем изменение как откаченное
-                    change.reverted = True
-                    change.reverted_at = datetime.utcnow()
-
-                    success_count += 1
+                    db.session.commit()
 
                 except Exception as e:
-                    error_count += 1
-                    errors.append(f"Товар {product.vendor_code if product else change.product_id}: {str(e)}")
-                    app.logger.error(f"Error reverting product {change.product_id}: {e}")
+                    error_count += len(batch)
+                    batch_ids = ', '.join(
+                        f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                        for c in batch[:5]
+                    )
+                    if len(batch) > 5:
+                        batch_ids += f' ... и ещё {len(batch) - 5}'
+                    error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                    errors.append(error_msg)
+                    app.logger.error(f"❌ {error_msg}")
 
         # Помечаем bulk операцию как откаченную
         bulk_operation.reverted = True
