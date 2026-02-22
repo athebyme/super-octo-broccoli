@@ -179,13 +179,15 @@
 
         <!-- Ошибки -->
         {% if bulk_operation.errors_details %}
-        <details class="mt-4">
+        <details class="mt-4" open>
             <summary class="cursor-pointer text-sm font-semibold text-red-700 dark:text-red-400 hover:text-red-800">
-                Показать ошибки ({{ bulk_operation.error_count }})
+                Причины ошибок ({{ bulk_operation.errors_details | length }})
             </summary>
-            <div class="mt-2 p-4 bg-red-50 dark:bg-red-900/20 rounded text-sm">
+            <div class="mt-2 space-y-2">
                 {% for error in bulk_operation.errors_details %}
-                <p class="text-red-800 dark:text-red-200">• {{ error }}</p>
+                <div class="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm">
+                    <span class="font-mono text-red-800 dark:text-red-200">{{ error }}</span>
+                </div>
                 {% endfor %}
             </div>
         </details>

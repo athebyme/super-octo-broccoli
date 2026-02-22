@@ -797,11 +797,19 @@ class WildberriesAPIClient:
 
         # Валидация карточек
         if validate:
-            from wb_validators import validate_and_log_errors
+            from wb_validators import validate_card_update
             for i, card in enumerate(cards):
-                if not validate_and_log_errors(card, operation="update"):
-                    logger.error(f"❌ Validation failed for card #{i} (nmID={card.get('nmID')})")
-                    raise WBAPIException(f"Validation failed for card #{i}")
+                is_valid, validation_errors = validate_card_update(card)
+                if not is_valid:
+                    nm_id = card.get('nmID', '?')
+                    vendor_code = card.get('vendorCode', '?')
+                    errors_str = '; '.join(validation_errors)
+                    msg = (
+                        f"Ошибка валидации карточки nmID={nm_id} "
+                        f"({vendor_code}): {errors_str}"
+                    )
+                    logger.error(f"❌ {msg}")
+                    raise WBAPIException(msg)
 
         endpoint = "/content/v2/cards/update"
 

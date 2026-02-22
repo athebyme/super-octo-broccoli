@@ -2903,7 +2903,14 @@ def products_bulk_edit():
 
                         except Exception as e:
                             error_count += len(batch)
-                            error_msg = f"Batch {batch_num}: {str(e)}"
+                            # Собираем список карточек из батча для понятного сообщения
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
                             errors.append(error_msg)
                             app.logger.error(f"❌ {error_msg}")
                             # Продолжаем со следующим батчем
