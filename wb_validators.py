@@ -93,11 +93,14 @@ def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
                 else:
                     # Проверяем формат value
                     value = char['value']
-                    # WB API ожидает массив для большинства характеристик (тип 1)
-                    if not isinstance(value, list):
+                    # WB API ожидает массив для большинства характеристик (тип 1),
+                    # но числовое значение (int/float) допустимо для charcType=4
+                    if isinstance(value, (int, float)):
+                        pass  # OK для числовых характеристик (charcType=4)
+                    elif not isinstance(value, list):
                         errors.append(
                             f"Характеристика #{i+1} (id={char.get('id')}): "
-                            f"'value' должно быть массивом, получено {type(value).__name__}. "
+                            f"'value' должно быть массивом или числом, получено {type(value).__name__}. "
                             f"Используйте clean_characteristics_for_update() перед валидацией."
                         )
                     elif len(value) == 0:
