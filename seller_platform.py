@@ -2736,14 +2736,12 @@ def products_bulk_edit():
                     db.session.commit()
 
                 elif operation == 'update_characteristic':
-                    characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
-                    app.logger.info(f"🔍 Update characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
-
-                    if not characteristic_id:
-                        flash('Не указан ID характеристики (char_id пустой)', 'warning')
+                    # Разбираем список изменений из JSON-поля characteristics_batch
+                    characteristics_batch_json = request.form.get('characteristics_batch', '').strip()
+                    if not characteristics_batch_json:
+                        flash('Не добавлено ни одной характеристики для изменения', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
@@ -2762,26 +2760,32 @@ def products_bulk_edit():
                                              edit_operations=edit_operations,
                                              categories=categories)
 
-                    if not new_value:
-                        flash('Не указано новое значение (value пустой)', 'warning')
+                    try:
+                        char_changes = json.loads(characteristics_batch_json)
+                        if not isinstance(char_changes, list) or len(char_changes) == 0:
+                            raise ValueError("Пустой список изменений")
+                        char_changes = [
+                            {'char_id': str(c['char_id']).strip(), 'value': str(c['value']).strip()}
+                            for c in char_changes
+                            if c.get('char_id') and c.get('value')
+                        ]
+                        if not char_changes:
+                            raise ValueError("Нет валидных изменений в списке")
+                    except Exception as e:
+                        flash(f'Ошибка формата данных характеристик: {e}', 'danger')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
+                        return redirect(url_for('products_list'))
 
-                        # Собираем категории для повторного рендера
-                        categories_info = {}
-                        for product in products:
-                            category = product.object_name or 'Без категории'
-                            if category not in categories_info:
-                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
-                            categories_info[category]['count'] += 1
-                            categories_info[category]['product_ids'].append(product.id)
-                        categories = list(categories_info.values())
+                    app.logger.info(f"🔍 Update characteristics (batch): {len(char_changes)} changes, category='{selected_category}'")
+                    for ch in char_changes:
+                        app.logger.info(f"   char_id={ch['char_id']}, value='{ch['value']}'")
 
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations,
-                                             categories=categories)
+                    # Обновляем описание операции
+                    bulk_operation.description = f'Обновление {len(char_changes)} характеристик'
+                    bulk_operation.operation_params = {'characteristics_batch': char_changes}
+                    db.session.commit()
 
                     # Фильтруем товары по категории если выбрана
                     products_to_update = products
@@ -2789,32 +2793,19 @@ def products_bulk_edit():
                         products_to_update = [p for p in products if p.object_name == selected_category]
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
-                    # Определяем тип значения: ID из справочника или текст
-                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
-                    # вызовет clean_characteristics_for_update для оборачивания в массив
-                    app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
-
-                    # Форматируем как строку, позже автоматически обернется в массив
-                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
-
                     # ==================== БАТЧИНГ ====================
-                    # Подготавливаем все карточки для обновления
                     app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
 
                     from wb_api_client import chunk_list
                     from wb_validators import prepare_card_for_update
 
                     cards_to_update = []
-                    product_map = {}  # Сопоставление nmID -> product для обновления БД
+                    product_map = {}  # nmID -> product
 
                     app.logger.info(f"⚡ Using DB data instead of {len(products_to_update)} GET requests to WB API")
 
                     for product in products_to_update:
                         try:
-                            # Используем данные из БД - мгновенно и без rate limits!
                             full_card = product.to_wb_card_format()
 
                             if not full_card or not full_card.get('sizes'):
@@ -2822,34 +2813,29 @@ def products_bulk_edit():
                                 errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
                                 continue
 
-                            # Получаем текущие характеристики
                             current_characteristics = full_card.get('characteristics', [])
 
-                            # Обновляем значение характеристики
-                            char_found = False
-                            for char in current_characteristics:
-                                if str(char.get('id')) == characteristic_id:
-                                    char['value'] = formatted_value
-                                    char_found = True
-                                    break
+                            # Применяем все изменения из очереди к характеристикам карточки
+                            for change in char_changes:
+                                char_id = change['char_id']
+                                new_value = change['value']
+                                char_found = False
+                                for char in current_characteristics:
+                                    if str(char.get('id')) == char_id:
+                                        char['value'] = new_value
+                                        char_found = True
+                                        break
+                                if not char_found:
+                                    current_characteristics.append({
+                                        'id': int(char_id),
+                                        'value': new_value
+                                    })
 
-                            if not char_found:
-                                # Добавляем новую характеристику если не нашли
-                                current_characteristics.append({
-                                    'id': int(characteristic_id),
-                                    'value': formatted_value
-                                })
-
-                            # Обновляем характеристики в карточке
                             full_card['characteristics'] = current_characteristics
-
-                            # Очищаем нередактируемые поля
                             card_ready = prepare_card_for_update(full_card, {})
-
                             cards_to_update.append(card_ready)
                             product_map[product.nm_id] = product
 
-                            # Логируем прогресс каждые 100 карточек
                             if len(cards_to_update) % 100 == 0:
                                 app.logger.info(f"  📦 Prepared {len(cards_to_update)}/{len(products_to_update)} cards...")
 
