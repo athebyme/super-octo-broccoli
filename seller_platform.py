@@ -27,7 +27,7 @@ from models import (
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
-    PricingSettings,
+    PricingSettings, AutoImportSettings,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -2534,6 +2534,16 @@ def products_bulk_edit():
         {'id': 'add_characteristic', 'name': 'Добавить характеристику', 'description': 'Добавить новую характеристику ко всем товарам'},
     ]
 
+    # Проверяем доступность AI и добавляем AI-операции если настроено
+    ai_settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+    ai_enabled = bool(ai_settings and ai_settings.ai_enabled and ai_settings.ai_api_key)
+    if ai_enabled:
+        edit_operations += [
+            {'id': 'ai_seo_title', 'name': 'AI: Оптимизировать заголовок', 'description': 'AI сгенерирует SEO-заголовок до 60 символов для каждого товара на основе его данных', 'is_ai': True},
+            {'id': 'ai_enhance_description', 'name': 'AI: Улучшить описание', 'description': 'AI улучшит и SEO-оптимизирует описание каждого товара индивидуально', 'is_ai': True},
+            {'id': 'ai_detect_brand', 'name': 'AI: Определить бренд', 'description': 'AI определит бренд из заголовка и описания товара (только при высокой уверенности)', 'is_ai': True},
+        ]
+
     if request.method == 'POST':
         operation = request.form.get('operation', '')
         start_time = time.time()
@@ -2551,6 +2561,9 @@ def products_bulk_edit():
             'replace_description': f'Замена описания на: "{operation_value[:50]}..."',
             'update_characteristic': 'Обновление характеристики',
             'add_characteristic': 'Добавление характеристики',
+            'ai_seo_title': 'AI: оптимизация заголовков',
+            'ai_enhance_description': 'AI: улучшение описаний',
+            'ai_detect_brand': 'AI: определение бренда',
         }
 
         bulk_operation = BulkEditHistory(
@@ -3090,6 +3103,139 @@ def products_bulk_edit():
 
                     db.session.commit()
 
+                elif operation in ('ai_seo_title', 'ai_enhance_description', 'ai_detect_brand'):
+                    from ai_service import get_ai_service
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    ai_settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+                    ai_service = get_ai_service(ai_settings)
+                    if not ai_service:
+                        flash('AI не настроен. Настройте AI в разделе Автоимпорт → Настройки.', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> (product, new_field, new_value)
+
+                    for product in products:
+                        try:
+                            if operation == 'ai_seo_title':
+                                success, result, error = ai_service.generate_seo_title(
+                                    title=product.title or '',
+                                    category=product.object_name or '',
+                                    brand=product.brand or '',
+                                    description=product.description or ''
+                                )
+                                if not success or not result.get('title'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: {error or 'AI не вернул заголовок'}")
+                                    continue
+                                new_value = result['title']
+                                changed_field = 'title'
+
+                            elif operation == 'ai_enhance_description':
+                                success, result, error = ai_service.enhance_description(
+                                    title=product.title or '',
+                                    description=product.description or '',
+                                    category=product.object_name or ''
+                                )
+                                if not success or not result.get('description'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: {error or 'AI не вернул описание'}")
+                                    continue
+                                new_value = result['description'][:5000]
+                                changed_field = 'description'
+
+                            elif operation == 'ai_detect_brand':
+                                success, result, error = ai_service.detect_brand(
+                                    title=product.title or '',
+                                    description=product.description or '',
+                                    category=product.object_name or ''
+                                )
+                                if not success or not result.get('brand'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: {error or 'AI не определил бренд'}")
+                                    continue
+                                # Применяем только при уверенности >= 0.7
+                                if result.get('confidence', 0) < 0.7:
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: низкая уверенность AI ({result.get('confidence', 0):.0%}) — пропущено")
+                                    continue
+                                new_value = result['brand']
+                                changed_field = 'brand'
+
+                            full_card = product.to_wb_card_format()
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
+
+                            full_card[changed_field] = new_value
+                            card_ready = prepare_card_for_update(full_card, {})
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = (product, changed_field, new_value)
+
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            app.logger.error(f"AI bulk operation error for {product.vendor_code}: {e}")
+
+                    app.logger.info(f"📦 AI operation '{operation}': prepared {len(cards_to_update)} cards")
+
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                entry = product_map.get(nm_id)
+                                if not entry:
+                                    continue
+                                product, changed_field, new_value = entry
+
+                                snapshot_before = _create_product_snapshot(product)
+
+                                if changed_field == 'title':
+                                    product.title = new_value
+                                elif changed_field == 'description':
+                                    product.description = new_value
+                                elif changed_field == 'brand':
+                                    product.brand = new_value
+
+                                product.last_sync = datetime.utcnow()
+                                snapshot_after = _create_product_snapshot(product)
+
+                                db.session.add(CardEditHistory(
+                                    product_id=product.id,
+                                    seller_id=current_user.seller.id,
+                                    bulk_edit_id=bulk_operation.id,
+                                    action='update',
+                                    changed_fields=[changed_field],
+                                    snapshot_before=snapshot_before,
+                                    snapshot_after=snapshot_after,
+                                    wb_synced=True,
+                                    wb_sync_status='success'
+                                ))
+                                success_count += 1
+
+                            db.session.commit()
+
+                        except Exception as e:
+                            error_count += len(batch)
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
+
                 else:
                     # Неизвестная операция
                     flash(f'Неизвестная операция: {operation}', 'danger')
@@ -3160,7 +3306,8 @@ def products_bulk_edit():
         categories=categories,
         filter_type=filter_type,
         filter_brand=filter_brand,
-        filter_category=filter_category
+        filter_category=filter_category,
+        ai_enabled=ai_enabled
     )
 
 
