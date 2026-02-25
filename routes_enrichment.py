@@ -53,7 +53,21 @@ def register_enrichment_routes(app):
             flash(
                 f'Данные поставщика не найдены для карточки «{product.vendor_code}». '
                 f'Искали external_id: {candidates_str}. '
-                f'Проверьте, что товар был импортирован через автоимпорт.',
+                f'Для диагностики откройте /api/products/{product_id}/enrich/debug',
+                'warning'
+            )
+            return redirect(url_for('product_detail', product_id=product_id))
+
+        # Проверяем что ImportedProduct содержит достаточно данных для обогащения
+        has_useful_data = any([
+            imp.photo_urls, imp.description, imp.characteristics,
+            imp.ai_seo_title, imp.ai_dimensions
+        ])
+        if not has_useful_data:
+            flash(
+                f'Товар поставщика найден (external_id={imp.external_id}), '
+                f'но данных для обогащения нет — запись создана без полных данных поставщика. '
+                f'Попробуйте повторно запустить автоимпорт для этого товара.',
                 'warning'
             )
             return redirect(url_for('product_detail', product_id=product_id))
