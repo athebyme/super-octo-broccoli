@@ -36,6 +36,8 @@ class EnrichmentService:
         """
         Находит ImportedProduct для данного WB-продукта.
         Перебирает стратегии по убыванию надёжности.
+        Данные поставщика общие: если не нашли у текущего продавца,
+        ищем у всех (поставщик один, продавцов много).
 
         Returns:
             ImportedProduct или None
@@ -49,7 +51,13 @@ class EnrichmentService:
             seller_id=seller_id
         ).first()
         if imp:
-            logger.debug(f"[Enrich] Match by product_id FK: product={product.id} → imp={imp.id}")
+            logger.debug(f"[Enrich] Match by product_id FK (seller): product={product.id} → imp={imp.id}")
+            return imp
+
+        # 1b. FK без ограничения seller_id — для ручных привязок импортов от других продавцов
+        imp = ImportedProduct.query.filter_by(product_id=product.id).first()
+        if imp:
+            logger.debug(f"[Enrich] Match by product_id FK (any seller): product={product.id} → imp={imp.id}")
             return imp
 
         # 2. По supplier_vendor_code карточки
@@ -58,6 +66,10 @@ class EnrichmentService:
                 external_vendor_code=product.supplier_vendor_code,
                 seller_id=seller_id
             ).first()
+            if not imp:
+                imp = ImportedProduct.query.filter_by(
+                    external_vendor_code=product.supplier_vendor_code
+                ).first()
             if imp:
                 logger.debug(f"[Enrich] Match by supplier_vendor_code: {product.supplier_vendor_code}")
                 return imp
@@ -83,10 +95,16 @@ class EnrichmentService:
                 unique_ids = [x for x in candidate_ids if not (x in seen or seen.add(x))]
 
                 for ext_id in unique_ids:
+                    # Сначала ищем у текущего продавца
                     imp = ImportedProduct.query.filter_by(
                         external_id=ext_id,
                         seller_id=seller_id
                     ).first()
+                    if not imp:
+                        # Данные поставщика общие — ищем у любого продавца
+                        imp = ImportedProduct.query.filter_by(
+                            external_id=ext_id
+                        ).first()
                     if imp:
                         logger.debug(
                             f"[Enrich] Match by vendor_code pattern: "

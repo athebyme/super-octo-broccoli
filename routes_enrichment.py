@@ -5,7 +5,7 @@
 import json
 import logging
 
-from flask import render_template, request, redirect, url_for, flash, jsonify, abort
+from flask import render_template, request, redirect, url_for, flash, jsonify, abort, Response, send_file
 from flask_login import login_required, current_user
 
 from models import db, Product, ImportedProduct, EnrichmentJob
@@ -165,6 +165,103 @@ def register_enrichment_routes(app):
 
         photos = service._get_supplier_photo_list(imp)
         return jsonify({'photos': photos, 'matched': True, 'supplier_id': imp.id})
+
+    @app.route('/api/enrich/photo-proxy/<int:imported_product_id>/<int:photo_idx>')
+    @login_required
+    def api_enrich_photo_proxy(imported_product_id, photo_idx):
+        """
+        Прокси для фото поставщика: отдаёт из кэша или скачивает у поставщика.
+        Используется в шаблоне чтобы показывать фото до их кэширования на диск.
+        """
+        import requests as _requests
+        from io import BytesIO
+        from PIL import Image as _Image
+        from photo_cache import get_photo_cache
+
+        imp = ImportedProduct.query.get_or_404(imported_product_id)
+
+        if not imp.photo_urls:
+            abort(404)
+
+        try:
+            photos = json.loads(imp.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            abort(404)
+
+        if photo_idx < 0 or photo_idx >= len(photos):
+            abort(404)
+
+        ph = photos[photo_idx]
+        url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+        if not url:
+            abort(404)
+
+        supplier_type = imp.source_type or 'unknown'
+        external_id = imp.external_id or ''
+        cache = get_photo_cache()
+
+        # Если уже закэшировано — отдаём из кэша
+        if cache.is_cached(supplier_type, external_id, url):
+            cache_path = cache.get_cache_path(supplier_type, external_id, url)
+            response = send_file(cache_path, mimetype='image/jpeg', conditional=True)
+            response.cache_control.max_age = 86400
+            response.cache_control.private = True
+            return response
+
+        # Скачиваем с поставщика
+        service = get_enrichment_service()
+        auth_cookies = None
+        if supplier_type == 'sexoptovik':
+            try:
+                auth_cookies = service._get_sexoptovik_auth(current_user.seller)
+            except Exception:
+                pass
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+        }
+        if 'sexoptovik.ru' in url:
+            headers['Referer'] = 'https://sexoptovik.ru/admin/'
+
+        fallbacks = []
+        if ph.get('blur') and ph['blur'] != url:
+            fallbacks.append(ph['blur'])
+        if ph.get('original') and ph['original'] != url:
+            fallbacks.append(ph['original'])
+
+        for current_url in [url] + fallbacks:
+            try:
+                resp = _requests.get(
+                    current_url, headers=headers, cookies=auth_cookies,
+                    timeout=15, allow_redirects=True
+                )
+                resp.raise_for_status()
+
+                content_type = resp.headers.get('Content-Type', '')
+                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                    continue
+
+                img = _Image.open(BytesIO(resp.content))
+                output = BytesIO()
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img.save(output, format='JPEG', quality=95)
+                image_bytes = output.getvalue()
+
+                # Сохраняем в кэш чтобы следующие запросы шли из кэша
+                cache.save_to_cache(supplier_type, external_id, url, image_bytes)
+
+                response = Response(image_bytes, mimetype='image/jpeg')
+                response.cache_control.max_age = 86400
+                response.cache_control.private = True
+                return response
+
+            except Exception as e:
+                logger.debug(f"[PhotoProxy] Failed {current_url[:60]}: {e}")
+                continue
+
+        abort(404)
 
     @app.route('/api/enrich/search-supplier', methods=['GET'])
     @login_required
