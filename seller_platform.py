@@ -3164,7 +3164,7 @@ def products_bulk_edit():
                                     error_count += 1
                                     errors.append(f"Товар {product.vendor_code}: {error or 'AI не вернул описание'}")
                                     continue
-                                new_value = result['description'][:5000]
+                                new_value = result['description'][:2000]
                                 changed_field = 'description'
 
                             elif operation == 'ai_detect_brand':
@@ -3269,14 +3269,7 @@ def products_bulk_edit():
                     for product in products:
                         try:
                             snapshot_before = _create_product_snapshot(product)
-                            chars = {}
-                            if product.characteristics:
-                                try:
-                                    chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
-                                except Exception:
-                                    chars = {}
-                            chars['_keywords'] = keywords_list
-                            product.characteristics = json.dumps(chars, ensure_ascii=False)
+                            product.tags_json = json.dumps(keywords_list, ensure_ascii=False)
                             snapshot_after = _create_product_snapshot(product)
                             db.session.add(CardEditHistory(
                                 product_id=product.id,
@@ -3346,7 +3339,7 @@ def products_bulk_edit():
                                     category=product.object_name or ''
                                 )
                                 if ok and result.get('description'):
-                                    new_values['description'] = result['description'][:5000]
+                                    new_values['description'] = result['description'][:2000]
                                     changed_fields.append('description')
                                 else:
                                     errors.append(f"Товар {product.vendor_code} (описание): {err or 'нет результата'}")
@@ -3386,14 +3379,7 @@ def products_bulk_edit():
 
                             # Применяем ключевые слова сразу (не через WB API)
                             if 'keywords' in changed_fields:
-                                chars = {}
-                                if product.characteristics:
-                                    try:
-                                        chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else (product.characteristics or {})
-                                    except Exception:
-                                        chars = {}
-                                chars['_keywords'] = new_values.pop('keywords')
-                                product.characteristics = json.dumps(chars, ensure_ascii=False)
+                                product.tags_json = json.dumps(new_values.pop('keywords'), ensure_ascii=False)
                                 changed_fields.remove('keywords')
 
                             # Поля для WB API (title, description, brand)
@@ -3536,14 +3522,7 @@ def products_bulk_edit():
                                             kw = (r.get('keywords') or []) + (r.get('search_queries') or [])
                                             kw = [str(k).strip() for k in kw if k]
                                             if kw:
-                                                _chars = {}
-                                                if product.characteristics:
-                                                    try:
-                                                        _chars = json.loads(product.characteristics) if isinstance(product.characteristics, str) else (product.characteristics or {})
-                                                    except Exception:
-                                                        _chars = {}
-                                                _chars['_keywords'] = kw
-                                                product.characteristics = json.dumps(_chars, ensure_ascii=False)
+                                                product.tags_json = json.dumps(kw, ensure_ascii=False)
                                                 _changed.append('keywords')
                                         else:
                                             errors.append(f"{product.vendor_code} (AI ключевые слова): {e or 'нет результата'}")
