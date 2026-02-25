@@ -188,6 +188,16 @@
                             </svg>
                             Разъединить всё
                         </button>
+                        <!-- Кнопка сброса если карточки уже разъединены на WB -->
+                        <button type="button"
+                                @click="forceUnmerge({{ group.imt_id }}, {{ group.cards|length }})"
+                                title="Карточки уже разъединены на WB, но в нашей системе ещё числятся объединёнными? Нажмите здесь."
+                                class="px-2.5 py-1 text-xs bg-gray-500 hover:bg-gray-600 rounded-full transition flex items-center gap-1 group relative">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            Уже на WB
+                        </button>
                         {% endif %}
                         {% else %}
                         <span class="px-2.5 py-1 text-xs bg-white/10 rounded-full">Не объединены</span>
@@ -411,6 +421,10 @@
 <form id="unmergeGroupForm" method="POST" style="display: none;">
 </form>
 
+<!-- Скрытая форма для принудительного сброса объединения в локальной БД -->
+<form id="forceUnmergeForm" method="POST" style="display: none;">
+</form>
+
 <!-- Скрытая форма для разъединения карточки (action устанавливается через JS) -->
 <form id="unmergeCardForm" method="POST" action="#" style="display: none;">
     <input type="hidden" name="nm_id" id="form_unmerge_nm_id">
@@ -584,11 +598,20 @@ function mergeApp() {
             document.getElementById('mergeForm').submit();
         },
 
-        // Разъединить группу
+        // Разъединить группу (через WB API)
         unmergeGroup(imtId, cardCount) {
             if (confirm(`Разъединить все ${cardCount} карточек из группы imtID=${imtId}?\n\nКаждая карточка получит новый уникальный imtID.`)) {
                 const form = document.getElementById('unmergeGroupForm');
                 form.action = `/products/merge/unmerge/${imtId}`;
+                form.submit();
+            }
+        },
+
+        // Сбросить объединение локально (если карточки уже разъединены на WB)
+        forceUnmerge(imtId, cardCount) {
+            if (confirm(`Карточки уже разъединены на Wildberries?\n\nЭта кнопка только обновит локальные данные (без обращения к WB API).\nПосле этого выполните синхронизацию с WB чтобы получить актуальные imtID.\n\nПродолжить?`)) {
+                const form = document.getElementById('forceUnmergeForm');
+                form.action = `/products/merge/force-unmerge/${imtId}`;
                 form.submit();
             }
         },

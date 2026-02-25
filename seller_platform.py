@@ -27,7 +27,7 @@ from models import (
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
-    PricingSettings,
+    PricingSettings, AutoImportSettings,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -2530,12 +2530,29 @@ def products_bulk_edit():
         {'id': 'update_brand', 'name': 'Обновить бренд', 'description': 'Установить одинаковый бренд для всех выбранных товаров'},
         {'id': 'append_description', 'name': 'Добавить к описанию', 'description': 'Добавить текст в конец описания всех товаров'},
         {'id': 'replace_description', 'name': 'Заменить описание', 'description': 'Заменить описание всех товаров на новое'},
+        {'id': 'update_keywords', 'name': 'Ключевые слова', 'description': 'Установить поисковые запросы и ключевые слова для всех товаров'},
         {'id': 'update_characteristic', 'name': 'Обновить характеристику', 'description': 'Изменить значение определенной характеристики'},
         {'id': 'add_characteristic', 'name': 'Добавить характеристику', 'description': 'Добавить новую характеристику ко всем товарам'},
     ]
 
+    # Проверяем доступность AI и добавляем AI-операции если настроено
+    ai_settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+    ai_enabled = bool(ai_settings and ai_settings.ai_enabled and ai_settings.ai_api_key)
+    if ai_enabled:
+        edit_operations += [
+            {'id': 'ai_seo_title', 'name': 'AI: Оптимизировать заголовок', 'description': 'AI сгенерирует SEO-заголовок до 60 символов для каждого товара на основе его данных', 'is_ai': True},
+            {'id': 'ai_enhance_description', 'name': 'AI: Улучшить описание', 'description': 'AI улучшит и SEO-оптимизирует описание каждого товара индивидуально', 'is_ai': True},
+            {'id': 'ai_detect_brand', 'name': 'AI: Определить бренд', 'description': 'AI определит бренд из заголовка и описания товара (только при высокой уверенности)', 'is_ai': True},
+            {'id': 'ai_keywords', 'name': 'AI: Ключевые слова', 'description': 'AI сгенерирует поисковые запросы и ключевые слова для каждого товара', 'is_ai': True},
+        ]
+
     if request.method == 'POST':
         operation = request.form.get('operation', '')
+        # AI мульти-операции: список выбранных AI-операций из чекбоксов
+        ai_operations_list = request.form.getlist('ai_operations')
+        # Если operation не задана, но есть AI-операции — запускаем AI-пакет
+        if not operation and ai_operations_list:
+            operation = 'ai_bulk'
         start_time = time.time()
 
         # Создаем запись bulk операции
@@ -2544,13 +2561,27 @@ def products_bulk_edit():
         # Для характеристик значение уже получено из поля 'value' выше
         # (не нужно переопределять operation_value)
 
+        # Названия AI-операций для описания истории
+        _ai_op_names = {
+            'ai_seo_title': 'Заголовок',
+            'ai_enhance_description': 'Описание',
+            'ai_detect_brand': 'Бренд',
+            'ai_keywords': 'Ключевые слова',
+        }
+
         # Определяем описание операции
         operation_descriptions = {
             'update_brand': f'Обновление бренда на "{operation_value}"',
             'append_description': f'Добавление к описанию: "{operation_value[:50]}..."',
             'replace_description': f'Замена описания на: "{operation_value[:50]}..."',
+            'update_keywords': f'Установка ключевых слов: "{operation_value[:80]}"',
             'update_characteristic': 'Обновление характеристики',
             'add_characteristic': 'Добавление характеристики',
+            'ai_seo_title': 'AI: оптимизация заголовков',
+            'ai_enhance_description': 'AI: улучшение описаний',
+            'ai_detect_brand': 'AI: определение бренда',
+            'ai_keywords': 'AI: генерация ключевых слов',
+            'ai_bulk': 'AI пакет: ' + ', '.join(_ai_op_names.get(op, op) for op in ai_operations_list) if ai_operations_list else 'AI пакет',
         }
 
         bulk_operation = BulkEditHistory(
@@ -2650,43 +2681,68 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> (product, new_desc)
+
                     for product in products:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
+                            full_card = product.to_wb_card_format()
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
 
                             current_desc = product.description or ''
                             new_desc = f"{current_desc}\n\n{append_text}".strip()
-                            client.update_card(
-                                product.nm_id,
-                                {'description': new_desc},
-                                log_to_db=True,
-                                seller_id=current_user.seller.id
-                            )
-                            product.description = new_desc
-                            product.last_sync = datetime.utcnow()
+                            full_card['description'] = new_desc
 
-                            snapshot_after = _create_product_snapshot(product)
-
-                            card_history = CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['description'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=True,
-                                wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
-
-                            success_count += 1
+                            card_ready = prepare_card_for_update(full_card, {})
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = (product, new_desc)
                         except Exception as e:
                             error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
-                            errors.append(error_msg)
+                            errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
 
-                    db.session.commit()
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                product, new_desc = product_map.get(nm_id, (None, None))
+                                if product:
+                                    snapshot_before = _create_product_snapshot(product)
+                                    product.description = new_desc
+                                    product.last_sync = datetime.utcnow()
+                                    snapshot_after = _create_product_snapshot(product)
+                                    db.session.add(CardEditHistory(
+                                        product_id=product.id,
+                                        seller_id=current_user.seller.id,
+                                        bulk_edit_id=bulk_operation.id,
+                                        action='update',
+                                        changed_fields=['description'],
+                                        snapshot_before=snapshot_before,
+                                        snapshot_after=snapshot_after,
+                                        wb_synced=True,
+                                        wb_sync_status='success'
+                                    ))
+                                    success_count += 1
+                            db.session.commit()
+                        except Exception as e:
+                            error_count += len(batch)
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
 
                 elif operation == 'replace_description':
                     new_description = operation_value
@@ -2699,51 +2755,73 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> product
+
                     for product in products:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
+                            full_card = product.to_wb_card_format()
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
 
-                            client.update_card(
-                                product.nm_id,
-                                {'description': new_description},
-                                log_to_db=True,
-                                seller_id=current_user.seller.id
-                            )
-                            product.description = new_description
-                            product.last_sync = datetime.utcnow()
-
-                            snapshot_after = _create_product_snapshot(product)
-
-                            card_history = CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['description'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=True,
-                                wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
-
-                            success_count += 1
+                            full_card['description'] = new_description
+                            card_ready = prepare_card_for_update(full_card, {})
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = product
                         except Exception as e:
                             error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
-                            errors.append(error_msg)
+                            errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
 
-                    db.session.commit()
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                product = product_map.get(nm_id)
+                                if product:
+                                    snapshot_before = _create_product_snapshot(product)
+                                    product.description = new_description
+                                    product.last_sync = datetime.utcnow()
+                                    snapshot_after = _create_product_snapshot(product)
+                                    db.session.add(CardEditHistory(
+                                        product_id=product.id,
+                                        seller_id=current_user.seller.id,
+                                        bulk_edit_id=bulk_operation.id,
+                                        action='update',
+                                        changed_fields=['description'],
+                                        snapshot_before=snapshot_before,
+                                        snapshot_after=snapshot_after,
+                                        wb_synced=True,
+                                        wb_sync_status='success'
+                                    ))
+                                    success_count += 1
+                            db.session.commit()
+                        except Exception as e:
+                            error_count += len(batch)
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
 
                 elif operation == 'update_characteristic':
-                    characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
-                    app.logger.info(f"🔍 Update characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
-
-                    if not characteristic_id:
-                        flash('Не указан ID характеристики (char_id пустой)', 'warning')
+                    # Разбираем список изменений из JSON-поля characteristics_batch
+                    characteristics_batch_json = request.form.get('characteristics_batch', '').strip()
+                    if not characteristics_batch_json:
+                        flash('Не добавлено ни одной характеристики для изменения', 'warning')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
@@ -2762,26 +2840,32 @@ def products_bulk_edit():
                                              edit_operations=edit_operations,
                                              categories=categories)
 
-                    if not new_value:
-                        flash('Не указано новое значение (value пустой)', 'warning')
+                    try:
+                        char_changes = json.loads(characteristics_batch_json)
+                        if not isinstance(char_changes, list) or len(char_changes) == 0:
+                            raise ValueError("Пустой список изменений")
+                        char_changes = [
+                            {'char_id': str(c['char_id']).strip(), 'value': str(c['value']).strip()}
+                            for c in char_changes
+                            if c.get('char_id') and c.get('value')
+                        ]
+                        if not char_changes:
+                            raise ValueError("Нет валидных изменений в списке")
+                    except Exception as e:
+                        flash(f'Ошибка формата данных характеристик: {e}', 'danger')
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
+                        return redirect(url_for('products_list'))
 
-                        # Собираем категории для повторного рендера
-                        categories_info = {}
-                        for product in products:
-                            category = product.object_name or 'Без категории'
-                            if category not in categories_info:
-                                categories_info[category] = {'name': category, 'count': 0, 'product_ids': [], 'subject_id': product.subject_id}
-                            categories_info[category]['count'] += 1
-                            categories_info[category]['product_ids'].append(product.id)
-                        categories = list(categories_info.values())
+                    app.logger.info(f"🔍 Update characteristics (batch): {len(char_changes)} changes, category='{selected_category}'")
+                    for ch in char_changes:
+                        app.logger.info(f"   char_id={ch['char_id']}, value='{ch['value']}'")
 
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations,
-                                             categories=categories)
+                    # Обновляем описание операции
+                    bulk_operation.description = f'Обновление {len(char_changes)} характеристик'
+                    bulk_operation.operation_params = {'characteristics_batch': char_changes}
+                    db.session.commit()
 
                     # Фильтруем товары по категории если выбрана
                     products_to_update = products
@@ -2789,32 +2873,19 @@ def products_bulk_edit():
                         products_to_update = [p for p in products if p.object_name == selected_category]
                         app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
 
-                    # Определяем тип значения: ID из справочника или текст
-                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
-                    # вызовет clean_characteristics_for_update для оборачивания в массив
-                    app.logger.info(f"Processing characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
-
-                    # Форматируем как строку, позже автоматически обернется в массив
-                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
-
                     # ==================== БАТЧИНГ ====================
-                    # Подготавливаем все карточки для обновления
                     app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
 
                     from wb_api_client import chunk_list
                     from wb_validators import prepare_card_for_update
 
                     cards_to_update = []
-                    product_map = {}  # Сопоставление nmID -> product для обновления БД
+                    product_map = {}  # nmID -> product
 
                     app.logger.info(f"⚡ Using DB data instead of {len(products_to_update)} GET requests to WB API")
 
                     for product in products_to_update:
                         try:
-                            # Используем данные из БД - мгновенно и без rate limits!
                             full_card = product.to_wb_card_format()
 
                             if not full_card or not full_card.get('sizes'):
@@ -2822,34 +2893,29 @@ def products_bulk_edit():
                                 errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
                                 continue
 
-                            # Получаем текущие характеристики
                             current_characteristics = full_card.get('characteristics', [])
 
-                            # Обновляем значение характеристики
-                            char_found = False
-                            for char in current_characteristics:
-                                if str(char.get('id')) == characteristic_id:
-                                    char['value'] = formatted_value
-                                    char_found = True
-                                    break
+                            # Применяем все изменения из очереди к характеристикам карточки
+                            for change in char_changes:
+                                char_id = change['char_id']
+                                new_value = change['value']
+                                char_found = False
+                                for char in current_characteristics:
+                                    if str(char.get('id')) == char_id:
+                                        char['value'] = new_value
+                                        char_found = True
+                                        break
+                                if not char_found:
+                                    current_characteristics.append({
+                                        'id': int(char_id),
+                                        'value': new_value
+                                    })
 
-                            if not char_found:
-                                # Добавляем новую характеристику если не нашли
-                                current_characteristics.append({
-                                    'id': int(characteristic_id),
-                                    'value': formatted_value
-                                })
-
-                            # Обновляем характеристики в карточке
                             full_card['characteristics'] = current_characteristics
-
-                            # Очищаем нередактируемые поля
                             card_ready = prepare_card_for_update(full_card, {})
-
                             cards_to_update.append(card_ready)
                             product_map[product.nm_id] = product
 
-                            # Логируем прогресс каждые 100 карточек
                             if len(cards_to_update) % 100 == 0:
                                 app.logger.info(f"  📦 Prepared {len(cards_to_update)}/{len(products_to_update)} cards...")
 
@@ -2917,7 +2983,14 @@ def products_bulk_edit():
 
                         except Exception as e:
                             error_count += len(batch)
-                            error_msg = f"Batch {batch_num}: {str(e)}"
+                            # Собираем список карточек из батча для понятного сообщения
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
                             errors.append(error_msg)
                             app.logger.error(f"❌ {error_msg}")
                             # Продолжаем со следующим батчем
@@ -3048,6 +3121,344 @@ def products_bulk_edit():
 
                     db.session.commit()
 
+                elif operation in ('ai_seo_title', 'ai_enhance_description', 'ai_detect_brand'):
+                    from ai_service import get_ai_service
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    ai_settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+                    ai_service = get_ai_service(ai_settings)
+                    if not ai_service:
+                        flash('AI не настроен. Настройте AI в разделе Автоимпорт → Настройки.', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> (product, new_field, new_value)
+
+                    for product in products:
+                        try:
+                            if operation == 'ai_seo_title':
+                                success, result, error = ai_service.generate_seo_title(
+                                    title=product.title or '',
+                                    category=product.object_name or '',
+                                    brand=product.brand or '',
+                                    description=product.description or ''
+                                )
+                                if not success or not result.get('title'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: {error or 'AI не вернул заголовок'}")
+                                    continue
+                                new_value = result['title']
+                                changed_field = 'title'
+
+                            elif operation == 'ai_enhance_description':
+                                success, result, error = ai_service.enhance_description(
+                                    title=product.title or '',
+                                    description=product.description or '',
+                                    category=product.object_name or ''
+                                )
+                                if not success or not result.get('description'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: {error or 'AI не вернул описание'}")
+                                    continue
+                                new_value = result['description'][:2000]
+                                changed_field = 'description'
+
+                            elif operation == 'ai_detect_brand':
+                                success, result, error = ai_service.detect_brand(
+                                    title=product.title or '',
+                                    description=product.description or '',
+                                    category=product.object_name or ''
+                                )
+                                if not success or not result.get('brand'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: {error or 'AI не определил бренд'}")
+                                    continue
+                                # Применяем только при уверенности >= 0.7
+                                if result.get('confidence', 0) < 0.7:
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: низкая уверенность AI ({result.get('confidence', 0):.0%}) — пропущено")
+                                    continue
+                                new_value = result['brand']
+                                changed_field = 'brand'
+
+                            full_card = product.to_wb_card_format()
+                            if not full_card or not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
+
+                            full_card[changed_field] = new_value
+                            card_ready = prepare_card_for_update(full_card, {})
+                            cards_to_update.append(card_ready)
+                            product_map[product.nm_id] = (product, changed_field, new_value)
+
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            app.logger.error(f"AI bulk operation error for {product.vendor_code}: {e}")
+
+                    app.logger.info(f"📦 AI operation '{operation}': prepared {len(cards_to_update)} cards")
+
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                entry = product_map.get(nm_id)
+                                if not entry:
+                                    continue
+                                product, changed_field, new_value = entry
+
+                                snapshot_before = _create_product_snapshot(product)
+
+                                if changed_field == 'title':
+                                    product.title = new_value
+                                elif changed_field == 'description':
+                                    product.description = new_value
+                                elif changed_field == 'brand':
+                                    product.brand = new_value
+
+                                product.last_sync = datetime.utcnow()
+                                snapshot_after = _create_product_snapshot(product)
+
+                                db.session.add(CardEditHistory(
+                                    product_id=product.id,
+                                    seller_id=current_user.seller.id,
+                                    bulk_edit_id=bulk_operation.id,
+                                    action='update',
+                                    changed_fields=[changed_field],
+                                    snapshot_before=snapshot_before,
+                                    snapshot_after=snapshot_after,
+                                    wb_synced=True,
+                                    wb_sync_status='success'
+                                ))
+                                success_count += 1
+
+                            db.session.commit()
+
+                        except Exception as e:
+                            error_count += len(batch)
+                            batch_ids = ', '.join(
+                                f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                                for c in batch[:5]
+                            )
+                            if len(batch) > 5:
+                                batch_ids += f' ... и ещё {len(batch) - 5}'
+                            error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                            errors.append(error_msg)
+                            app.logger.error(f"❌ {error_msg}")
+
+                elif operation == 'update_keywords':
+                    keywords_text = operation_value
+                    if not keywords_text:
+                        flash('Укажите ключевые слова', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+
+                    # Разбиваем на список, чистим пустые
+                    keywords_list = [k.strip() for k in keywords_text.replace('\n', ',').split(',') if k.strip()]
+
+                    for product in products:
+                        try:
+                            snapshot_before = _create_product_snapshot(product)
+                            product.tags_json = json.dumps(keywords_list, ensure_ascii=False)
+                            snapshot_after = _create_product_snapshot(product)
+                            db.session.add(CardEditHistory(
+                                product_id=product.id,
+                                seller_id=current_user.seller.id,
+                                bulk_edit_id=bulk_operation.id,
+                                action='update',
+                                changed_fields=['keywords'],
+                                snapshot_before=snapshot_before,
+                                snapshot_after=snapshot_after,
+                                wb_synced=False,
+                                wb_sync_status='local_only'
+                            ))
+                            success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+
+                    db.session.commit()
+                    bulk_operation.wb_synced = False  # Ключевые слова хранятся локально
+
+                elif operation == 'ai_bulk':
+                    from ai_service import get_ai_service
+                    from wb_api_client import chunk_list
+                    from wb_validators import prepare_card_for_update
+
+                    if not ai_operations_list:
+                        flash('Выберите хотя бы одну AI-операцию', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+
+                    ai_settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+                    ai_service = get_ai_service(ai_settings)
+                    if not ai_service:
+                        flash('AI не настроен. Настройте AI в разделе Автоимпорт → Настройки.', 'warning')
+                        bulk_operation.status = 'failed'
+                        bulk_operation.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+
+                    cards_to_update = []
+                    product_map = {}  # nmID -> (product, changed_fields, new_values dict)
+
+                    for product in products:
+                        try:
+                            changed_fields = []
+                            new_values = {}
+
+                            if 'ai_seo_title' in ai_operations_list:
+                                ok, result, err = ai_service.generate_seo_title(
+                                    title=product.title or '',
+                                    category=product.object_name or '',
+                                    brand=product.brand or '',
+                                    description=product.description or ''
+                                )
+                                if ok and result.get('title'):
+                                    new_values['title'] = result['title']
+                                    changed_fields.append('title')
+                                else:
+                                    errors.append(f"Товар {product.vendor_code} (заголовок): {err or 'нет результата'}")
+
+                            if 'ai_enhance_description' in ai_operations_list:
+                                ok, result, err = ai_service.enhance_description(
+                                    title=product.title or '',
+                                    description=product.description or '',
+                                    category=product.object_name or ''
+                                )
+                                if ok and result.get('description'):
+                                    new_values['description'] = result['description'][:2000]
+                                    changed_fields.append('description')
+                                else:
+                                    errors.append(f"Товар {product.vendor_code} (описание): {err or 'нет результата'}")
+
+                            if 'ai_detect_brand' in ai_operations_list:
+                                ok, result, err = ai_service.detect_brand(
+                                    title=product.title or '',
+                                    description=product.description or '',
+                                    category=product.object_name or ''
+                                )
+                                if ok and result.get('brand') and result.get('confidence', 0) >= 0.7:
+                                    new_values['brand'] = result['brand']
+                                    changed_fields.append('brand')
+                                elif ok:
+                                    errors.append(f"Товар {product.vendor_code} (бренд): низкая уверенность {result.get('confidence', 0):.0%}")
+                                else:
+                                    errors.append(f"Товар {product.vendor_code} (бренд): {err or 'нет результата'}")
+
+                            if 'ai_keywords' in ai_operations_list:
+                                ok, result, err = ai_service.generate_keywords(
+                                    title=product.title or '',
+                                    category=product.object_name or '',
+                                    description=product.description or ''
+                                )
+                                if ok and result:
+                                    kw = (result.get('keywords') or []) + (result.get('search_queries') or [])
+                                    kw = [str(k).strip() for k in kw if k]
+                                    if kw:
+                                        new_values['keywords'] = kw
+                                        changed_fields.append('keywords')
+                                else:
+                                    errors.append(f"Товар {product.vendor_code} (ключевые слова): {err or 'нет результата'}")
+
+                            if not changed_fields:
+                                error_count += 1
+                                continue
+
+                            # Применяем ключевые слова сразу (не через WB API)
+                            if 'keywords' in changed_fields:
+                                product.tags_json = json.dumps(new_values.pop('keywords'), ensure_ascii=False)
+                                changed_fields.remove('keywords')
+
+                            # Поля для WB API (title, description, brand)
+                            wb_fields = {k: v for k, v in new_values.items() if k in ('title', 'description', 'brand')}
+                            if wb_fields:
+                                full_card = product.to_wb_card_format()
+                                if not full_card or not full_card.get('sizes'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                    continue
+                                for field, val in wb_fields.items():
+                                    full_card[field] = val
+                                card_ready = prepare_card_for_update(full_card, {})
+                                cards_to_update.append(card_ready)
+                                product_map[product.nm_id] = (product, changed_fields, new_values)
+                            else:
+                                # Только ключевые слова — сразу создаём историю
+                                snapshot_before = _create_product_snapshot(product)
+                                snapshot_after = _create_product_snapshot(product)
+                                db.session.add(CardEditHistory(
+                                    product_id=product.id,
+                                    seller_id=current_user.seller.id,
+                                    bulk_edit_id=bulk_operation.id,
+                                    action='update',
+                                    changed_fields=changed_fields,
+                                    snapshot_before=snapshot_before,
+                                    snapshot_after=snapshot_after,
+                                    wb_synced=False,
+                                    wb_sync_status='local_only'
+                                ))
+                                success_count += 1
+
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            app.logger.error(f"AI bulk op error for {product.vendor_code}: {e}")
+
+                    app.logger.info(f"📦 AI bulk: {len(cards_to_update)} cards for WB API update")
+
+                    BATCH_SIZE = 100
+                    for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
+                        try:
+                            client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
+
+                            for card in batch:
+                                nm_id = card['nmID']
+                                entry = product_map.get(nm_id)
+                                if not entry:
+                                    continue
+                                product, changed_fields, new_values = entry
+                                snapshot_before = _create_product_snapshot(product)
+                                for field, val in new_values.items():
+                                    if field == 'title':
+                                        product.title = val
+                                    elif field == 'description':
+                                        product.description = val
+                                    elif field == 'brand':
+                                        product.brand = val
+                                product.last_sync = datetime.utcnow()
+                                snapshot_after = _create_product_snapshot(product)
+                                db.session.add(CardEditHistory(
+                                    product_id=product.id,
+                                    seller_id=current_user.seller.id,
+                                    bulk_edit_id=bulk_operation.id,
+                                    action='update',
+                                    changed_fields=changed_fields,
+                                    snapshot_before=snapshot_before,
+                                    snapshot_after=snapshot_after,
+                                    wb_synced=True,
+                                    wb_sync_status='success'
+                                ))
+                                success_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            errors.append(f"Батч {batch_num}: {str(e)}")
+                            app.logger.error(f"❌ AI bulk WB batch error: {e}")
+
+                    db.session.commit()
+
                 else:
                     # Неизвестная операция
                     flash(f'Неизвестная операция: {operation}', 'danger')
@@ -3057,6 +3468,112 @@ def products_bulk_edit():
                     return render_template('products_bulk_edit.html',
                                          products=products,
                                          edit_operations=edit_operations)
+
+                # ── Комбинированный режим: AI-операции дополнительно к ручной ──
+                # Если заданы AI-операции И уже выполнялась ручная операция
+                if ai_operations_list and operation not in ('ai_bulk', '', None):
+                    try:
+                        from ai_service import get_ai_service
+                        from wb_api_client import chunk_list
+                        from wb_validators import prepare_card_for_update
+                        _ai_s_combined = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+                        _ai_svc = get_ai_service(_ai_s_combined)
+                        if _ai_svc:
+                            _cards_ai = []
+                            _pmap_ai = {}
+                            for product in products:
+                                try:
+                                    _changed = []
+                                    _nv = {}
+                                    if 'ai_seo_title' in ai_operations_list:
+                                        ok, r, e = _ai_svc.generate_seo_title(
+                                            title=product.title or '', category=product.object_name or '',
+                                            brand=product.brand or '', description=product.description or '')
+                                        if ok and r.get('title'):
+                                            _nv['title'] = r['title']
+                                            _changed.append('title')
+                                        else:
+                                            errors.append(f"{product.vendor_code} (AI заголовок): {e or 'нет результата'}")
+                                    if 'ai_enhance_description' in ai_operations_list:
+                                        ok, r, e = _ai_svc.enhance_description(
+                                            title=product.title or '', description=product.description or '',
+                                            category=product.object_name or '')
+                                        if ok and r.get('description'):
+                                            _nv['description'] = r['description'][:5000]
+                                            _changed.append('description')
+                                        else:
+                                            errors.append(f"{product.vendor_code} (AI описание): {e or 'нет результата'}")
+                                    if 'ai_detect_brand' in ai_operations_list:
+                                        ok, r, e = _ai_svc.detect_brand(
+                                            title=product.title or '', description=product.description or '',
+                                            category=product.object_name or '')
+                                        if ok and r.get('brand') and r.get('confidence', 0) >= 0.7:
+                                            _nv['brand'] = r['brand']
+                                            _changed.append('brand')
+                                        elif ok:
+                                            errors.append(f"{product.vendor_code} (AI бренд): уверенность {r.get('confidence',0):.0%}")
+                                        else:
+                                            errors.append(f"{product.vendor_code} (AI бренд): {e or 'нет результата'}")
+                                    if 'ai_keywords' in ai_operations_list:
+                                        ok, r, e = _ai_svc.generate_keywords(
+                                            title=product.title or '', category=product.object_name or '',
+                                            description=product.description or '')
+                                        if ok and r:
+                                            kw = (r.get('keywords') or []) + (r.get('search_queries') or [])
+                                            kw = [str(k).strip() for k in kw if k]
+                                            if kw:
+                                                product.tags_json = json.dumps(kw, ensure_ascii=False)
+                                                _changed.append('keywords')
+                                        else:
+                                            errors.append(f"{product.vendor_code} (AI ключевые слова): {e or 'нет результата'}")
+                                    _wb_fields = {k: v for k, v in _nv.items() if k in ('title', 'description', 'brand')}
+                                    if _wb_fields:
+                                        _fc = product.to_wb_card_format()
+                                        if _fc and _fc.get('sizes'):
+                                            for f, v in _wb_fields.items():
+                                                _fc[f] = v
+                                            _cards_ai.append(prepare_card_for_update(_fc, {}))
+                                            _pmap_ai[product.nm_id] = (product, _changed, _nv)
+                                        else:
+                                            error_count += 1
+                                    elif 'keywords' in _changed:
+                                        success_count += 1
+                                except Exception as _e:
+                                    error_count += 1
+                                    errors.append(f"{product.vendor_code} (AI пакет комбо): {str(_e)}")
+                            for _b in chunk_list(_cards_ai, 100):
+                                try:
+                                    client.update_cards_batch(_b, log_to_db=True, seller_id=current_user.seller.id)
+                                    for _c in _b:
+                                        _e = _pmap_ai.get(_c['nmID'])
+                                        if not _e:
+                                            continue
+                                        _p, _cf, _nv2 = _e
+                                        _snap_b = _create_product_snapshot(_p)
+                                        for _f, _v in _nv2.items():
+                                            if _f == 'title':
+                                                _p.title = _v
+                                            elif _f == 'description':
+                                                _p.description = _v
+                                            elif _f == 'brand':
+                                                _p.brand = _v
+                                        _p.last_sync = datetime.utcnow()
+                                        db.session.add(CardEditHistory(
+                                            product_id=_p.id, seller_id=current_user.seller.id,
+                                            bulk_edit_id=bulk_operation.id, action='update',
+                                            changed_fields=_cf,
+                                            snapshot_before=_snap_b,
+                                            snapshot_after=_create_product_snapshot(_p),
+                                            wb_synced=True, wb_sync_status='success'
+                                        ))
+                                        success_count += 1
+                                except Exception as _be:
+                                    error_count += 1
+                                    errors.append(f"AI батч (combined): {str(_be)}")
+                            db.session.commit()
+                    except Exception as _ce:
+                        app.logger.error(f"Combined AI ops error: {_ce}")
+                        errors.append(f"Ошибка AI-пакета в комбинированном режиме: {str(_ce)}")
 
                 # Обновляем статус bulk операции
                 bulk_operation.success_count = success_count
@@ -3118,7 +3635,8 @@ def products_bulk_edit():
         categories=categories,
         filter_type=filter_type,
         filter_brand=filter_brand,
-        filter_category=filter_category
+        filter_category=filter_category,
+        ai_enabled=ai_enabled
     )
 
 
@@ -3386,71 +3904,107 @@ def revert_bulk_edit(bulk_id):
         error_count = 0
         errors = []
 
+        from wb_api_client import chunk_list
+        from wb_validators import prepare_card_for_update, clean_characteristics_for_update
+
+        # Готовим карточки для батч-обновления из локальной БД (без лишних GET-запросов к WB)
+        cards_to_update = []
+        change_map = {}  # nmID -> (change, product, reverted_fields, snapshot_to_restore)
+
+        for change in product_changes:
+            if not change.can_revert():
+                continue
+
+            product = Product.query.get(change.product_id)
+            if not product:
+                continue
+
+            snapshot_to_restore = change.snapshot_before
+            reverted_fields = []
+
+            try:
+                full_card = product.to_wb_card_format()
+                if not full_card or not full_card.get('sizes'):
+                    error_count += 1
+                    errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                    continue
+
+                # Применяем snapshot_before к полной карточке из БД
+                for field in change.changed_fields:
+                    if field not in snapshot_to_restore:
+                        continue
+                    if field == 'vendor_code':
+                        full_card['vendorCode'] = snapshot_to_restore[field]
+                    elif field == 'characteristics':
+                        chars = snapshot_to_restore[field]
+                        full_card['characteristics'] = clean_characteristics_for_update(chars) if chars else chars
+                    elif field in ['title', 'description', 'brand']:
+                        full_card[field] = snapshot_to_restore[field]
+                    reverted_fields.append(field)
+
+                if not reverted_fields:
+                    continue
+
+                card_ready = prepare_card_for_update(full_card, {})
+                cards_to_update.append(card_ready)
+                change_map[product.nm_id] = (change, product, reverted_fields, snapshot_to_restore)
+
+            except Exception as e:
+                error_count += 1
+                errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
+
+        app.logger.info(f"📦 Prepared {len(cards_to_update)} cards for batch revert")
+
         with WildberriesAPIClient(
             current_user.seller.wb_api_key,
             db_logger_callback=APILog.log_request
         ) as client:
-            for change in product_changes:
+            BATCH_SIZE = 100
+            for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
                 try:
-                    if not change.can_revert():
-                        continue
+                    app.logger.info(f"📤 Revert batch {batch_num}: {len(batch)} cards")
+                    client.update_cards_batch(batch, log_to_db=True, seller_id=current_user.seller.id)
 
-                    product = Product.query.get(change.product_id)
-                    if not product:
-                        continue
+                    for card in batch:
+                        nm_id = card['nmID']
+                        entry = change_map.get(nm_id)
+                        if not entry:
+                            continue
+                        change, product, reverted_fields, snapshot_to_restore = entry
 
-                    # Подготавливаем данные для отката
-                    snapshot_to_restore = change.snapshot_before
-                    updates = {}
-                    reverted_fields = []
-
-                    for field in change.changed_fields:
-                        if field in snapshot_to_restore:
+                        for field in reverted_fields:
                             if field == 'vendor_code':
-                                updates['vendorCode'] = snapshot_to_restore[field]
-                            elif field in ['title', 'description', 'brand', 'characteristics']:
-                                updates[field] = snapshot_to_restore[field]
-                            reverted_fields.append(field)
+                                product.vendor_code = snapshot_to_restore[field]
+                            elif field == 'title':
+                                product.title = snapshot_to_restore[field]
+                            elif field == 'description':
+                                product.description = snapshot_to_restore[field]
+                            elif field == 'brand':
+                                product.brand = snapshot_to_restore[field]
+                            elif field == 'characteristics':
+                                product.characteristics_json = json.dumps(
+                                    snapshot_to_restore[field],
+                                    ensure_ascii=False
+                                )
 
-                    if not updates:
-                        continue
+                        product.last_sync = datetime.utcnow()
+                        change.reverted = True
+                        change.reverted_at = datetime.utcnow()
+                        success_count += 1
 
-                    # Откатываем через WB API
-                    result = client.update_card(
-                        product.nm_id,
-                        updates,
-                        log_to_db=True,
-                        seller_id=current_user.seller.id
-                    )
-
-                    # Обновляем локальную БД
-                    for field in reverted_fields:
-                        if field == 'vendor_code':
-                            product.vendor_code = snapshot_to_restore[field]
-                        elif field == 'title':
-                            product.title = snapshot_to_restore[field]
-                        elif field == 'description':
-                            product.description = snapshot_to_restore[field]
-                        elif field == 'brand':
-                            product.brand = snapshot_to_restore[field]
-                        elif field == 'characteristics':
-                            product.characteristics_json = json.dumps(
-                                snapshot_to_restore[field],
-                                ensure_ascii=False
-                            )
-
-                    product.last_sync = datetime.utcnow()
-
-                    # Помечаем изменение как откаченное
-                    change.reverted = True
-                    change.reverted_at = datetime.utcnow()
-
-                    success_count += 1
+                    db.session.commit()
 
                 except Exception as e:
-                    error_count += 1
-                    errors.append(f"Товар {product.vendor_code if product else change.product_id}: {str(e)}")
-                    app.logger.error(f"Error reverting product {change.product_id}: {e}")
+                    error_count += len(batch)
+                    batch_ids = ', '.join(
+                        f"nmID={c.get('nmID')} ({c.get('vendorCode', '?')})"
+                        for c in batch[:5]
+                    )
+                    if len(batch) > 5:
+                        batch_ids += f' ... и ещё {len(batch) - 5}'
+                    error_msg = f"Батч {batch_num} ({len(batch)} карт.: {batch_ids}): {str(e)}"
+                    errors.append(error_msg)
+                    app.logger.error(f"❌ {error_msg}")
 
         # Помечаем bulk операцию как откаченную
         bulk_operation.reverted = True

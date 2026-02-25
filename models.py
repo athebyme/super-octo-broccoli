@@ -202,6 +202,7 @@ class Product(db.Model):
     characteristics_json = db.Column(db.Text)  # JSON с характеристиками товара
     description = db.Column(db.Text)  # Описание товара
     dimensions_json = db.Column(db.Text)  # JSON с габаритами (длина, ширина, высота)
+    tags_json = db.Column(db.Text)  # JSON список ключевых слов/тегов (хранится локально, не в WB)
 
     # Метаданные
     is_active = db.Column(db.Boolean, default=True)  # Активна ли карточка

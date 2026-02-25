@@ -304,36 +304,61 @@ def register_merge_routes(app):
             # Разъединяем через API
             client = WildberriesAPIClient(current_user.seller.wb_api_key)
 
+            import time
+            api_errors = []
+
             try:
-                result = client.unmerge_cards(
-                    nm_ids=nm_ids,
-                    log_to_db=True,
-                    seller_id=current_user.seller.id
-                )
+                # ВАЖНО: отправляем каждую карточку отдельным запросом,
+                # иначе WB объединит их в новую группу с новым imtID.
+                # Последнюю карточку не трогаем — она автоматически останется одна.
+                for nm_id in nm_ids[:-1]:
+                    try:
+                        client.unmerge_cards(
+                            nm_ids=[nm_id],
+                            log_to_db=True,
+                            seller_id=current_user.seller.id
+                        )
+                    except WBAPIException as e:
+                        # Если карточка уже отдельная на WB — не критично, продолжаем
+                        err_str = str(e)
+                        app.logger.warning(f"unmerge nm_id={nm_id}: {err_str}")
+                        api_errors.append(err_str)
+                    time.sleep(0.3)
 
-                # Снимок ПОСЛЕ (каждая карточка получит новый imt_id от WB)
-                snapshot_after = snapshot_before.copy()  # WB изменит imt_id автоматически
+                # Обновляем imt_id в локальной БД: сбрасываем в None
+                # (реальные новые imtID подтянутся при следующей синхронизации с WB)
+                for product in products:
+                    product.imt_id = None
+                    product.last_sync = datetime.utcnow()
 
-                unmerge_history.snapshot_after = snapshot_after
+                unmerge_history.snapshot_after = snapshot_before.copy()
                 unmerge_history.status = 'completed'
                 unmerge_history.wb_synced = True
                 unmerge_history.wb_sync_status = 'success'
+                unmerge_history.wb_error_message = '; '.join(api_errors) if api_errors else None
                 unmerge_history.completed_at = datetime.utcnow()
                 unmerge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
 
                 db.session.commit()
 
-                flash(f'Успешно разъединено {len(nm_ids)} карточек. Обновите список товаров для получения новых imtID', 'success')
+                if api_errors:
+                    flash(f'Карточки разъединены локально. Часть карточек уже была разъединена на WB ранее.', 'success')
+                else:
+                    flash(f'Успешно разъединено {len(nm_ids)} карточек.', 'success')
                 return redirect(url_for('products_merge_history', id=unmerge_history.id))
 
-            except WBAPIException as e:
+            except Exception as e:
+                # Даже при ошибке сбрасываем imt_id в БД, чтобы карточки
+                # не зависали в состоянии "объединено" вечно
+                for product in products:
+                    product.imt_id = None
                 unmerge_history.status = 'failed'
                 unmerge_history.wb_synced = False
                 unmerge_history.wb_sync_status = 'failed'
                 unmerge_history.wb_error_message = str(e)
                 db.session.commit()
 
-                flash(f'Ошибка при разъединении карточек: {str(e)}', 'danger')
+                flash(f'Ошибка WB API при разъединении: {str(e)}. Локальные данные сброшены — выполните синхронизацию.', 'warning')
                 return redirect(url_for('products_merge'))
 
         except Exception as e:
@@ -402,36 +427,37 @@ def register_merge_routes(app):
             # Разъединяем через API (только одну карточку)
             client = WildberriesAPIClient(current_user.seller.wb_api_key)
 
+            wb_error = None
             try:
-                result = client.unmerge_cards(
+                client.unmerge_cards(
                     nm_ids=[nm_id],
                     log_to_db=True,
                     seller_id=current_user.seller.id
                 )
-
-                snapshot_after = snapshot_before.copy()
-
-                unmerge_history.snapshot_after = snapshot_after
-                unmerge_history.status = 'completed'
-                unmerge_history.wb_synced = True
-                unmerge_history.wb_sync_status = 'success'
-                unmerge_history.completed_at = datetime.utcnow()
-                unmerge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
-
-                db.session.commit()
-
-                flash(f'Карточка {product.vendor_code} отсоединена от группы. Синхронизируйте товары для обновления imtID', 'success')
-                return redirect(url_for('products_merge'))
-
             except WBAPIException as e:
-                unmerge_history.status = 'failed'
-                unmerge_history.wb_synced = False
-                unmerge_history.wb_sync_status = 'failed'
-                unmerge_history.wb_error_message = str(e)
-                db.session.commit()
+                # Карточка уже могла быть разъединена на WB — не критично
+                wb_error = str(e)
+                app.logger.warning(f"unmerge single nm_id={nm_id}: {wb_error}")
 
-                flash(f'Ошибка при отсоединении карточки: {str(e)}', 'danger')
-                return redirect(url_for('products_merge'))
+            # В любом случае обновляем локальную БД
+            product.imt_id = None
+            product.last_sync = datetime.utcnow()
+
+            unmerge_history.snapshot_after = snapshot_before.copy()
+            unmerge_history.status = 'completed'
+            unmerge_history.wb_synced = not bool(wb_error)
+            unmerge_history.wb_sync_status = 'failed' if wb_error else 'success'
+            unmerge_history.wb_error_message = wb_error
+            unmerge_history.completed_at = datetime.utcnow()
+            unmerge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
+
+            db.session.commit()
+
+            if wb_error:
+                flash(f'Карточка {product.vendor_code} уже была отсоединена на WB. Локальные данные обновлены.', 'success')
+            else:
+                flash(f'Карточка {product.vendor_code} отсоединена от группы.', 'success')
+            return redirect(url_for('products_merge'))
 
         except Exception as e:
             app.logger.error(f"Error in products_merge_unmerge_single: {str(e)}")
@@ -585,3 +611,33 @@ def register_merge_routes(app):
             app.logger.error(f"Error in products_merge_revert: {str(e)}")
             flash('Произошла ошибка при откате объединения', 'danger')
             return redirect(url_for('products_merge_history', id=id))
+
+    @app.route('/products/merge/force-unmerge/<int:imt_id>', methods=['POST'])
+    @login_required
+    def products_merge_force_unmerge(imt_id):
+        """Принудительно сбросить объединение в локальной БД (без вызова WB API).
+        Используется когда карточки уже разъединены на WB, но в нашей БД всё ещё числятся объединёнными."""
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 400
+
+        products = Product.query.filter_by(
+            imt_id=imt_id,
+            seller_id=current_user.seller.id,
+            is_active=True
+        ).all()
+
+        if not products:
+            flash('Карточки не найдены', 'warning')
+            return redirect(url_for('products_merge'))
+
+        count = len(products)
+        for product in products:
+            product.imt_id = None
+            product.last_sync = datetime.utcnow()
+
+        db.session.commit()
+
+        flash(f'Локальные данные обновлены: {count} карточек помечены как несвязанные. '
+              f'Выполните синхронизацию с WB чтобы получить актуальные imtID.', 'success')
+        return redirect(url_for('products_merge'))
+
