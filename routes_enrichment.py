@@ -38,22 +38,16 @@ def register_enrichment_routes(app):
         imp = service.find_supplier_data(product, current_user.seller.id)
 
         # Пользователь может явно указать supplier_id через ?supplier_id=X
+        # (переопределяет автоматически найденный, например, если хочет выбрать другой)
         manual_supplier_id = request.args.get('supplier_id', type=int)
-        if manual_supplier_id and not imp:
-            imp = ImportedProduct.query.filter_by(id=manual_supplier_id).first()
-            if imp:
-                # Автоматически прилинковываем
-                imp.product_id = product.id
-                db.session.commit()
-
-        # Если нашли, проверяем что есть полезные данные
-        if imp:
-            has_useful_data = any([
-                imp.photo_urls, imp.description, imp.characteristics,
-                imp.ai_seo_title, imp.ai_dimensions
-            ])
-            if not has_useful_data:
-                imp = None  # Показываем форму поиска — данных нет
+        if manual_supplier_id:
+            manual_imp = ImportedProduct.query.filter_by(id=manual_supplier_id).first()
+            if manual_imp:
+                imp = manual_imp
+                # Прилинковываем выбранный
+                if imp.product_id is None:
+                    imp.product_id = product.id
+                    db.session.commit()
 
         preview = service.build_preview(product, imp) if imp else None
 
@@ -61,12 +55,19 @@ def register_enrichment_routes(app):
         from pricing_engine import extract_supplier_product_id
         suggested_ext_id = extract_supplier_product_id(product.vendor_code or '')
 
+        # Сигнал шаблону, что данных мало (стаб — только название/бренд)
+        low_data = imp and not any([
+            imp.photo_urls, imp.description, imp.characteristics,
+            imp.ai_seo_title, imp.ai_dimensions
+        ])
+
         return render_template(
             'product_enrich.html',
             product=product,
             imported_product=imp,
             preview=preview,
             suggested_ext_id=suggested_ext_id,
+            low_data=low_data,
         )
 
     @app.route('/api/products/<int:product_id>/enrich/preview', methods=['POST'])
