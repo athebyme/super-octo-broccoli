@@ -1,0 +1,434 @@
+{% extends "base.html" %}
+
+{% block title %}Обогащение карточки — {{ product.title or product.vendor_code }}{% endblock %}
+
+{% block content %}
+<div x-data="enrichApp()" x-cloak class="max-w-full">
+
+  <!-- ===== ШАПКА ===== -->
+  <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-3">
+      <a href="{{ url_for('product_detail', product_id=product.id) }}"
+         class="text-gray-400 hover:text-gray-600 transition-colors">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+        </svg>
+      </a>
+      <div>
+        <h1 class="text-xl font-bold text-gray-900">Обогащение от поставщика</h1>
+        <p class="text-sm text-gray-500 mt-0.5">
+          Артикул <span class="font-mono font-medium text-gray-700">{{ product.vendor_code }}</span>
+          &nbsp;·&nbsp;
+          <span class="text-indigo-600 font-medium">{{ imported_product.source_type or 'Поставщик' }}</span>
+          #{{ imported_product.external_id }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Кнопки верхней панели -->
+    <div class="flex items-center gap-3">
+      <button @click="selectAll()" type="button"
+              class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+        Выбрать всё
+      </button>
+      <button @click="deselectAll()" type="button"
+              class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+        Снять всё
+      </button>
+      <button @click="applyEnrichment()" :disabled="loading || selectedCount === 0"
+              :class="{'opacity-50 cursor-not-allowed': loading || selectedCount === 0}"
+              type="button"
+              class="px-5 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-sm">
+        <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+        </svg>
+        <svg x-show="!loading" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+        <span x-text="loading ? 'Применяю...' : `Применить (${ selectedCount })`"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ===== TOAST уведомление ===== -->
+  <div x-show="toast.show" x-transition
+       :class="toast.success ? 'bg-green-50 border-green-400 text-green-800' : 'bg-red-50 border-red-400 text-red-800'"
+       class="mb-4 px-4 py-3 rounded-lg border flex items-center gap-3">
+    <svg x-show="toast.success" class="w-5 h-5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <svg x-show="!toast.success" class="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+    </svg>
+    <span x-text="toast.message" class="text-sm font-medium"></span>
+  </div>
+
+  <!-- ===== SPLIT PANEL ===== -->
+  <div class="grid grid-cols-1 gap-4">
+
+    <!-- ---- ФОТО ---- -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" x-model="selected.photos"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+            <span class="font-semibold text-gray-800 text-sm">Фотографии</span>
+          </label>
+          <span class="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+            WB: {{ preview.photos.current_count }} шт &nbsp;→&nbsp; Поставщик: {{ preview.photos.supplier_photos | length }} шт
+          </span>
+        </div>
+        <!-- Стратегия -->
+        <div x-show="selected.photos" class="flex items-center gap-2">
+          <span class="text-xs text-gray-500">Стратегия:</span>
+          <select x-model="photoStrategy"
+                  class="text-xs border border-gray-300 rounded-lg px-2 py-1 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+            <option value="replace">Заменить всё</option>
+            <option value="append">Добавить в конец</option>
+            <option value="only_if_empty">Только если нет фото</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="p-5 grid grid-cols-2 gap-6">
+        <!-- Текущие фото WB -->
+        <div>
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Текущие фото WB</p>
+          {% set photos_list = product.photos_json | tojson | safe %}
+          <div class="flex flex-wrap gap-2">
+            {% set photos = product.photos_json | default('[]') %}
+            {% for i in range(1, 8) %}
+              <div class="w-20 h-20 rounded-lg bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center">
+                <img src="{{ url_for('static', filename='') | replace('/static/', '/') }}{{ product | wb_photo_url(i) if product.nm_id }}"
+                     onerror="this.parentElement.innerHTML='<span class=\'text-gray-300 text-xs text-center p-2\'>{{ i }}</span>'"
+                     class="w-full h-full object-cover"
+                     loading="lazy">
+              </div>
+            {% endfor %}
+            {% if product.photos_json | default('[]') == '[]' %}
+              <p class="text-sm text-gray-400 italic">Нет фото</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Фото от поставщика -->
+        <div>
+          <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">
+            Фото поставщика
+            {% if preview.photos.supplier_photos %}
+              <span class="ml-2 text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full text-xs font-medium normal-case">
+                {{ preview.photos.supplier_photos | length }} шт
+              </span>
+            {% endif %}
+          </p>
+          {% if preview.photos.supplier_photos %}
+            <div class="flex flex-wrap gap-2" id="supplier-photos-grid">
+              {% for photo in preview.photos.supplier_photos %}
+                <div class="relative group w-20 h-20 rounded-lg overflow-hidden border border-gray-200">
+                  {% if photo.cached %}
+                    <img src="{{ photo.serve_url }}"
+                         class="w-full h-full object-cover"
+                         loading="lazy"
+                         onerror="this.src='/static/img/placeholder.jpg'">
+                    <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all flex items-center justify-center">
+                      <svg class="hidden group-hover:block w-6 h-6 text-white drop-shadow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                      </svg>
+                    </div>
+                  {% else %}
+                    <div class="w-full h-full bg-gray-100 flex flex-col items-center justify-center gap-1">
+                      <svg class="w-5 h-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                      </svg>
+                      <span class="text-xs text-gray-400">Загрузка...</span>
+                    </div>
+                  {% endif %}
+                  <span class="absolute bottom-0 right-0 text-xs bg-black/50 text-white px-1 rounded-tl">
+                    {{ loop.index }}
+                  </span>
+                </div>
+              {% endfor %}
+            </div>
+            <p class="mt-2 text-xs text-gray-400">
+              <span class="text-green-600 font-medium">{{ preview.photos.supplier_photos | selectattr('cached') | list | length }} готово</span>
+              · {{ (preview.photos.supplier_photos | length) - (preview.photos.supplier_photos | selectattr('cached') | list | length) }} загружается
+            </p>
+          {% else %}
+            <p class="text-sm text-gray-400 italic">Нет фото от поставщика</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ---- ЗАГОЛОВОК ---- -->
+    {% if preview.title.supplier %}
+    <div class="bg-white rounded-xl border shadow-sm overflow-hidden
+                {{ 'border-amber-200' if preview.title.has_change else 'border-gray-200' }}">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" x-model="selected.title"
+                 class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+          <span class="font-semibold text-gray-800 text-sm">Заголовок</span>
+        </label>
+        {% if preview.title.has_change %}
+          <span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">Отличается</span>
+        {% else %}
+          <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Совпадает</span>
+        {% endif %}
+      </div>
+      <div class="grid grid-cols-2 divide-x divide-gray-100 text-sm">
+        <div class="p-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase mb-2">Текущий WB</p>
+          <p class="text-gray-800 leading-relaxed">{{ preview.title.current or '—' }}</p>
+          <p class="text-xs text-gray-400 mt-1">{{ (preview.title.current or '') | length }} / 60</p>
+        </div>
+        <div class="p-4 {{ 'bg-amber-50/40' if preview.title.has_change }}">
+          <p class="text-xs font-semibold text-indigo-500 uppercase mb-2">От поставщика</p>
+          <p class="text-gray-900 font-medium leading-relaxed">{{ preview.title.supplier }}</p>
+          <p class="text-xs text-gray-400 mt-1">{{ (preview.title.supplier or '') | length }} / 60</p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- ---- БРЕНД ---- -->
+    {% if preview.brand.supplier %}
+    <div class="bg-white rounded-xl border shadow-sm overflow-hidden
+                {{ 'border-amber-200' if preview.brand.has_change else 'border-gray-200' }}">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" x-model="selected.brand"
+                 class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+          <span class="font-semibold text-gray-800 text-sm">Бренд</span>
+        </label>
+        {% if preview.brand.has_change %}
+          <span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">Отличается</span>
+        {% else %}
+          <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Совпадает</span>
+        {% endif %}
+      </div>
+      <div class="grid grid-cols-2 divide-x divide-gray-100 text-sm">
+        <div class="p-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase mb-2">Текущий WB</p>
+          <p class="text-gray-800">{{ preview.brand.current or '—' }}</p>
+        </div>
+        <div class="p-4 {{ 'bg-amber-50/40' if preview.brand.has_change }}">
+          <p class="text-xs font-semibold text-indigo-500 uppercase mb-2">От поставщика</p>
+          <p class="text-gray-900 font-medium">{{ preview.brand.supplier }}</p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- ---- ОПИСАНИЕ ---- -->
+    {% if preview.description.supplier %}
+    <div class="bg-white rounded-xl border shadow-sm overflow-hidden
+                {{ 'border-amber-200' if preview.description.has_change else 'border-gray-200' }}">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" x-model="selected.description"
+                 class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+          <span class="font-semibold text-gray-800 text-sm">Описание</span>
+        </label>
+        {% if preview.description.has_change %}
+          <span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-medium">Отличается</span>
+        {% endif %}
+      </div>
+      <div class="grid grid-cols-2 divide-x divide-gray-100 text-sm">
+        <div class="p-4 max-h-48 overflow-y-auto">
+          <p class="text-xs font-semibold text-gray-400 uppercase mb-2">Текущее WB</p>
+          <p class="text-gray-700 whitespace-pre-line leading-relaxed text-xs">{{ preview.description.current or '—' }}</p>
+        </div>
+        <div class="p-4 max-h-48 overflow-y-auto {{ 'bg-amber-50/40' if preview.description.has_change }}">
+          <p class="text-xs font-semibold text-indigo-500 uppercase mb-2">От поставщика</p>
+          <p class="text-gray-900 whitespace-pre-line leading-relaxed text-xs">{{ preview.description.supplier }}</p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- ---- ХАРАКТЕРИСТИКИ ---- -->
+    {% if preview.characteristics.supplier_raw and preview.characteristics.has_change %}
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" x-model="selected.characteristics"
+                 class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+          <span class="font-semibold text-gray-800 text-sm">Характеристики</span>
+        </label>
+        <span class="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full font-medium">
+          {{ preview.characteristics.current | length }} WB → данные поставщика
+        </span>
+      </div>
+      <div class="grid grid-cols-2 divide-x divide-gray-100 text-sm">
+        <div class="p-4 max-h-64 overflow-y-auto">
+          <p class="text-xs font-semibold text-gray-400 uppercase mb-3">Текущие WB</p>
+          {% if preview.characteristics.current %}
+            <div class="space-y-1">
+              {% for char in preview.characteristics.current %}
+                <div class="flex items-start gap-2 py-1 border-b border-gray-50">
+                  <span class="text-gray-500 text-xs min-w-0 flex-1">{{ char.get('name', char.get('id', '')) }}</span>
+                  <span class="text-gray-800 text-xs text-right">{{ char.get('value', '') }}</span>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="text-gray-400 italic text-xs">Нет характеристик</p>
+          {% endif %}
+        </div>
+        <div class="p-4 bg-indigo-50/30 max-h-64 overflow-y-auto">
+          <p class="text-xs font-semibold text-indigo-500 uppercase mb-3">От поставщика</p>
+          <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono bg-white rounded p-2 border border-gray-200 max-h-52 overflow-y-auto">{{ preview.characteristics.supplier_raw | truncate(2000) }}</pre>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- ---- ГАБАРИТЫ ---- -->
+    {% if preview.dimensions.has_change and preview.dimensions.supplier %}
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" x-model="selected.dimensions"
+                 class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+          <span class="font-semibold text-gray-800 text-sm">Габариты</span>
+        </label>
+        <span class="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">Новые данные</span>
+      </div>
+      <div class="grid grid-cols-2 divide-x divide-gray-100 text-sm">
+        <div class="p-4">
+          <p class="text-xs font-semibold text-gray-400 uppercase mb-2">Текущие WB</p>
+          {% if preview.dimensions.current %}
+            <div class="space-y-1 text-xs">
+              {% for k, v in preview.dimensions.current.items() %}
+                <div class="flex justify-between py-0.5">
+                  <span class="text-gray-500">{{ k }}</span>
+                  <span class="font-medium text-gray-800">{{ v }}</span>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="text-gray-400 italic text-xs">Нет данных</p>
+          {% endif %}
+        </div>
+        <div class="p-4 bg-indigo-50/30">
+          <p class="text-xs font-semibold text-indigo-500 uppercase mb-2">От поставщика</p>
+          <div class="space-y-1 text-xs">
+            {% for k, v in preview.dimensions.supplier.items() %}
+              <div class="flex justify-between py-0.5">
+                <span class="text-gray-500">{{ k }}</span>
+                <span class="font-semibold text-indigo-700">{{ v }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+  </div><!-- end grid -->
+
+  <!-- ===== НИЖНЯЯ ПАНЕЛЬ ДЕЙСТВИЙ ===== -->
+  <div class="sticky bottom-0 mt-6 bg-white border-t border-gray-200 px-6 py-4 flex items-center justify-between shadow-lg rounded-t-xl">
+    <div class="text-sm text-gray-500">
+      Выбрано полей: <span class="font-semibold text-gray-900" x-text="selectedCount"></span>
+      <span x-show="lastResult" class="ml-4 text-green-600 font-medium" x-text="lastResult"></span>
+    </div>
+    <div class="flex items-center gap-3">
+      <a href="{{ url_for('product_detail', product_id=product.id) }}"
+         class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        Отмена
+      </a>
+      <button @click="applyEnrichment()" :disabled="loading || selectedCount === 0"
+              :class="{'opacity-50 cursor-not-allowed': loading || selectedCount === 0}"
+              class="px-6 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 shadow-sm">
+        <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+        </svg>
+        <span x-text="loading ? 'Применяю...' : `Применить (${ selectedCount } поля(ей))`"></span>
+      </button>
+    </div>
+  </div>
+
+</div><!-- end x-data -->
+
+<script>
+function enrichApp() {
+    return {
+        loading: false,
+        photoStrategy: 'replace',
+        selected: {
+            photos: {{ 'true' if preview.photos.has_change else 'false' }},
+            title: {{ 'true' if preview.title.has_change else 'false' }},
+            brand: {{ 'false' }},
+            description: {{ 'true' if preview.description.has_change else 'false' }},
+            characteristics: {{ 'true' if preview.characteristics.has_change else 'false' }},
+            dimensions: {{ 'true' if preview.dimensions.has_change else 'false' }},
+        },
+        toast: { show: false, success: false, message: '' },
+        lastResult: '',
+
+        get selectedCount() {
+            return Object.values(this.selected).filter(Boolean).length;
+        },
+
+        selectAll() {
+            Object.keys(this.selected).forEach(k => this.selected[k] = true);
+        },
+
+        deselectAll() {
+            Object.keys(this.selected).forEach(k => this.selected[k] = false);
+        },
+
+        showToast(success, message) {
+            this.toast = { show: true, success, message };
+            setTimeout(() => this.toast.show = false, 4000);
+        },
+
+        async applyEnrichment() {
+            if (this.selectedCount === 0 || this.loading) return;
+            this.loading = true;
+
+            const fields = Object.entries(this.selected)
+                .filter(([k, v]) => v)
+                .map(([k]) => k);
+
+            try {
+                const resp = await fetch('/api/products/{{ product.id }}/enrich/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        fields,
+                        photo_strategy: this.photoStrategy,
+                        supplier_id: {{ imported_product.id }}
+                    })
+                });
+
+                const data = await resp.json();
+
+                if (resp.ok && data.success) {
+                    const applied = (data.fields_applied || []).join(', ');
+                    this.showToast(true, `Применено: ${applied || 'ничего не изменилось'}`);
+                    this.lastResult = `✓ Обогащено: ${applied}`;
+
+                    // Через 2 сек переходим обратно на карточку
+                    setTimeout(() => {
+                        window.location.href = '/products/{{ product.id }}';
+                    }, 2000);
+                } else {
+                    const msg = data.error || 'Неизвестная ошибка';
+                    this.showToast(false, `Ошибка: ${msg}`);
+                }
+            } catch (e) {
+                this.showToast(false, `Ошибка сети: ${e.message}`);
+            } finally {
+                this.loading = false;
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

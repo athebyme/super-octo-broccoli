@@ -439,3 +439,22 @@ def get_cached_photo_path(supplier_type: str, external_id: str, url: str) -> Opt
     if cache.is_cached(supplier_type, external_id, url):
         return cache.get_cache_path(supplier_type, external_id, url)
     return None
+
+
+def get_supplier_photo_url(supplier_type: str, external_id: str, url: str) -> str:
+    """
+    Возвращает безопасный URL для раздачи фото поставщика через наш сервер.
+    Маршрут: /photos/supplier/{supplier_type}/{safe_external_id}/{photo_hash}
+
+    Args:
+        supplier_type: Тип поставщика (sexoptovik, etc.)
+        external_id: Внешний ID товара
+        url: Оригинальный URL фото поставщика
+
+    Returns:
+        Относительный URL для serve через наш сервер
+    """
+    cache = get_photo_cache()
+    photo_hash = cache.get_photo_hash(url)
+    safe_id = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(external_id))
+    return f"/photos/supplier/{supplier_type}/{safe_id}/{photo_hash}"

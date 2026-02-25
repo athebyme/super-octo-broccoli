@@ -830,6 +830,56 @@ class WildberriesAPIClient:
             logger.error(f"❌ Unexpected error in batch update: {str(e)}")
             raise
 
+    def upload_photos_to_card(
+        self,
+        nm_id: int,
+        photo_paths: List[str],
+        seller_id: int = None
+    ) -> List[Dict]:
+        """
+        Загрузить фото в карточку WB через Content API v3 media/save
+
+        Args:
+            nm_id: Артикул WB (nmID)
+            photo_paths: Список путей к JPEG-файлам на диске
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Список результатов по каждому фото
+
+        Note:
+            WB API /content/v3/media/save принимает multipart/form-data
+            Параметры: nmId (query), photoNumber (query, 1-based), uploadfile (file)
+        """
+        endpoint = "/content/v3/media/save"
+        results = []
+
+        for idx, path in enumerate(photo_paths):
+            photo_number = idx + 1
+            logger.info(f"📤 Uploading photo {photo_number}/{len(photo_paths)} for nmID={nm_id}: {path}")
+
+            try:
+                with open(path, 'rb') as f:
+                    files = {'uploadfile': (f'photo_{photo_number}.jpg', f, 'image/jpeg')}
+                    params = {'nmId': nm_id, 'photoNumber': photo_number}
+
+                    response = self._make_request(
+                        'POST', 'content', endpoint,
+                        params=params,
+                        files=files,
+                        log_to_db=False,
+                        seller_id=seller_id
+                    )
+                    result = response.json() if response.content else {}
+                    logger.info(f"✅ Photo {photo_number} uploaded: {result}")
+                    results.append({'photo_number': photo_number, 'success': True, 'response': result})
+
+            except Exception as e:
+                logger.error(f"❌ Failed to upload photo {photo_number} for nmID={nm_id}: {e}")
+                results.append({'photo_number': photo_number, 'success': False, 'error': str(e)})
+
+        return results
+
     def update_prices(
         self,
         prices: List[Dict[str, Any]]

@@ -1987,3 +1987,24 @@ def log_admin_action(admin_user_id: int, action: str, target_type: str = None,
     db.session.add(audit_log)
     db.session.commit()
     return audit_log
+
+
+class EnrichmentJob(db.Model):
+    """Задача массового обогащения карточек данными поставщика"""
+    __tablename__ = 'enrichment_jobs'
+
+    id            = db.Column(db.String(36), primary_key=True)   # UUID
+    seller_id     = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    status        = db.Column(db.String(20), default='pending')  # pending/running/done/failed
+    total         = db.Column(db.Integer, default=0)
+    processed     = db.Column(db.Integer, default=0)
+    succeeded     = db.Column(db.Integer, default=0)
+    failed        = db.Column(db.Integer, default=0)
+    skipped       = db.Column(db.Integer, default=0)
+    fields_config  = db.Column(db.Text)    # JSON список полей: ['title','photos',...]
+    photo_strategy = db.Column(db.String(20), default='replace')  # replace/append/only_if_empty
+    results       = db.Column(db.Text)    # JSON [{product_id, nm_id, status, error}]
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', foreign_keys=[seller_id])

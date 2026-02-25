@@ -579,6 +579,43 @@ def download_report(report_id: int):
     return send_file(path, as_attachment=True, download_name=path.name)
 
 
+# ============= БЕЗОПАСНАЯ РАЗДАЧА ФОТО ПОСТАВЩИКА =============
+
+@app.route('/photos/supplier/<supplier_type>/<external_id>/<photo_hash>')
+@login_required
+def serve_supplier_photo(supplier_type, external_id, photo_hash):
+    """
+    Безопасная раздача кэшированных фото поставщика.
+    Только авторизованные пользователи. Не раскрывает оригинальный URL поставщика.
+    """
+    # Валидация параметров — только безопасные символы
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_-]+$', supplier_type):
+        abort(404)
+    if not _re.match(r'^[a-zA-Z0-9_-]+$', external_id):
+        abort(404)
+    if not _re.match(r'^[a-f0-9]+$', photo_hash):
+        abort(404)
+
+    cache_base = BASE_DIR / 'data' / 'photo_cache'
+    photo_path = cache_base / supplier_type / external_id / f"{photo_hash}.jpg"
+
+    # Path traversal защита
+    try:
+        photo_path.resolve().relative_to(cache_base.resolve())
+    except ValueError:
+        abort(404)
+
+    if not photo_path.exists():
+        abort(404)
+
+    response = send_file(photo_path, mimetype='image/jpeg', conditional=True)
+    response.cache_control.max_age = 86400
+    response.cache_control.public = False
+    response.cache_control.private = True
+    return response
+
+
 # ============= АДМИН ПАНЕЛЬ =============
 
 @app.route('/admin')
@@ -5510,6 +5547,10 @@ register_safe_prices_routes(app)
 # ============= РОУТЫ ЗАБЛОКИРОВАННЫХ КАРТОЧЕК И ЭКСПОРТА =============
 from routes_blocked_cards import register_blocked_cards_routes
 register_blocked_cards_routes(app)
+
+# ============= РОУТЫ ОБОГАЩЕНИЯ КАРТОЧЕК ДАННЫМИ ПОСТАВЩИКА =============
+from routes_enrichment import register_enrichment_routes
+register_enrichment_routes(app)
 
 
 if __name__ == '__main__':
