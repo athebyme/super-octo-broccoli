@@ -235,15 +235,102 @@ else:
     print("  ⚠️  Битый JSON в photo_urls ломает строки таблицы на AI-обновлении")
     print("     Если страница не рендерится → кнопки не появляются вообще")
 
-# ─── 4. Итог ───────────────────────────────────────────────────────────────────
-print("\n" + SEP)
+
+
+# ─── 4. Photo_urls структура для первой страницы продавца #1 (Владимир) ───────
+print("\n[4] СТРУКТУРА PHOTO_URLS — первые 50 товаров Владимира (#1)\n" + SEP2)
+print("(именно их рендерит шаблон /ai-update, страница 1)\n")
+
+cur.execute("""
+    SELECT id, photo_urls
+    FROM imported_products
+    WHERE seller_id = 1
+      AND import_status IN ('pending', 'validated', 'failed')
+    ORDER BY created_at DESC
+    LIMIT 50
+""")
+
+page1_products = cur.fetchall()
+fmt_counts = {"null": 0, "empty_list": 0, "list_strings": 0,
+              "list_dicts_with_sxp": 0, "list_dicts_no_sxp": 0,
+              "list_mixed": 0, "single_string": 0, "other": 0, "invalid_json": 0}
+broken_detail = []
+
+for row in page1_products:
+    val = row['photo_urls']
+    if not val:
+        fmt_counts["null"] += 1
+        continue
+    try:
+        parsed = json.loads(val)
+    except Exception:
+        fmt_counts["invalid_json"] += 1
+        broken_detail.append((row['id'], repr(val[:80])))
+        continue
+
+    if parsed is None:
+        fmt_counts["null"] += 1
+    elif isinstance(parsed, list):
+        if len(parsed) == 0:
+            fmt_counts["empty_list"] += 1
+        else:
+            first = parsed[0]
+            if isinstance(first, dict):
+                if 'sexoptovik' in first:
+                    fmt_counts["list_dicts_with_sxp"] += 1
+                else:
+                    fmt_counts["list_dicts_no_sxp"] += 1
+                    # ⚠️ Это может вызвать Jinja2 Undefined — photo_url станет Undefined
+                    broken_detail.append((row['id'], f"dict без 'sexoptovik': ключи={list(first.keys())[:5]}"))
+            elif isinstance(first, str):
+                fmt_counts["list_strings"] += 1
+            else:
+                fmt_counts["list_mixed"] += 1
+    elif isinstance(parsed, str):
+        fmt_counts["single_string"] += 1
+    else:
+        fmt_counts["other"] += 1
+
+print(f"  Всего товаров на странице 1: {len(page1_products)}")
+for k, v in fmt_counts.items():
+    if v > 0:
+        marker = "⚠️" if k in ("invalid_json", "list_dicts_no_sxp", "null") else "  "
+        print(f"  {marker} {k:<28} {v}")
+
+if fmt_counts["list_dicts_no_sxp"] > 0 or fmt_counts["invalid_json"] > 0:
+    print()
+    print("  ❌ НАЙДЕНА ПРИЧИНА КРАША ШАБЛОНА:")
+    print("     Jinja2 делает photos[0].sexoptovik на dict без этого ключа")
+    print("     → возвращает Undefined → url_for() кидает UndefinedError")
+    print("     → весь рендер страницы падает → JS не грузится → кнопки мертвы")
+    print()
+    print("  Проблемные товары:")
+    for pid, detail in broken_detail[:10]:
+        print(f"    product_id={pid}: {detail}")
+    if len(broken_detail) > 10:
+        print(f"    ... и ещё {len(broken_detail) - 10}")
+else:
+    print()
+    print("  ✅ Структура photo_urls корректна для всех 50 товаров первой страницы")
+    print("     Шаблон должен рендериться нормально.")
+    print("     Попроси Владимира открыть браузер → F12 → Console")
+    print("     и скопировать ошибки (красные строки) для дальнейшей диагностики.")
+
+print()
+
+# ─── 5. Итог ───────────────────────────────────────────────────────────────────
+print(SEP)
 print("ИТОГ")
 print(SEP)
-print("Смотри разделы выше. Ключевые точки:")
-print("1. Тест Cloud.ru API [1] — если ❌, ключ протух → нужно обновить в настройках")
-print("2. Битый JSON [3]        — если ❌, шаблон не рендерится → JS не грузится → кнопки мертвы")
-print("3. Товары на странице [2]— если 0, кнопка «Запустить» вечно серая (нужно выбрать операции И товары)")
-print("4. Хвосты паролей sexoptovik в [1] — если они разные, у одного тенанта неверный пароль")
+print("1. Cloud.ru API [1]      — проверен тестовым запросом")
+print("2. Битый JSON [3]        — проверен для всех товаров")
+print("3. Photo_urls формат [4] — проверен для первой страницы Владимира")
+print()
+print("Если [4] чист → причина на стороне браузера Владимира.")
+print("Следующий шаг: F12 → Console, скопировать красные ошибки.")
+print()
+print("Так же запусти:")
+print("  docker logs seller-platform --tail 100 2>&1 | grep -i error")
 print(SEP)
 
 con.close()
