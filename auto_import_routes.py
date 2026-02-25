@@ -2108,8 +2108,29 @@ def register_auto_import_routes(app):
 
             # Сохраняем размеры в поле sizes если есть
             if 'sizes_text' in updates and updates['sizes_text']:
-                product.sizes = updates['sizes_text']
-                applied.append('sizes_text')
+                sizes_text_val = updates['sizes_text']
+                # Валидация: не сохраняем случайно попавший AI-промпт.
+                # Валидный JSON сохраняем всегда; plain-текст — только если короткий
+                # (реальный текст размеров типа "S, M, L" или "длина 15 см" короткий).
+                _is_valid_json = False
+                try:
+                    json.loads(sizes_text_val)
+                    _is_valid_json = True
+                except Exception:
+                    pass
+                _prompt_prefixes = ('Определи ', 'Ты эксперт', 'Твоя задача', 'НАЗВАНИЕ:')
+                _looks_like_prompt = any(
+                    sizes_text_val.startswith(p) or ('\n' + p) in sizes_text_val[:100]
+                    for p in _prompt_prefixes
+                )
+                if _is_valid_json or (len(sizes_text_val) <= 500 and not _looks_like_prompt):
+                    product.sizes = sizes_text_val
+                    applied.append('sizes_text')
+                else:
+                    logger.warning(
+                        f"Skipping garbage sizes_text for product {product_id}: "
+                        f"len={len(sizes_text_val)}, preview={sizes_text_val[:80]!r}"
+                    )
 
             # Характеристики из WB API - сохраняем в characteristics для отображения
             if 'wb_characteristics' in updates and updates['wb_characteristics']:
