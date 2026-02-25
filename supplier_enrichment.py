@@ -41,6 +41,7 @@ class EnrichmentService:
             ImportedProduct или None
         """
         from models import ImportedProduct
+        from pricing_engine import extract_supplier_product_id
 
         # 1. Прямая FK-связь (самый надёжный)
         imp = ImportedProduct.query.filter_by(
@@ -61,18 +62,37 @@ class EnrichmentService:
                 logger.debug(f"[Enrich] Match by supplier_vendor_code: {product.supplier_vendor_code}")
                 return imp
 
-        # 3. По паттерну vendor_code: "id-{external_id}-{seller_code}"
+        # 3. По vendor_code паттерну с множественными форматами external_id.
+        # Vendor code имеет форму: id-{product_id}-{supplier_code}
+        # ImportedProduct.external_id может быть: '25268', 'id-25268', 'id-25268-...'
         if product.vendor_code:
-            m = re.match(r'^id-(\w+)-', product.vendor_code)
-            if m:
-                external_id = m.group(1)
-                imp = ImportedProduct.query.filter_by(
-                    external_id=external_id,
-                    seller_id=seller_id
-                ).first()
-                if imp:
-                    logger.debug(f"[Enrich] Match by vendor_code pattern: external_id={external_id}")
-                    return imp
+            numeric_pid = extract_supplier_product_id(product.vendor_code)  # int или None
+            if numeric_pid:
+                # Пробуем все варианты формата external_id, которые встречаются в реальных данных
+                candidate_ids = [
+                    str(numeric_pid),           # '25268'
+                    f'id-{numeric_pid}',        # 'id-25268'  ← sexoptovik CSV
+                ]
+                # Также извлекаем часть vendor_code до второго дефиса
+                vc_match = re.match(r'^(id-\w+)-', product.vendor_code)
+                if vc_match:
+                    candidate_ids.append(vc_match.group(1))  # 'id-25268'
+
+                # Дедупликация
+                seen = set()
+                unique_ids = [x for x in candidate_ids if not (x in seen or seen.add(x))]
+
+                for ext_id in unique_ids:
+                    imp = ImportedProduct.query.filter_by(
+                        external_id=ext_id,
+                        seller_id=seller_id
+                    ).first()
+                    if imp:
+                        logger.debug(
+                            f"[Enrich] Match by vendor_code pattern: "
+                            f"vendor_code={product.vendor_code} → external_id={ext_id}"
+                        )
+                        return imp
 
         return None
 

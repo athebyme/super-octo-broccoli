@@ -37,9 +37,23 @@ def register_enrichment_routes(app):
         imp = service.find_supplier_data(product, current_user.seller.id)
 
         if not imp:
+            # Диагностика для flash-сообщения
+            from pricing_engine import extract_supplier_product_id
+            import re as _re
+            pid_num = extract_supplier_product_id(product.vendor_code or '')
+            vc_match = _re.match(r'^(id-\w+)-', product.vendor_code or '')
+
+            candidates = []
+            if pid_num:
+                candidates.extend([str(pid_num), f'id-{pid_num}'])
+            if vc_match:
+                candidates.append(vc_match.group(1))
+            candidates_str = ', '.join(f'"{c}"' for c in dict.fromkeys(candidates)) if candidates else '(нет)'
+
             flash(
-                'Данные поставщика для этой карточки не найдены. '
-                'Убедитесь, что товар был импортирован из поставщика.',
+                f'Данные поставщика не найдены для карточки «{product.vendor_code}». '
+                f'Искали external_id: {candidates_str}. '
+                f'Проверьте, что товар был импортирован через автоимпорт.',
                 'warning'
             )
             return redirect(url_for('product_detail', product_id=product_id))
@@ -149,6 +163,63 @@ def register_enrichment_routes(app):
 
         photos = service._get_supplier_photo_list(imp)
         return jsonify({'photos': photos, 'matched': True, 'supplier_id': imp.id})
+
+    @app.route('/api/products/<int:product_id>/enrich/debug', methods=['GET'])
+    @login_required
+    def api_product_enrich_debug(product_id):
+        """Debug: показывает детали матчинга для диагностики"""
+        if not current_user.seller:
+            return jsonify({'error': 'No seller profile'}), 403
+
+        product = Product.query.get_or_404(product_id)
+        if product.seller_id != current_user.seller.id:
+            return jsonify({'error': 'Access denied'}), 403
+
+        from pricing_engine import extract_supplier_product_id
+        import re as _re
+
+        seller_id = current_user.seller.id
+        vendor_code = product.vendor_code or ''
+
+        # Вычисляем кандидатов
+        pid_num = extract_supplier_product_id(vendor_code)
+        candidates = []
+        if pid_num:
+            candidates.extend([str(pid_num), f'id-{pid_num}'])
+        vc_match = _re.match(r'^(id-\w+)-', vendor_code)
+        if vc_match:
+            candidates.append(vc_match.group(1))
+        candidates = list(dict.fromkeys(candidates))
+
+        # Ищем что есть в БД
+        db_results = {}
+        for c in candidates:
+            imp = ImportedProduct.query.filter_by(external_id=c, seller_id=seller_id).first()
+            db_results[c] = {'found': imp is not None, 'imp_id': imp.id if imp else None}
+
+        # Любые ImportedProduct этого продавца (первые 5)
+        recent = ImportedProduct.query.filter_by(seller_id=seller_id).order_by(
+            ImportedProduct.id.desc()
+        ).limit(5).all()
+
+        # Проверка по product_id FK
+        fk_imp = ImportedProduct.query.filter_by(product_id=product.id, seller_id=seller_id).first()
+
+        return jsonify({
+            'product_id': product.id,
+            'nm_id': product.nm_id,
+            'vendor_code': vendor_code,
+            'supplier_vendor_code': product.supplier_vendor_code,
+            'seller_id': seller_id,
+            'numeric_pid_extracted': pid_num,
+            'candidate_external_ids': candidates,
+            'db_search_results': db_results,
+            'fk_match': {'found': fk_imp is not None, 'imp_id': fk_imp.id if fk_imp else None},
+            'recent_imported_external_ids': [
+                {'id': imp.id, 'external_id': imp.external_id, 'product_id': imp.product_id}
+                for imp in recent
+            ],
+        })
 
     # =========================================================================
     # МАССОВОЕ ОБОГАЩЕНИЕ
