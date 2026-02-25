@@ -33,52 +33,40 @@ def register_enrichment_routes(app):
         if product.seller_id != current_user.seller.id:
             abort(403)
 
+        # Пробуем найти данные поставщика автоматически
         service = get_enrichment_service()
         imp = service.find_supplier_data(product, current_user.seller.id)
 
-        if not imp:
-            # Диагностика для flash-сообщения
-            from pricing_engine import extract_supplier_product_id
-            import re as _re
-            pid_num = extract_supplier_product_id(product.vendor_code or '')
-            vc_match = _re.match(r'^(id-\w+)-', product.vendor_code or '')
+        # Пользователь может явно указать supplier_id через ?supplier_id=X
+        manual_supplier_id = request.args.get('supplier_id', type=int)
+        if manual_supplier_id and not imp:
+            imp = ImportedProduct.query.filter_by(id=manual_supplier_id).first()
+            if imp:
+                # Автоматически прилинковываем
+                imp.product_id = product.id
+                db.session.commit()
 
-            candidates = []
-            if pid_num:
-                candidates.extend([str(pid_num), f'id-{pid_num}'])
-            if vc_match:
-                candidates.append(vc_match.group(1))
-            candidates_str = ', '.join(f'"{c}"' for c in dict.fromkeys(candidates)) if candidates else '(нет)'
+        # Если нашли, проверяем что есть полезные данные
+        if imp:
+            has_useful_data = any([
+                imp.photo_urls, imp.description, imp.characteristics,
+                imp.ai_seo_title, imp.ai_dimensions
+            ])
+            if not has_useful_data:
+                imp = None  # Показываем форму поиска — данных нет
 
-            flash(
-                f'Данные поставщика не найдены для карточки «{product.vendor_code}». '
-                f'Искали external_id: {candidates_str}. '
-                f'Для диагностики откройте /api/products/{product_id}/enrich/debug',
-                'warning'
-            )
-            return redirect(url_for('product_detail', product_id=product_id))
+        preview = service.build_preview(product, imp) if imp else None
 
-        # Проверяем что ImportedProduct содержит достаточно данных для обогащения
-        has_useful_data = any([
-            imp.photo_urls, imp.description, imp.characteristics,
-            imp.ai_seo_title, imp.ai_dimensions
-        ])
-        if not has_useful_data:
-            flash(
-                f'Товар поставщика найден (external_id={imp.external_id}), '
-                f'но данных для обогащения нет — запись создана без полных данных поставщика. '
-                f'Попробуйте повторно запустить автоимпорт для этого товара.',
-                'warning'
-            )
-            return redirect(url_for('product_detail', product_id=product_id))
-
-        preview = service.build_preview(product, imp)
+        # Предполагаемый external_id из vendor_code для подсказки в форме
+        from pricing_engine import extract_supplier_product_id
+        suggested_ext_id = extract_supplier_product_id(product.vendor_code or '')
 
         return render_template(
             'product_enrich.html',
             product=product,
             imported_product=imp,
             preview=preview,
+            suggested_ext_id=suggested_ext_id,
         )
 
     @app.route('/api/products/<int:product_id>/enrich/preview', methods=['POST'])
@@ -177,6 +165,60 @@ def register_enrichment_routes(app):
 
         photos = service._get_supplier_photo_list(imp)
         return jsonify({'photos': photos, 'matched': True, 'supplier_id': imp.id})
+
+    @app.route('/api/enrich/search-supplier', methods=['GET'])
+    @login_required
+    def api_enrich_search_supplier():
+        """
+        Поиск ImportedProduct по артикулу поставщика или названию.
+        Ищет у всех продавцов — данные поставщика общие.
+        GET ?q=25268   или   ?q=Массажная+свеча
+        """
+        if not current_user.seller:
+            return jsonify({'error': 'No seller profile'}), 403
+
+        q = (request.args.get('q') or '').strip()
+        if not q:
+            return jsonify({'results': []})
+
+        from sqlalchemy import or_
+        from models import ImportedProduct as IP
+
+        # Поиск по external_id (точное совпадение) или title (ilike)
+        query = IP.query.filter(
+            or_(
+                IP.external_id == q,
+                IP.external_vendor_code == q,
+                IP.title.ilike(f'%{q}%'),
+            )
+        ).order_by(IP.id.desc()).limit(20)
+
+        results = []
+        for imp in query.all():
+            has_data = any([
+                imp.photo_urls, imp.description, imp.characteristics,
+                imp.ai_seo_title, imp.ai_dimensions
+            ])
+            photo_count = 0
+            if imp.photo_urls:
+                try:
+                    import json as _json
+                    photo_count = len(_json.loads(imp.photo_urls))
+                except Exception:
+                    pass
+            results.append({
+                'id': imp.id,
+                'external_id': imp.external_id,
+                'title': imp.title or '—',
+                'brand': imp.brand or '',
+                'source_type': imp.source_type or '',
+                'photo_count': photo_count,
+                'has_data': has_data,
+                'already_linked': imp.product_id is not None,
+                'import_status': imp.import_status,
+            })
+
+        return jsonify({'results': results})
 
     @app.route('/api/products/<int:product_id>/enrich/debug', methods=['GET'])
     @login_required

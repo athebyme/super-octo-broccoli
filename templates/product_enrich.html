@@ -3,6 +3,140 @@
 {% block title %}Обогащение карточки — {{ product.title or product.vendor_code }}{% endblock %}
 
 {% block content %}
+
+{# ============================================================
+   РЕЖИМ: нет данных поставщика — показываем форму ручного поиска
+   ============================================================ #}
+{% if not imported_product %}
+<div x-data="supplierSearchApp({{ suggested_ext_id or 'null' }}, {{ product.id }})" class="max-w-2xl mx-auto">
+  <div class="flex items-center gap-3 mb-6">
+    <a href="{{ url_for('product_detail', product_id=product.id) }}"
+       class="text-gray-400 hover:text-gray-600 transition-colors">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+      </svg>
+    </a>
+    <div>
+      <h1 class="text-xl font-bold text-gray-900">Обогащение от поставщика</h1>
+      <p class="text-sm text-gray-500">Артикул <span class="font-mono font-medium text-gray-700">{{ product.vendor_code }}</span></p>
+    </div>
+  </div>
+
+  <!-- Блок "не найдено" -->
+  <div class="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-6">
+    <div class="flex gap-3">
+      <svg class="w-6 h-6 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <div>
+        <p class="font-semibold text-amber-800 text-sm">Данные поставщика не найдены автоматически</p>
+        <p class="text-amber-700 text-xs mt-1">
+          Эта карточка WB была создана без автоимпорта, или запись поставщика удалена.
+          {% if suggested_ext_id %}
+            Предполагаемый артикул поставщика: <span class="font-mono font-semibold">{{ suggested_ext_id }}</span>.
+          {% endif %}
+          Введите артикул ниже чтобы найти и привязать данные поставщика вручную.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Форма поиска -->
+  <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+    <h2 class="font-semibold text-gray-900 text-base mb-4">Найти товар поставщика</h2>
+    <div class="flex gap-3 mb-4">
+      <input x-model="searchQuery"
+             @keydown.enter="search()"
+             type="text"
+             placeholder="Артикул поставщика или название (например: 25268)"
+             class="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+      <button @click="search()" :disabled="loading"
+              class="px-5 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-50">
+        <svg x-show="loading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+        </svg>
+        <svg x-show="!loading" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        Найти
+      </button>
+    </div>
+
+    <!-- Результаты поиска -->
+    <div x-show="searched && results.length === 0" class="text-center py-8 text-gray-400 text-sm">
+      Ничего не найдено. Попробуйте другой артикул или сначала импортируйте товар через автоимпорт.
+    </div>
+    <div x-show="results.length > 0" class="space-y-2 max-h-96 overflow-y-auto">
+      <template x-for="r in results" :key="r.id">
+        <div class="flex items-center justify-between p-3 rounded-lg border hover:border-indigo-300 hover:bg-indigo-50/40 transition-colors"
+             :class="r.has_data ? 'border-gray-200 cursor-pointer' : 'border-gray-100 opacity-60'">
+          <div class="min-w-0 flex-1" @click="r.has_data && linkSupplier(r.id)">
+            <div class="flex items-center gap-2 mb-0.5">
+              <span class="font-mono text-xs text-gray-500" x-text="r.external_id"></span>
+              <span x-show="r.source_type" class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded" x-text="r.source_type"></span>
+              <span x-show="r.already_linked" class="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">уже привязан</span>
+              <span x-show="!r.has_data" class="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded">нет данных</span>
+            </div>
+            <p class="text-sm font-medium text-gray-900 truncate" x-text="r.title"></p>
+            <p class="text-xs text-gray-500 mt-0.5">
+              <span x-show="r.brand" x-text="r.brand + ' · '"></span>
+              <span x-text="r.photo_count + ' фото'"></span>
+            </p>
+          </div>
+          <button x-show="r.has_data" @click="linkSupplier(r.id)"
+                  class="ml-3 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors flex-shrink-0">
+            Использовать
+          </button>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<script>
+function supplierSearchApp(suggestedId, productId) {
+    return {
+        searchQuery: suggestedId ? String(suggestedId) : '',
+        loading: false,
+        searched: false,
+        results: [],
+
+        async init() {
+            // Автоматически ищем если есть предполагаемый ID
+            if (this.searchQuery) {
+                await this.search();
+            }
+        },
+
+        async search() {
+            if (!this.searchQuery.trim()) return;
+            this.loading = true;
+            this.searched = false;
+            try {
+                const resp = await fetch(`/api/enrich/search-supplier?q=${encodeURIComponent(this.searchQuery.trim())}`);
+                const data = await resp.json();
+                this.results = data.results || [];
+                this.searched = true;
+            } catch(e) {
+                this.results = [];
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        linkSupplier(supplierId) {
+            // Переходим на страницу обогащения с явным supplier_id
+            window.location.href = `/products/${productId}/enrich?supplier_id=${supplierId}`;
+        }
+    }
+}
+</script>
+
+{% else %}
+{# ============================================================
+   РЕЖИМ: данные поставщика найдены — показываем split-panel
+   ============================================================ #}
 <div x-data="enrichApp()" x-cloak class="max-w-full">
 
   <!-- ===== ШАПКА ===== -->
@@ -353,8 +487,6 @@
     </div>
   </div>
 
-</div><!-- end x-data -->
-
 <script>
 function enrichApp() {
     return {
@@ -431,4 +563,6 @@ function enrichApp() {
     }
 }
 </script>
+</div>{# end x-data enrichApp #}
+{% endif %}{# end if imported_product #}
 {% endblock %}
