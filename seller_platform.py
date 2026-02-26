@@ -28,6 +28,7 @@ from models import (
     UserActivity, AdminAuditLog, SystemSettings,
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
     PricingSettings, AutoImportSettings,
+    Supplier, SupplierProduct, SellerSupplier,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -5551,6 +5552,10 @@ register_blocked_cards_routes(app)
 # ============= РОУТЫ ОБОГАЩЕНИЯ КАРТОЧЕК ДАННЫМИ ПОСТАВЩИКА =============
 from routes_enrichment import register_enrichment_routes
 register_enrichment_routes(app)
+
+# ============= РОУТЫ ПОСТАВЩИКОВ (АДМИН + КАТАЛОГ ПРОДАВЦА) =============
+from routes_suppliers import register_supplier_routes
+register_supplier_routes(app)
 
 
 if __name__ == '__main__':

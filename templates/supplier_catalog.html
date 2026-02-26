@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Каталог поставщиков{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900">Каталог поставщиков</h1>
+        <p class="mt-2 text-sm text-gray-600">Просматривайте товары подключённых поставщиков и импортируйте к себе</p>
+    </div>
+
+    {% if suppliers_data %}
+    <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+        {% for item in suppliers_data %}
+        {% set s = item.supplier %}
+        {% set conn = item.connection %}
+        {% set st = item.stats %}
+        <div class="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
+            <div class="p-6">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-12 h-12 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-xl flex items-center justify-center">
+                        <span class="text-white font-bold text-lg">{{ s.name[0].upper() }}</span>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">{{ s.name }}</h3>
+                        {% if s.website %}
+                        <p class="text-xs text-gray-400">{{ s.website }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                {% if s.description %}
+                <p class="text-sm text-gray-600 mb-4 line-clamp-2">{{ s.description }}</p>
+                {% endif %}
+
+                <div class="grid grid-cols-3 gap-4 text-center mb-4">
+                    <div>
+                        <p class="text-xl font-bold text-gray-900">{{ st.total }}</p>
+                        <p class="text-xs text-gray-500">Товаров</p>
+                    </div>
+                    <div>
+                        <p class="text-xl font-bold text-green-600">{{ st.ready }}</p>
+                        <p class="text-xs text-gray-500">Готовых</p>
+                    </div>
+                    <div>
+                        <p class="text-xl font-bold text-indigo-600">{{ item.imported_count }}</p>
+                        <p class="text-xs text-gray-500">Импорт.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-50 px-6 py-3 flex justify-between items-center">
+                <a href="{{ url_for('supplier_catalog_products', supplier_id=s.id) }}"
+                   class="text-sm font-medium text-indigo-600 hover:text-indigo-800">
+                    Открыть каталог &rarr;
+                </a>
+                {% if item.imported_count > 0 %}
+                <form method="POST" action="{{ url_for('supplier_catalog_update') }}">
+                    <input type="hidden" name="supplier_id" value="{{ s.id }}">
+                    <button type="submit" onclick="return confirm('Обновить все импортированные товары из базы поставщика?')"
+                            class="text-sm font-medium text-green-600 hover:text-green-800">Обновить</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-12 bg-white rounded-lg border border-gray-200">
+        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-gray-900">Нет доступных поставщиков</h3>
+        <p class="mt-1 text-sm text-gray-500">Обратитесь к администратору для подключения к поставщику</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

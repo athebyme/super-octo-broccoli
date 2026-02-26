@@ -850,6 +850,10 @@ class ImportedProduct(db.Model):
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True, index=True)  # Ссылка на созданный товар (если создан)
 
+    # Связь с централизованной базой поставщика
+    supplier_product_id = db.Column(db.Integer, db.ForeignKey('supplier_products.id'), nullable=True, index=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=True, index=True)
+
     # Исходные данные из CSV
     external_id = db.Column(db.String(200), index=True)  # ID из внешнего источника
     external_vendor_code = db.Column(db.String(200))  # Артикул поставщика из источника
@@ -920,11 +924,14 @@ class ImportedProduct(db.Model):
 
     # Связи
     product = db.relationship('Product', backref=db.backref('import_source', uselist=False))
+    supplier_product = db.relationship('SupplierProduct', backref=db.backref('imported_copies', lazy='dynamic'))
+    supplier = db.relationship('Supplier', backref=db.backref('imported_products', lazy='dynamic'))
 
     # Индексы
     __table_args__ = (
         db.Index('idx_imported_seller_status', 'seller_id', 'import_status'),
         db.Index('idx_imported_external_id', 'external_id', 'source_type'),
+        db.Index('idx_imported_supplier_product', 'supplier_product_id'),
     )
 
     def __repr__(self) -> str:
@@ -1987,6 +1994,392 @@ def log_admin_action(admin_user_id: int, action: str, target_type: str = None,
     db.session.add(audit_log)
     db.session.commit()
     return audit_log
+
+
+# ============= SUPPLIER DATABASE MODELS =============
+
+class Supplier(db.Model):
+    """Поставщик товаров (централизованная сущность)"""
+    __tablename__ = 'suppliers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)  # "Sexoptovik", "FixPrice"
+    code = db.Column(db.String(50), unique=True, nullable=False, index=True)  # slug: "sexoptovik"
+    description = db.Column(db.Text)
+    website = db.Column(db.String(500))
+    logo_url = db.Column(db.String(500))
+
+    # Источник данных
+    csv_source_url = db.Column(db.String(500))  # URL CSV для автоимпорта
+    csv_delimiter = db.Column(db.String(5), default=';')
+    csv_encoding = db.Column(db.String(20), default='cp1251')
+    api_endpoint = db.Column(db.String(500))  # Для будущей API-интеграции
+
+    # Авторизация для доступа к ресурсам поставщика (фото и т.д.)
+    auth_login = db.Column(db.String(200))
+    _auth_password_encrypted = db.Column('auth_password', db.String(500))
+
+    # AI настройки (централизованные для поставщика)
+    ai_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    ai_provider = db.Column(db.String(50), default='openai')
+    _ai_api_key_encrypted = db.Column('ai_api_key', db.String(500))
+    ai_api_base_url = db.Column(db.String(500))
+    ai_model = db.Column(db.String(100), default='gpt-4o-mini')
+    ai_temperature = db.Column(db.Float, default=0.3)
+    ai_max_tokens = db.Column(db.Integer, default=2000)
+    ai_timeout = db.Column(db.Integer, default=60)
+    # Cloud.ru OAuth2
+    ai_client_id = db.Column(db.String(500))
+    ai_client_secret = db.Column(db.String(500))
+    # Кастомные AI инструкции
+    ai_category_instruction = db.Column(db.Text)
+    ai_size_instruction = db.Column(db.Text)
+    ai_seo_title_instruction = db.Column(db.Text)
+    ai_keywords_instruction = db.Column(db.Text)
+    ai_description_instruction = db.Column(db.Text)
+    ai_analysis_instruction = db.Column(db.Text)
+
+    # Настройки обработки фото
+    resize_images = db.Column(db.Boolean, default=True, nullable=False)
+    image_target_size = db.Column(db.Integer, default=1200)
+    image_background_color = db.Column(db.String(20), default='white')
+
+    # Наценка по умолчанию (%)
+    default_markup_percent = db.Column(db.Float)
+
+    # Статус
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Статистика
+    total_products = db.Column(db.Integer, default=0)
+    last_sync_at = db.Column(db.DateTime)
+    last_sync_status = db.Column(db.String(50))
+    last_sync_error = db.Column(db.Text)
+    last_sync_duration = db.Column(db.Float)
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    # Связи
+    products = db.relationship('SupplierProduct', backref='supplier', lazy='dynamic', cascade='all, delete-orphan')
+    seller_connections = db.relationship('SellerSupplier', backref='supplier', lazy='dynamic', cascade='all, delete-orphan')
+    created_by = db.relationship('User', backref='created_suppliers', foreign_keys=[created_by_user_id])
+
+    @property
+    def auth_password(self) -> Optional[str]:
+        """Расшифровать пароль"""
+        if not self._auth_password_encrypted:
+            return None
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            return self._auth_password_encrypted
+        try:
+            f = Fernet(encryption_key.encode())
+            return f.decrypt(self._auth_password_encrypted.encode()).decode()
+        except Exception:
+            return self._auth_password_encrypted
+
+    @auth_password.setter
+    def auth_password(self, value: Optional[str]) -> None:
+        """Зашифровать пароль"""
+        if value is None:
+            self._auth_password_encrypted = None
+            return
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            self._auth_password_encrypted = value
+            return
+        try:
+            f = Fernet(encryption_key.encode())
+            self._auth_password_encrypted = f.encrypt(value.encode()).decode()
+        except Exception:
+            self._auth_password_encrypted = value
+
+    @property
+    def ai_api_key(self) -> Optional[str]:
+        """Расшифровать AI API ключ"""
+        if not self._ai_api_key_encrypted:
+            return None
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            return self._ai_api_key_encrypted
+        try:
+            f = Fernet(encryption_key.encode())
+            return f.decrypt(self._ai_api_key_encrypted.encode()).decode()
+        except Exception:
+            return self._ai_api_key_encrypted
+
+    @ai_api_key.setter
+    def ai_api_key(self, value: Optional[str]) -> None:
+        """Зашифровать AI API ключ"""
+        if value is None:
+            self._ai_api_key_encrypted = None
+            return
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            self._ai_api_key_encrypted = value
+            return
+        try:
+            f = Fernet(encryption_key.encode())
+            self._ai_api_key_encrypted = f.encrypt(value.encode()).decode()
+        except Exception:
+            self._ai_api_key_encrypted = value
+
+    def get_connected_sellers_count(self) -> int:
+        """Количество подключённых продавцов"""
+        return self.seller_connections.filter_by(is_active=True).count()
+
+    def __repr__(self) -> str:
+        return f'<Supplier {self.code} ({self.name})>'
+
+    def to_dict(self, include_sensitive: bool = False) -> dict:
+        """Конвертировать в словарь для JSON"""
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'code': self.code,
+            'description': self.description,
+            'website': self.website,
+            'logo_url': self.logo_url,
+            'csv_source_url': self.csv_source_url,
+            'is_active': self.is_active,
+            'total_products': self.total_products,
+            'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
+            'last_sync_status': self.last_sync_status,
+            'ai_enabled': self.ai_enabled,
+            'ai_provider': self.ai_provider,
+            'ai_model': self.ai_model,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_sensitive:
+            data['auth_login'] = self.auth_login
+            data['ai_api_base_url'] = self.ai_api_base_url
+        return data
+
+
+class SupplierProduct(db.Model):
+    """Товар в централизованной базе поставщика"""
+    __tablename__ = 'supplier_products'
+
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False, index=True)
+
+    # Идентификация
+    external_id = db.Column(db.String(200), index=True)  # ID из каталога поставщика
+    vendor_code = db.Column(db.String(200))  # Артикул поставщика
+    barcode = db.Column(db.String(200))
+
+    # Основные данные (нормализованные)
+    title = db.Column(db.String(500))
+    description = db.Column(db.Text)
+    brand = db.Column(db.String(200))
+    category = db.Column(db.String(200))  # Категория поставщика
+    all_categories = db.Column(db.Text)  # Все категории из цепочки (JSON)
+
+    # WB маппинг
+    wb_category_name = db.Column(db.String(200))
+    wb_subject_id = db.Column(db.Integer)
+    wb_subject_name = db.Column(db.String(200))
+    category_confidence = db.Column(db.Float, default=0.0)
+
+    # Цена и остатки
+    supplier_price = db.Column(db.Float)  # Закупочная цена
+    supplier_quantity = db.Column(db.Integer)  # Остаток у поставщика
+    currency = db.Column(db.String(10), default='RUB')
+
+    # Характеристики (нормализованные JSON)
+    characteristics_json = db.Column(db.Text)  # [{name, value}, ...]
+    sizes_json = db.Column(db.Text)  # Размеры
+    colors_json = db.Column(db.Text)  # Цвета
+    materials_json = db.Column(db.Text)  # Материалы
+    dimensions_json = db.Column(db.Text)  # Габариты (д/ш/в/вес)
+    gender = db.Column(db.String(50))
+    country = db.Column(db.String(100))
+    season = db.Column(db.String(50))
+    age_group = db.Column(db.String(50))
+
+    # Медиа
+    photo_urls_json = db.Column(db.Text)  # Оригинальные URL фото от поставщика
+    processed_photos_json = db.Column(db.Text)  # Обработанные фото (локальные пути)
+    video_url = db.Column(db.String(500))
+
+    # AI-обогащённые данные
+    ai_seo_title = db.Column(db.String(500))
+    ai_description = db.Column(db.Text)
+    ai_keywords_json = db.Column(db.Text)
+    ai_bullets_json = db.Column(db.Text)
+    ai_rich_content_json = db.Column(db.Text)
+    ai_analysis_json = db.Column(db.Text)
+    ai_validated = db.Column(db.Boolean, default=False)
+    ai_validated_at = db.Column(db.DateTime)
+    ai_validation_score = db.Column(db.Float)  # Оценка качества 0-100
+    content_hash = db.Column(db.String(64))
+
+    # Оригинальные данные для отката
+    original_data_json = db.Column(db.Text)
+
+    # Статус: draft → validated → ready → archived
+    status = db.Column(db.String(50), default='draft', index=True)
+    validation_errors_json = db.Column(db.Text)
+
+    # Метаданные
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Составные индексы
+    __table_args__ = (
+        db.UniqueConstraint('supplier_id', 'external_id', name='uq_supplier_external_id'),
+        db.Index('idx_supplier_product_status', 'supplier_id', 'status'),
+        db.Index('idx_supplier_product_category', 'supplier_id', 'wb_subject_id'),
+        db.Index('idx_supplier_product_brand', 'supplier_id', 'brand'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<SupplierProduct {self.external_id} ({self.title[:30] if self.title else "N/A"})>'
+
+    def get_photos(self) -> list:
+        """Получить список URL фотографий"""
+        if not self.photo_urls_json:
+            return []
+        try:
+            import json
+            return json.loads(self.photo_urls_json)
+        except Exception:
+            return []
+
+    def get_processed_photos(self) -> list:
+        """Получить обработанные фотографии"""
+        if not self.processed_photos_json:
+            return []
+        try:
+            import json
+            return json.loads(self.processed_photos_json)
+        except Exception:
+            return []
+
+    def get_characteristics(self) -> list:
+        """Получить характеристики"""
+        if not self.characteristics_json:
+            return []
+        try:
+            import json
+            return json.loads(self.characteristics_json)
+        except Exception:
+            return []
+
+    def get_sizes(self) -> list:
+        """Получить размеры"""
+        if not self.sizes_json:
+            return []
+        try:
+            import json
+            return json.loads(self.sizes_json)
+        except Exception:
+            return []
+
+    def get_validation_errors(self) -> list:
+        """Получить ошибки валидации"""
+        if not self.validation_errors_json:
+            return []
+        try:
+            import json
+            return json.loads(self.validation_errors_json)
+        except Exception:
+            return []
+
+    def to_dict(self, include_ai: bool = False) -> dict:
+        """Конвертировать в словарь для JSON"""
+        import json
+        data = {
+            'id': self.id,
+            'supplier_id': self.supplier_id,
+            'external_id': self.external_id,
+            'vendor_code': self.vendor_code,
+            'barcode': self.barcode,
+            'title': self.title,
+            'description': self.description,
+            'brand': self.brand,
+            'category': self.category,
+            'wb_category_name': self.wb_category_name,
+            'wb_subject_id': self.wb_subject_id,
+            'wb_subject_name': self.wb_subject_name,
+            'category_confidence': self.category_confidence,
+            'supplier_price': self.supplier_price,
+            'supplier_quantity': self.supplier_quantity,
+            'gender': self.gender,
+            'country': self.country,
+            'season': self.season,
+            'photo_urls': self.get_photos(),
+            'processed_photos': self.get_processed_photos(),
+            'status': self.status,
+            'ai_validated': self.ai_validated,
+            'ai_validation_score': self.ai_validation_score,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_ai:
+            data['ai_seo_title'] = self.ai_seo_title
+            data['ai_description'] = self.ai_description
+            data['ai_keywords'] = json.loads(self.ai_keywords_json) if self.ai_keywords_json else []
+            data['ai_bullets'] = json.loads(self.ai_bullets_json) if self.ai_bullets_json else []
+            data['ai_analysis'] = json.loads(self.ai_analysis_json) if self.ai_analysis_json else None
+            data['ai_validated_at'] = self.ai_validated_at.isoformat() if self.ai_validated_at else None
+            data['validation_errors'] = self.get_validation_errors()
+        return data
+
+
+class SellerSupplier(db.Model):
+    """Связь продавца с поставщиком (M2M)"""
+    __tablename__ = 'seller_suppliers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False, index=True)
+
+    # Настройки продавца для этого поставщика
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    supplier_code = db.Column(db.String(50))  # Код продавца для артикулов
+    vendor_code_pattern = db.Column(db.String(200), default='id-{product_id}-{supplier_code}')
+
+    # Ценообразование
+    custom_markup_percent = db.Column(db.Float)  # Переопределение наценки
+
+    # Статистика
+    products_imported = db.Column(db.Integer, default=0)
+    last_import_at = db.Column(db.DateTime)
+
+    # Метаданные
+    connected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    seller = db.relationship('Seller', backref=db.backref('supplier_connections', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'supplier_id', name='uq_seller_supplier'),
+        db.Index('idx_seller_supplier_active', 'seller_id', 'is_active'),
+    )
+
+    def __repr__(self) -> str:
+        return f'<SellerSupplier seller={self.seller_id} supplier={self.supplier_id}>'
+
+    def to_dict(self) -> dict:
+        """Конвертировать в словарь для JSON"""
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'supplier_id': self.supplier_id,
+            'is_active': self.is_active,
+            'supplier_code': self.supplier_code,
+            'vendor_code_pattern': self.vendor_code_pattern,
+            'custom_markup_percent': self.custom_markup_percent,
+            'products_imported': self.products_imported,
+            'last_import_at': self.last_import_at.isoformat() if self.last_import_at else None,
+            'connected_at': self.connected_at.isoformat() if self.connected_at else None,
+        }
 
 
 class EnrichmentJob(db.Model):
