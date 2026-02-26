@@ -112,7 +112,6 @@
                         </div>
 
                         <!-- AI данные -->
-                        {% if product.ai_seo_title or product.ai_description %}
                         <hr class="my-4">
                         <h3 class="text-sm font-semibold text-gray-700">AI-обогащённые данные</h3>
                         <div>
@@ -124,6 +123,17 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1">AI описание</label>
                             <textarea name="ai_description" rows="3"
                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">{{ product.ai_description or '' }}</textarea>
+                        </div>
+                        {% if product.ai_keywords_json %}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Ключевые слова</label>
+                            <p class="text-sm text-gray-600 bg-gray-50 rounded-lg px-3 py-2">{{ product.ai_keywords_json }}</p>
+                        </div>
+                        {% endif %}
+                        {% if product.ai_analysis_json %}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">AI анализ</label>
+                            <pre class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 overflow-x-auto max-h-48">{{ product.ai_analysis_json }}</pre>
                         </div>
                         {% endif %}
                     </div>
@@ -179,6 +189,46 @@
                     </div>
                 </dl>
             </div>
+
+            <!-- AI действия -->
+            {% if supplier.ai_enabled %}
+            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4 sticky top-80">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">AI действия</h3>
+                <div class="space-y-2">
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_seo', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+                            Сгенерировать SEO заголовок
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_desc', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+                            Сгенерировать описание
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_validate', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
+                            AI валидация
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_analyze', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors">
+                            AI анализ карточки
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_enrich', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" onclick="return confirm('Запустить полное AI обогащение? Это займёт время.')"
+                                class="w-full text-left px-3 py-2 text-sm rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors font-medium">
+                            Полное AI обогащение
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>

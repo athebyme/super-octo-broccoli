@@ -824,6 +824,293 @@ class SupplierService:
             page=page, per_page=per_page, error_out=False
         )
 
+    # ===================================================================
+    # AI ОПЕРАЦИИ НА УРОВНЕ ПОСТАВЩИКА
+    # ===================================================================
+
+    @staticmethod
+    def _get_ai_service(supplier: Supplier):
+        """Создать AIService из настроек поставщика"""
+        from ai_service import AIConfig, AIService as AISvc
+        config = AIConfig.from_settings(supplier)
+        if not config:
+            return None
+        return AISvc(config)
+
+    @staticmethod
+    def ai_validate_product(product_id: int) -> dict:
+        """
+        AI валидация одного товара поставщика.
+        Запускает analyze_card и обновляет ai_validation_score, ai_validated.
+
+        Returns:
+            dict с ключами: success, score, issues, recommendations, error
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен для этого поставщика'}
+
+        ai_svc = SupplierService._get_ai_service(supplier)
+        if not ai_svc:
+            return {'success': False, 'error': 'Не удалось создать AI сервис (проверьте API ключ)'}
+
+        photos = product.get_photos() if hasattr(product, 'get_photos') else []
+
+        success, result, error = ai_svc.analyze_card(
+            title=product.title or '',
+            description=product.description or '',
+            category=product.wb_category_name or product.category or '',
+            photos_count=len(photos),
+            price=product.supplier_price or 0
+        )
+
+        if success and result:
+            score = result.get('score', 0)
+            product.ai_analysis_json = json.dumps(result, ensure_ascii=False)
+            product.ai_validation_score = score
+            product.ai_validated = True
+            product.ai_validated_at = datetime.utcnow()
+            if score >= 70:
+                product.status = 'validated'
+            db.session.commit()
+            return {
+                'success': True,
+                'score': score,
+                'issues': result.get('issues', []),
+                'recommendations': result.get('recommendations', []),
+                'strengths': result.get('strengths', []),
+            }
+
+        return {'success': False, 'error': error or 'Ошибка AI анализа'}
+
+    @staticmethod
+    def ai_validate_bulk(supplier_id: int, product_ids: List[int]) -> dict:
+        """
+        AI валидация нескольких товаров.
+
+        Returns:
+            dict: {success, validated, errors, results: [{product_id, score, error}]}
+        """
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен', 'validated': 0, 'errors': 0, 'results': []}
+
+        results = []
+        validated = 0
+        errors = 0
+
+        for pid in product_ids:
+            res = SupplierService.ai_validate_product(pid)
+            results.append({
+                'product_id': pid,
+                'score': res.get('score'),
+                'error': res.get('error'),
+                'success': res.get('success', False),
+            })
+            if res.get('success'):
+                validated += 1
+            else:
+                errors += 1
+
+        return {
+            'success': True,
+            'validated': validated,
+            'errors': errors,
+            'results': results,
+        }
+
+    @staticmethod
+    def ai_generate_seo(product_id: int) -> dict:
+        """
+        AI генерация SEO заголовка для товара.
+
+        Returns:
+            dict: {success, title, keywords_used, error}
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен'}
+
+        ai_svc = SupplierService._get_ai_service(supplier)
+        if not ai_svc:
+            return {'success': False, 'error': 'Не удалось создать AI сервис'}
+
+        success, result, error = ai_svc.generate_seo_title(
+            title=product.title or '',
+            category=product.wb_category_name or product.category or '',
+            brand=product.brand or '',
+            description=product.description or ''
+        )
+
+        if success and result:
+            product.ai_seo_title = result.get('title', '')
+            product.updated_at = datetime.utcnow()
+            db.session.commit()
+            return {'success': True, 'title': result.get('title', ''), 'keywords_used': result.get('keywords_used', [])}
+
+        return {'success': False, 'error': error or 'Ошибка AI'}
+
+    @staticmethod
+    def ai_generate_description(product_id: int) -> dict:
+        """
+        AI генерация описания для товара.
+
+        Returns:
+            dict: {success, description, error}
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен'}
+
+        ai_svc = SupplierService._get_ai_service(supplier)
+        if not ai_svc:
+            return {'success': False, 'error': 'Не удалось создать AI сервис'}
+
+        success, result, error = ai_svc.enhance_description(
+            title=product.title or '',
+            description=product.description or '',
+            category=product.wb_category_name or product.category or ''
+        )
+
+        if success and result:
+            product.ai_description = result.get('description', '')
+            product.updated_at = datetime.utcnow()
+            db.session.commit()
+            return {'success': True, 'description': result.get('description', '')}
+
+        return {'success': False, 'error': error or 'Ошибка AI'}
+
+    @staticmethod
+    def ai_generate_keywords(product_id: int) -> dict:
+        """
+        AI генерация ключевых слов для товара.
+
+        Returns:
+            dict: {success, keywords, error}
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен'}
+
+        ai_svc = SupplierService._get_ai_service(supplier)
+        if not ai_svc:
+            return {'success': False, 'error': 'Не удалось создать AI сервис'}
+
+        success, result, error = ai_svc.generate_keywords(
+            title=product.title or '',
+            category=product.wb_category_name or product.category or '',
+            description=product.description or ''
+        )
+
+        if success and result:
+            product.ai_keywords_json = json.dumps(result.get('keywords', []), ensure_ascii=False)
+            product.updated_at = datetime.utcnow()
+            db.session.commit()
+            return {'success': True, 'keywords': result.get('keywords', [])}
+
+        return {'success': False, 'error': error or 'Ошибка AI'}
+
+    @staticmethod
+    def ai_analyze_product(product_id: int) -> dict:
+        """
+        Комплексный AI анализ товара (без изменения статуса валидации).
+
+        Returns:
+            dict: {success, score, issues, recommendations, strengths, error}
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен'}
+
+        ai_svc = SupplierService._get_ai_service(supplier)
+        if not ai_svc:
+            return {'success': False, 'error': 'Не удалось создать AI сервис'}
+
+        photos = product.get_photos() if hasattr(product, 'get_photos') else []
+
+        success, result, error = ai_svc.analyze_card(
+            title=product.title or '',
+            description=product.description or '',
+            category=product.wb_category_name or product.category or '',
+            photos_count=len(photos),
+            price=product.supplier_price or 0
+        )
+
+        if success and result:
+            product.ai_analysis_json = json.dumps(result, ensure_ascii=False)
+            product.updated_at = datetime.utcnow()
+            db.session.commit()
+            return {
+                'success': True,
+                'score': result.get('score', 0),
+                'issues': result.get('issues', []),
+                'recommendations': result.get('recommendations', []),
+                'strengths': result.get('strengths', []),
+            }
+
+        return {'success': False, 'error': error or 'Ошибка AI'}
+
+    @staticmethod
+    def ai_full_enrich(product_id: int) -> dict:
+        """
+        Полное AI обогащение товара: SEO + описание + ключевые слова + анализ.
+
+        Returns:
+            dict: {success, seo_title, description, keywords, score, errors}
+        """
+        errors = []
+        result_data = {}
+
+        seo_res = SupplierService.ai_generate_seo(product_id)
+        if seo_res.get('success'):
+            result_data['seo_title'] = seo_res.get('title', '')
+        else:
+            errors.append(f"SEO: {seo_res.get('error', '?')}")
+
+        desc_res = SupplierService.ai_generate_description(product_id)
+        if desc_res.get('success'):
+            result_data['description'] = desc_res.get('description', '')
+        else:
+            errors.append(f"Описание: {desc_res.get('error', '?')}")
+
+        kw_res = SupplierService.ai_generate_keywords(product_id)
+        if kw_res.get('success'):
+            result_data['keywords'] = kw_res.get('keywords', [])
+        else:
+            errors.append(f"Ключевые слова: {kw_res.get('error', '?')}")
+
+        val_res = SupplierService.ai_validate_product(product_id)
+        if val_res.get('success'):
+            result_data['score'] = val_res.get('score', 0)
+        else:
+            errors.append(f"Анализ: {val_res.get('error', '?')}")
+
+        return {
+            'success': len(errors) == 0,
+            'errors': errors,
+            **result_data,
+        }
+
 
 # ============================================================================
 # PRIVATE HELPERS

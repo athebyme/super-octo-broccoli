@@ -19,6 +19,12 @@
             <p class="text-sm text-gray-500 mt-1">{{ stats.total }} товаров | {{ stats.ready }} готовых | {{ stats.ai_validated }} AI валидированных</p>
         </div>
         <div class="flex gap-2">
+            {% if supplier.ai_enabled %}
+            <a href="{{ url_for('admin_supplier_ai_history', supplier_id=supplier.id) }}"
+               class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                AI история
+            </a>
+            {% endif %}
             {% if supplier.csv_source_url %}
             <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}" class="inline">
                 <button type="submit" onclick="return confirm('Запустить синхронизацию?')"
@@ -91,6 +97,7 @@
             <select name="action" class="rounded-lg border-gray-300 text-sm border px-3 py-1.5">
                 <option value="">Действие...</option>
                 <option value="set_status">Сменить статус</option>
+                <option value="ai_validate">AI валидация</option>
                 <option value="delete">Удалить</option>
             </select>
             <select name="new_status" class="rounded-lg border-gray-300 text-sm border px-3 py-1.5">

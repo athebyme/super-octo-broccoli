@@ -16,7 +16,7 @@ from flask_login import login_required, current_user
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
-    ImportedProduct, Seller, log_admin_action
+    ImportedProduct, Seller, AIHistory, log_admin_action
 )
 from supplier_service import SupplierService
 
@@ -368,8 +368,8 @@ def register_supplier_routes(app):
             flash(f'Статус обновлён для {len(product_ids)} товаров', 'success')
 
         elif action == 'ai_validate':
-            # Перенаправляем на AI страницу
-            flash(f'AI валидация для {len(product_ids)} товаров запланирована', 'info')
+            result = SupplierService.ai_validate_bulk(supplier_id, product_ids)
+            flash(f'AI валидация: {result.get("validated", 0)} успешно, {result.get("errors", 0)} ошибок', 'success')
 
         log_admin_action(
             admin_user_id=current_user.id,
@@ -381,6 +381,202 @@ def register_supplier_routes(app):
         )
 
         return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+    # -------------------------------------------------------------------
+    # AI операции с товарами поставщика
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/validate', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_validate(supplier_id):
+        """AI валидация товаров поставщика"""
+        product_ids_raw = request.form.getlist('product_ids')
+        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+        single_product_id = request.form.get('product_id', type=int)
+
+        if single_product_id:
+            result = SupplierService.ai_validate_product(single_product_id)
+            log_admin_action(
+                admin_user_id=current_user.id,
+                action='ai_validate_supplier_product',
+                target_type='supplier_product',
+                target_id=single_product_id,
+                details={'supplier_id': supplier_id, 'success': result.get('success'), 'score': result.get('score')},
+                request=request
+            )
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify(result)
+            if result.get('success'):
+                flash(f'AI валидация завершена. Оценка: {result.get("score", 0):.0f}%', 'success')
+            else:
+                flash(f'Ошибка AI валидации: {result.get("error", "?")}', 'danger')
+            return redirect(url_for('admin_supplier_product_detail',
+                                    supplier_id=supplier_id, product_id=single_product_id))
+
+        elif product_ids:
+            result = SupplierService.ai_validate_bulk(supplier_id, product_ids)
+            log_admin_action(
+                admin_user_id=current_user.id,
+                action='ai_validate_bulk_supplier_products',
+                target_type='supplier',
+                target_id=supplier_id,
+                details={'count': len(product_ids), 'validated': result.get('validated'), 'errors': result.get('errors')},
+                request=request
+            )
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify(result)
+            flash(f'AI валидация: {result.get("validated", 0)} успешно, {result.get("errors", 0)} ошибок', 'success')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        flash('Не выбраны товары', 'warning')
+        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/generate-seo', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_seo(supplier_id):
+        """AI генерация SEO заголовка"""
+        product_id = request.form.get('product_id', type=int)
+        if not product_id:
+            flash('Не указан товар', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.ai_generate_seo(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_generate_seo_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={'supplier_id': supplier_id, 'success': result.get('success')},
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        if result.get('success'):
+            flash(f'SEO заголовок сгенерирован: {result.get("title", "")}', 'success')
+        else:
+            flash(f'Ошибка генерации SEO: {result.get("error", "?")}', 'danger')
+        return redirect(url_for('admin_supplier_product_detail',
+                                supplier_id=supplier_id, product_id=product_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/generate-desc', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_desc(supplier_id):
+        """AI генерация описания"""
+        product_id = request.form.get('product_id', type=int)
+        if not product_id:
+            flash('Не указан товар', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.ai_generate_description(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_generate_desc_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={'supplier_id': supplier_id, 'success': result.get('success')},
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        if result.get('success'):
+            flash('AI описание сгенерировано', 'success')
+        else:
+            flash(f'Ошибка генерации описания: {result.get("error", "?")}', 'danger')
+        return redirect(url_for('admin_supplier_product_detail',
+                                supplier_id=supplier_id, product_id=product_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/analyze', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_analyze(supplier_id):
+        """AI анализ товара"""
+        product_id = request.form.get('product_id', type=int)
+        if not product_id:
+            flash('Не указан товар', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.ai_analyze_product(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_analyze_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={'supplier_id': supplier_id, 'success': result.get('success'), 'score': result.get('score')},
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        if result.get('success'):
+            flash(f'AI анализ завершён. Оценка: {result.get("score", 0):.0f}%', 'success')
+        else:
+            flash(f'Ошибка AI анализа: {result.get("error", "?")}', 'danger')
+        return redirect(url_for('admin_supplier_product_detail',
+                                supplier_id=supplier_id, product_id=product_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/enrich', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_enrich(supplier_id):
+        """Полное AI обогащение товара (SEO + описание + ключевые слова + анализ)"""
+        product_id = request.form.get('product_id', type=int)
+        if not product_id:
+            flash('Не указан товар', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.ai_full_enrich(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_full_enrich_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={'supplier_id': supplier_id, 'success': result.get('success')},
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        if result.get('success'):
+            flash('AI обогащение завершено', 'success')
+        else:
+            errors_str = '; '.join(result.get('errors', []))
+            flash(f'AI обогащение частично завершено: {errors_str}', 'warning')
+        return redirect(url_for('admin_supplier_product_detail',
+                                supplier_id=supplier_id, product_id=product_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/history')
+    @login_required
+    @admin_required
+    def admin_supplier_ai_history(supplier_id):
+        """История AI операций для товаров поставщика"""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            flash('Поставщик не найден', 'danger')
+            return redirect(url_for('admin_suppliers'))
+
+        page = request.args.get('page', 1, type=int)
+
+        # Получаем ID всех ImportedProduct, связанных с этим поставщиком
+        subq = db.session.query(ImportedProduct.id).filter(
+            ImportedProduct.supplier_id == supplier_id
+        ).subquery()
+
+        history_query = AIHistory.query.filter(
+            AIHistory.imported_product_id.in_(subq)
+        ).order_by(AIHistory.created_at.desc())
+
+        pagination = history_query.paginate(page=page, per_page=50, error_out=False)
+
+        return render_template('admin_supplier_ai_history.html',
+                               supplier=supplier, pagination=pagination)
 
     # -------------------------------------------------------------------
     # Управление подключёнными продавцами
