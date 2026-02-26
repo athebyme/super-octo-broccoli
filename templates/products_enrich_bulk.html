@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+
+{% block title %}Массовое обогащение от поставщика{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+<div x-data="bulkEnrichApp({{ product_ids_json }})" x-cloak class="max-w-4xl mx-auto">
+
+  <!-- ШАПКА -->
+  <div class="flex items-center gap-3 mb-6">
+    <a href="{{ url_for('products_list') }}"
+       class="text-gray-400 hover:text-gray-600 transition-colors">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+      </svg>
+    </a>
+    <div>
+      <h1 class="text-xl font-bold text-gray-900">Массовое обогащение от поставщика</h1>
+      <p class="text-sm text-gray-500 mt-0.5">
+        Выбрано карточек: <span class="font-semibold text-gray-700">{{ count }}</span>
+        {% if matched_count is defined %}
+        <span class="mx-1.5 text-gray-300">|</span>
+        С данными поставщика: <span class="font-semibold text-green-600">{{ matched_count }}</span>
+        {% if matched_count < count %}
+        <span class="text-xs text-gray-400 ml-1">({{ count - matched_count }} будут пропущены)</span>
+        {% endif %}
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <!-- КОНФИГУРАЦИЯ -->
+  <div x-show="phase === 'config'" class="space-y-5">
+
+    <!-- Инфо-блок -->
+    {% if matched_count is defined and matched_count < count %}
+    <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
+      <svg class="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      <div>
+        <p class="text-sm font-semibold text-blue-800">Не все карточки будут обогащены</p>
+        <p class="text-xs text-blue-700 mt-0.5">
+          У {{ count - matched_count }} карточек нет привязки к данным поставщика.
+          Они будут пропущены. Чтобы привязать их, откройте каждую карточку и используйте ручной поиск поставщика.
+        </p>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Выбор полей -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+      <h2 class="text-base font-semibold text-gray-900 mb-4">Что применить из данных поставщика</h2>
+      <div class="space-y-3">
+
+        <div class="flex items-center justify-between py-3 border-b border-gray-100">
+          <label class="flex items-center gap-3 cursor-pointer flex-1">
+            <input type="checkbox" x-model="fields.photos"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
+            <div>
+              <span class="font-medium text-gray-800 text-sm">Фотографии</span>
+              <p class="text-xs text-gray-500 mt-0.5">Фото из каталога поставщика</p>
+            </div>
+          </label>
+          <div x-show="fields.photos" x-transition class="flex items-center gap-2 ml-4">
+            <select x-model="photoStrategy"
+                    class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-500">
+              <option value="replace">Заменить все</option>
+              <option value="append">Добавить в конец</option>
+              <option value="only_if_empty">Только если нет фото</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between py-3 border-b border-gray-100">
+          <label class="flex items-center gap-3 cursor-pointer flex-1">
+            <input type="checkbox" x-model="fields.title"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
+            <div>
+              <span class="font-medium text-gray-800 text-sm">Заголовок</span>
+              <p class="text-xs text-gray-500 mt-0.5">SEO-название от поставщика (до 60 символов)</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="flex items-center justify-between py-3 border-b border-gray-100">
+          <label class="flex items-center gap-3 cursor-pointer flex-1">
+            <input type="checkbox" x-model="fields.description"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
+            <div>
+              <span class="font-medium text-gray-800 text-sm">Описание</span>
+              <p class="text-xs text-gray-500 mt-0.5">Полное описание товара</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="flex items-center py-3 border-b border-gray-100">
+          <label class="flex items-center gap-3 cursor-pointer flex-1">
+            <input type="checkbox" x-model="fields.characteristics"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
+            <div>
+              <span class="font-medium text-gray-800 text-sm">Характеристики</span>
+              <p class="text-xs text-gray-500 mt-0.5">Технические параметры из каталога поставщика</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="flex items-center py-3 border-b border-gray-100">
+          <label class="flex items-center gap-3 cursor-pointer flex-1">
+            <input type="checkbox" x-model="fields.dimensions"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
+            <div>
+              <span class="font-medium text-gray-800 text-sm">Габариты</span>
+              <p class="text-xs text-gray-500 mt-0.5">Длина, ширина, высота, вес</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="flex items-center py-3">
+          <label class="flex items-center gap-3 cursor-pointer flex-1">
+            <input type="checkbox" x-model="fields.brand"
+                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
+            <div>
+              <span class="font-medium text-gray-800 text-sm">Бренд</span>
+              <p class="text-xs text-amber-600 mt-0.5">Осторожно: смена бренда может влиять на SEO и позиции</p>
+            </div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Кнопка запуска -->
+    <div class="flex items-center justify-between bg-gray-50 rounded-xl border border-gray-200 p-5">
+      <div class="text-sm text-gray-600">
+        Выбрано полей: <span class="font-semibold text-gray-900" x-text="selectedFieldsCount"></span>
+        <span class="mx-1.5 text-gray-300">|</span>
+        Карточек: <span class="font-semibold text-gray-900">{{ count }}</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="{{ url_for('products_list') }}"
+           class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+          Отмена
+        </a>
+        <button @click="startEnrichment()"
+                :disabled="selectedFieldsCount === 0 || starting"
+                :class="{'opacity-50 cursor-not-allowed': selectedFieldsCount === 0 || starting}"
+                class="px-6 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2">
+          <svg x-show="starting" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+          </svg>
+          <span x-text="starting ? 'Запускаю...' : 'Запустить обогащение'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ПРОГРЕСС -->
+  <div x-show="phase === 'running' || phase === 'done'" x-transition class="space-y-5">
+
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <div x-show="phase === 'running'"
+               class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
+            <svg class="animate-spin w-5 h-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+            </svg>
+          </div>
+          <div x-show="phase === 'done'"
+               class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+            <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+            </svg>
+          </div>
+          <div>
+            <h2 class="font-semibold text-gray-900"
+                x-text="phase === 'running' ? 'Обогащение выполняется...' : 'Обогащение завершено'"></h2>
+            <p class="text-sm text-gray-500 mt-0.5"
+               x-text="`${progress.processed} из ${progress.total} карточек`"></p>
+          </div>
+        </div>
+        <div x-show="phase === 'done'" class="flex items-center gap-2">
+          <button @click="downloadReport()"
+                  class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            Отчёт
+          </button>
+          <a href="{{ url_for('products_list') }}"
+             class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors">
+            К списку
+          </a>
+        </div>
+      </div>
+
+      <!-- Прогресс-бар -->
+      <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden mb-5">
+        <div class="h-2.5 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out"
+             :style="`width: ${progress.pct}%`"></div>
+      </div>
+
+      <!-- Счётчики -->
+      <div class="grid grid-cols-4 gap-3">
+        <div class="text-center p-3 rounded-lg bg-gray-50 border border-gray-100">
+          <p class="text-2xl font-bold text-gray-900" x-text="progress.total"></p>
+          <p class="text-xs text-gray-500 mt-1">Всего</p>
+        </div>
+        <div class="text-center p-3 rounded-lg bg-green-50 border border-green-100">
+          <p class="text-2xl font-bold text-green-700" x-text="progress.succeeded"></p>
+          <p class="text-xs text-green-600 mt-1">Обогащено</p>
+        </div>
+        <div class="text-center p-3 rounded-lg bg-yellow-50 border border-yellow-100">
+          <p class="text-2xl font-bold text-yellow-700" x-text="progress.skipped"></p>
+          <p class="text-xs text-yellow-600 mt-1">Пропущено</p>
+        </div>
+        <div class="text-center p-3 rounded-lg bg-red-50 border border-red-100">
+          <p class="text-2xl font-bold text-red-700" x-text="progress.failed"></p>
+          <p class="text-xs text-red-600 mt-1">Ошибок</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Таблица результатов -->
+    <div x-show="results.length > 0" class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 bg-gray-50">
+        <h3 class="font-semibold text-gray-800 text-sm">Результаты</h3>
+      </div>
+      <div class="overflow-x-auto max-h-96 overflow-y-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide sticky top-0">
+            <tr>
+              <th class="px-4 py-2 text-left">Артикул</th>
+              <th class="px-4 py-2 text-left">NM ID</th>
+              <th class="px-4 py-2 text-left">Статус</th>
+              <th class="px-4 py-2 text-left">Результат</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100">
+            <template x-for="row in results" :key="row.product_id">
+              <tr :class="{
+                'bg-green-50/50': row.status === 'success',
+                'bg-yellow-50/50': row.status === 'skipped',
+                'bg-red-50/50': row.status === 'failed'
+              }">
+                <td class="px-4 py-2 font-mono text-xs text-gray-600" x-text="row.vendor_code || '—'"></td>
+                <td class="px-4 py-2 font-mono text-xs text-gray-600" x-text="row.nm_id || '—'"></td>
+                <td class="px-4 py-2">
+                  <span :class="{
+                    'bg-green-100 text-green-700': row.status === 'success',
+                    'bg-yellow-100 text-yellow-700': row.status === 'skipped',
+                    'bg-red-100 text-red-700': row.status === 'failed'
+                  }"
+                  class="text-xs px-2 py-0.5 rounded-full font-medium"
+                  x-text="{'success':'Обогащено','skipped':'Пропущено','failed':'Ошибка'}[row.status] || row.status"></span>
+                </td>
+                <td class="px-4 py-2 text-xs text-gray-600"
+                    x-text="row.fields_applied ? row.fields_applied.join(', ') : (row.reason || row.error || '—')"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+function bulkEnrichApp(productIds) {
+    return {
+        productIds,
+        phase: 'config',
+        jobId: null,
+        pollTimer: null,
+        starting: false,
+
+        fields: {
+            photos: true,
+            title: true,
+            description: true,
+            characteristics: true,
+            dimensions: true,
+            brand: false,
+        },
+        photoStrategy: 'only_if_empty',
+
+        progress: { total: productIds.length, processed: 0, succeeded: 0, failed: 0, skipped: 0, pct: 0 },
+        results: [],
+
+        get selectedFieldsCount() {
+            return Object.values(this.fields).filter(Boolean).length;
+        },
+
+        async startEnrichment() {
+            if (this.selectedFieldsCount === 0 || this.starting) return;
+            this.starting = true;
+
+            const fields = Object.entries(this.fields).filter(([k, v]) => v).map(([k]) => k);
+
+            try {
+                const resp = await fetch('/api/products/enrich-bulk/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        product_ids: this.productIds,
+                        fields,
+                        photo_strategy: this.photoStrategy
+                    })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    alert('Ошибка запуска: ' + (err.error || resp.statusText));
+                    this.starting = false;
+                    return;
+                }
+
+                const data = await resp.json();
+                this.jobId = data.job_id;
+                this.progress.total = data.total;
+                this.phase = 'running';
+
+                this.pollTimer = setInterval(() => this.pollStatus(), 2000);
+
+            } catch (e) {
+                alert('Ошибка сети: ' + e.message);
+                this.starting = false;
+            }
+        },
+
+        async pollStatus() {
+            if (!this.jobId) return;
+
+            try {
+                const resp = await fetch(`/api/products/enrich-bulk/${this.jobId}/status`);
+                if (!resp.ok) return;
+
+                const data = await resp.json();
+                this.progress = {
+                    total: data.total,
+                    processed: data.processed,
+                    succeeded: data.succeeded,
+                    failed: data.failed,
+                    skipped: data.skipped,
+                    pct: data.progress_pct
+                };
+                this.results = data.results || [];
+
+                if (data.status === 'done' || data.status === 'failed') {
+                    clearInterval(this.pollTimer);
+                    this.phase = 'done';
+                }
+            } catch (e) {
+                // Ignore polling errors
+            }
+        },
+
+        downloadReport() {
+            const rows = [['product_id', 'nm_id', 'vendor_code', 'status', 'fields_applied', 'error']];
+            for (const r of this.results) {
+                rows.push([
+                    r.product_id, r.nm_id || '', r.vendor_code || '',
+                    r.status, (r.fields_applied || []).join(';'), r.error || r.reason || ''
+                ]);
+            }
+            const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+            const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `enrichment_report_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    }
+}
+</script>
+{% endblock %}

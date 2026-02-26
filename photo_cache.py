@@ -319,6 +319,47 @@ class PhotoCacheManager:
 
         return new_img
 
+    def download_now(
+        self,
+        supplier_type: str,
+        external_id: str,
+        url: str,
+        auth_cookies: Optional[dict] = None,
+        fallback_urls: Optional[List[str]] = None
+    ) -> bool:
+        """
+        Синхронная загрузка фото (блокирующая).
+        Используется когда нужно гарантированно получить фото сразу.
+
+        Returns:
+            True если фото успешно скачано и закэшировано
+        """
+        if self.is_cached(supplier_type, external_id, url):
+            return True
+
+        try:
+            self._download_and_save(
+                supplier_type, external_id, url,
+                auth_cookies, (1200, 1200), 'white',
+                fallback_urls or []
+            )
+            return self.is_cached(supplier_type, external_id, url)
+        except Exception as e:
+            logger.debug(f"Синхронная загрузка не удалась {url[:50]}: {e}")
+            return False
+
+    def list_cached_photos(self, supplier_type: str, external_id: str) -> List[str]:
+        """Список всех закэшированных фото для товара поставщика"""
+        safe_ext_id = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(external_id))
+        dir_path = os.path.join(PHOTO_CACHE_DIR, supplier_type, safe_ext_id)
+        if not os.path.isdir(dir_path):
+            return []
+        return sorted([
+            os.path.join(dir_path, f)
+            for f in os.listdir(dir_path)
+            if f.endswith('.jpg')
+        ])
+
     def get_stats(self) -> Dict:
         """Возвращает статистику кэша"""
         return {
@@ -439,3 +480,22 @@ def get_cached_photo_path(supplier_type: str, external_id: str, url: str) -> Opt
     if cache.is_cached(supplier_type, external_id, url):
         return cache.get_cache_path(supplier_type, external_id, url)
     return None
+
+
+def get_supplier_photo_url(supplier_type: str, external_id: str, url: str) -> str:
+    """
+    Возвращает безопасный URL для раздачи фото поставщика через наш сервер.
+    Маршрут: /photos/supplier/{supplier_type}/{safe_external_id}/{photo_hash}
+
+    Args:
+        supplier_type: Тип поставщика (sexoptovik, etc.)
+        external_id: Внешний ID товара
+        url: Оригинальный URL фото поставщика
+
+    Returns:
+        Относительный URL для serve через наш сервер
+    """
+    cache = get_photo_cache()
+    photo_hash = cache.get_photo_hash(url)
+    safe_id = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(external_id))
+    return f"/photos/supplier/{supplier_type}/{safe_id}/{photo_hash}"
