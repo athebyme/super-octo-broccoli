@@ -71,10 +71,10 @@ if [ -f "seller_platform.db" ]; then
     read -p "Пересоздать с тестовыми данными? (y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        python test_init.py
+        python scripts/test_init.py
     fi
 else
-    python test_init.py
+    python scripts/test_init.py
 fi
 
 echo ""
