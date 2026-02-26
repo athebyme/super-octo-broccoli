@@ -1,126 +1,150 @@
-# Deployment Quick Guide (EN)
+# WB Seller Platform
 
-## Docker (recommended)
-1. Optional: create a `.env` and set `SECRET_KEY`, `DATABASE_URL`, `SELLER_PORT`, `CALCULATOR_PORT`, `APP_SECRET_KEY`.
-2. Build and start containers:
-   ```bash
-   docker compose up -d --build
-   ```
-3. Create the first admin user:
-   ```bash
-   docker compose exec seller-platform flask --app seller_platform create_admin
-   ```
-   Then open http://localhost:5001/login.
-4. Stop services with `docker compose down`. Rebuild with `docker compose build` when the source changes.
+Платформа управления товарами и продажами на Wildberries: авто-импорт товаров от поставщиков, умное ценообразование, AI-обогащение карточек, мониторинг цен, объединение дублей, и калькулятор прибыли.
 
-## Local (without Docker)
+## Возможности
+
+| Модуль | Что делает |
+|--------|-----------|
+| **Авто-импорт** | Парсит каталоги поставщиков (Sexoptovik и др.), импортирует товары на WB с AI-классификацией категорий |
+| **Ценообразование** | Автоматический расчёт цен на основе закупочной стоимости, логистики и желаемой маржи |
+| **AI-обогащение** | GPT/GigaChat генерирует заголовки, описания, характеристики для карточек WB |
+| **Генерация изображений** | AI создаёт инфографику и фото для товарных карточек |
+| **Мониторинг цен** | Безопасное изменение цен с откатом, защита от демпинга |
+| **Объединение карточек** | Поиск дублей и рекомендации по мержу карточек WB |
+| **Блокировки** | Отслеживание заблокированных и затенённых карточек |
+| **База поставщиков** | Управление каталогом поставщиков с обогащением данных |
+| **Калькулятор** | Расчёт прибыли по отчётам WB с учётом логистики и упаковки |
+| **Админ-панель** | Управление продавцами, пользователями и настройками |
+
+## Быстрый старт
+
+### Docker (рекомендуется)
+
 ```bash
+# 1. Запуск
+docker compose up -d --build
+
+# 2. Создание админа
+docker compose exec seller-platform flask --app seller_platform create_admin
+
+# 3. Открыть http://localhost:5001/login
+```
+
+### Локально
+
+```bash
+# 1. Виртуальное окружение
 python -m venv .venv
-.venv\\Scripts\\activate  # Windows
-# source .venv/bin/activate  # Linux/macOS
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/macOS
+
+# 2. Зависимости
 pip install -r requirements.txt
-```
-- Calculator UI: `python app.py` (http://localhost:5000)
-- Seller platform: `python seller_platform.py` (http://localhost:5001)
-- Initialize DB / admin locally: `python init_platform.py` or `flask --app seller_platform create_admin`.
 
-----
+# 3. Инициализация БД и админа
+python scripts/init_platform.py
 
-# Калькулятор прибыли Wildberries
-
-Веб-приложение рассчитывает прибыль по товарам Wildberries: загрузите отчет WB и прайс Sexoptovik, получите Excel с распределённой логистикой, расходами на упаковку, фактическими перечислениями и сводкой по марже.
-
-## Что умеет сервис
-
-- принимает xlsx-отчет WB и csv Sexoptovik;
-- подтягивает свежий прайс с sexoptovik.ru по кнопке «Обновить прайс автоматически»;
-- сохраняет пути к последним файлам, поэтому их можно не загружать заново;
-- позволяет выбрать колонки итоговой таблицы (по умолчанию берутся A–AH и AK);
-- извлекает закупочную цену, распределяет логистику, удерживает 45 ₽ за упаковку на каждую продажу;
-- строит в Excel основную таблицу и лист «Сводка» с ключевыми цифрами:
-  - «Начислено WB» (до удержания логистики),
-  - «Фактическое перечисление» (то, что приходит на расчетный счет),
-  - себестоимость (закупка + упаковка),
-  - прибыль и наша доля 33 %,
-  - логистика и упаковка отдельными строками,
-  - количество продаж и средняя маржа, посчитанная от фактического перечисления;
-- добавляет строку «ИТОГО» с суммами по продажам.
-
-## Требования
-
-- Python 3.11+
-- Зависимости из `requirements.txt`
-- Файлы:
-  - отчет Wildberries с колонками «Обоснование для оплаты», «Артикул поставщика», «Кол-во», «К перечислению Продавцу за реализованный Товар», «Услуги по доставке товара покупателю»;
-  - прайс `all_prod_prices__.csv` (разделитель `;`, кодировка `cp1251`).
-
-## Установка
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate      # Windows
-# source .venv/bin/activate  # Linux/macOS
-pip install -r requirements.txt
+# 4. Запуск
+python seller_platform.py     # → http://localhost:5001
 ```
 
-## Запуск
+Калькулятор прибыли запускается отдельно: `python app.py` → http://localhost:5000
 
-```bash
-python app.py
-```
+## Стек
 
-Приложение откроется на `http://localhost:5000`. Загрузите файлы, при необходимости обновите прайс автоматически, выберите нужные столбцы и нажмите «Пересчитать прибыль». Готовый отчет можно скачать кнопкой на геро-блоке или в статусе файлов.
-
-## Логика расчетов
-
-- Используются строки с «Обоснование для оплаты» = «Продажа» и «Логистика».
-- Логистика суммируется по артикулу и распределяется по продажам пропорционально количеству.
-- Для артикулов вида `id-<товар>-<продавец>` в прайсе используется только товарный ID; дополнительные строки (`z1…`) ищутся как набор чисел внутри артикула, кода номенклатуры и штрихкода.
-- `Начислено WB` = колонка «К перечислению Продавцу за реализованный Товар».
-- `Фактическое перечисление` = начисление WB − распределённая логистика (то, что реально поступает на счет).
-- Себестоимость = закупка + упаковка (45 ₽ за единицу).
-- Прибыль = фактическое перечисление − себестоимость, маржа вычисляется относительно фактического перечисления.
-- Наша доля = 33 % от прибыли.
+- **Backend:** Flask, Flask-Login, Flask-SQLAlchemy, SQLite, Gunicorn
+- **Frontend:** TailwindCSS (CDN), Alpine.js, Jinja2-шаблоны
+- **AI:** OpenAI / GigaChat API для обогащения карточек и генерации изображений
+- **Интеграции:** Wildberries Content API, Sexoptovik API
+- **Планировщик:** APScheduler — синхронизация товаров, мониторинг блокировок
 
 ## Структура проекта
 
-- `app.py` — Flask-приложение, обработка отчетов, расчет показателей, скачивание прайса.
-- `templates/index.html` — интерфейс загрузки/статуса/сводки.
-- `static/style.css` — стили поверх Bootstrap.
-- `uploads/`, `processed/`, `data/` — каталоги для загруженных файлов, готовых отчетов и состояния.
+```
+├── seller_platform.py          # Точка входа: Flask-приложение, маршруты
+├── app.py                      # Калькулятор прибыли (отдельное приложение)
+├── models.py                   # SQLAlchemy-модели (User, Seller, Product, ...)
+│
+├── routes/                     # Маршруты (Flask Blueprints)
+│   ├── auto_import.py          #   Авто-импорт товаров
+│   ├── enrichment.py           #   AI-обогащение карточек
+│   ├── safe_prices.py          #   Мониторинг и безопасное изменение цен
+│   ├── merge_cards.py          #   Объединение дублей карточек
+│   ├── blocked_cards.py        #   Блокировки и затенения
+│   └── suppliers.py            #   Управление поставщиками
+│
+├── services/                   # Бизнес-логика
+│   ├── ai_service.py           #   GPT/GigaChat — генерация контента
+│   ├── wb_api_client.py        #   Клиент Wildberries Content API
+│   ├── auto_import_manager.py  #   Менеджер авто-импорта
+│   ├── pricing_engine.py       #   Расчёт цен
+│   ├── supplier_service.py     #   Сервис поставщиков
+│   ├── supplier_enrichment.py  #   Обогащение данных поставщика
+│   ├── image_generation_service.py  #  Генерация изображений
+│   ├── merge_recommendations.py     #  Рекомендации по объединению
+│   ├── product_sync_scheduler.py    #  Фоновая синхронизация
+│   ├── photo_cache.py          #   Кэш фотографий
+│   ├── brand_cache.py          #   Кэш брендов WB
+│   ├── wb_product_importer.py  #   Импорт товаров на WB
+│   ├── wb_categories_mapping.py #  Маппинг категорий WB
+│   ├── wb_validators.py        #   Валидация данных для WB
+│   ├── data_export.py          #   Экспорт данных
+│   └── wildberries_api.py      #   Legacy WB API обёртка
+│
+├── templates/                  # Jinja2-шаблоны (~54 файла)
+├── static/                     # CSS, JS, изображения
+│
+├── migrations/                 # Скрипты миграции БД
+├── scripts/                    # Утилиты: init, backup, диагностика
+├── docs/                       # Документация, гайды
+│   └── api_specs/              #   OpenAPI-спецификации WB API
+├── data/                       # CSV, SQL, тестовые данные
+│
+├── Dockerfile                  # Docker-образ
+├── docker-compose.yml          # Оркестрация контейнеров
+├── docker-entrypoint.sh        # Скрипт запуска (миграции + gunicorn)
+└── requirements.txt            # Python-зависимости
+```
 
-## Проверка
+## Настройка
 
-Минимальный прогон:
+### Переменные окружения
+
+Скопируйте `.env.example` → `.env` и заполните:
+
+| Переменная | Описание | По умолчанию |
+|-----------|----------|-------------|
+| `SECRET_KEY` | Ключ сессий Flask | auto-generated |
+| `DATABASE_URL` | Путь к SQLite БД | `sqlite:///seller_platform.db` |
+| `SELLER_PORT` | Порт платформы | `5001` |
+| `CALCULATOR_PORT` | Порт калькулятора | `5000` |
+
+AI-ключи и WB API-ключи настраиваются через интерфейс администратора в разделе настроек продавца.
+
+## Production-деплой
 
 ```bash
-python -c "from pathlib import Path; import app; stat = next(Path('.').glob('*.xlsx')); price = Path('all_prod_prices__.csv'); df, _, summary = app.compute_profit_table(stat, price); print('rows:', len(df)); print('summary:', summary)"
+# Gunicorn
+gunicorn -w 4 -b 0.0.0.0:5001 seller_platform:app
+
+# Или через Docker
+docker compose up -d --build
 ```
 
-Проверка веб-потока через тестовый клиент Flask:
+Для systemd и nginx см. [docs/PLATFORM_README.md](docs/PLATFORM_README.md).
 
-```python
-from pathlib import Path
-import app
+## Документация
 
-stat_path = next(Path(".").glob("*.xlsx"))
-price_path = Path("all_prod_prices__.csv")
-client = app.app.test_client()
-with stat_path.open("rb") as stat, price_path.open("rb") as price:
-    data = {
-        "statistics": (stat, stat_path.name),
-        "prices": (price, price_path.name),
-        "columns": app.column_letters_to_indices(
-            app.read_statistics(stat_path).columns,
-            app.DEFAULT_COLUMN_INDICES,
-        ),
-    }
-    print("upload", client.post("/upload", data=data, content_type="multipart/form-data").status_code)
-print("download", client.get("/download").status_code)
-```
+| Документ | Описание |
+|----------|----------|
+| [PLATFORM_README](docs/PLATFORM_README.md) | Полное руководство по платформе |
+| [DOCKER_QUICKSTART](docs/DOCKER_QUICKSTART.md) | Docker-деплой |
+| [AUTO_IMPORT_README](docs/AUTO_IMPORT_README.md) | Авто-импорт товаров |
+| [WB_API_SETUP](docs/WB_API_SETUP.md) | Настройка WB API |
+| [MIGRATION_GUIDE](docs/MIGRATION_GUIDE.md) | Миграции БД |
+| [ADMIN_CREDENTIALS](docs/ADMIN_CREDENTIALS.md) | Учётные данные |
 
-## Ограничения
+## Лицензия
 
-- Прайс Sexoptovik должен содержать числовой идентификатор и колонку с ценой.
-- Если на артикул не нашлась цена или нет продаж, строки остаются с нулевой себестоимостью.
-- Состояние (пути к файлам и последняя сводка) хранится в `data/state.json`. Удалите файл для сброса.
+Проект для внутреннего использования.
