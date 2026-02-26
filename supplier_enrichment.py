@@ -126,7 +126,7 @@ class EnrichmentService:
             dict с ключами: title, brand, description, characteristics,
                            dimensions, photos, supplier_meta
         """
-        from photo_cache import get_supplier_photo_url, get_photo_cache
+        from photo_cache import get_photo_cache
 
         # Текущие поля карточки
         current_chars = json.loads(product.characteristics_json or '[]')
@@ -139,19 +139,26 @@ class EnrichmentService:
         sup_chars_raw = imp.characteristics or '{}'
         sup_dims_raw = imp.ai_dimensions or '{}'
 
+        # Парсим характеристики поставщика в удобный формат
+        supplier_chars_parsed = self._parse_supplier_chars(sup_chars_raw)
+
         # Фото поставщика
         supplier_photos = self._get_supplier_photo_list(imp)
+
+        # Ставим фото на фоновую загрузку чтобы кэш наполнялся
+        if supplier_photos and not all(p.get('cached') for p in supplier_photos):
+            self._trigger_photo_cache(imp)
 
         preview = {
             'title': {
                 'current': product.title,
                 'supplier': sup_title,
-                'has_change': sup_title and sup_title != product.title,
+                'has_change': bool(sup_title and sup_title != product.title),
             },
             'brand': {
                 'current': product.brand,
                 'supplier': sup_brand,
-                'has_change': sup_brand and sup_brand != product.brand,
+                'has_change': bool(sup_brand and sup_brand != product.brand),
             },
             'description': {
                 'current': product.description,
@@ -161,11 +168,12 @@ class EnrichmentService:
             'characteristics': {
                 'current': current_chars,
                 'supplier_raw': sup_chars_raw,
-                'has_change': bool(sup_chars_raw and sup_chars_raw != '{}'),
+                'supplier_parsed': supplier_chars_parsed,
+                'has_change': bool(supplier_chars_parsed),
             },
             'dimensions': {
                 'current': current_dims,
-                'supplier': json.loads(sup_dims_raw) if sup_dims_raw else {},
+                'supplier': self._safe_json_loads(sup_dims_raw, {}),
                 'has_change': bool(sup_dims_raw and sup_dims_raw != '{}'),
             },
             'photos': {
@@ -183,6 +191,71 @@ class EnrichmentService:
         }
 
         return preview
+
+    @staticmethod
+    def _safe_json_loads(data: str, default=None):
+        """Безопасный json.loads с дефолтным значением"""
+        if not data:
+            return default
+        try:
+            return json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return default
+
+    @staticmethod
+    def _parse_supplier_chars(chars_raw: str) -> List[Dict]:
+        """
+        Парсит характеристики поставщика в список [{name, value}].
+        Принимает JSON строку — dict или list.
+        """
+        if not chars_raw or chars_raw in ('{}', '[]', 'null'):
+            return []
+        try:
+            data = json.loads(chars_raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+        result = []
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, list):
+                    v = ', '.join(str(x) for x in v)
+                result.append({'name': str(k), 'value': str(v) if v is not None else ''})
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    name = item.get('name', item.get('id', ''))
+                    value = item.get('value', '')
+                    if isinstance(value, list):
+                        value = ', '.join(str(x) for x in value)
+                    result.append({'name': str(name), 'value': str(value)})
+        return result
+
+    def _trigger_photo_cache(self, imp):
+        """Ставит все фото ImportedProduct в очередь фоновой загрузки"""
+        from photo_cache import get_photo_cache
+        if not imp.photo_urls:
+            return
+        try:
+            photo_urls = json.loads(imp.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        cache = get_photo_cache()
+        supplier_type = imp.source_type or 'unknown'
+        external_id = imp.external_id or ''
+
+        for ph in photo_urls:
+            if not isinstance(ph, dict):
+                continue
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            if url and not cache.is_cached(supplier_type, external_id, url):
+                fallbacks = []
+                if ph.get('blur') and ph['blur'] != url:
+                    fallbacks.append(ph['blur'])
+                if ph.get('original') and ph['original'] != url:
+                    fallbacks.append(ph['original'])
+                cache.queue_download(supplier_type, external_id, url, fallback_urls=fallbacks)
 
     def _get_supplier_photo_list(self, imp) -> List[Dict]:
         """Возвращает список фото поставщика с serve URL и статусом кэша"""
@@ -365,6 +438,12 @@ class EnrichmentService:
         """
         Преобразует characteristics из ImportedProduct в формат WB API.
         WB ожидает: [{"id": <int>, "value": <str|list>}]
+
+        Стратегия:
+        1. Если уже в формате [{id, value}] — используем как есть
+        2. Если dict {name: value} — пытаемся смаппить через существующие
+           характеристики карточки (по совпадению имён)
+        3. Для AI-полей (ai_dimensions, ai_materials и пр.) — мержим отдельно
         """
         if not imp.characteristics:
             return []
@@ -375,14 +454,41 @@ class EnrichmentService:
             return []
 
         if isinstance(raw, list):
-            # Уже в нужном формате
             valid = [c for c in raw if isinstance(c, dict) and 'id' in c]
             return valid
 
         if isinstance(raw, dict):
-            # Конвертируем dict {name: value} → [{id: ..., value: ...}]
-            # Без маппинга name→id возвращаем пустой список
-            return []
+            # Пытаемся смаппить по имени характеристики → id
+            # через существующие характеристики карточки
+            from models import Product
+            product = None
+            if imp.product_id:
+                product = Product.query.get(imp.product_id)
+
+            existing_chars = []
+            if product and product.characteristics_json:
+                try:
+                    existing_chars = json.loads(product.characteristics_json)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Строим маппинг name → id из существующих характеристик
+            name_to_id = {}
+            for ch in existing_chars:
+                if isinstance(ch, dict) and 'name' in ch and 'id' in ch:
+                    name_to_id[ch['name'].lower().strip()] = ch['id']
+
+            result = []
+            for name, value in raw.items():
+                name_lower = name.lower().strip()
+                char_id = name_to_id.get(name_lower)
+                if char_id is not None:
+                    if isinstance(value, list):
+                        result.append({'id': char_id, 'value': value})
+                    else:
+                        result.append({'id': char_id, 'value': str(value)})
+
+            return result
 
         return []
 

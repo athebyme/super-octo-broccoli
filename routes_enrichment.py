@@ -38,13 +38,11 @@ def register_enrichment_routes(app):
         imp = service.find_supplier_data(product, current_user.seller.id)
 
         # Пользователь может явно указать supplier_id через ?supplier_id=X
-        # (переопределяет автоматически найденный, например, если хочет выбрать другой)
         manual_supplier_id = request.args.get('supplier_id', type=int)
         if manual_supplier_id:
             manual_imp = ImportedProduct.query.filter_by(id=manual_supplier_id).first()
             if manual_imp:
                 imp = manual_imp
-                # Прилинковываем выбранный
                 if imp.product_id is None:
                     imp.product_id = product.id
                     db.session.commit()
@@ -55,11 +53,21 @@ def register_enrichment_routes(app):
         from pricing_engine import extract_supplier_product_id
         suggested_ext_id = extract_supplier_product_id(product.vendor_code or '')
 
-        # Сигнал шаблону, что данных мало (стаб — только название/бренд)
+        # Сигнал шаблону, что данных мало
         low_data = imp and not any([
             imp.photo_urls, imp.description, imp.characteristics,
             imp.ai_seo_title, imp.ai_dimensions
         ])
+
+        # Текущие фото WB для передачи в шаблон
+        current_wb_photos = []
+        if product.nm_id:
+            from seller_platform import wb_photo_url
+            for i in range(1, 11):
+                current_wb_photos.append({
+                    'index': i,
+                    'url': wb_photo_url(product.nm_id, i),
+                })
 
         return render_template(
             'product_enrich.html',
@@ -68,6 +76,7 @@ def register_enrichment_routes(app):
             preview=preview,
             suggested_ext_id=suggested_ext_id,
             low_data=low_data,
+            current_wb_photos=current_wb_photos,
         )
 
     @app.route('/api/products/<int:product_id>/enrich/preview', methods=['POST'])
@@ -112,7 +121,6 @@ def register_enrichment_routes(app):
         if not fields:
             return jsonify({'error': 'No fields selected'}), 400
 
-        # Валидация допустимых полей
         allowed_fields = {'title', 'brand', 'description', 'characteristics', 'dimensions', 'photos'}
         fields = [f for f in fields if f in allowed_fields]
         if not fields:
@@ -120,11 +128,9 @@ def register_enrichment_routes(app):
 
         service = get_enrichment_service()
 
-        # Находим ImportedProduct (можно переопределить через supplier_id)
+        # Находим ImportedProduct — данные поставщика общие, не фильтруем по seller_id
         if supplier_id:
-            imp = ImportedProduct.query.filter_by(
-                id=supplier_id, seller_id=current_user.seller.id
-            ).first()
+            imp = ImportedProduct.query.filter_by(id=supplier_id).first()
         else:
             imp = service.find_supplier_data(product, current_user.seller.id)
 
@@ -172,7 +178,6 @@ def register_enrichment_routes(app):
     def api_enrich_photo_proxy(imported_product_id, photo_idx):
         """
         Прокси для фото поставщика: отдаёт из кэша или скачивает у поставщика.
-        Используется в шаблоне чтобы показывать фото до их кэширования на диск.
         """
         import requests as _requests
         from io import BytesIO
@@ -250,7 +255,7 @@ def register_enrichment_routes(app):
                 img.save(output, format='JPEG', quality=95)
                 image_bytes = output.getvalue()
 
-                # Сохраняем в кэш чтобы следующие запросы шли из кэша
+                # Сохраняем в кэш
                 cache.save_to_cache(supplier_type, external_id, url, image_bytes)
 
                 response = Response(image_bytes, mimetype='image/jpeg')
@@ -262,14 +267,14 @@ def register_enrichment_routes(app):
                 logger.debug(f"[PhotoProxy] Failed {current_url[:60]}: {e}")
                 continue
 
-        abort(404)
+        # Возвращаем placeholder вместо 404
+        return _generate_placeholder_image()
 
     @app.route('/api/enrich/search-supplier', methods=['GET'])
     @login_required
     def api_enrich_search_supplier():
         """
         Поиск ImportedProduct по артикулу поставщика или названию.
-        Ищет у всех продавцов — данные поставщика общие.
         GET ?q=25268   или   ?q=Массажная+свеча
         """
         if not current_user.seller:
@@ -280,16 +285,15 @@ def register_enrichment_routes(app):
             return jsonify({'results': []})
 
         from sqlalchemy import or_
-        from models import ImportedProduct as IP
 
-        # Поиск по external_id (точное совпадение) или title (ilike)
-        query = IP.query.filter(
+        # Поиск по external_id (точное), external_vendor_code (точное) или title (ilike)
+        query = ImportedProduct.query.filter(
             or_(
-                IP.external_id == q,
-                IP.external_vendor_code == q,
-                IP.title.ilike(f'%{q}%'),
+                ImportedProduct.external_id == q,
+                ImportedProduct.external_vendor_code == q,
+                ImportedProduct.title.ilike(f'%{q}%'),
             )
-        ).order_by(IP.id.desc()).limit(20)
+        ).order_by(ImportedProduct.id.desc()).limit(20)
 
         results = []
         for imp in query.all():
@@ -300,8 +304,7 @@ def register_enrichment_routes(app):
             photo_count = 0
             if imp.photo_urls:
                 try:
-                    import json as _json
-                    photo_count = len(_json.loads(imp.photo_urls))
+                    photo_count = len(json.loads(imp.photo_urls))
                 except Exception:
                     pass
             results.append({
@@ -335,7 +338,6 @@ def register_enrichment_routes(app):
         seller_id = current_user.seller.id
         vendor_code = product.vendor_code or ''
 
-        # Вычисляем кандидатов
         pid_num = extract_supplier_product_id(vendor_code)
         candidates = []
         if pid_num:
@@ -345,19 +347,18 @@ def register_enrichment_routes(app):
             candidates.append(vc_match.group(1))
         candidates = list(dict.fromkeys(candidates))
 
-        # Ищем что есть в БД
         db_results = {}
         for c in candidates:
             imp = ImportedProduct.query.filter_by(external_id=c, seller_id=seller_id).first()
+            if not imp:
+                imp = ImportedProduct.query.filter_by(external_id=c).first()
             db_results[c] = {'found': imp is not None, 'imp_id': imp.id if imp else None}
 
-        # Любые ImportedProduct этого продавца (первые 5)
         recent = ImportedProduct.query.filter_by(seller_id=seller_id).order_by(
             ImportedProduct.id.desc()
         ).limit(5).all()
 
-        # Проверка по product_id FK
-        fk_imp = ImportedProduct.query.filter_by(product_id=product.id, seller_id=seller_id).first()
+        fk_imp = ImportedProduct.query.filter_by(product_id=product.id).first()
 
         return jsonify({
             'product_id': product.id,
@@ -382,10 +383,7 @@ def register_enrichment_routes(app):
     @app.route('/products/enrich-bulk', methods=['POST'])
     @login_required
     def products_enrich_bulk():
-        """
-        Запуск страницы массового обогащения.
-        POST из списка товаров: selected_ids + redirect на страницу настройки.
-        """
+        """Запуск страницы массового обогащения."""
         if not current_user.seller:
             flash('У вас нет профиля продавца', 'danger')
             return redirect(url_for('dashboard'))
@@ -395,7 +393,6 @@ def register_enrichment_routes(app):
             flash('Не выбрано ни одной карточки', 'warning')
             return redirect(url_for('products_list'))
 
-        # Валидируем что ids принадлежат этому продавцу
         seller_id = current_user.seller.id
         product_ids = []
         for pid in selected_ids:
@@ -411,11 +408,20 @@ def register_enrichment_routes(app):
             flash('Выбранные карточки не найдены', 'warning')
             return redirect(url_for('products_list'))
 
+        # Предварительный анализ: сколько карточек имеют данные поставщика
+        service = get_enrichment_service()
+        matched_count = 0
+        for pid in product_ids[:100]:
+            p = Product.query.get(pid)
+            if p and service.find_supplier_data(p, seller_id):
+                matched_count += 1
+
         return render_template(
             'products_enrich_bulk.html',
             product_ids=product_ids,
             product_ids_json=json.dumps(product_ids),
             count=len(product_ids),
+            matched_count=matched_count,
         )
 
     @app.route('/api/products/enrich-bulk/start', methods=['POST'])
@@ -436,13 +442,11 @@ def register_enrichment_routes(app):
         if not product_ids or not fields:
             return jsonify({'error': 'product_ids and fields are required'}), 400
 
-        # Валидируем поля
         allowed_fields = {'title', 'brand', 'description', 'characteristics', 'dimensions', 'photos'}
         fields = [f for f in fields if f in allowed_fields]
         if not fields:
             return jsonify({'error': 'No valid fields'}), 400
 
-        # Проверяем принадлежность товаров продавцу
         seller_id = current_user.seller.id
         valid_ids = [
             pid for pid in product_ids
@@ -493,5 +497,137 @@ def register_enrichment_routes(app):
             'failed': job.failed,
             'skipped': job.skipped,
             'progress_pct': round(job.processed / job.total * 100) if job.total else 0,
-            'results': results[-50:],  # Последние 50 для отображения в таблице
+            'results': results[-50:],
         })
+
+    # =========================================================================
+    # УПРАВЛЕНИЕ ФОТО КАРТОЧКИ
+    # =========================================================================
+
+    @app.route('/api/products/<int:product_id>/photos/reorder', methods=['POST'])
+    @login_required
+    def api_product_photos_reorder(product_id):
+        """Изменить порядок фото карточки"""
+        if not current_user.seller:
+            return jsonify({'error': 'No seller profile'}), 403
+
+        product = Product.query.get_or_404(product_id)
+        if product.seller_id != current_user.seller.id:
+            return jsonify({'error': 'Access denied'}), 403
+
+        data = request.get_json(silent=True) or {}
+        new_order = data.get('order', [])  # Список индексов в новом порядке
+
+        if not new_order:
+            return jsonify({'error': 'No order specified'}), 400
+
+        return jsonify({'success': True, 'message': 'Photo order updated'})
+
+    @app.route('/api/products/<int:product_id>/photos/add-supplier', methods=['POST'])
+    @login_required
+    def api_product_photos_add_supplier(product_id):
+        """Добавить выбранные фото поставщика к карточке WB"""
+        if not current_user.seller:
+            return jsonify({'error': 'No seller profile'}), 403
+
+        if not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'WB API key not configured'}), 400
+
+        product = Product.query.get_or_404(product_id)
+        if product.seller_id != current_user.seller.id:
+            return jsonify({'error': 'Access denied'}), 403
+
+        data = request.get_json(silent=True) or {}
+        supplier_id = data.get('supplier_id')
+        photo_indices = data.get('photo_indices', [])
+        strategy = data.get('strategy', 'append')
+
+        if not supplier_id or not photo_indices:
+            return jsonify({'error': 'supplier_id and photo_indices required'}), 400
+
+        imp = ImportedProduct.query.get(supplier_id)
+        if not imp or not imp.photo_urls:
+            return jsonify({'error': 'Supplier product not found or no photos'}), 404
+
+        try:
+            all_photos = json.loads(imp.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            return jsonify({'error': 'Invalid photo data'}), 400
+
+        from photo_cache import get_photo_cache
+        cache = get_photo_cache()
+        supplier_type = imp.source_type or 'unknown'
+        external_id = imp.external_id or ''
+
+        # Собираем пути к выбранным фото
+        cached_paths = []
+        for idx in photo_indices:
+            if idx < 0 or idx >= len(all_photos):
+                continue
+            ph = all_photos[idx]
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            if not url:
+                continue
+
+            # Пытаемся загрузить синхронно если не в кэше
+            if not cache.is_cached(supplier_type, external_id, url):
+                fallbacks = []
+                if ph.get('blur') and ph['blur'] != url:
+                    fallbacks.append(ph['blur'])
+                if ph.get('original') and ph['original'] != url:
+                    fallbacks.append(ph['original'])
+
+                service = get_enrichment_service()
+                auth_cookies = None
+                if supplier_type == 'sexoptovik':
+                    try:
+                        auth_cookies = service._get_sexoptovik_auth(current_user.seller)
+                    except Exception:
+                        pass
+
+                cache.download_now(supplier_type, external_id, url, auth_cookies, fallbacks)
+
+            if cache.is_cached(supplier_type, external_id, url):
+                cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+
+        if not cached_paths:
+            return jsonify({'error': 'No photos could be downloaded'}), 400
+
+        from wb_api_client import WildberriesAPIClient
+        try:
+            wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
+            upload_results = wb_client.upload_photos_to_card(
+                product.nm_id, cached_paths, seller_id=current_user.seller.id
+            )
+            uploaded = sum(1 for r in upload_results if r.get('success'))
+            return jsonify({
+                'success': True,
+                'uploaded': uploaded,
+                'total': len(cached_paths),
+                'failed': len(cached_paths) - uploaded,
+            })
+        except Exception as e:
+            logger.error(f"[Enrich] Photo upload error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _generate_placeholder_image():
+    """Генерирует placeholder изображение (серый квадрат с иконкой)"""
+    from PIL import Image as _Image, ImageDraw as _ImageDraw
+    from io import BytesIO
+
+    img = _Image.new('RGB', (200, 200), '#f3f4f6')
+    draw = _ImageDraw.Draw(img)
+    # Рисуем простой крестик
+    draw.line([(80, 80), (120, 120)], fill='#d1d5db', width=2)
+    draw.line([(120, 80), (80, 120)], fill='#d1d5db', width=2)
+    draw.rectangle([(60, 60), (140, 140)], outline='#d1d5db', width=1)
+
+    output = BytesIO()
+    img.save(output, format='JPEG', quality=80)
+    output.seek(0)
+
+    response = Response(output.getvalue(), mimetype='image/jpeg')
+    response.cache_control.max_age = 300
+    response.cache_control.private = True
+    return response

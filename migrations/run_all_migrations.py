@@ -222,6 +222,36 @@ def migrate(db_path):
             print("   ⏭️  Таблица не существует (будет создана при первом использовании)")
 
         # ============================================================
+        # Создание таблицы enrichment_jobs (если не существует)
+        # ============================================================
+        print("\n📋 Таблица: enrichment_jobs")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='enrichment_jobs'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE enrichment_jobs (
+                    id VARCHAR(36) PRIMARY KEY,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    status VARCHAR(20) DEFAULT 'pending',
+                    total INTEGER DEFAULT 0,
+                    processed INTEGER DEFAULT 0,
+                    succeeded INTEGER DEFAULT 0,
+                    failed INTEGER DEFAULT 0,
+                    skipped INTEGER DEFAULT 0,
+                    fields_config TEXT,
+                    photo_strategy VARCHAR(20) DEFAULT 'replace',
+                    results TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print("  ✅ Таблица enrichment_jobs создана")
+            total_added += 1
+        else:
+            print("  ⏭️  Таблица уже существует")
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()
