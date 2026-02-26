@@ -73,7 +73,7 @@
                             <!-- Фото -->
                             {% set photos = product.get_photos() %}
                             {% if photos %}
-                            <img src="{{ photos[0].get('blur', photos[0].get('original', '')) if photos[0] is mapping else photos[0] }}"
+                            <img src="{{ url_for('serve_supplier_product_photo', supplier_product_id=product.id, photo_idx=0) }}"
                                  class="w-full h-32 object-cover rounded-lg mb-2"
                                  onerror="this.style.display='none'" alt="">
                             {% endif %}

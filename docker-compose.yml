@@ -15,8 +15,12 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      # SSL/HTTPS (оставьте пустыми для авто-генерации self-signed)
+      - SSL_CERT_PATH=${SSL_CERT_PATH:-}
+      - SSL_KEY_PATH=${SSL_KEY_PATH:-}
+      - SSL_COMMON_NAME=${SSL_COMMON_NAME:-seller-platform}
     ports:
-      - "${SELLER_PORT:-5001}:5001"
+      - "${SELLER_PORT:-5001}:${SELLER_PORT:-5001}"
     volumes:
       - ./uploads:/app/uploads
       - ./processed:/app/processed

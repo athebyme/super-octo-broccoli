@@ -97,6 +97,69 @@ PYCODE
 fi
 
 echo "🌐 Запуск gunicorn на порту ${PORT}..."
+
+# ---------- HTTPS / SSL ----------
+SSL_CERT="${SSL_CERT_PATH:-}"
+SSL_KEY="${SSL_KEY_PATH:-}"
+
+# Если сертификат не предоставлен — генерируем self-signed
+if [ -z "$SSL_CERT" ]; then
+  SSL_DIR="/app/data/ssl"
+  SSL_CERT="$SSL_DIR/cert.pem"
+  SSL_KEY="$SSL_DIR/key.pem"
+
+  if [ ! -f "$SSL_CERT" ] || [ ! -f "$SSL_KEY" ]; then
+    echo "🔐 Генерация self-signed SSL сертификата..."
+    mkdir -p "$SSL_DIR"
+    python - <<'PYSSL'
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+import datetime, os, ipaddress
+
+key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+subject = issuer = x509.Name([
+    x509.NameAttribute(NameOID.COMMON_NAME, os.environ.get("SSL_COMMON_NAME", "seller-platform")),
+    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "WB Seller Platform"),
+])
+
+cert = (
+    x509.CertificateBuilder()
+    .subject_name(subject)
+    .issuer_name(issuer)
+    .public_key(key.public_key())
+    .serial_number(x509.random_serial_number())
+    .not_valid_before(datetime.datetime.utcnow())
+    .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+    .add_extension(
+        x509.SubjectAlternativeName([
+            x509.DNSName("localhost"),
+            x509.DNSName("seller-platform"),
+            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+        ]),
+        critical=False,
+    )
+    .sign(key, hashes.SHA256())
+)
+
+ssl_dir = os.environ.get("SSL_DIR", "/app/data/ssl")
+os.makedirs(ssl_dir, exist_ok=True)
+
+with open(os.path.join(ssl_dir, "key.pem"), "wb") as f:
+    f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+
+with open(os.path.join(ssl_dir, "cert.pem"), "wb") as f:
+    f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+print("✅ Self-signed SSL сертификат создан")
+PYSSL
+  else
+    echo "✅ SSL сертификат уже существует"
+  fi
+fi
+
 exec gunicorn \
   --bind 0.0.0.0:${PORT} \
   --timeout 600 \
@@ -105,4 +168,6 @@ exec gunicorn \
   --worker-class gthread \
   --access-logfile - \
   --error-logfile - \
+  --certfile "$SSL_CERT" \
+  --keyfile "$SSL_KEY" \
   ${APP_MODULE}
