@@ -291,9 +291,10 @@ def run_migration():
                             csv_source_url, csv_delimiter, csv_encoding,
                             auth_login, auth_password,
                             ai_enabled, ai_provider, ai_model,
+                            resize_images, image_target_size, image_background_color,
                             is_active, total_products,
                             created_at, created_by_user_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1200, 'white', 1, 0, ?, ?)
                     """, (
                         'Sexoptovik', 'sexoptovik',
                         'Поставщик товаров для взрослых (sexoptovik.ru)',
