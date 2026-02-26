@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+
+{% block title %}Товары — {{ supplier.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Хлебные крошки -->
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:text-indigo-600">Поставщики</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) }}" class="hover:text-indigo-600">{{ supplier.name }}</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">Товары</span>
+    </nav>
+
+    <div class="mb-6 flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900">Товары: {{ supplier.name }}</h1>
+            <p class="text-sm text-gray-500 mt-1">{{ stats.total }} товаров | {{ stats.ready }} готовых | {{ stats.ai_validated }} AI валидированных</p>
+        </div>
+        <div class="flex gap-2">
+            {% if supplier.ai_enabled %}
+            <a href="{{ url_for('admin_supplier_ai_history', supplier_id=supplier.id) }}"
+               class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                AI история
+            </a>
+            {% endif %}
+            {% if supplier.csv_source_url %}
+            <form method="POST" action="{{ url_for('admin_supplier_sync', supplier_id=supplier.id) }}" class="inline">
+                <button type="submit" onclick="return confirm('Запустить синхронизацию?')"
+                        class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700">
+                    Синхронизация CSV
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Фильтры -->
+    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+            <div>
+                <input type="text" name="search" value="{{ search }}" placeholder="Поиск..."
+                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <select name="status" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="">Все статусы</option>
+                    <option value="draft" {{ 'selected' if current_status == 'draft' }}>Черновик</option>
+                    <option value="validated" {{ 'selected' if current_status == 'validated' }}>Валидирован</option>
+                    <option value="ready" {{ 'selected' if current_status == 'ready' }}>Готов</option>
+                    <option value="archived" {{ 'selected' if current_status == 'archived' }}>Архив</option>
+                </select>
+            </div>
+            <div>
+                <select name="brand" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="">Все бренды</option>
+                    {% for b in brands %}
+                    <option value="{{ b }}" {{ 'selected' if current_brand == b }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <select name="category" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="">Все категории</option>
+                    {% for c in categories %}
+                    <option value="{{ c }}" {{ 'selected' if current_category == c }}>{{ c[:40] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <select name="ai_validated" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="">AI: все</option>
+                    <option value="1" {{ 'selected' if ai_validated == '1' }}>AI: да</option>
+                    <option value="0" {{ 'selected' if ai_validated == '0' }}>AI: нет</option>
+                </select>
+            </div>
+            <div>
+                <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+                    Фильтр
+                </button>
+            </div>
+        </div>
+    </form>
+
+    <!-- Таблица товаров -->
+    <form method="POST" action="{{ url_for('admin_supplier_products_bulk', supplier_id=supplier.id) }}" id="bulk-form"
+          x-data="{ selectedAll: false, selected: [] }">
+        <!-- Массовые действия -->
+        <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex items-center gap-3">
+            <label class="flex items-center gap-2">
+                <input type="checkbox" x-model="selectedAll"
+                       @change="selected = selectedAll ? [...document.querySelectorAll('[name=product_ids]')].map(el => el.value) : []"
+                       class="rounded border-gray-300 text-indigo-600">
+                <span class="text-sm text-gray-600">Все</span>
+            </label>
+            <select name="action" class="rounded-lg border-gray-300 text-sm border px-3 py-1.5">
+                <option value="">Действие...</option>
+                <option value="set_status">Сменить статус</option>
+                <option value="ai_validate">AI валидация</option>
+                <option value="delete">Удалить</option>
+            </select>
+            <select name="new_status" class="rounded-lg border-gray-300 text-sm border px-3 py-1.5">
+                <option value="draft">Черновик</option>
+                <option value="validated">Валидирован</option>
+                <option value="ready">Готов</option>
+                <option value="archived">Архив</option>
+            </select>
+            <button type="submit" onclick="return confirm('Применить действие к выбранным товарам?')"
+                    class="px-3 py-1.5 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700">Применить</button>
+        </div>
+
+        <div class="overflow-x-auto bg-white border border-gray-200 rounded-b-lg">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="w-10 px-4 py-3"></th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Фото</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Бренд</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Категория</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Цена</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">AI</th>
+                        <th class="px-4 py-3"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for product in pagination.items %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3">
+                            <input type="checkbox" name="product_ids" value="{{ product.id }}"
+                                   :checked="selected.includes('{{ product.id }}')"
+                                   @change="selected = $event.target.checked ? [...selected, '{{ product.id }}'] : selected.filter(id => id !== '{{ product.id }}')"
+                                   class="rounded border-gray-300 text-indigo-600">
+                        </td>
+                        <td class="px-4 py-3">
+                            {% set photos = product.get_photos() %}
+                            {% if photos %}
+                            <img src="{{ photos[0].get('blur', photos[0].get('original', '')) if photos[0] is mapping else photos[0] }}"
+                                 class="w-12 h-12 object-cover rounded-lg" alt=""
+                                 onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%23ccc%22><rect width=%2224%22 height=%2224%22 fill=%22%23f0f0f0%22/><text x=%2212%22 y=%2216%22 text-anchor=%22middle%22 font-size=%228%22>?</text></svg>'">
+                            {% else %}
+                            <div class="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 text-xs">N/A</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3">
+                            <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
+                               class="text-sm font-medium text-gray-900 hover:text-indigo-600 line-clamp-2">
+                                {{ product.title or 'Без названия' }}
+                            </a>
+                            <p class="text-xs text-gray-400 mt-0.5">{{ product.external_id }}</p>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-600">{{ product.brand or '—' }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">{{ (product.category or '—')[:30] }}</td>
+                        <td class="px-4 py-3 text-sm font-medium text-gray-900">
+                            {{ '%.0f'|format(product.supplier_price) + ' ₽' if product.supplier_price else '—' }}
+                        </td>
+                        <td class="px-4 py-3">
+                            {% set status_colors = {'draft': 'bg-gray-100 text-gray-700', 'validated': 'bg-blue-100 text-blue-700', 'ready': 'bg-green-100 text-green-700', 'archived': 'bg-yellow-100 text-yellow-700'} %}
+                            {% set status_labels = {'draft': 'Черновик', 'validated': 'Валидирован', 'ready': 'Готов', 'archived': 'Архив'} %}
+                            <span class="inline-flex px-2 py-0.5 rounded-full text-xs font-medium {{ status_colors.get(product.status, 'bg-gray-100 text-gray-700') }}">
+                                {{ status_labels.get(product.status, product.status) }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            {% if product.ai_validated %}
+                            <span class="text-green-600" title="AI валидирован">&#10003;</span>
+                            {% else %}
+                            <span class="text-gray-300">&#10007;</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
+                               class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">Открыть</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+
+    <!-- Пагинация -->
+    {% if pagination.pages > 1 %}
+    <div class="mt-6 flex items-center justify-between">
+        <p class="text-sm text-gray-700">
+            Показано {{ pagination.page * pagination.per_page - pagination.per_page + 1 }}—{{ [pagination.page * pagination.per_page, pagination.total]|min }}
+            из {{ pagination.total }}
+        </p>
+        <nav class="flex gap-1">
+            {% if pagination.has_prev %}
+            <a href="?page={{ pagination.prev_num }}&search={{ search }}&status={{ current_status }}&brand={{ current_brand }}&category={{ current_category }}"
+               class="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">&laquo;</a>
+            {% endif %}
+            {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                {% if p %}
+                <a href="?page={{ p }}&search={{ search }}&status={{ current_status }}&brand={{ current_brand }}&category={{ current_category }}"
+                   class="px-3 py-2 text-sm border rounded-lg {{ 'bg-indigo-600 text-white border-indigo-600' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
+                {% else %}
+                <span class="px-2 py-2 text-gray-400">...</span>
+                {% endif %}
+            {% endfor %}
+            {% if pagination.has_next %}
+            <a href="?page={{ pagination.next_num }}&search={{ search }}&status={{ current_status }}&brand={{ current_brand }}&category={{ current_category }}"
+               class="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">&raquo;</a>
+            {% endif %}
+        </nav>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

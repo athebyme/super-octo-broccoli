@@ -28,6 +28,7 @@ from models import (
     UserActivity, AdminAuditLog, SystemSettings,
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
     PricingSettings, AutoImportSettings,
+    Supplier, SupplierProduct, SellerSupplier,
     log_admin_action, log_user_activity
 )
 from wildberries_api import WildberriesAPIError, list_cards
@@ -627,10 +628,19 @@ def admin_panel():
     total_sellers = len(sellers)
     active_sellers = sum(1 for s in sellers if s.user.is_active)
 
+    # Статистика поставщиков
+    from models import Supplier, SupplierProduct
+    total_suppliers = Supplier.query.count()
+    active_suppliers = Supplier.query.filter_by(is_active=True).count()
+    total_supplier_products = SupplierProduct.query.count()
+
     return render_template('admin.html',
                          sellers=sellers,
                          total_sellers=total_sellers,
-                         active_sellers=active_sellers)
+                         active_sellers=active_sellers,
+                         total_suppliers=total_suppliers,
+                         active_suppliers=active_suppliers,
+                         total_supplier_products=total_supplier_products)
 
 
 @app.route('/admin/sellers/add', methods=['GET', 'POST'])
@@ -5551,6 +5561,10 @@ register_blocked_cards_routes(app)
 # ============= РОУТЫ ОБОГАЩЕНИЯ КАРТОЧЕК ДАННЫМИ ПОСТАВЩИКА =============
 from routes_enrichment import register_enrichment_routes
 register_enrichment_routes(app)
+
+# ============= РОУТЫ ПОСТАВЩИКОВ (АДМИН + КАТАЛОГ ПРОДАВЦА) =============
+from routes_suppliers import register_supplier_routes
+register_supplier_routes(app)
 
 
 if __name__ == '__main__':

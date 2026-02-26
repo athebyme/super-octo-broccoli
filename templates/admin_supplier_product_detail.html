@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.title or 'Товар' }} — {{ supplier.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:text-indigo-600">Поставщики</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}" class="hover:text-indigo-600">{{ supplier.name }}</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">{{ (product.title or 'Товар')[:50] }}</span>
+    </nav>
+
+    <div class="flex gap-8">
+        <!-- Основной контент -->
+        <div class="flex-1">
+            <form method="POST">
+                <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                    <div class="p-6 border-b border-gray-200">
+                        <div class="flex items-start justify-between">
+                            <h1 class="text-xl font-bold text-gray-900">{{ product.title or 'Без названия' }}</h1>
+                            {% set status_colors = {'draft': 'bg-gray-100 text-gray-700', 'validated': 'bg-blue-100 text-blue-700', 'ready': 'bg-green-100 text-green-700', 'archived': 'bg-yellow-100 text-yellow-700'} %}
+                            <span class="px-3 py-1 rounded-full text-xs font-medium {{ status_colors.get(product.status, 'bg-gray-100 text-gray-700') }}">
+                                {{ product.status }}
+                            </span>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-1">ID: {{ product.external_id }} | Артикул: {{ product.vendor_code or '—' }}</p>
+                    </div>
+
+                    <!-- Фотографии -->
+                    {% set photos = product.get_photos() %}
+                    {% if photos %}
+                    <div class="p-6 border-b border-gray-200">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-3">Фотографии ({{ photos|length }})</h3>
+                        <div class="flex gap-3 overflow-x-auto pb-2">
+                            {% for photo in photos[:10] %}
+                            <img src="{{ photo.get('blur', photo.get('original', '')) if photo is mapping else photo }}"
+                                 class="w-24 h-24 object-cover rounded-lg flex-shrink-0 border border-gray-200" alt=""
+                                 onerror="this.style.display='none'">
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Основные поля -->
+                    <div class="p-6 space-y-4">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Название</label>
+                                <input type="text" name="title" value="{{ product.title or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Бренд</label>
+                                <input type="text" name="brand" value="{{ product.brand or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Описание</label>
+                            <textarea name="description" rows="3"
+                                      class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">{{ product.description or '' }}</textarea>
+                        </div>
+                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Категория</label>
+                                <input type="text" name="category" value="{{ product.category or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Категория WB</label>
+                                <input type="text" name="wb_category_name" value="{{ product.wb_category_name or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">WB Subject ID</label>
+                                <input type="number" name="wb_subject_id" value="{{ product.wb_subject_id or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Цена поставщика</label>
+                                <input type="number" name="supplier_price" step="0.01" value="{{ product.supplier_price or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Остаток</label>
+                                <input type="number" name="supplier_quantity" value="{{ product.supplier_quantity or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Пол</label>
+                                <input type="text" name="gender" value="{{ product.gender or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Страна</label>
+                                <input type="text" name="country" value="{{ product.country or '' }}"
+                                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Статус</label>
+                            <select name="status" class="rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                                <option value="draft" {{ 'selected' if product.status == 'draft' }}>Черновик</option>
+                                <option value="validated" {{ 'selected' if product.status == 'validated' }}>Валидирован</option>
+                                <option value="ready" {{ 'selected' if product.status == 'ready' }}>Готов</option>
+                                <option value="archived" {{ 'selected' if product.status == 'archived' }}>Архив</option>
+                            </select>
+                        </div>
+
+                        <!-- AI данные -->
+                        <hr class="my-4">
+                        <h3 class="text-sm font-semibold text-gray-700">AI-обогащённые данные</h3>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">SEO заголовок</label>
+                            <input type="text" name="ai_seo_title" value="{{ product.ai_seo_title or '' }}"
+                                   class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">AI описание</label>
+                            <textarea name="ai_description" rows="3"
+                                      class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">{{ product.ai_description or '' }}</textarea>
+                        </div>
+                        {% if product.ai_keywords_json %}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Ключевые слова</label>
+                            <p class="text-sm text-gray-600 bg-gray-50 rounded-lg px-3 py-2">{{ product.ai_keywords_json }}</p>
+                        </div>
+                        {% endif %}
+                        {% if product.ai_analysis_json %}
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">AI анализ</label>
+                            <pre class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 overflow-x-auto max-h-48">{{ product.ai_analysis_json }}</pre>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end gap-3">
+                    <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
+                       class="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">Назад</a>
+                    <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Сохранить</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Сайдбар -->
+        <div class="w-64 flex-shrink-0">
+            <div class="bg-white rounded-lg border border-gray-200 p-5 sticky top-8">
+                <h3 class="text-sm font-semibold text-gray-900 mb-4">Информация</h3>
+                <dl class="space-y-3 text-sm">
+                    <div>
+                        <dt class="text-gray-500">External ID</dt>
+                        <dd class="font-medium text-gray-900 mt-0.5">{{ product.external_id }}</dd>
+                    </div>
+                    {% if product.barcode %}
+                    <div>
+                        <dt class="text-gray-500">Штрихкод</dt>
+                        <dd class="font-medium text-gray-900 mt-0.5">{{ product.barcode }}</dd>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <dt class="text-gray-500">AI валидирован</dt>
+                        <dd class="mt-0.5">
+                            {% if product.ai_validated %}
+                            <span class="text-green-600 font-medium">Да</span>
+                            {% if product.ai_validation_score %}
+                            <span class="text-gray-400">({{ '%.0f'|format(product.ai_validation_score) }}%)</span>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-gray-400">Нет</span>
+                            {% endif %}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt class="text-gray-500">Импортирован продавцами</dt>
+                        <dd class="font-medium text-gray-900 mt-0.5">{{ import_count }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-gray-500">Создан</dt>
+                        <dd class="text-gray-600 mt-0.5">{{ product.created_at.strftime('%d.%m.%Y %H:%M') if product.created_at else '—' }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-gray-500">Обновлён</dt>
+                        <dd class="text-gray-600 mt-0.5">{{ product.updated_at.strftime('%d.%m.%Y %H:%M') if product.updated_at else '—' }}</dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- AI действия -->
+            {% if supplier.ai_enabled %}
+            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4 sticky top-80">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">AI действия</h3>
+                <div class="space-y-2">
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_seo', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+                            Сгенерировать SEO заголовок
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_desc', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors">
+                            Сгенерировать описание
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_validate', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
+                            AI валидация
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_analyze', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" class="w-full text-left px-3 py-2 text-sm rounded-lg bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors">
+                            AI анализ карточки
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_supplier_ai_enrich', supplier_id=supplier.id) }}">
+                        <input type="hidden" name="product_id" value="{{ product.id }}">
+                        <button type="submit" onclick="return confirm('Запустить полное AI обогащение? Это займёт время.')"
+                                class="w-full text-left px-3 py-2 text-sm rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors font-medium">
+                            Полное AI обогащение
+                        </button>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
