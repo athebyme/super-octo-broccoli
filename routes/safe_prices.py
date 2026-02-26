@@ -35,7 +35,7 @@ from models import (
     db, Product, Seller, SafePriceChangeSettings,
     PriceChangeBatch, PriceChangeItem, PriceHistory
 )
-from wb_api_client import WildberriesAPIClient, WBAPIException
+from services.wb_api_client import WildberriesAPIClient, WBAPIException
 
 logger = logging.getLogger(__name__)
 

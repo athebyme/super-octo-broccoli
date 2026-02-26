@@ -80,7 +80,7 @@ if __name__ == '__main__':
 
         # Сравниваем с текущим маппингом
         try:
-            from wb_categories_mapping import WB_ADULT_CATEGORIES
+            from services.wb_categories_mapping import WB_ADULT_CATEGORIES
 
             current_ids = set(WB_ADULT_CATEGORIES.keys())
             api_ids = set(categories.keys())

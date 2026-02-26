@@ -17,7 +17,7 @@ from models import (
     db, AutoImportSettings, ImportedProduct, CategoryMapping,
     Product, Seller, PricingSettings
 )
-from pricing_engine import (
+from services.pricing_engine import (
     SupplierPriceLoader, calculate_price, extract_supplier_product_id,
     DEFAULT_PRICE_RANGES,
 )
@@ -343,7 +343,7 @@ class CategoryMapper:
 
     def __init__(self, ai_service=None, ai_confidence_threshold: float = 0.7):
         # Импортируем точный маппинг категорий WB
-        from wb_categories_mapping import get_best_category_match
+        from services.wb_categories_mapping import get_best_category_match
         self.get_best_match = get_best_category_match
         self.ai_service = ai_service
         self.ai_confidence_threshold = ai_confidence_threshold
@@ -899,7 +899,7 @@ class AutoImportManager:
         self.ai_service = None
         if settings.ai_enabled and settings.ai_api_key:
             try:
-                from ai_service import get_ai_service, AIConfig
+                from services.ai_service import get_ai_service, AIConfig
                 self.ai_service = get_ai_service(settings)
                 if self.ai_service:
                     logger.info(f"🤖 AI сервис инициализирован: провайдер={settings.ai_provider}, модель={settings.ai_model}")

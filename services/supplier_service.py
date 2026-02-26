@@ -831,7 +831,7 @@ class SupplierService:
     @staticmethod
     def _get_ai_service(supplier: Supplier):
         """Создать AIService из настроек поставщика"""
-        from ai_service import AIConfig, AIService as AISvc
+        from services.ai_service import AIConfig, AIService as AISvc
         config = AIConfig.from_settings(supplier)
         if not config:
             return None

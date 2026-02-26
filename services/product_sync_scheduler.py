@@ -235,7 +235,7 @@ def sync_blocked_cards_all_sellers(flask_app):
     Запускается каждые 10 минут планировщиком.
     """
     from models import Seller, BlockedCard, ShadowedCard, BlockedCardsSyncSettings, APILog, db
-    from wb_api_client import WildberriesAPIClient
+    from services.wb_api_client import WildberriesAPIClient
 
     with flask_app.app_context():
         try:

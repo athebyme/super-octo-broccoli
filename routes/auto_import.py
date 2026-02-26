@@ -13,8 +13,8 @@ import hashlib
 from datetime import datetime
 
 from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory, PricingSettings, Product
-from auto_import_manager import AutoImportManager, ImageProcessor
-from pricing_engine import (
+from services.auto_import_manager import AutoImportManager, ImageProcessor
+from services.pricing_engine import (
     SupplierPriceLoader, calculate_price, extract_supplier_product_id,
     DEFAULT_PRICE_RANGES,
 )
@@ -283,7 +283,7 @@ def register_auto_import_routes(app):
             # Сбрасываем AI сервис при изменении настроек
             if settings.ai_enabled:
                 try:
-                    from ai_service import reset_ai_service
+                    from services.ai_service import reset_ai_service
                     reset_ai_service()
                 except ImportError:
                     pass
@@ -579,7 +579,7 @@ def register_auto_import_routes(app):
             logger.warning(f"Ошибка парсинга AI полей: {e}")
 
         # Получаем список всех WB категорий для dropdown
-        from wb_categories_mapping import WB_ADULT_CATEGORIES
+        from services.wb_categories_mapping import WB_ADULT_CATEGORIES
         wb_categories = WB_ADULT_CATEGORIES
 
         # Проверяем настройки продавца для диагностики
@@ -645,7 +645,7 @@ def register_auto_import_routes(app):
                 product.all_categories_list = []
 
         # Получаем список всех WB категорий для dropdown
-        from wb_categories_mapping import WB_ADULT_CATEGORIES
+        from services.wb_categories_mapping import WB_ADULT_CATEGORIES
         wb_categories = WB_ADULT_CATEGORIES
 
         return render_template('auto_import_validate.html',
@@ -694,7 +694,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Invalid product IDs'}), 400
 
         # Импортируем товары
-        from wb_product_importer import import_products_batch
+        from services.wb_product_importer import import_products_batch
         result = import_products_batch(seller.id, product_ids)
 
         if result.get('success'):
@@ -721,7 +721,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Product not found'}), 404
 
         # Импортируем товар
-        from wb_product_importer import WBProductImporter
+        from services.wb_product_importer import WBProductImporter
         importer = WBProductImporter(seller)
         success, error, product = importer.import_product_to_wb(imported_product)
 
@@ -841,7 +841,7 @@ def register_auto_import_routes(app):
 
         try:
             # Получаем название категории
-            from wb_categories_mapping import WB_ADULT_CATEGORIES
+            from services.wb_categories_mapping import WB_ADULT_CATEGORIES
             new_wb_subject_name = WB_ADULT_CATEGORIES.get(new_wb_subject_id)
 
             if not new_wb_subject_name:
@@ -928,7 +928,7 @@ def register_auto_import_routes(app):
                 product.barcodes = json.dumps(barcodes, ensure_ascii=False)
 
             if 'wb_subject_id' in data:
-                from wb_categories_mapping import WB_ADULT_CATEGORIES
+                from services.wb_categories_mapping import WB_ADULT_CATEGORIES
                 new_id = data['wb_subject_id']
                 if new_id in WB_ADULT_CATEGORIES:
                     product.wb_subject_id = new_id
@@ -936,7 +936,7 @@ def register_auto_import_routes(app):
                     product.category_confidence = 1.0
 
             # Перезапускаем валидацию
-            from auto_import_manager import ProductValidator
+            from services.auto_import_manager import ProductValidator
 
             # Собираем данные для валидации
             product_data = {
@@ -986,7 +986,7 @@ def register_auto_import_routes(app):
         seller = current_user.seller
 
         try:
-            from wb_categories_mapping import get_best_category_match
+            from services.wb_categories_mapping import get_best_category_match
 
             # Получаем все товары с низкой уверенностью (< 95%)
             products_to_recalculate = ImportedProduct.query.filter(
@@ -1138,7 +1138,7 @@ def register_auto_import_routes(app):
 
                 if sexoptovik_login and sexoptovik_password:
                     logger.info(f"🔐 Авторизация на sexoptovik с логином: {sexoptovik_login}")
-                    from auto_import_manager import SexoptovikAuth
+                    from services.auto_import_manager import SexoptovikAuth
                     auth_cookies = SexoptovikAuth.get_auth_cookies(
                         sexoptovik_login,
                         sexoptovik_password
@@ -1281,7 +1281,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Product not found'}), 404
 
         try:
-            from ai_service import get_ai_service, AIConfig
+            from services.ai_service import get_ai_service, AIConfig
             ai_service = get_ai_service(settings)
 
             if not ai_service:
@@ -1338,7 +1338,7 @@ def register_auto_import_routes(app):
                     category_chars = []
                     if product.wb_subject_id:
                         try:
-                            from wb_api_client import WBApiClient
+                            from services.wb_api_client import WBApiClient
                             # Используем WB API клиент селлера
                             wb_client = WBApiClient(seller.api_key)
                             chars_config = wb_client.get_card_characteristics_config(product.wb_subject_id)
@@ -1385,7 +1385,7 @@ def register_auto_import_routes(app):
             if 'description' in operations:
                 try:
                     # Простая генерация описания через chat completion
-                    from ai_service import AIClient, AIConfig as AIC
+                    from services.ai_service import AIClient, AIConfig as AIC
                     config = AIC.from_settings(settings)
                     if config:
                         client = AIClient(config)
@@ -1447,7 +1447,7 @@ def register_auto_import_routes(app):
         provider = request.args.get('provider', 'cloudru')
 
         try:
-            from ai_service import get_available_models
+            from services.ai_service import get_available_models
             models = get_available_models(provider)
             return jsonify({
                 'success': True,
@@ -1528,7 +1528,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'API ключ не настроен. Сохраните настройки перед тестированием.'}), 400
 
         try:
-            from ai_service import get_ai_service, reset_ai_service
+            from services.ai_service import get_ai_service, reset_ai_service
 
             # Логируем какой ключ используется
             logger.info(f"🔑 AI Test: provider={settings.ai_provider}")
@@ -1559,7 +1559,7 @@ def register_auto_import_routes(app):
     def auto_import_ai_instructions():
         """Возвращает дефолтные инструкции для редактирования"""
         try:
-            from ai_service import get_default_instructions
+            from services.ai_service import get_default_instructions
             instructions = get_default_instructions()
             return jsonify({
                 'success': True,
@@ -1599,7 +1599,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             if not config:
@@ -1671,7 +1671,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -1729,7 +1729,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -1800,7 +1800,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Описание отсутствует'}), 400
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -1850,7 +1850,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -1929,7 +1929,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -2003,7 +2003,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -2290,7 +2290,7 @@ def register_auto_import_routes(app):
                     pass
 
             # Импортируем сервис генерации изображений
-            from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
+            from services.image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
 
             # Создаем конфигурацию
             provider_str = getattr(settings, 'image_gen_provider', 'together_flux') or 'together_flux'
@@ -2406,7 +2406,7 @@ def register_auto_import_routes(app):
                 except:
                     pass
 
-            from image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
+            from services.image_generation_service import ImageGenerationConfig, ImageGenerationService, ImageProvider
 
             provider_str = getattr(settings, 'image_gen_provider', 'together_flux') or 'together_flux'
             try:
@@ -2483,7 +2483,7 @@ def register_auto_import_routes(app):
     def auto_import_ai_image_providers():
         """Получение списка доступных провайдеров генерации изображений"""
         try:
-            from image_generation_service import get_available_providers
+            from services.image_generation_service import get_available_providers
             providers = get_available_providers()
             return jsonify({'success': True, 'providers': providers})
         except Exception as e:
@@ -2696,7 +2696,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -2763,7 +2763,7 @@ def register_auto_import_routes(app):
 
         if category_id and seller.wb_api_key:
             try:
-                from wb_api_client import WildberriesAPIClient
+                from services.wb_api_client import WildberriesAPIClient
                 with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                     chars_config = wb_client.get_card_characteristics_config(int(category_id))
                     wb_characteristics = chars_config.get('data', [])
@@ -2789,7 +2789,7 @@ def register_auto_import_routes(app):
                 logger.warning(f"Не удалось получить характеристики WB: {e}")
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -3224,7 +3224,7 @@ def register_auto_import_routes(app):
 
         if category_id and seller.wb_api_key:
             try:
-                from wb_api_client import WildberriesAPIClient
+                from services.wb_api_client import WildberriesAPIClient
                 with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                     chars_config = wb_client.get_card_characteristics_config(int(category_id))
                     raw_chars = chars_config.get('data', [])
@@ -3269,7 +3269,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Не удалось получить характеристики категории WB'}), 400
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -3674,7 +3674,7 @@ def register_auto_import_routes(app):
                 brand_validation = None
                 if product.brand and seller.wb_api_key:
                     try:
-                        from wb_api_client import WildberriesAPIClient
+                        from services.wb_api_client import WildberriesAPIClient
                         with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                             brand_result = wb_client.validate_brand(product.brand)
                             brand_validation = {
@@ -3766,7 +3766,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -3819,7 +3819,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -3881,7 +3881,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -3941,7 +3941,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -4000,8 +4000,8 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
-            from wb_categories_mapping import WB_ADULT_CATEGORIES
+            from services.ai_service import AIConfig, AIService
+            from services.wb_categories_mapping import WB_ADULT_CATEGORIES
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -4076,7 +4076,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         try:
-            from ai_service import AIConfig, AIService
+            from services.ai_service import AIConfig, AIService
 
             config = AIConfig.from_settings(settings)
             ai_service = AIService(config)
@@ -4172,7 +4172,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
 
         try:
-            from wb_api_client import WildberriesAPIClient
+            from services.wb_api_client import WildberriesAPIClient
 
             with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                 result = wb_client.validate_brand(brand_name)
@@ -4220,7 +4220,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
 
         try:
-            from wb_api_client import WildberriesAPIClient
+            from services.wb_api_client import WildberriesAPIClient
 
             with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                 result = wb_client.search_brands(query, top=limit)
@@ -4273,8 +4273,8 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
 
         try:
-            from brand_cache import get_brand_cache
-            from wb_api_client import WildberriesAPIClient
+            from services.brand_cache import get_brand_cache
+            from services.wb_api_client import WildberriesAPIClient
 
             cache = get_brand_cache()
 
@@ -4357,8 +4357,8 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'AI API ключ не настроен'}), 400
 
         try:
-            from ai_service import AIConfig, AIService
-            from brand_cache import get_brand_cache
+            from services.ai_service import AIConfig, AIService
+            from services.brand_cache import get_brand_cache
 
             # Создаем AI клиент
             config = AIConfig.from_settings(settings)
@@ -4397,7 +4397,7 @@ def register_auto_import_routes(app):
             # Если нет матча через кэш - пробуем API
             if not wb_match and detected_brand and seller.wb_api_key:
                 try:
-                    from wb_api_client import WildberriesAPIClient
+                    from services.wb_api_client import WildberriesAPIClient
                     with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                         api_result = wb_client.validate_brand(detected_brand)
                         if api_result.get('valid'):
@@ -4459,7 +4459,7 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': 'WB API ключ не настроен'}), 400
 
         try:
-            from brand_cache import get_brand_cache
+            from services.brand_cache import get_brand_cache
 
             cache = get_brand_cache()
 
@@ -4499,7 +4499,7 @@ def register_auto_import_routes(app):
             }
         """
         try:
-            from brand_cache import get_brand_cache
+            from services.brand_cache import get_brand_cache
 
             cache = get_brand_cache()
             return jsonify({

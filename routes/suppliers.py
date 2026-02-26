@@ -18,7 +18,7 @@ from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, AIHistory, log_admin_action
 )
-from supplier_service import SupplierService
+from services.supplier_service import SupplierService
 
 logger = logging.getLogger(__name__)
 

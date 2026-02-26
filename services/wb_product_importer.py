@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 from models import db, ImportedProduct, Product, Seller
-from wb_api_client import WildberriesAPIClient
+from services.wb_api_client import WildberriesAPIClient
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ class WBProductImporter:
                 has_real_sizes = False
 
             # Формируем артикул
-            from auto_import_manager import AutoImportManager
+            from services.auto_import_manager import AutoImportManager
             settings = self.seller.auto_import_settings
             if settings and settings.vendor_code_pattern:
                 pattern = settings.vendor_code_pattern

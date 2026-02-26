@@ -3034,7 +3034,7 @@ def get_ai_service(settings=None) -> Optional[AIService]:
         _ai_service_instance = AIService(config)
         # Загружаем категории WB
         try:
-            from wb_categories_mapping import WB_ADULT_CATEGORIES
+            from services.wb_categories_mapping import WB_ADULT_CATEGORIES
             _ai_service_instance.set_categories(WB_ADULT_CATEGORIES)
         except ImportError:
             logger.warning("Не удалось загрузить WB_ADULT_CATEGORIES")

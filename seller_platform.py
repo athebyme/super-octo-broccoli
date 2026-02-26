@@ -31,13 +31,13 @@ from models import (
     Supplier, SupplierProduct, SellerSupplier,
     log_admin_action, log_user_activity
 )
-from wildberries_api import WildberriesAPIError, list_cards
+from services.wildberries_api import WildberriesAPIError, list_cards
 import json
 import time
 import threading
 import logging
 from logging.handlers import RotatingFileHandler
-from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
+from services.wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
 
 # Настройка приложения
 app = Flask(__name__)
@@ -185,7 +185,7 @@ login_manager.login_message = 'Пожалуйста, войдите в сист�
 login_manager.login_message_category = 'info'
 
 # Инициализация планировщика автоматической синхронизации
-from product_sync_scheduler import init_scheduler
+from services.product_sync_scheduler import init_scheduler
 init_scheduler(app)
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -2728,8 +2728,8 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
-                    from wb_api_client import chunk_list
-                    from wb_validators import prepare_card_for_update
+                    from services.wb_api_client import chunk_list
+                    from services.wb_validators import prepare_card_for_update
 
                     cards_to_update = []
                     product_map = {}  # nmID -> (product, new_desc)
@@ -2802,8 +2802,8 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
-                    from wb_api_client import chunk_list
-                    from wb_validators import prepare_card_for_update
+                    from services.wb_api_client import chunk_list
+                    from services.wb_validators import prepare_card_for_update
 
                     cards_to_update = []
                     product_map = {}  # nmID -> product
@@ -2923,8 +2923,8 @@ def products_bulk_edit():
                     # ==================== БАТЧИНГ ====================
                     app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
 
-                    from wb_api_client import chunk_list
-                    from wb_validators import prepare_card_for_update
+                    from services.wb_api_client import chunk_list
+                    from services.wb_validators import prepare_card_for_update
 
                     cards_to_update = []
                     product_map = {}  # nmID -> product
@@ -3169,9 +3169,9 @@ def products_bulk_edit():
                     db.session.commit()
 
                 elif operation in ('ai_seo_title', 'ai_enhance_description', 'ai_detect_brand'):
-                    from ai_service import get_ai_service
-                    from wb_api_client import chunk_list
-                    from wb_validators import prepare_card_for_update
+                    from services.ai_service import get_ai_service
+                    from services.wb_api_client import chunk_list
+                    from services.wb_validators import prepare_card_for_update
 
                     ai_settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
                     ai_service = get_ai_service(ai_settings)
@@ -3338,9 +3338,9 @@ def products_bulk_edit():
                     bulk_operation.wb_synced = False  # Ключевые слова хранятся локально
 
                 elif operation == 'ai_bulk':
-                    from ai_service import get_ai_service
-                    from wb_api_client import chunk_list
-                    from wb_validators import prepare_card_for_update
+                    from services.ai_service import get_ai_service
+                    from services.wb_api_client import chunk_list
+                    from services.wb_validators import prepare_card_for_update
 
                     if not ai_operations_list:
                         flash('Выберите хотя бы одну AI-операцию', 'warning')
@@ -3520,9 +3520,9 @@ def products_bulk_edit():
                 # Если заданы AI-операции И уже выполнялась ручная операция
                 if ai_operations_list and operation not in ('ai_bulk', '', None):
                     try:
-                        from ai_service import get_ai_service
-                        from wb_api_client import chunk_list
-                        from wb_validators import prepare_card_for_update
+                        from services.ai_service import get_ai_service
+                        from services.wb_api_client import chunk_list
+                        from services.wb_validators import prepare_card_for_update
                         _ai_s_combined = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
                         _ai_svc = get_ai_service(_ai_s_combined)
                         if _ai_svc:
@@ -3951,8 +3951,8 @@ def revert_bulk_edit(bulk_id):
         error_count = 0
         errors = []
 
-        from wb_api_client import chunk_list
-        from wb_validators import prepare_card_for_update, clean_characteristics_for_update
+        from services.wb_api_client import chunk_list
+        from services.wb_validators import prepare_card_for_update, clean_characteristics_for_update
 
         # Готовим карточки для батч-обновления из локальной БД (без лишних GET-запросов к WB)
         cards_to_update = []
@@ -5186,7 +5186,7 @@ def perform_price_monitoring_sync(seller: Seller, settings: PriceMonitorSettings
         supplier_prices = {}
         supplier_prices_updated = 0
         try:
-            from pricing_engine import SupplierPriceLoader, extract_supplier_product_id
+            from services.pricing_engine import SupplierPriceLoader, extract_supplier_product_id
             from models import PricingSettings
             pricing_settings = PricingSettings.query.filter_by(seller_id=seller.id).first()
             if pricing_settings and pricing_settings.is_enabled and pricing_settings.supplier_price_url:
@@ -5541,29 +5541,29 @@ def apply_migrations():
 
 # ============= РОУТЫ АВТОИМПОРТА =============
 # Регистрация роутов автоимпорта товаров
-from auto_import_routes import register_auto_import_routes
+from routes.auto_import import register_auto_import_routes
 register_auto_import_routes(app)
 
 
 # ============= РОУТЫ ОБЪЕДИНЕНИЯ КАРТОЧЕК =============
 # Регистрация роутов для объединения/разъединения карточек
-from routes_merge_cards import register_merge_routes
+from routes.merge_cards import register_merge_routes
 register_merge_routes(app)
 
 # Регистрация роутов для безопасного изменения цен
-from routes_safe_prices import register_routes as register_safe_prices_routes
+from routes.safe_prices import register_routes as register_safe_prices_routes
 register_safe_prices_routes(app)
 
 # ============= РОУТЫ ЗАБЛОКИРОВАННЫХ КАРТОЧЕК И ЭКСПОРТА =============
-from routes_blocked_cards import register_blocked_cards_routes
+from routes.blocked_cards import register_blocked_cards_routes
 register_blocked_cards_routes(app)
 
 # ============= РОУТЫ ОБОГАЩЕНИЯ КАРТОЧЕК ДАННЫМИ ПОСТАВЩИКА =============
-from routes_enrichment import register_enrichment_routes
+from routes.enrichment import register_enrichment_routes
 register_enrichment_routes(app)
 
 # ============= РОУТЫ ПОСТАВЩИКОВ (АДМИН + КАТАЛОГ ПРОДАВЦА) =============
-from routes_suppliers import register_supplier_routes
+from routes.suppliers import register_supplier_routes
 register_supplier_routes(app)
 
 

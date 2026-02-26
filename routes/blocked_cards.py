@@ -15,8 +15,8 @@ from models import (
     db, Product, APILog, BlockedCard, ShadowedCard, BlockedCardsSyncSettings,
     BulkEditHistory, CardEditHistory,
 )
-from wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
-from data_export import (
+from services.wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthException
+from services.data_export import (
     export_data, get_available_columns,
     BLOCKED_CARD_COLUMNS, SHADOWED_CARD_COLUMNS, PRODUCT_COLUMNS,
     BULK_EDIT_COLUMNS, COLUMN_SETS,
@@ -207,7 +207,7 @@ def register_blocked_cards_routes(app):
 
         seller = current_user.seller
         try:
-            from product_sync_scheduler import _upsert_blocked_cards, _upsert_shadowed_cards
+            from services.product_sync_scheduler import _upsert_blocked_cards, _upsert_shadowed_cards
             client = _get_wb_client(seller)
 
             blocked_api = client.get_blocked_cards(

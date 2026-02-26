@@ -107,7 +107,7 @@ class BrandCache:
             return
 
         def sync_with_new_client():
-            from wb_api_client import WildberriesAPIClient
+            from services.wb_api_client import WildberriesAPIClient
             with WildberriesAPIClient(api_key) as client:
                 self.sync_brands(client)
 

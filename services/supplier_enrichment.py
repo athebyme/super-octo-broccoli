@@ -43,7 +43,7 @@ class EnrichmentService:
             ImportedProduct или None
         """
         from models import ImportedProduct
-        from pricing_engine import extract_supplier_product_id
+        from services.pricing_engine import extract_supplier_product_id
 
         # 1. Прямая FK-связь (самый надёжный)
         imp = ImportedProduct.query.filter_by(
@@ -126,7 +126,7 @@ class EnrichmentService:
             dict с ключами: title, brand, description, characteristics,
                            dimensions, photos, supplier_meta
         """
-        from photo_cache import get_photo_cache
+        from services.photo_cache import get_photo_cache
 
         # Текущие поля карточки
         current_chars = json.loads(product.characteristics_json or '[]')
@@ -233,7 +233,7 @@ class EnrichmentService:
 
     def _trigger_photo_cache(self, imp):
         """Ставит все фото ImportedProduct в очередь фоновой загрузки"""
-        from photo_cache import get_photo_cache
+        from services.photo_cache import get_photo_cache
         if not imp.photo_urls:
             return
         try:
@@ -259,7 +259,7 @@ class EnrichmentService:
 
     def _get_supplier_photo_list(self, imp) -> List[Dict]:
         """Возвращает список фото поставщика с serve URL и статусом кэша"""
-        from photo_cache import get_photo_cache, get_supplier_photo_url
+        from services.photo_cache import get_photo_cache, get_supplier_photo_url
 
         if not imp.photo_urls:
             return []
@@ -501,7 +501,7 @@ class EnrichmentService:
             'append'       - добавить в конец
             'only_if_empty' - только если у карточки нет фото
         """
-        from photo_cache import get_photo_cache, PhotoCacheManager
+        from services.photo_cache import get_photo_cache, PhotoCacheManager
 
         # Проверка стратегии
         current_photos = json.loads(product.photos_json or '[]')
@@ -608,7 +608,7 @@ class EnrichmentService:
     def _get_sexoptovik_auth(self, seller) -> Optional[Dict]:
         """Получает cookies авторизации для sexoptovik"""
         try:
-            from auto_import_manager import SexoptovikAuth
+            from services.auto_import_manager import SexoptovikAuth
             from models import AutoImportSettings
 
             settings = seller.auto_import_settings if seller else None
@@ -692,7 +692,7 @@ class EnrichmentService:
     ):
         """Фоновая задача массового обогащения"""
         from models import db, EnrichmentJob, Product, Seller
-        from wb_api_client import WildberriesAPIClient
+        from services.wb_api_client import WildberriesAPIClient
 
         # Нужно создать новый контекст приложения для фонового потока
         from seller_platform import app as flask_app

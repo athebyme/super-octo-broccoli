@@ -9,7 +9,7 @@ from flask import render_template, request, redirect, url_for, flash, jsonify, a
 from flask_login import login_required, current_user
 
 from models import db, Product, ImportedProduct, EnrichmentJob
-from supplier_enrichment import get_enrichment_service
+from services.supplier_enrichment import get_enrichment_service
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def register_enrichment_routes(app):
         preview = service.build_preview(product, imp) if imp else None
 
         # Предполагаемый external_id из vendor_code для подсказки в форме
-        from pricing_engine import extract_supplier_product_id
+        from services.pricing_engine import extract_supplier_product_id
         suggested_ext_id = extract_supplier_product_id(product.vendor_code or '')
 
         # Сигнал шаблону, что данных мало
@@ -137,7 +137,7 @@ def register_enrichment_routes(app):
         if not imp:
             return jsonify({'error': 'Supplier data not found'}), 404
 
-        from wb_api_client import WildberriesAPIClient
+        from services.wb_api_client import WildberriesAPIClient
         try:
             wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
         except Exception as e:
@@ -182,7 +182,7 @@ def register_enrichment_routes(app):
         import requests as _requests
         from io import BytesIO
         from PIL import Image as _Image
-        from photo_cache import get_photo_cache
+        from services.photo_cache import get_photo_cache
 
         imp = ImportedProduct.query.get_or_404(imported_product_id)
 
@@ -332,7 +332,7 @@ def register_enrichment_routes(app):
         if product.seller_id != current_user.seller.id:
             return jsonify({'error': 'Access denied'}), 403
 
-        from pricing_engine import extract_supplier_product_id
+        from services.pricing_engine import extract_supplier_product_id
         import re as _re
 
         seller_id = current_user.seller.id
@@ -456,7 +456,7 @@ def register_enrichment_routes(app):
         if not valid_ids:
             return jsonify({'error': 'No valid products found'}), 400
 
-        from wb_api_client import WildberriesAPIClient
+        from services.wb_api_client import WildberriesAPIClient
         try:
             wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
         except Exception as e:
@@ -554,7 +554,7 @@ def register_enrichment_routes(app):
         except (json.JSONDecodeError, TypeError):
             return jsonify({'error': 'Invalid photo data'}), 400
 
-        from photo_cache import get_photo_cache
+        from services.photo_cache import get_photo_cache
         cache = get_photo_cache()
         supplier_type = imp.source_type or 'unknown'
         external_id = imp.external_id or ''
@@ -593,7 +593,7 @@ def register_enrichment_routes(app):
         if not cached_paths:
             return jsonify({'error': 'No photos could be downloaded'}), 400
 
-        from wb_api_client import WildberriesAPIClient
+        from services.wb_api_client import WildberriesAPIClient
         try:
             wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
             upload_results = wb_client.upload_photos_to_card(

@@ -7,9 +7,9 @@ from datetime import datetime
 import json
 
 from models import db, Product, CardMergeHistory
-from wb_api_client import WildberriesAPIClient, WBAPIException
+from services.wb_api_client import WildberriesAPIClient, WBAPIException
 from sqlalchemy import or_
-from merge_recommendations import get_merge_recommendations_for_seller
+from services.merge_recommendations import get_merge_recommendations_for_seller
 
 
 def register_merge_routes(app):
