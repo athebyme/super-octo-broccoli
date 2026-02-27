@@ -106,6 +106,62 @@
                         </div>
                     </div>
                     <hr class="my-4">
+                    <h3 class="text-sm font-semibold text-gray-700">Файл цен и остатков</h3>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">URL файла цен/остатков</label>
+                        <input type="url" name="price_file_url" value="{{ supplier.price_file_url if supplier and supplier.price_file_url else '' }}"
+                               placeholder="http://sexoptovik.ru/files/all_prod_prices__.csv"
+                               class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                        <p class="mt-1 text-xs text-gray-400">CSV: id;артикул;цена;наличие;статус;доп.артикул;штрихкод;ррц</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">URL INF файла (определение обновлений)</label>
+                        <input type="url" name="price_file_inf_url" value="{{ supplier.price_file_inf_url if supplier and supplier.price_file_inf_url else '' }}"
+                               placeholder="http://sexoptovik.ru/files/all_prod_prices__.inf"
+                               class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Разделитель файла цен</label>
+                            <input type="text" name="price_file_delimiter" value="{{ supplier.price_file_delimiter if supplier else ';' }}" maxlength="5"
+                                   class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Кодировка файла цен</label>
+                            <select name="price_file_encoding"
+                                    class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                                <option value="cp1251" {{ 'selected' if supplier and supplier.price_file_encoding == 'cp1251' else '' }}>cp1251 (Windows)</option>
+                                <option value="utf-8" {{ 'selected' if supplier and supplier.price_file_encoding == 'utf-8' else '' }}>UTF-8</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 items-end">
+                        <label class="flex items-center gap-2">
+                            <input type="checkbox" name="auto_sync_prices" {{ 'checked' if supplier and supplier.auto_sync_prices else '' }}
+                                   class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                            <span class="text-sm text-gray-700">Автосинхронизация цен</span>
+                        </label>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Интервал (мин)</label>
+                            <input type="number" name="auto_sync_interval_minutes" min="5" step="5"
+                                   value="{{ supplier.auto_sync_interval_minutes if supplier and supplier.auto_sync_interval_minutes else 60 }}"
+                                   class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                        </div>
+                    </div>
+                    {% if mode == 'edit' and supplier.last_price_sync_at %}
+                    <div class="bg-gray-50 rounded-lg p-3 text-sm">
+                        <span class="text-gray-500">Последняя синхронизация цен:</span>
+                        <span class="font-medium {{ 'text-green-600' if supplier.last_price_sync_status == 'success' else 'text-red-600' }}">
+                            {{ supplier.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }}
+                            ({{ supplier.last_price_sync_status }})
+                        </span>
+                        {% if supplier.last_price_sync_error %}
+                        <p class="text-red-500 text-xs mt-1">{{ supplier.last_price_sync_error[:200] }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <hr class="my-4">
                     <h3 class="text-sm font-semibold text-gray-700">Авторизация (для доступа к фото)</h3>
                     <div class="grid grid-cols-2 gap-4">
                         <div>
@@ -261,11 +317,51 @@
                     </div>
                 </dl>
 
+                {% if price_stock_stats %}
+                <hr class="my-4">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Остатки и цены</h3>
+                <dl class="space-y-3">
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-500">В наличии</dt>
+                        <dd class="text-sm font-semibold text-green-600">{{ price_stock_stats.in_stock }}</dd>
+                    </div>
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-500">Нет в наличии</dt>
+                        <dd class="text-sm font-semibold text-red-500">{{ price_stock_stats.out_of_stock }}</dd>
+                    </div>
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-500">С ценой</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ price_stock_stats.with_price }}</dd>
+                    </div>
+                    {% if price_stock_stats.min_price > 0 %}
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-500">Мин. / Макс. цена</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ '%.0f'|format(price_stock_stats.min_price) }} / {{ '%.0f'|format(price_stock_stats.max_price) }} &#8381;</dd>
+                    </div>
+                    {% endif %}
+                    {% if price_stock_stats.total_stock > 0 %}
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-500">Общий остаток</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ price_stock_stats.total_stock }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+                {% endif %}
+
                 <div class="mt-6 space-y-2">
                     <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
                        class="block w-full text-center px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100">
                         Товары
                     </a>
+                    {% if supplier.price_file_url %}
+                    <form method="POST" action="{{ url_for('admin_supplier_sync_prices', supplier_id=supplier.id) }}" class="inline w-full">
+                        <input type="hidden" name="force" value="1">
+                        <button type="submit" onclick="return confirm('Синхронизировать цены и остатки?')"
+                                class="block w-full text-center px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100">
+                            Синхр. цены/остатки
+                        </button>
+                    </form>
+                    {% endif %}
                     <a href="{{ url_for('admin_supplier_sellers', supplier_id=supplier.id) }}"
                        class="block w-full text-center px-4 py-2 bg-gray-50 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-100">
                         Продавцы

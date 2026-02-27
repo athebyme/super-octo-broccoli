@@ -2015,6 +2015,22 @@ class Supplier(db.Model):
     csv_encoding = db.Column(db.String(20), default='cp1251')
     api_endpoint = db.Column(db.String(500))  # Для будущей API-интеграции
 
+    # Источник цен и остатков (отдельный файл)
+    price_file_url = db.Column(db.String(500))       # URL CSV цен/остатков
+    price_file_inf_url = db.Column(db.String(500))    # URL INF файла (change detection)
+    price_file_delimiter = db.Column(db.String(5), default=';')
+    price_file_encoding = db.Column(db.String(20), default='cp1251')
+
+    # Статистика синхронизации цен
+    last_price_sync_at = db.Column(db.DateTime)
+    last_price_sync_status = db.Column(db.String(50))  # success/failed/running
+    last_price_sync_error = db.Column(db.Text)
+    last_price_file_hash = db.Column(db.String(64))     # MD5 hash INF файла
+
+    # Автосинхронизация
+    auto_sync_prices = db.Column(db.Boolean, default=False, nullable=False)
+    auto_sync_interval_minutes = db.Column(db.Integer, default=60)
+
     # Авторизация для доступа к ресурсам поставщика (фото и т.д.)
     auth_login = db.Column(db.String(200))
     _auth_password_encrypted = db.Column('auth_password', db.String(500))
@@ -2148,6 +2164,10 @@ class Supplier(db.Model):
             'total_products': self.total_products,
             'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
             'last_sync_status': self.last_sync_status,
+            'price_file_url': self.price_file_url,
+            'last_price_sync_at': self.last_price_sync_at.isoformat() if self.last_price_sync_at else None,
+            'last_price_sync_status': self.last_price_sync_status,
+            'auto_sync_prices': self.auto_sync_prices,
             'ai_enabled': self.ai_enabled,
             'ai_provider': self.ai_provider,
             'ai_model': self.ai_model,
@@ -2189,6 +2209,14 @@ class SupplierProduct(db.Model):
     supplier_price = db.Column(db.Float)  # Закупочная цена
     supplier_quantity = db.Column(db.Integer)  # Остаток у поставщика
     currency = db.Column(db.String(10), default='RUB')
+    recommended_retail_price = db.Column(db.Float)   # РРЦ от поставщика
+    supplier_status = db.Column(db.String(50))        # Статус у поставщика (in_stock/out_of_stock)
+    additional_vendor_code = db.Column(db.String(200)) # Доп. артикул
+
+    # Синхронизация цен/остатков
+    last_price_sync_at = db.Column(db.DateTime)       # Когда последний раз обновилась цена
+    price_changed_at = db.Column(db.DateTime)          # Когда цена реально изменилась
+    previous_price = db.Column(db.Float)               # Предыдущая цена (для трекинга)
 
     # Характеристики (нормализованные JSON)
     characteristics_json = db.Column(db.Text)  # [{name, value}, ...]

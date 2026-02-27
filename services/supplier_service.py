@@ -273,6 +273,12 @@ class SupplierService:
             csv_source_url=data.get('csv_source_url'),
             csv_delimiter=data.get('csv_delimiter', ';'),
             csv_encoding=data.get('csv_encoding', 'cp1251'),
+            price_file_url=data.get('price_file_url'),
+            price_file_inf_url=data.get('price_file_inf_url'),
+            price_file_delimiter=data.get('price_file_delimiter', ';'),
+            price_file_encoding=data.get('price_file_encoding', 'cp1251'),
+            auto_sync_prices=data.get('auto_sync_prices', False),
+            auto_sync_interval_minutes=data.get('auto_sync_interval_minutes', 60),
             auth_login=data.get('auth_login'),
             ai_enabled=data.get('ai_enabled', False),
             ai_provider=data.get('ai_provider', 'openai'),
@@ -322,6 +328,8 @@ class SupplierService:
             'ai_timeout', 'ai_client_id', 'ai_client_secret',
             'resize_images', 'image_target_size', 'image_background_color',
             'default_markup_percent', 'is_active',
+            'price_file_url', 'price_file_inf_url', 'price_file_delimiter',
+            'price_file_encoding', 'auto_sync_prices', 'auto_sync_interval_minutes',
             'ai_category_instruction', 'ai_size_instruction',
             'ai_seo_title_instruction', 'ai_keywords_instruction',
             'ai_description_instruction', 'ai_analysis_instruction',
@@ -465,6 +473,20 @@ class SupplierService:
                 f"({result.duration_seconds:.1f}s)"
             )
 
+            # Автоматическая синхронизация цен/остатков после каталога
+            if supplier.price_file_url:
+                try:
+                    price_result = SupplierService.sync_prices_and_stock(supplier_id, force=True)
+                    if price_result.success:
+                        logger.info(
+                            f"Авто-синхр цен {supplier.code}: обновлено={price_result.updated}"
+                        )
+                        # Каскадное обновление к продавцам
+                        if price_result.updated > 0:
+                            SupplierService.cascade_prices_to_sellers(supplier_id)
+                except Exception as e:
+                    logger.warning(f"Ошибка авто-синхр цен после каталога: {e}")
+
             # Запускаем фоновое скачивание всех фото поставщика
             try:
                 from services.photo_cache import bulk_download_supplier_photos
@@ -491,6 +513,334 @@ class SupplierService:
         return result
 
     # -----------------------------------------------------------------------
+    # Синхронизация цен и остатков
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def sync_prices_and_stock(supplier_id: int, force: bool = False) -> SyncResult:
+        """
+        Синхронизация цен и остатков из отдельного CSV файла поставщика.
+
+        CSV формат (sexoptovik): id;осн.артикул;цена;наличие;статус;доп.артикул;штрихкод;ррц
+
+        Обновляет: supplier_price, supplier_quantity, supplier_status,
+        recommended_retail_price, barcode, vendor_code, additional_vendor_code.
+        Сохраняет previous_price для трекинга изменений.
+        """
+        result = SyncResult()
+        start_time = time.time()
+
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier:
+            result.success = False
+            result.error_messages.append("Поставщик не найден")
+            return result
+
+        if not supplier.price_file_url:
+            result.success = False
+            result.error_messages.append("URL файла цен не задан")
+            return result
+
+        supplier.last_price_sync_status = 'running'
+        db.session.commit()
+
+        try:
+            # Проверяем обновление через INF файл (если не force)
+            if not force and supplier.price_file_inf_url:
+                try:
+                    inf_resp = requests.get(supplier.price_file_inf_url, timeout=30)
+                    inf_resp.raise_for_status()
+                    import hashlib as _hl
+                    new_hash = _hl.md5(inf_resp.content).hexdigest()
+                    if new_hash == supplier.last_price_file_hash:
+                        result.success = True
+                        result.error_messages.append("Файл не изменился с последней синхронизации")
+                        supplier.last_price_sync_status = 'success'
+                        db.session.commit()
+                        result.duration_seconds = time.time() - start_time
+                        return result
+                except Exception as e:
+                    logger.warning(f"Не удалось проверить INF файл: {e}")
+
+            # Загружаем CSV цен
+            encoding = supplier.price_file_encoding or 'cp1251'
+            delimiter = supplier.price_file_delimiter or ';'
+
+            try:
+                resp = requests.get(supplier.price_file_url, timeout=120)
+                resp.raise_for_status()
+            except Exception as e:
+                result.success = False
+                result.error_messages.append(f"Ошибка загрузки файла цен: {str(e)[:200]}")
+                supplier.last_price_sync_status = 'failed'
+                supplier.last_price_sync_error = str(e)[:500]
+                db.session.commit()
+                return result
+
+            text = resp.content.decode(encoding, errors='replace')
+
+            # Парсим CSV
+            price_data = {}
+            reader = csv.reader(StringIO(text), delimiter=delimiter)
+            header_skipped = False
+
+            for row in reader:
+                if len(row) < 4:
+                    continue
+
+                raw_id = row[0].strip()
+
+                # Пропускаем заголовок
+                if not header_skipped:
+                    try:
+                        int(raw_id)
+                    except ValueError:
+                        header_skipped = True
+                        continue
+                    header_skipped = True
+
+                try:
+                    product_id = int(raw_id)
+                except ValueError:
+                    continue
+
+                try:
+                    price = float(row[2].strip().replace(',', '.')) if row[2].strip() else 0
+                except (ValueError, IndexError):
+                    price = 0
+
+                try:
+                    quantity = int(row[3].strip()) if len(row) > 3 and row[3].strip() else 0
+                except (ValueError, IndexError):
+                    quantity = 0
+
+                # Статус поставщика (колонка 4)
+                sup_status_raw = row[4].strip() if len(row) > 4 else ''
+
+                # Доп. артикул (колонка 5)
+                add_vendor = row[5].strip() if len(row) > 5 else ''
+
+                # Штрихкод (колонка 6)
+                barcode = row[6].strip() if len(row) > 6 else ''
+
+                # РРЦ (колонка 7)
+                try:
+                    rrp = float(row[7].strip().replace(',', '.')) if len(row) > 7 and row[7].strip() else None
+                except (ValueError, IndexError):
+                    rrp = None
+
+                price_data[product_id] = {
+                    'vendor_code': row[1].strip() if len(row) > 1 else '',
+                    'price': price,
+                    'quantity': quantity,
+                    'status': sup_status_raw,
+                    'additional_vendor_code': add_vendor,
+                    'barcode': barcode,
+                    'rrp': rrp,
+                }
+
+            result.total_in_csv = len(price_data)
+            logger.info(f"Загружено {len(price_data)} записей цен из CSV ({supplier.code})")
+
+            if not price_data:
+                result.error_messages.append("Файл цен пустой или не удалось распарсить")
+                supplier.last_price_sync_status = 'failed'
+                supplier.last_price_sync_error = "Файл цен пустой"
+                db.session.commit()
+                return result
+
+            # Обновляем товары
+            products = SupplierProduct.query.filter_by(supplier_id=supplier_id).all()
+            now = datetime.utcnow()
+
+            batch_count = 0
+            for sp in products:
+                try:
+                    # Извлекаем числовой ID из external_id
+                    numeric_id = None
+                    if sp.external_id:
+                        match = re.search(r'(\d+)', sp.external_id)
+                        if match:
+                            numeric_id = int(match.group(1))
+
+                    if numeric_id is None:
+                        continue
+
+                    data = price_data.get(numeric_id)
+                    if data is None:
+                        continue
+
+                    # Сохраняем предыдущую цену
+                    old_price = sp.supplier_price
+
+                    # Обновляем поля
+                    if data['price'] > 0:
+                        sp.supplier_price = data['price']
+                    sp.supplier_quantity = data['quantity']
+
+                    # Статус поставщика
+                    if data['status'] == '1' or data['quantity'] > 0:
+                        sp.supplier_status = 'in_stock'
+                    else:
+                        sp.supplier_status = 'out_of_stock'
+
+                    # РРЦ
+                    if data['rrp'] is not None and data['rrp'] > 0:
+                        sp.recommended_retail_price = data['rrp']
+
+                    # Артикулы и штрихкод
+                    if data['vendor_code']:
+                        sp.vendor_code = data['vendor_code']
+                    if data['additional_vendor_code']:
+                        sp.additional_vendor_code = data['additional_vendor_code']
+                    if data['barcode']:
+                        sp.barcode = data['barcode']
+
+                    # Трекинг изменения цены
+                    sp.last_price_sync_at = now
+                    if old_price is not None and data['price'] > 0 and old_price != data['price']:
+                        sp.previous_price = old_price
+                        sp.price_changed_at = now
+
+                    result.updated += 1
+
+                    batch_count += 1
+                    if batch_count % 200 == 0:
+                        db.session.flush()
+
+                except Exception as e:
+                    result.errors += 1
+                    result.error_messages.append(f"Товар {sp.external_id}: {str(e)[:100]}")
+                    if len(result.error_messages) > 50:
+                        result.error_messages.append("...и другие ошибки")
+                        break
+
+            db.session.commit()
+
+            # Обновляем hash INF файла
+            if supplier.price_file_inf_url:
+                try:
+                    inf_resp = requests.get(supplier.price_file_inf_url, timeout=30)
+                    inf_resp.raise_for_status()
+                    import hashlib as _hl
+                    supplier.last_price_file_hash = _hl.md5(inf_resp.content).hexdigest()
+                except Exception:
+                    pass
+
+            supplier.last_price_sync_at = now
+            supplier.last_price_sync_status = 'success'
+            supplier.last_price_sync_error = None
+            db.session.commit()
+
+            result.duration_seconds = time.time() - start_time
+            logger.info(
+                f"Синхронизация цен {supplier.code}: "
+                f"обновлено={result.updated}, ошибок={result.errors} "
+                f"({result.duration_seconds:.1f}s)"
+            )
+
+        except Exception as e:
+            db.session.rollback()
+            result.success = False
+            result.error_messages.append(f"Критическая ошибка: {str(e)}")
+            supplier.last_price_sync_status = 'failed'
+            supplier.last_price_sync_error = str(e)[:500]
+            db.session.commit()
+            logger.error(f"Ошибка синхронизации цен {supplier.code}: {e}")
+
+        result.duration_seconds = time.time() - start_time
+        return result
+
+    @staticmethod
+    def cascade_prices_to_sellers(supplier_id: int) -> dict:
+        """
+        Каскадное обновление закупочных цен и остатков к продавцам.
+        Обновляет supplier_price и supplier_quantity в ImportedProduct,
+        НЕ меняет calculated_price — это делает продавец через свои PricingSettings.
+        """
+        updated = 0
+        errors = 0
+
+        imported_products = ImportedProduct.query.filter(
+            ImportedProduct.supplier_product_id.isnot(None),
+            ImportedProduct.supplier_id == supplier_id
+        ).all()
+
+        for imp in imported_products:
+            try:
+                sp = imp.supplier_product
+                if not sp:
+                    continue
+                if sp.supplier_price is not None:
+                    imp.supplier_price = sp.supplier_price
+                if sp.supplier_quantity is not None:
+                    imp.supplier_quantity = sp.supplier_quantity
+                imp.updated_at = datetime.utcnow()
+                updated += 1
+            except Exception as e:
+                errors += 1
+                logger.warning(f"Cascade error ImportedProduct {imp.id}: {e}")
+
+        db.session.commit()
+        logger.info(f"Каскадное обновление цен для поставщика {supplier_id}: "
+                     f"обновлено={updated}, ошибок={errors}")
+        return {'updated': updated, 'errors': errors, 'total': len(imported_products)}
+
+    @staticmethod
+    def get_price_stock_stats(supplier_id: int) -> dict:
+        """Статистика по ценам и остаткам товаров поставщика"""
+        base = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+
+        in_stock = base.filter(
+            SupplierProduct.supplier_quantity.isnot(None),
+            SupplierProduct.supplier_quantity > 0
+        ).count()
+
+        out_of_stock = base.filter(
+            db.or_(
+                SupplierProduct.supplier_quantity.is_(None),
+                SupplierProduct.supplier_quantity == 0
+            )
+        ).count()
+
+        with_price = base.filter(
+            SupplierProduct.supplier_price.isnot(None),
+            SupplierProduct.supplier_price > 0
+        ).count()
+
+        price_stats = db.session.query(
+            db.func.min(SupplierProduct.supplier_price),
+            db.func.max(SupplierProduct.supplier_price),
+            db.func.avg(SupplierProduct.supplier_price),
+            db.func.sum(SupplierProduct.supplier_quantity),
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.supplier_price.isnot(None),
+            SupplierProduct.supplier_price > 0
+        ).first()
+
+        with_rrp = base.filter(
+            SupplierProduct.recommended_retail_price.isnot(None),
+            SupplierProduct.recommended_retail_price > 0
+        ).count()
+
+        price_changed = base.filter(
+            SupplierProduct.previous_price.isnot(None)
+        ).count()
+
+        return {
+            'in_stock': in_stock,
+            'out_of_stock': out_of_stock,
+            'with_price': with_price,
+            'with_rrp': with_rrp,
+            'price_changed': price_changed,
+            'min_price': round(price_stats[0], 2) if price_stats[0] else 0,
+            'max_price': round(price_stats[1], 2) if price_stats[1] else 0,
+            'avg_price': round(price_stats[2], 2) if price_stats[2] else 0,
+            'total_stock': int(price_stats[3]) if price_stats[3] else 0,
+        }
+
+    # -----------------------------------------------------------------------
     # Управление товарами
     # -----------------------------------------------------------------------
 
@@ -499,11 +849,19 @@ class SupplierService:
                      search: str = None, status: str = None,
                      category: str = None, brand: str = None,
                      ai_validated: bool = None, has_photos: bool = None,
+                     stock_status: str = None,
                      sort_by: str = 'created_at', sort_dir: str = 'desc'):
         """Получить товары поставщика с фильтрацией и пагинацией"""
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
 
         # Фильтры
+        if stock_status == 'in_stock':
+            q = q.filter(SupplierProduct.supplier_quantity.isnot(None),
+                         SupplierProduct.supplier_quantity > 0)
+        elif stock_status == 'out_of_stock':
+            q = q.filter(db.or_(
+                SupplierProduct.supplier_quantity.is_(None),
+                SupplierProduct.supplier_quantity == 0))
         if search:
             search_term = f"%{search}%"
             q = q.filter(
