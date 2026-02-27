@@ -5537,6 +5537,10 @@ register_supplier_routes(app)
 from routes.photos import register_photo_routes
 register_photo_routes(app)
 
+# ============= РОУТЫ ДОКУМЕНТАЦИИ =============
+from routes.docs import register_docs_routes
+register_docs_routes(app)
+
 
 if __name__ == '__main__':
     with app.app_context():
