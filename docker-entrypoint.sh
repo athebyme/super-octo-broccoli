@@ -159,6 +159,32 @@ PYSSL
     echo "✅ SSL сертификат уже существует"
   fi
 fi
+# ---------- HTTP → HTTPS Redirect ----------
+HTTP_PORT="${HTTP_PORT:-80}"
+echo "🔀 Запуск HTTP→HTTPS редиректа на порту ${HTTP_PORT}..."
+python - <<'PYREDIRECT' &
+import http.server, ssl, os
+
+https_port = os.environ.get("PORT", "5001")
+http_port = int(os.environ.get("HTTP_PORT", "80"))
+
+class RedirectHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        host = self.headers.get("Host", "").split(":")[0]
+        target = f"https://{host}:{https_port}{self.path}"
+        self.send_response(301)
+        self.send_header("Location", target)
+        self.end_headers()
+
+    do_POST = do_HEAD = do_PUT = do_DELETE = do_GET
+
+    def log_message(self, fmt, *args):
+        pass  # тихий режим
+
+server = http.server.HTTPServer(("0.0.0.0", http_port), RedirectHandler)
+print(f"✅ HTTP redirect: :{http_port} → HTTPS :{https_port}")
+server.serve_forever()
+PYREDIRECT
 
 exec gunicorn \
   --bind 0.0.0.0:${PORT} \
