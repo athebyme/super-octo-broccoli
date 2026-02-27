@@ -3,9 +3,9 @@
 Скрипт для массового скачивания фото всех поставщиков.
 
 Использование:
-    python scripts/download_all_photos.py                    # все поставщики
-    python scripts/download_all_photos.py --supplier-id 1    # конкретный поставщик
-    python scripts/download_all_photos.py --wait             # ждать завершения очереди
+    python3 scripts/download_all_photos.py                    # все поставщики
+    python3 scripts/download_all_photos.py --supplier-id 1    # конкретный поставщик
+    python3 scripts/download_all_photos.py --wait             # ждать завершения очереди
 """
 
 import sys
@@ -16,7 +16,8 @@ import argparse
 # Добавляем корень проекта в path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import create_app
+# Импортируем готовое Flask-приложение из seller_platform
+from seller_platform import app
 
 
 def main():
@@ -24,8 +25,6 @@ def main():
     parser.add_argument('--supplier-id', type=int, help='ID конкретного поставщика')
     parser.add_argument('--wait', action='store_true', help='Ждать завершения всех загрузок')
     args = parser.parse_args()
-
-    app = create_app()
 
     with app.app_context():
         from models import Supplier
