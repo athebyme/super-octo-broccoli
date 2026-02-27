@@ -421,8 +421,9 @@ class PhotoCacheManager:
 
     def bulk_download_for_supplier(self, supplier_id: int) -> Dict:
         """
-        Ставит в очередь загрузку ВСЕХ фото для всех товаров поставщика.
-        Пропускает фото, которые уже есть в кэше.
+        Запускает фоновое скачивание ВСЕХ фото поставщика.
+        Фото подаются в очередь постепенно через фоновый поток,
+        чтобы не переполнять очередь.
 
         Args:
             supplier_id: ID поставщика в БД
@@ -431,7 +432,6 @@ class PhotoCacheManager:
             dict: {total_photos, already_cached, queued, errors}
         """
         import json
-        # Ленивый импорт моделей чтобы избежать циклических зависимостей
         from models import SupplierProduct, Supplier
 
         supplier = Supplier.query.get(supplier_id)
@@ -441,9 +441,10 @@ class PhotoCacheManager:
         supplier_type = supplier.code or 'unknown'
         total_photos = 0
         already_cached = 0
-        queued = 0
 
-        # Обрабатываем товары батчами чтобы не грузить память
+        # Собираем все задания на скачивание (без постановки в очередь)
+        download_tasks = []
+
         page = 1
         batch_size = 200
         while True:
@@ -486,25 +487,53 @@ class PhotoCacheManager:
                     if ph.get('original') and ph['original'] != url:
                         fallbacks.append(ph['original'])
 
-                    if self.queue_download(
-                        supplier_type=supplier_type,
-                        external_id=external_id,
-                        url=url,
-                        fallback_urls=fallbacks
-                    ):
-                        queued += 1
+                    download_tasks.append((
+                        supplier_type,
+                        external_id,
+                        url,
+                        None,  # auth_cookies
+                        (1200, 1200),  # target_size
+                        'white',  # background_color
+                        fallbacks
+                    ))
 
             page += 1
 
+        to_queue = len(download_tasks)
+
         logger.info(
             f"Bulk download для {supplier_type}: "
-            f"всего={total_photos}, в кэше={already_cached}, в очереди={queued}"
+            f"всего={total_photos}, в кэше={already_cached}, к загрузке={to_queue}"
         )
+
+        # Запускаем фоновый поток-фидер, который подаёт задания в очередь
+        # с блокировкой (ждёт когда освободится место)
+        if download_tasks:
+            def _feeder():
+                fed = 0
+                for task in download_tasks:
+                    try:
+                        # Блокирующий put — ждёт пока освободится место в очереди
+                        self._download_queue.put(task, block=True, timeout=300)
+                        fed += 1
+                        if fed % 500 == 0:
+                            logger.info(f"Фидер {supplier_type}: подано {fed}/{to_queue} в очередь")
+                    except Exception as e:
+                        logger.warning(f"Фидер: ошибка постановки в очередь: {e}")
+                        break
+                logger.info(f"Фидер {supplier_type}: завершён, подано {fed}/{to_queue}")
+
+            feeder_thread = threading.Thread(
+                target=_feeder,
+                name=f'photo-feeder-{supplier_type}',
+                daemon=True
+            )
+            feeder_thread.start()
 
         return {
             'total_photos': total_photos,
             'already_cached': already_cached,
-            'queued': queued,
+            'queued': to_queue,
             'errors': []
         }
 
