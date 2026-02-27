@@ -4,6 +4,9 @@ set -e
 APP_MODULE=${APP_MODULE:-seller_platform:app}
 PORT=${PORT:-5001}
 
+# Ensure Python can find root-level modules when running scripts from subdirectories
+export PYTHONPATH=/app:${PYTHONPATH:-}
+
 # Ensure all working directories exist so uploads and reports survive volume mounts.
 mkdir -p uploads processed data
 
