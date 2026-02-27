@@ -813,7 +813,7 @@ class SupplierService:
                                           show_imported: bool = False):
         """Товары поставщика, доступные для импорта продавцу"""
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
-        q = q.filter(SupplierProduct.status.in_(['validated', 'ready']))
+        q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
 
         if not show_imported:
             # Исключаем уже импортированные
