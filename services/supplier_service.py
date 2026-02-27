@@ -1168,8 +1168,12 @@ class SupplierService:
     def get_available_products_for_seller(seller_id: int, supplier_id: int,
                                           page: int = 1, per_page: int = 50,
                                           search: str = None,
-                                          show_imported: bool = False):
-        """Товары поставщика, доступные для импорта продавцу"""
+                                          show_imported: bool = False,
+                                          stock_status: str = None):
+        """Товары поставщика, доступные для импорта продавцу
+
+        stock_status: 'in_stock' | 'out_of_stock' | None (все)
+        """
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
 
@@ -1180,6 +1184,15 @@ class SupplierService:
                 ImportedProduct.supplier_product_id.isnot(None)
             ).subquery()
             q = q.filter(~SupplierProduct.id.in_(imported_sp_ids))
+
+        # Фильтр по наличию
+        if stock_status == 'in_stock':
+            q = q.filter(SupplierProduct.supplier_quantity.isnot(None),
+                         SupplierProduct.supplier_quantity > 0)
+        elif stock_status == 'out_of_stock':
+            q = q.filter(db.or_(
+                SupplierProduct.supplier_quantity.is_(None),
+                SupplierProduct.supplier_quantity == 0))
 
         if search:
             search_term = f"%{search}%"

@@ -762,11 +762,17 @@ def register_supplier_routes(app):
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         show_imported = request.args.get('show_imported', '0') == '1'
+        # По умолчанию показываем только товары в наличии
+        stock_status = request.args.get('stock_status', 'in_stock').strip()
+        if stock_status not in ('in_stock', 'out_of_stock', 'all'):
+            stock_status = 'in_stock'
+        effective_stock = stock_status if stock_status != 'all' else None
 
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,
             page=page, per_page=50,
-            search=search, show_imported=show_imported
+            search=search, show_imported=show_imported,
+            stock_status=effective_stock
         )
 
         # Получаем ID уже импортированных товаров
@@ -778,11 +784,14 @@ def register_supplier_routes(app):
         )
 
         stats = SupplierService.get_product_stats(supplier_id)
+        price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
         return render_template('supplier_catalog_products.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                show_imported=show_imported,
+                               stock_status=stock_status,
+                               price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
                                connection=conn)
 
