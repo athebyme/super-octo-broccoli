@@ -125,6 +125,25 @@ subject = issuer = x509.Name([
     x509.NameAttribute(NameOID.ORGANIZATION_NAME, "WB Seller Platform"),
 ])
 
+# SAN: localhost + seller-platform + 127.0.0.1 + пользовательские IP из SSL_SAN_IPS
+san_entries = [
+    x509.DNSName("localhost"),
+    x509.DNSName("seller-platform"),
+    x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+]
+
+# Добавляем пользовательские IP/домены из SSL_SAN_IPS (через запятую)
+extra_sans = os.environ.get("SSL_SAN_IPS", "").strip()
+if extra_sans:
+    for entry in extra_sans.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(entry)))
+        except ValueError:
+            san_entries.append(x509.DNSName(entry))
+
 cert = (
     x509.CertificateBuilder()
     .subject_name(subject)
@@ -134,11 +153,7 @@ cert = (
     .not_valid_before(datetime.datetime.utcnow())
     .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
     .add_extension(
-        x509.SubjectAlternativeName([
-            x509.DNSName("localhost"),
-            x509.DNSName("seller-platform"),
-            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-        ]),
+        x509.SubjectAlternativeName(san_entries),
         critical=False,
     )
     .sign(key, hashes.SHA256())

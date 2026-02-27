@@ -19,6 +19,7 @@ services:
       - SSL_CERT_PATH=${SSL_CERT_PATH:-}
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
       - SSL_COMMON_NAME=${SSL_COMMON_NAME:-seller-platform}
+      - SSL_SAN_IPS=${SSL_SAN_IPS:-}
       - HTTP_PORT=${HTTP_PORT:-80}
     ports:
       - "${SELLER_PORT:-5001}:${SELLER_PORT:-5001}"
