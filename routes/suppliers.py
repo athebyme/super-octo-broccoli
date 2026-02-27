@@ -143,10 +143,12 @@ def register_supplier_routes(app):
             return redirect(url_for('admin_supplier_edit', supplier_id=supplier_id))
 
         stats = SupplierService.get_product_stats(supplier_id)
+        price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
         sellers = SupplierService.get_supplier_sellers(supplier_id)
         return render_template('admin_supplier_form.html',
                                supplier=supplier, mode='edit',
-                               stats=stats, sellers=sellers)
+                               stats=stats, price_stock_stats=price_stock_stats,
+                               sellers=sellers)
 
     # -------------------------------------------------------------------
     # Удаление поставщика
@@ -239,6 +241,55 @@ def register_supplier_routes(app):
         return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
     # -------------------------------------------------------------------
+    # Синхронизация цен и остатков
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/sync-prices', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_sync_prices(supplier_id):
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            flash('Поставщик не найден', 'danger')
+            return redirect(url_for('admin_suppliers'))
+
+        if not supplier.price_file_url:
+            flash('URL файла цен не задан для этого поставщика', 'warning')
+            return redirect(url_for('admin_supplier_edit', supplier_id=supplier_id))
+
+        force = request.form.get('force', '0') == '1'
+        result = SupplierService.sync_prices_and_stock(supplier_id, force=force)
+
+        # Каскадное обновление к продавцам
+        cascade_result = None
+        if result.success and result.updated > 0:
+            cascade_result = SupplierService.cascade_prices_to_sellers(supplier_id)
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='sync_supplier_prices',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'updated': result.updated,
+                'errors': result.errors,
+                'duration': round(result.duration_seconds, 1),
+                'cascade_updated': cascade_result['updated'] if cascade_result else 0,
+            },
+            request=request
+        )
+
+        if result.success:
+            msg = (f'Синхронизация цен: {result.updated} обновлено, '
+                   f'{result.errors} ошибок ({result.duration_seconds:.1f}с)')
+            if cascade_result and cascade_result['updated'] > 0:
+                msg += f' | Обновлено у продавцов: {cascade_result["updated"]}'
+            flash(msg, 'success')
+        else:
+            flash(f'Ошибка синхронизации цен: {"; ".join(result.error_messages[:3])}', 'danger')
+
+        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+    # -------------------------------------------------------------------
     # Товары поставщика (админ)
     # -------------------------------------------------------------------
     @app.route('/admin/suppliers/<int:supplier_id>/products')
@@ -257,6 +308,7 @@ def register_supplier_routes(app):
         brand = request.args.get('brand', '').strip()
         category = request.args.get('category', '').strip()
         ai_validated = request.args.get('ai_validated')
+        stock_status = request.args.get('stock_status', '').strip()
         sort_by = request.args.get('sort_by', 'created_at')
         sort_dir = request.args.get('sort_dir', 'desc')
 
@@ -270,10 +322,12 @@ def register_supplier_routes(app):
             supplier_id, page=page, per_page=per_page,
             search=search, status=status or None,
             category=category or None, brand=brand or None,
-            ai_validated=ai_val, sort_by=sort_by, sort_dir=sort_dir
+            ai_validated=ai_val, stock_status=stock_status or None,
+            sort_by=sort_by, sort_dir=sort_dir
         )
 
         stats = SupplierService.get_product_stats(supplier_id)
+        price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
         # Получить список брендов и категорий для фильтров
         brands = db.session.query(SupplierProduct.brand).filter(
@@ -292,10 +346,13 @@ def register_supplier_routes(app):
 
         return render_template('admin_supplier_products.html',
                                supplier=supplier, pagination=pagination,
-                               stats=stats, brands=brands, categories=categories,
+                               stats=stats, price_stock_stats=price_stock_stats,
+                               brands=brands, categories=categories,
                                search=search, current_status=status,
                                current_brand=brand, current_category=category,
-                               ai_validated=ai_validated, sort_by=sort_by, sort_dir=sort_dir)
+                               ai_validated=ai_validated,
+                               stock_status=stock_status,
+                               sort_by=sort_by, sort_dir=sort_dir)
 
     # -------------------------------------------------------------------
     # Детали / редактирование товара поставщика
@@ -330,9 +387,19 @@ def register_supplier_routes(app):
         # Кол-во продавцов, импортировавших этот товар
         import_count = ImportedProduct.query.filter_by(supplier_product_id=product_id).count()
 
+        # Расчёт розничной цены (если есть закупочная)
+        price_calc = None
+        if product.supplier_price and product.supplier_price > 0:
+            try:
+                from services.pricing_engine import calculate_price
+                price_calc = calculate_price(product.supplier_price)
+            except Exception:
+                pass
+
         return render_template('admin_supplier_product_detail.html',
                                supplier=supplier, product=product,
-                               import_count=import_count)
+                               import_count=import_count,
+                               price_calc=price_calc)
 
     # -------------------------------------------------------------------
     # Массовые действия с товарами
@@ -695,11 +762,17 @@ def register_supplier_routes(app):
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         show_imported = request.args.get('show_imported', '0') == '1'
+        # По умолчанию показываем только товары в наличии
+        stock_status = request.args.get('stock_status', 'in_stock').strip()
+        if stock_status not in ('in_stock', 'out_of_stock', 'all'):
+            stock_status = 'in_stock'
+        effective_stock = stock_status if stock_status != 'all' else None
 
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,
             page=page, per_page=50,
-            search=search, show_imported=show_imported
+            search=search, show_imported=show_imported,
+            stock_status=effective_stock
         )
 
         # Получаем ID уже импортированных товаров
@@ -711,11 +784,14 @@ def register_supplier_routes(app):
         )
 
         stats = SupplierService.get_product_stats(supplier_id)
+        price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
         return render_template('supplier_catalog_products.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                show_imported=show_imported,
+                               stock_status=stock_status,
+                               price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
                                connection=conn)
 
@@ -814,6 +890,8 @@ def _extract_supplier_form_data(form) -> dict:
     text_fields = [
         'description', 'website', 'csv_source_url', 'csv_delimiter',
         'csv_encoding', 'api_endpoint', 'auth_login', 'auth_password',
+        'price_file_url', 'price_file_inf_url', 'price_file_delimiter',
+        'price_file_encoding',
         'ai_provider', 'ai_api_key', 'ai_api_base_url', 'ai_model',
         'ai_client_id', 'ai_client_secret',
         'image_background_color',
@@ -828,7 +906,8 @@ def _extract_supplier_form_data(form) -> dict:
 
     # Числовые поля
     for f in ('ai_temperature', 'ai_max_tokens', 'ai_timeout',
-              'default_markup_percent', 'image_target_size'):
+              'default_markup_percent', 'image_target_size',
+              'auto_sync_interval_minutes'):
         val = form.get(f)
         if val:
             try:
@@ -840,6 +919,7 @@ def _extract_supplier_form_data(form) -> dict:
     data['ai_enabled'] = form.get('ai_enabled') == 'on'
     data['is_active'] = form.get('is_active') == 'on'
     data['resize_images'] = form.get('resize_images') == 'on'
+    data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
 
     return data
 

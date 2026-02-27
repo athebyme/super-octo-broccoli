@@ -30,7 +30,9 @@
                             </span>
                         </div>
                         <p class="text-sm text-gray-500 mt-1">ID: {{ product.external_id }} | Артикул: {{
-                            product.vendor_code or '—' }}</p>
+                            product.vendor_code or '—' }}
+                            {% if product.additional_vendor_code %} | Доп: {{ product.additional_vendor_code }}{% endif %}
+                        </p>
                     </div>
 
                     <!-- Фотографии -->
@@ -85,12 +87,19 @@
                                     class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
                         </div>
+
+                        <!-- Цены и остатки -->
+                        <hr class="my-4">
+                        <h3 class="text-sm font-semibold text-gray-700">Цены и остатки</h3>
                         <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Цена поставщика</label>
                                 <input type="number" name="supplier_price" step="0.01"
                                     value="{{ product.supplier_price or '' }}"
                                     class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                                {% if product.previous_price and product.previous_price != product.supplier_price %}
+                                <p class="mt-0.5 text-xs text-gray-400">Была: {{ '%.0f'|format(product.previous_price) }} &#8381;</p>
+                                {% endif %}
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Остаток</label>
@@ -98,6 +107,53 @@
                                     value="{{ product.supplier_quantity or '' }}"
                                     class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
                             </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">РРЦ</label>
+                                <div class="w-full rounded-lg bg-gray-50 text-sm border border-gray-200 px-3 py-2 text-gray-700">
+                                    {{ '%.0f ₽'|format(product.recommended_retail_price) if product.recommended_retail_price else '—' }}
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Наличие</label>
+                                <div class="w-full rounded-lg text-sm border border-gray-200 px-3 py-2 {{ 'bg-green-50 text-green-700' if product.supplier_status == 'in_stock' else 'bg-red-50 text-red-600' if product.supplier_status == 'out_of_stock' else 'bg-gray-50 text-gray-500' }}">
+                                    {% if product.supplier_status == 'in_stock' %}
+                                    В наличии
+                                    {% elif product.supplier_status == 'out_of_stock' %}
+                                    Нет в наличии
+                                    {% else %}
+                                    Не синхронизировано
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Расчёт розничной цены -->
+                        {% if price_calc %}
+                        <div class="bg-indigo-50 rounded-lg p-4 mt-3">
+                            <h4 class="text-sm font-semibold text-indigo-900 mb-2">Расчёт розничной цены (по умолчанию)</h4>
+                            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                                <div>
+                                    <span class="text-indigo-600">Закупочная (P)</span>
+                                    <p class="font-bold text-indigo-900">{{ '%.0f'|format(price_calc.P) }} &#8381;</p>
+                                </div>
+                                <div>
+                                    <span class="text-indigo-600">Цена на МП (Z)</span>
+                                    <p class="font-bold text-indigo-900">{{ '%.0f'|format(price_calc.Z) }} &#8381;</p>
+                                </div>
+                                <div>
+                                    <span class="text-indigo-600">Со скидкой (X)</span>
+                                    <p class="font-bold text-indigo-900">{{ '%.0f'|format(price_calc.X) }} &#8381;</p>
+                                </div>
+                                <div>
+                                    <span class="text-indigo-600">До скидки (Y)</span>
+                                    <p class="font-bold text-indigo-900">{{ '%.0f'|format(price_calc.Y) }} &#8381;</p>
+                                </div>
+                            </div>
+                            <p class="text-xs text-indigo-500 mt-2">Прибыль Q: {{ '%.0f'|format(price_calc.Q) }} &#8381; ({{ '%.0f'|format(price_calc.Q / price_calc.P * 100) if price_calc.P else 0 }}%) | Доставка S: {{ '%.0f'|format(price_calc.S) }} &#8381;</p>
+                        </div>
+                        {% endif %}
+
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Пол</label>
                                 <input type="text" name="gender" value="{{ product.gender or '' }}"
@@ -175,6 +231,12 @@
                         <dd class="font-medium text-gray-900 mt-0.5">{{ product.barcode }}</dd>
                     </div>
                     {% endif %}
+                    {% if product.additional_vendor_code %}
+                    <div>
+                        <dt class="text-gray-500">Доп. артикул</dt>
+                        <dd class="font-medium text-gray-900 mt-0.5">{{ product.additional_vendor_code }}</dd>
+                    </div>
+                    {% endif %}
                     <div>
                         <dt class="text-gray-500">AI валидирован</dt>
                         <dd class="mt-0.5">
@@ -192,6 +254,18 @@
                         <dt class="text-gray-500">Импортирован продавцами</dt>
                         <dd class="font-medium text-gray-900 mt-0.5">{{ import_count }}</dd>
                     </div>
+                    {% if product.last_price_sync_at %}
+                    <div>
+                        <dt class="text-gray-500">Синхр. цен</dt>
+                        <dd class="text-gray-600 mt-0.5">{{ product.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }}</dd>
+                    </div>
+                    {% endif %}
+                    {% if product.price_changed_at %}
+                    <div>
+                        <dt class="text-gray-500">Цена менялась</dt>
+                        <dd class="text-gray-600 mt-0.5">{{ product.price_changed_at.strftime('%d.%m.%Y %H:%M') }}</dd>
+                    </div>
+                    {% endif %}
                     <div>
                         <dt class="text-gray-500">Создан</dt>
                         <dd class="text-gray-600 mt-0.5">{{ product.created_at.strftime('%d.%m.%Y %H:%M') if
@@ -207,7 +281,7 @@
 
             <!-- AI действия -->
             {% if supplier.ai_enabled %}
-            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4 sticky top-80">
+            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4">
                 <h3 class="text-sm font-semibold text-gray-900 mb-3">AI действия</h3>
                 <div class="space-y-2">
                     <form method="POST" action="{{ url_for('admin_supplier_ai_seo', supplier_id=supplier.id) }}">
