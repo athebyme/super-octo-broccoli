@@ -465,6 +465,19 @@ class SupplierService:
                 f"({result.duration_seconds:.1f}s)"
             )
 
+            # Запускаем фоновое скачивание всех фото поставщика
+            try:
+                from services.photo_cache import bulk_download_supplier_photos
+                dl_result = bulk_download_supplier_photos(supplier_id)
+                logger.info(
+                    f"Фото {supplier.code}: "
+                    f"всего={dl_result['total_photos']}, "
+                    f"в кэше={dl_result['already_cached']}, "
+                    f"в очереди={dl_result['queued']}"
+                )
+            except Exception as e:
+                logger.warning(f"Ошибка запуска скачивания фото: {e}")
+
         except Exception as e:
             db.session.rollback()
             result.success = False

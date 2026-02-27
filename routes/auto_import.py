@@ -1041,167 +1041,114 @@ def register_auto_import_routes(app):
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
 
-    # Простой файловый кэш для картинок
-    import hashlib
-    import os
-    PHOTO_CACHE_DIR = os.path.join(os.path.dirname(__file__), 'photo_cache')
-    os.makedirs(PHOTO_CACHE_DIR, exist_ok=True)
-
-    def get_photo_cache_path(url: str) -> str:
-        """Генерирует путь к кэшированному файлу"""
-        url_hash = hashlib.md5(url.encode()).hexdigest()
-        return os.path.join(PHOTO_CACHE_DIR, f"{url_hash}.jpg")
-
+    # Используем централизованный кэш фото из services/photo_cache.py
     @app.route('/auto-import/photo/padded', methods=['GET'])
     @login_required
     def auto_import_photo_padded():
         """
-        Возвращает фото с примененным padding до 1200x1200
+        Возвращает фото с примененным padding до 1200x1200.
+        Использует централизованный PhotoCacheManager.
+
         Query params:
             url: URL исходного фото
             bg_color: Цвет фона для padding (по умолчанию 'white')
             fallback_blur: URL альтернативного изображения (blur)
             fallback_original: URL альтернативного изображения (original)
         """
+        from services.photo_cache import get_photo_cache
+
         photo_url = request.args.get('url')
-        bg_color = request.args.get('bg_color', 'white')
         fallback_blur = request.args.get('fallback_blur')
         fallback_original = request.args.get('fallback_original')
 
         if not photo_url:
             return jsonify({'error': 'URL параметр обязателен'}), 400
 
-        # Проверяем кэш
-        cache_path = get_photo_cache_path(photo_url)
-        if os.path.exists(cache_path):
-            # Проверяем возраст кэша (24 часа)
-            cache_age = time.time() - os.path.getmtime(cache_path)
-            if cache_age < 86400:  # 24 часа
-                logger.info(f"📦 Кэш найден для: {photo_url[:50]}...")
-                return send_file(cache_path, mimetype='image/jpeg')
+        cache = get_photo_cache()
 
-        try:
-            logger.info(f"🖼️  Запрос обработки фото: {photo_url}")
+        # Определяем supplier_type и external_id из URL
+        supplier_type = 'unknown'
+        external_id = ''
+        if 'sexoptovik.ru' in photo_url or 'x-story.ru' in photo_url:
+            supplier_type = 'sexoptovik'
+            import re as _re
+            match = _re.search(r'/(\d+)/\d+_\d+_1200\.jpg', photo_url)
+            if not match:
+                match = _re.search(r'/(\d+)_\d+_1200\.jpg', photo_url)
+            if match:
+                external_id = f'id-{match.group(1)}'
 
-            # Собираем fallback URLs
-            fallback_urls = []
-            if fallback_blur:
-                fallback_urls.append(fallback_blur)
-            if fallback_original:
-                fallback_urls.append(fallback_original)
+        # Проверяем централизованный кэш
+        if cache.is_cached(supplier_type, external_id, photo_url):
+            cache_path = cache.get_cache_path(supplier_type, external_id, photo_url)
+            return send_file(cache_path, mimetype='image/jpeg')
 
-            # Автоматически формируем fallback URLs для sexoptovik
-            if 'sexoptovik.ru' in photo_url and not fallback_urls:
-                # Извлекаем ID и номер из URL
-                import re
-                match = re.search(r'/(\d+)/(\d+)_(\d+)_1200\.jpg', photo_url)
-                if match:
-                    product_id, _, photo_num = match.groups()
-                    fallback_urls = [
-                        f"https://x-story.ru/mp/_project/img_sx0_1200/{product_id}_{photo_num}_1200.jpg",
-                        f"https://x-story.ru/mp/_project/img_sx_1200/{product_id}_{photo_num}_1200.jpg"
-                    ]
-                    logger.info(f"📋 Автоматические fallback URLs: {fallback_urls}")
+        # Собираем fallback URLs
+        fallback_urls = []
+        if fallback_blur:
+            fallback_urls.append(fallback_blur)
+        if fallback_original:
+            fallback_urls.append(fallback_original)
 
-            # Получаем настройки автоимпорта для получения credentials sexoptovik
-            # ВАЖНО: Фотографии одинаковые для всех продавцов, поэтому можем использовать
-            # credentials от любого настроенного продавца
+        # Автоматически формируем fallback URLs для sexoptovik
+        if 'sexoptovik.ru' in photo_url and not fallback_urls:
+            import re as _re
+            match = _re.search(r'/(\d+)/(\d+)_(\d+)_1200\.jpg', photo_url)
+            if match:
+                product_id, _, photo_num = match.groups()
+                fallback_urls = [
+                    f"https://x-story.ru/mp/_project/img_sx0_1200/{product_id}_{photo_num}_1200.jpg",
+                    f"https://x-story.ru/mp/_project/img_sx_1200/{product_id}_{photo_num}_1200.jpg"
+                ]
+
+        # Получаем auth cookies для sexoptovik
+        auth_cookies = None
+        if 'sexoptovik.ru' in photo_url:
             seller = current_user.seller if current_user.is_authenticated else None
-            logger.info(f"👤 Current user authenticated: {current_user.is_authenticated}, seller: {seller is not None}")
-            auth_cookies = None
+            settings = seller.auto_import_settings if seller else None
+            sexoptovik_login = None
+            sexoptovik_password = None
 
-            # Если URL от sexoptovik - нужна авторизация
-            if 'sexoptovik.ru' in photo_url:
-                logger.info(f"🌐 URL от sexoptovik.ru обнаружен")
+            if settings and settings.sexoptovik_login and settings.sexoptovik_password:
+                sexoptovik_login = settings.sexoptovik_login
+                sexoptovik_password = settings.sexoptovik_password
+            else:
+                other_settings = AutoImportSettings.query.filter(
+                    AutoImportSettings.sexoptovik_login.isnot(None),
+                    AutoImportSettings.sexoptovik_password.isnot(None)
+                ).first()
+                if other_settings:
+                    sexoptovik_login = other_settings.sexoptovik_login
+                    sexoptovik_password = other_settings.sexoptovik_password
 
-                # Сначала пробуем credentials текущего продавца
-                settings = seller.auto_import_settings if seller else None
-                sexoptovik_login = None
-                sexoptovik_password = None
+            if sexoptovik_login and sexoptovik_password:
+                from services.auto_import_manager import SexoptovikAuth
+                auth_cookies = SexoptovikAuth.get_auth_cookies(
+                    sexoptovik_login,
+                    sexoptovik_password
+                )
 
-                if settings and settings.sexoptovik_login and settings.sexoptovik_password:
-                    sexoptovik_login = settings.sexoptovik_login
-                    sexoptovik_password = settings.sexoptovik_password
-                    logger.info(f"🔑 Используем credentials текущего продавца: {sexoptovik_login}")
-                else:
-                    # Если у текущего нет - ищем у любого настроенного продавца
-                    logger.info(f"🔍 Ищем credentials у других продавцов...")
-                    other_settings = AutoImportSettings.query.filter(
-                        AutoImportSettings.sexoptovik_login.isnot(None),
-                        AutoImportSettings.sexoptovik_password.isnot(None)
-                    ).first()
+        # Синхронная загрузка через централизованный кэш
+        success = cache.download_now(
+            supplier_type=supplier_type,
+            external_id=external_id,
+            url=photo_url,
+            auth_cookies=auth_cookies,
+            fallback_urls=fallback_urls if fallback_urls else None
+        )
 
-                    if other_settings:
-                        sexoptovik_login = other_settings.sexoptovik_login
-                        sexoptovik_password = other_settings.sexoptovik_password
-                        logger.info(f"✅ Найдены credentials от другого продавца: {sexoptovik_login}")
+        if success:
+            cache_path = cache.get_cache_path(supplier_type, external_id, photo_url)
+            return send_file(cache_path, mimetype='image/jpeg')
 
-                if sexoptovik_login and sexoptovik_password:
-                    logger.info(f"🔐 Авторизация на sexoptovik с логином: {sexoptovik_login}")
-                    from services.auto_import_manager import SexoptovikAuth
-                    auth_cookies = SexoptovikAuth.get_auth_cookies(
-                        sexoptovik_login,
-                        sexoptovik_password
-                    )
-                    if not auth_cookies:
-                        logger.warning(f"⚠️  Авторизация не удалась, пробуем fallback URLs")
-                    else:
-                        logger.info(f"✅ Авторизация успешна, получены cookies")
-                else:
-                    logger.warning(f"⚠️  Нет credentials для sexoptovik ни у одного продавца, пробуем fallback URLs")
-
-            # Скачиваем и обрабатываем фото с retry и fallback
-            logger.info(f"⬇️  Скачивание и обработка изображения...")
-            processed_image = ImageProcessor.download_and_process_image(
-                photo_url,
-                target_size=(1200, 1200),
-                background_color=bg_color,
-                auth_cookies=auth_cookies,
-                fallback_urls=fallback_urls if fallback_urls else None
-            )
-
-            if not processed_image:
-                # Вместо ошибки 500 возвращаем placeholder - это не блокирует UI
-                logger.debug(f"Фото недоступно, возвращаем placeholder: {photo_url[:50]}...")
-                # Создаём простой серый placeholder
-                from PIL import Image
-                from io import BytesIO
-                placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
-                buffer = BytesIO()
-                placeholder.save(buffer, format='JPEG', quality=80)
-                buffer.seek(0)
-                return send_file(buffer, mimetype='image/jpeg')
-
-            logger.info(f"✅ Изображение успешно обработано")
-
-            # Сохраняем в кэш
-            try:
-                processed_image.seek(0)
-                with open(cache_path, 'wb') as f:
-                    f.write(processed_image.read())
-                processed_image.seek(0)
-                logger.info(f"💾 Сохранено в кэш: {cache_path}")
-            except Exception as cache_err:
-                logger.warning(f"⚠️  Ошибка сохранения в кэш: {cache_err}")
-
-            # Возвращаем обработанное изображение
-            return send_file(
-                processed_image,
-                mimetype='image/jpeg',
-                as_attachment=False,
-                download_name='padded_photo.jpg'
-            )
-
-        except Exception as e:
-            # Вместо ошибки 500 возвращаем placeholder
-            logger.debug(f"Ошибка загрузки фото, возвращаем placeholder: {str(e)[:100]}")
-            from PIL import Image
-            from io import BytesIO
-            placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
-            buffer = BytesIO()
-            placeholder.save(buffer, format='JPEG', quality=80)
-            buffer.seek(0)
-            return send_file(buffer, mimetype='image/jpeg')
+        # Placeholder при неудаче
+        from PIL import Image
+        from io import BytesIO
+        placeholder = Image.new('RGB', (200, 200), color=(243, 244, 246))
+        buffer = BytesIO()
+        placeholder.save(buffer, format='JPEG', quality=80)
+        buffer.seek(0)
+        return send_file(buffer, mimetype='image/jpeg')
 
 
     @app.route('/auto-import/ai-update', methods=['GET'])

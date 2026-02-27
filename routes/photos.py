@@ -166,6 +166,67 @@ def register_photo_routes(app):
         # Возвращаем placeholder вместо 404
         return _generate_placeholder_image()
 
+    # ==========================================================================
+    # API управления скачиванием фото
+    # ==========================================================================
+
+    @app.route('/api/photos/download-all/<int:supplier_id>', methods=['POST'])
+    @login_required
+    def api_photos_download_all(supplier_id):
+        """
+        Запускает массовое фоновое скачивание всех фото поставщика.
+        Фото, которые уже есть в кэше, пропускаются.
+        """
+        from services.photo_cache import bulk_download_supplier_photos
+        try:
+            result = bulk_download_supplier_photos(supplier_id)
+            return {
+                'success': True,
+                'total_photos': result['total_photos'],
+                'already_cached': result['already_cached'],
+                'queued': result['queued'],
+                'errors': result['errors']
+            }
+        except Exception as e:
+            logger.error(f"Ошибка запуска массового скачивания фото: {e}")
+            return {'success': False, 'error': str(e)}, 500
+
+    @app.route('/api/photos/download-status/<int:supplier_id>')
+    @login_required
+    def api_photos_download_status(supplier_id):
+        """
+        Возвращает прогресс скачивания фото для поставщика.
+        """
+        from services.photo_cache import get_photo_cache
+        try:
+            cache = get_photo_cache()
+            progress = cache.get_download_progress(supplier_id)
+            return {
+                'success': True,
+                **progress
+            }
+        except Exception as e:
+            logger.error(f"Ошибка получения прогресса: {e}")
+            return {'success': False, 'error': str(e)}, 500
+
+    @app.route('/api/photos/cache-stats')
+    @login_required
+    def api_photos_cache_stats():
+        """
+        Общая статистика кэша фотографий.
+        """
+        from services.photo_cache import get_photo_cache
+        try:
+            cache = get_photo_cache()
+            stats = cache.get_stats()
+            return {
+                'success': True,
+                **stats
+            }
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики: {e}")
+            return {'success': False, 'error': str(e)}, 500
+
 
 def _get_supplier_auth_cookies(supplier) -> dict:
     """Получает cookies авторизации для поставщика (если требуется)"""

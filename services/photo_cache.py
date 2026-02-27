@@ -35,7 +35,7 @@ PHOTO_CACHE_DIR = os.environ.get('PHOTO_CACHE_DIR', 'data/photo_cache')
 MAX_DOWNLOAD_QUEUE_SIZE = 1000
 
 # Количество воркеров для фоновой загрузки
-NUM_DOWNLOAD_WORKERS = 3
+NUM_DOWNLOAD_WORKERS = 5
 
 # Таймаут для загрузки одного фото
 DOWNLOAD_TIMEOUT = 15
@@ -419,6 +419,150 @@ class PhotoCacheManager:
 
         return result
 
+    def bulk_download_for_supplier(self, supplier_id: int) -> Dict:
+        """
+        Ставит в очередь загрузку ВСЕХ фото для всех товаров поставщика.
+        Пропускает фото, которые уже есть в кэше.
+
+        Args:
+            supplier_id: ID поставщика в БД
+
+        Returns:
+            dict: {total_photos, already_cached, queued, errors}
+        """
+        import json
+        # Ленивый импорт моделей чтобы избежать циклических зависимостей
+        from models import SupplierProduct, Supplier
+
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier:
+            return {'total_photos': 0, 'already_cached': 0, 'queued': 0, 'errors': ['Поставщик не найден']}
+
+        supplier_type = supplier.code or 'unknown'
+        total_photos = 0
+        already_cached = 0
+        queued = 0
+
+        # Обрабатываем товары батчами чтобы не грузить память
+        page = 1
+        batch_size = 200
+        while True:
+            products = SupplierProduct.query.filter_by(
+                supplier_id=supplier_id
+            ).filter(
+                SupplierProduct.photo_urls_json.isnot(None),
+                SupplierProduct.photo_urls_json != '[]'
+            ).limit(batch_size).offset((page - 1) * batch_size).all()
+
+            if not products:
+                break
+
+            for product in products:
+                try:
+                    photo_urls = json.loads(product.photo_urls_json)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                external_id = product.external_id or ''
+
+                for ph in photo_urls:
+                    if not isinstance(ph, dict):
+                        continue
+
+                    url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+                    if not url:
+                        continue
+
+                    total_photos += 1
+
+                    if self.is_cached(supplier_type, external_id, url):
+                        already_cached += 1
+                        continue
+
+                    # Собираем fallback URLs
+                    fallbacks = []
+                    if ph.get('blur') and ph['blur'] != url:
+                        fallbacks.append(ph['blur'])
+                    if ph.get('original') and ph['original'] != url:
+                        fallbacks.append(ph['original'])
+
+                    if self.queue_download(
+                        supplier_type=supplier_type,
+                        external_id=external_id,
+                        url=url,
+                        fallback_urls=fallbacks
+                    ):
+                        queued += 1
+
+            page += 1
+
+        logger.info(
+            f"Bulk download для {supplier_type}: "
+            f"всего={total_photos}, в кэше={already_cached}, в очереди={queued}"
+        )
+
+        return {
+            'total_photos': total_photos,
+            'already_cached': already_cached,
+            'queued': queued,
+            'errors': []
+        }
+
+    def get_download_progress(self, supplier_id: int) -> Dict:
+        """
+        Возвращает прогресс скачивания фото для поставщика.
+
+        Returns:
+            dict: {total, cached, pending, percent}
+        """
+        import json
+        from models import SupplierProduct, Supplier
+
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier:
+            return {'total': 0, 'cached': 0, 'pending': 0, 'percent': 0}
+
+        supplier_type = supplier.code or 'unknown'
+        total = 0
+        cached = 0
+
+        products = SupplierProduct.query.filter_by(
+            supplier_id=supplier_id
+        ).filter(
+            SupplierProduct.photo_urls_json.isnot(None),
+            SupplierProduct.photo_urls_json != '[]'
+        ).all()
+
+        for product in products:
+            try:
+                photo_urls = json.loads(product.photo_urls_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            external_id = product.external_id or ''
+
+            for ph in photo_urls:
+                if not isinstance(ph, dict):
+                    continue
+                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+                if not url:
+                    continue
+
+                total += 1
+                if self.is_cached(supplier_type, external_id, url):
+                    cached += 1
+
+        pending = total - cached
+        percent = round((cached / total * 100), 1) if total > 0 else 100.0
+
+        return {
+            'total': total,
+            'cached': cached,
+            'pending': pending,
+            'percent': percent,
+            'queue_size': self._download_queue.qsize()
+        }
+
 
 # Глобальный экземпляр
 _photo_cache: Optional[PhotoCacheManager] = None
@@ -499,3 +643,17 @@ def get_supplier_photo_url(supplier_type: str, external_id: str, url: str) -> st
     photo_hash = cache.get_photo_hash(url)
     safe_id = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(external_id))
     return f"/photos/supplier/{supplier_type}/{safe_id}/{photo_hash}"
+
+
+def bulk_download_supplier_photos(supplier_id: int) -> Dict:
+    """
+    Удобная функция для запуска массового скачивания фото поставщика.
+
+    Args:
+        supplier_id: ID поставщика
+
+    Returns:
+        dict: {total_photos, already_cached, queued, errors}
+    """
+    cache = get_photo_cache()
+    return cache.bulk_download_for_supplier(supplier_id)

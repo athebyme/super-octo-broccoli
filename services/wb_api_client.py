@@ -652,7 +652,7 @@ class WildberriesAPIClient:
             WB API v2 требует отправлять ПОЛНУЮ карточку товара.
             Метод автоматически получает текущую карточку и объединяет с изменениями.
         """
-        from wb_validators import prepare_card_for_update, validate_and_log_errors, clean_characteristics_for_update
+        from services.wb_validators import prepare_card_for_update, validate_and_log_errors, clean_characteristics_for_update
 
         logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
         logger.debug(f"Update data: {updates}")
@@ -797,7 +797,7 @@ class WildberriesAPIClient:
 
         # Валидация карточек
         if validate:
-            from wb_validators import validate_card_update
+            from services.wb_validators import validate_card_update
             for i, card in enumerate(cards):
                 is_valid, validation_errors = validate_card_update(card)
                 if not is_valid:
