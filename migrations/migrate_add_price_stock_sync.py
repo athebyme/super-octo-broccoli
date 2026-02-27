@@ -10,95 +10,123 @@ Supplier:
 SupplierProduct:
 - recommended_retail_price, supplier_status, additional_vendor_code
 - last_price_sync_at, price_changed_at, previous_price
+
+Usage:
+  python migrations/migrate_add_price_stock_sync.py                         # auto-detect via Flask app
+  python migrations/migrate_add_price_stock_sync.py /path/to/db.db          # explicit path
+  python migrations/migrate_add_price_stock_sync.py --db-path /path/to/db   # explicit path
 """
 
 import sys
 import sqlite3
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from seller_platform import app
+def get_db_path():
+    """Получить путь к БД из аргументов или через Flask"""
+    # Аргумент командной строки
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == '--db-path' and i < len(sys.argv) - 1:
+            return sys.argv[i + 1]
+        if not arg.startswith('-') and arg.endswith('.db'):
+            return arg
+
+    # Через Flask app
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from seller_platform import app
+        with app.app_context():
+            db_url = app.config['SQLALCHEMY_DATABASE_URI']
+            if db_url.startswith('sqlite:///'):
+                return db_url.replace('sqlite:///', '')
+    except Exception:
+        pass
+
+    # Стандартный путь
+    default = Path(__file__).parent.parent / 'data' / 'seller_platform.db'
+    if default.exists():
+        return str(default)
+
+    return None
 
 
-def migrate():
+def migrate(db_path: str = None):
     """Выполнить миграцию"""
-    with app.app_context():
-        print("Начало миграции: добавление полей синхронизации цен/остатков")
+    if not db_path:
+        db_path = get_db_path()
 
-        db_url = app.config['SQLALCHEMY_DATABASE_URI']
-        if db_url.startswith('sqlite:///'):
-            db_path = db_url.replace('sqlite:///', '')
-        else:
-            print(f"Неподдерживаемый тип БД: {db_url}")
-            return False
+    if not db_path:
+        print("Не удалось определить путь к БД")
+        return False
 
-        if not Path(db_path).exists():
-            print(f"База данных не найдена: {db_path}")
-            return False
+    if not Path(db_path).exists():
+        print(f"База данных не найдена: {db_path}")
+        return False
 
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+    print(f"Начало миграции: добавление полей синхронизации цен/остатков ({db_path})")
 
-        try:
-            # --- suppliers ---
-            cursor.execute("PRAGMA table_info(suppliers)")
-            columns = {row[1] for row in cursor.fetchall()}
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
 
-            supplier_new_columns = [
-                ("price_file_url", "VARCHAR(500)"),
-                ("price_file_inf_url", "VARCHAR(500)"),
-                ("price_file_delimiter", "VARCHAR(5) DEFAULT ';'"),
-                ("price_file_encoding", "VARCHAR(20) DEFAULT 'cp1251'"),
-                ("last_price_sync_at", "DATETIME"),
-                ("last_price_sync_status", "VARCHAR(50)"),
-                ("last_price_sync_error", "TEXT"),
-                ("last_price_file_hash", "VARCHAR(64)"),
-                ("auto_sync_prices", "BOOLEAN DEFAULT 0"),
-                ("auto_sync_interval_minutes", "INTEGER DEFAULT 60"),
-            ]
+    try:
+        # --- suppliers ---
+        cursor.execute("PRAGMA table_info(suppliers)")
+        columns = {row[1] for row in cursor.fetchall()}
 
-            for col_name, col_type in supplier_new_columns:
-                if col_name not in columns:
-                    print(f"  + suppliers.{col_name}")
-                    cursor.execute(f"ALTER TABLE suppliers ADD COLUMN {col_name} {col_type}")
-                else:
-                    print(f"  . suppliers.{col_name} already exists")
+        supplier_new_columns = [
+            ("price_file_url", "VARCHAR(500)"),
+            ("price_file_inf_url", "VARCHAR(500)"),
+            ("price_file_delimiter", "VARCHAR(5) DEFAULT ';'"),
+            ("price_file_encoding", "VARCHAR(20) DEFAULT 'cp1251'"),
+            ("last_price_sync_at", "DATETIME"),
+            ("last_price_sync_status", "VARCHAR(50)"),
+            ("last_price_sync_error", "TEXT"),
+            ("last_price_file_hash", "VARCHAR(64)"),
+            ("auto_sync_prices", "BOOLEAN DEFAULT 0"),
+            ("auto_sync_interval_minutes", "INTEGER DEFAULT 60"),
+        ]
 
-            conn.commit()
+        for col_name, col_type in supplier_new_columns:
+            if col_name not in columns:
+                print(f"  + suppliers.{col_name}")
+                cursor.execute(f"ALTER TABLE suppliers ADD COLUMN {col_name} {col_type}")
+            else:
+                print(f"  . suppliers.{col_name} already exists")
 
-            # --- supplier_products ---
-            cursor.execute("PRAGMA table_info(supplier_products)")
-            columns = {row[1] for row in cursor.fetchall()}
+        conn.commit()
 
-            product_new_columns = [
-                ("recommended_retail_price", "FLOAT"),
-                ("supplier_status", "VARCHAR(50)"),
-                ("additional_vendor_code", "VARCHAR(200)"),
-                ("last_price_sync_at", "DATETIME"),
-                ("price_changed_at", "DATETIME"),
-                ("previous_price", "FLOAT"),
-            ]
+        # --- supplier_products ---
+        cursor.execute("PRAGMA table_info(supplier_products)")
+        columns = {row[1] for row in cursor.fetchall()}
 
-            for col_name, col_type in product_new_columns:
-                if col_name not in columns:
-                    print(f"  + supplier_products.{col_name}")
-                    cursor.execute(f"ALTER TABLE supplier_products ADD COLUMN {col_name} {col_type}")
-                else:
-                    print(f"  . supplier_products.{col_name} already exists")
+        product_new_columns = [
+            ("recommended_retail_price", "FLOAT"),
+            ("supplier_status", "VARCHAR(50)"),
+            ("additional_vendor_code", "VARCHAR(200)"),
+            ("last_price_sync_at", "DATETIME"),
+            ("price_changed_at", "DATETIME"),
+            ("previous_price", "FLOAT"),
+        ]
 
-            conn.commit()
+        for col_name, col_type in product_new_columns:
+            if col_name not in columns:
+                print(f"  + supplier_products.{col_name}")
+                cursor.execute(f"ALTER TABLE supplier_products ADD COLUMN {col_name} {col_type}")
+            else:
+                print(f"  . supplier_products.{col_name} already exists")
 
-            print("\nМиграция завершена успешно!")
-            return True
+        conn.commit()
 
-        except Exception as e:
-            print(f"Ошибка при миграции: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-        finally:
-            conn.close()
+        print("\nМиграция завершена успешно!")
+        return True
+
+    except Exception as e:
+        print(f"Ошибка при миграции: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':
