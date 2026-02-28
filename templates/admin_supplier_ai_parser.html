@@ -1,0 +1,489 @@
+{% extends "base.html" %}
+
+{% block title %}AI Парсер — {{ supplier.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:text-indigo-600">Поставщики</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}" class="hover:text-indigo-600">{{ supplier.name }}</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">AI Парсер</span>
+    </nav>
+
+    <div class="mb-6">
+        <div class="flex justify-between items-start">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-900">AI Парсер данных</h1>
+                <p class="text-sm text-gray-500 mt-1">Извлечение характеристик товаров для маркетплейсов</p>
+            </div>
+            <div class="flex gap-2">
+                {% if supplier.description_file_url %}
+                <button onclick="startDescSync()" id="descSyncBtn"
+                        class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                    Синхр. описания
+                </button>
+                {% endif %}
+                <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
+                   class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                    Назад к товарам
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Статистика -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+            <p class="text-xs text-gray-500">Всего товаров</p>
+            <p class="text-2xl font-bold text-gray-900">{{ stats.total }}</p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+            <p class="text-xs text-gray-500">AI спарсено</p>
+            <p class="text-2xl font-bold text-indigo-600" id="statParsed">{{ parsed_count }}</p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+            <p class="text-xs text-gray-500">Не спарсено</p>
+            <p class="text-2xl font-bold text-orange-500">{{ stats.total - parsed_count }}</p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+            <p class="text-xs text-gray-500">AI покрытие</p>
+            <p class="text-2xl font-bold text-green-600">{{ '%.0f'|format(parsed_count / stats.total * 100) if stats.total > 0 else 0 }}%</p>
+        </div>
+    </div>
+
+    {% if not supplier.ai_enabled %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+        <p class="text-yellow-800 font-medium">AI не активирован.</p>
+        <p class="text-yellow-600 text-sm mt-1">
+            <a href="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) }}" class="underline">Настройки поставщика</a> — включите AI.
+        </p>
+    </div>
+    {% else %}
+
+    <!-- ===== ПАНЕЛЬ АКТИВНЫХ ЗАДАЧ ===== -->
+    <div id="jobsPanel" class="space-y-3 mb-6" style="{% if not active_jobs %}display:none{% endif %}">
+    </div>
+
+    <!-- История задач (свёрнутая) -->
+    {% if recent_jobs %}
+    <details class="mb-6">
+        <summary class="text-sm text-gray-500 cursor-pointer hover:text-indigo-600">
+            История задач (последние {{ recent_jobs|length }})
+        </summary>
+        <div class="mt-2 space-y-2">
+            {% for j in recent_jobs %}
+            {% if j.status in ('done', 'failed', 'cancelled') %}
+            <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex justify-between items-center text-sm">
+                <div>
+                    <span class="font-medium {% if j.status == 'done' %}text-green-700{% elif j.status == 'failed' %}text-red-600{% else %}text-gray-500{% endif %}">
+                        {{ j.status|upper }}
+                    </span>
+                    <span class="text-gray-500 ml-2">{{ j.job_type }}</span>
+                    <span class="text-gray-400 ml-2">{{ j.succeeded }} ok / {{ j.failed }} fail / {{ j.total }} total</span>
+                </div>
+                <span class="text-xs text-gray-400">{{ j.created_at[:16] if j.created_at else '' }}</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    <!-- Инструкция -->
+    <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
+        <h3 class="text-indigo-900 font-semibold text-sm mb-2">Как работает</h3>
+        <ol class="text-indigo-700 text-sm space-y-1 list-decimal list-inside">
+            <li>Выберите товары галочками</li>
+            <li>Выберите кол-во потоков (параллельных AI-запросов) и нажмите "AI Парсинг выбранных"</li>
+            <li>Прогресс отобразится в панели вверху — страница не зависает, обработка идёт параллельно</li>
+            <li>AI извлечёт 50+ характеристик в формате WB/Ozon</li>
+        </ol>
+    </div>
+
+    <!-- Фильтры -->
+    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+        <div class="flex gap-3 items-end">
+            <div class="flex-1">
+                <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, ID, бренду..."
+                       class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <select name="stock_status" class="rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="">Все</option>
+                    <option value="in_stock" {{ 'selected' if stock_status == 'in_stock' }}>В наличии</option>
+                    <option value="out_of_stock" {{ 'selected' if stock_status == 'out_of_stock' }}>Нет в наличии</option>
+                </select>
+            </div>
+            <button type="submit" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Найти</button>
+        </div>
+    </form>
+
+    <!-- Таблица товаров -->
+    <div class="bg-white rounded-lg border border-gray-200 mb-6">
+        <div class="p-4 border-b border-gray-200 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="selectAll" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                    <span class="text-sm font-medium text-gray-700">Выбрать все</span>
+                </label>
+                <span id="selectedCount" class="text-sm text-gray-500 hidden">
+                    Выбрано: <span class="font-bold text-indigo-600">0</span>
+                </span>
+            </div>
+            <div class="flex gap-2 items-center">
+                <label class="flex items-center gap-1.5 text-xs text-gray-500" title="Количество параллельных потоков AI-запросов">
+                    <span>Потоки:</span>
+                    <select id="maxWorkers" class="rounded border-gray-300 text-xs border px-2 py-1.5 w-16 focus:border-indigo-500 focus:ring-indigo-500">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="4" selected>4</option>
+                        <option value="6">6</option>
+                        <option value="8">8</option>
+                    </select>
+                </label>
+                <button type="button" id="bulkParseBtn" disabled onclick="startBulkParse()"
+                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                    AI Парсинг выбранных
+                </button>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left w-8"></th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-500">Товар</th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-500">Бренд</th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-500">Категория</th>
+                        <th class="px-4 py-3 text-right font-medium text-gray-500">Цена</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">Описание</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">AI парсинг</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">Действия</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for product in pagination.items %}
+                    <tr class="hover:bg-gray-50 transition-colors" id="row-{{ product.id }}">
+                        <td class="px-4 py-3">
+                            <input type="checkbox" data-product-id="{{ product.id }}"
+                                   class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        </td>
+                        <td class="px-4 py-3">
+                            <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
+                               class="font-medium text-gray-900 hover:text-indigo-600 line-clamp-1">
+                                {{ product.title or 'Без названия' }}
+                            </a>
+                            <p class="text-xs text-gray-400 mt-0.5">{{ product.external_id }}</p>
+                        </td>
+                        <td class="px-4 py-3 text-gray-600">{{ product.brand or '—' }}</td>
+                        <td class="px-4 py-3 text-gray-600 text-xs">{{ (product.wb_category_name or product.category or '—')[:30] }}</td>
+                        <td class="px-4 py-3 text-right text-gray-900 font-medium">
+                            {{ '%.0f'|format(product.supplier_price) if product.supplier_price else '—' }}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            {% if product.description %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{{ product.description_source or 'есть' }}</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">нет</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center" id="parse-status-{{ product.id }}">
+                            {% if product.ai_parsed_at %}
+                            {% set pdata = product.get_ai_parsed_data() %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
+                                  title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
+                                {{ '%.0f'|format(pdata.get('parsing_meta', {}).get('fill_percentage', 0)) }}%
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <div class="flex justify-center gap-1">
+                                <button type="button" onclick="startSingleParse({{ product.id }})"
+                                        class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 transition-colors">
+                                    Парсинг
+                                </button>
+                                <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"
+                                   class="px-2 py-1 text-xs bg-gray-50 text-gray-600 rounded hover:bg-gray-100 transition-colors">
+                                    JSON
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if pagination.pages > 1 %}
+        <div class="p-4 border-t border-gray-200 flex justify-center">
+            <nav class="flex gap-1">
+                {% for page_num in pagination.iter_pages(left_edge=2, left_current=2, right_current=3, right_edge=2) %}
+                {% if page_num %}
+                <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, page=page_num, search=search, stock_status=stock_status) }}"
+                   class="px-3 py-1 rounded text-sm {{ 'bg-indigo-600 text-white' if page_num == pagination.page else 'text-gray-600 hover:bg-gray-100' }}">
+                    {{ page_num }}
+                </a>
+                {% else %}
+                <span class="px-2 py-1 text-gray-400">...</span>
+                {% endif %}
+                {% endfor %}
+            </nav>
+        </div>
+        {% endif %}
+    </div>
+
+    {% endif %}
+</div>
+
+<script>
+const SUPPLIER_ID = {{ supplier.id }};
+const PARSE_URL = '{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}';
+const DESC_SYNC_URL = '{{ url_for("admin_supplier_sync_descriptions", supplier_id=supplier.id) }}';
+
+// ===== Чекбоксы =====
+const selectAll = document.getElementById('selectAll');
+const bulkBtn = document.getElementById('bulkParseBtn');
+const selectedCount = document.getElementById('selectedCount');
+
+function getCheckboxes() { return document.querySelectorAll('.product-checkbox'); }
+
+function updateSelection() {
+    const checked = document.querySelectorAll('.product-checkbox:checked').length;
+    bulkBtn.disabled = checked === 0;
+    if (checked > 0) {
+        selectedCount.classList.remove('hidden');
+        selectedCount.querySelector('span').textContent = checked;
+    } else {
+        selectedCount.classList.add('hidden');
+    }
+}
+
+if (selectAll) {
+    selectAll.addEventListener('change', function() {
+        getCheckboxes().forEach(cb => cb.checked = this.checked);
+        updateSelection();
+    });
+}
+document.addEventListener('change', e => { if (e.target.classList.contains('product-checkbox')) updateSelection(); });
+
+// ===== Активные задачи (поллинг) =====
+let activeJobIds = new Set();
+{% for j in active_jobs %}
+activeJobIds.add('{{ j.job_id }}');
+{% endfor %}
+
+function statusUrl(jobId) {
+    return `/admin/suppliers/${SUPPLIER_ID}/ai/parse-job/${jobId}/status`;
+}
+function cancelUrl(jobId) {
+    return `/admin/suppliers/${SUPPLIER_ID}/ai/parse-job/${jobId}/cancel`;
+}
+
+function renderJobCard(j) {
+    const pct = j.progress_pct || 0;
+    const isDone = (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled');
+    const barColor = j.status === 'failed' ? 'bg-red-500' : j.status === 'cancelled' ? 'bg-gray-400' : j.status === 'done' ? 'bg-green-500' : 'bg-indigo-500';
+    const borderColor = j.status === 'failed' ? 'border-red-200' : j.status === 'done' ? 'border-green-200' : 'border-indigo-200';
+    const bgColor = j.status === 'failed' ? 'bg-red-50' : j.status === 'done' ? 'bg-green-50' : 'bg-indigo-50';
+
+    let statusIcon = '';
+    if (j.status === 'running') statusIcon = '<span class="inline-block animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full mr-2"></span>';
+    else if (j.status === 'done') statusIcon = '<svg class="inline w-4 h-4 text-green-600 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
+    else if (j.status === 'failed') statusIcon = '<svg class="inline w-4 h-4 text-red-500 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+
+    const typeLabel = j.job_type === 'sync_descriptions' ? 'Синхронизация описаний' : j.total === 1 ? 'AI Парсинг товара' : `AI Парсинг (${j.total} товаров)`;
+
+    let details = '';
+    if (j.current_product && j.status === 'running') {
+        details = `<p class="text-xs text-gray-500 mt-1 truncate">Обрабатывается: ${j.current_product}</p>`;
+    }
+    if (isDone && j.results && j.results.length > 0) {
+        const last5 = j.results.slice(-5);
+        details = '<div class="mt-2 space-y-1">' + last5.map(r => {
+            const icon = r.status === 'success' ? '<span class="text-green-600">&#10003;</span>' : '<span class="text-red-500">&#10007;</span>';
+            const extra = r.fill_pct ? ` (${r.fill_pct.toFixed(0)}%)` : '';
+            const err = r.error ? ` — ${r.error}` : '';
+            return `<p class="text-xs text-gray-500">${icon} ${r.title || r.product_id}${extra}${err}</p>`;
+        }).join('') + '</div>';
+    }
+
+    const cancelBtn = (!isDone) ? `<button onclick="cancelJob('${j.job_id}')" class="text-xs text-red-500 hover:text-red-700">Отменить</button>` : '';
+    const dismissBtn = isDone ? `<button onclick="dismissJob('${j.job_id}')" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>` : '';
+
+    return `
+    <div id="job-${j.job_id}" class="${bgColor} border ${borderColor} rounded-lg p-4 transition-all">
+        <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center">
+                ${statusIcon}
+                <span class="font-semibold text-sm text-gray-900">${typeLabel}</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-500">${j.succeeded} ok / ${j.failed} fail / ${j.processed}/${j.total}</span>
+                ${cancelBtn}${dismissBtn}
+            </div>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5 mb-1">
+            <div class="${barColor} h-2.5 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+        </div>
+        <div class="flex justify-between text-xs text-gray-500">
+            <span>${pct}%</span>
+            <span>${j.status}</span>
+        </div>
+        ${details}
+        ${j.error_message ? '<p class="text-xs text-red-600 mt-1">' + j.error_message + '</p>' : ''}
+    </div>`;
+}
+
+function renderAllJobs() {
+    const panel = document.getElementById('jobsPanel');
+    if (activeJobIds.size === 0) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = 'block';
+}
+
+function pollJob(jobId) {
+    fetch(statusUrl(jobId))
+    .then(r => r.json())
+    .then(data => {
+        const panel = document.getElementById('jobsPanel');
+        let el = document.getElementById('job-' + jobId);
+        const html = renderJobCard(data);
+
+        if (el) {
+            el.outerHTML = html;
+        } else {
+            panel.insertAdjacentHTML('afterbegin', html);
+            panel.style.display = 'block';
+        }
+
+        const isDone = ['done', 'failed', 'cancelled'].includes(data.status);
+        if (!isDone) {
+            setTimeout(() => pollJob(jobId), 2000);
+        } else {
+            activeJobIds.delete(jobId);
+        }
+    })
+    .catch(() => {
+        setTimeout(() => pollJob(jobId), 5000);
+    });
+}
+
+// Начать поллинг активных задач
+activeJobIds.forEach(id => pollJob(id));
+
+function cancelJob(jobId) {
+    if (!confirm('Отменить задачу?')) return;
+    fetch(cancelUrl(jobId), { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    .then(r => r.json())
+    .then(() => pollJob(jobId));
+}
+
+function dismissJob(jobId) {
+    const el = document.getElementById('job-' + jobId);
+    if (el) el.remove();
+    activeJobIds.delete(jobId);
+    renderAllJobs();
+}
+
+// ===== Запуск задач =====
+
+function startBulkParse() {
+    const ids = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.dataset.productId);
+    if (!ids.length) return;
+    if (!confirm(`Запустить AI парсинг для ${ids.length} товаров?`)) return;
+
+    bulkBtn.disabled = true;
+    bulkBtn.textContent = 'Запуск...';
+
+    const form = new FormData();
+    ids.forEach(id => form.append('product_ids', id));
+    form.append('max_workers', document.getElementById('maxWorkers').value);
+
+    fetch(PARSE_URL, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: form
+    })
+    .then(r => r.json())
+    .then(data => {
+        bulkBtn.textContent = 'AI Парсинг выбранных';
+        updateSelection();
+
+        if (data.error) {
+            alert('Ошибка: ' + data.error);
+            return;
+        }
+        if (data.job_id) {
+            activeJobIds.add(data.job_id);
+            pollJob(data.job_id);
+            // Сбросить чекбоксы
+            getCheckboxes().forEach(cb => cb.checked = false);
+            if (selectAll) selectAll.checked = false;
+            updateSelection();
+        }
+    })
+    .catch(err => {
+        bulkBtn.textContent = 'AI Парсинг выбранных';
+        updateSelection();
+        alert('Ошибка сети: ' + err.message);
+    });
+}
+
+function startSingleParse(productId) {
+    const form = new FormData();
+    form.append('product_id', productId);
+
+    // Обновляем ячейку статуса на спиннер
+    const cell = document.getElementById('parse-status-' + productId);
+    if (cell) cell.innerHTML = '<span class="inline-block animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full"></span>';
+
+    fetch(PARSE_URL, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: form
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.job_id) {
+            activeJobIds.add(data.job_id);
+            pollJob(data.job_id);
+        } else if (data.error) {
+            if (cell) cell.innerHTML = '<span class="text-xs text-red-500">err</span>';
+        }
+    })
+    .catch(() => {
+        if (cell) cell.innerHTML = '<span class="text-xs text-red-500">err</span>';
+    });
+}
+
+function startDescSync() {
+    if (!confirm('Запустить синхронизацию описаний из CSV?')) return;
+    const btn = document.getElementById('descSyncBtn');
+    btn.disabled = true;
+    btn.textContent = 'Запуск...';
+
+    fetch(DESC_SYNC_URL, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(r => {
+        // Это redirect при обычном POST, но мы отправляем без XHR header в form
+        // Используем form submit вместо
+    });
+
+    // Fallback — просто сабмитим форму
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = DESC_SYNC_URL;
+    document.body.appendChild(form);
+    form.submit();
+}
+</script>
+{% endblock %}

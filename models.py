@@ -2054,6 +2054,14 @@ class Supplier(db.Model):
     ai_keywords_instruction = db.Column(db.Text)
     ai_description_instruction = db.Column(db.Text)
     ai_analysis_instruction = db.Column(db.Text)
+    ai_parsing_instruction = db.Column(db.Text)  # Кастомная инструкция для AI парсинга
+
+    # Файл описаний товаров (отдельный CSV с описаниями)
+    description_file_url = db.Column(db.String(500))       # URL CSV с описаниями
+    description_file_delimiter = db.Column(db.String(5), default=';')
+    description_file_encoding = db.Column(db.String(20), default='cp1251')
+    last_description_sync_at = db.Column(db.DateTime)
+    last_description_sync_status = db.Column(db.String(50))
 
     # Настройки обработки фото
     resize_images = db.Column(db.Boolean, default=True, nullable=False)
@@ -2246,6 +2254,12 @@ class SupplierProduct(db.Model):
     ai_validation_score = db.Column(db.Float)  # Оценка качества 0-100
     content_hash = db.Column(db.String(64))
 
+    # AI полный парсинг — результаты комплексного AI-извлечения
+    ai_parsed_data_json = db.Column(db.Text)  # Полный JSON со всеми извлечёнными характеристиками
+    ai_parsed_at = db.Column(db.DateTime)     # Когда был выполнен парсинг
+    ai_marketplace_json = db.Column(db.Text)  # Данные форматированные для маркетплейса (WB)
+    description_source = db.Column(db.String(50))  # csv/ai/manual — откуда описание
+
     # Оригинальные данные для отката
     original_data_json = db.Column(db.Text)
 
@@ -2356,6 +2370,77 @@ class SupplierProduct(db.Model):
             data['ai_analysis'] = json.loads(self.ai_analysis_json) if self.ai_analysis_json else None
             data['ai_validated_at'] = self.ai_validated_at.isoformat() if self.ai_validated_at else None
             data['validation_errors'] = self.get_validation_errors()
+            data['ai_parsed_data'] = self.get_ai_parsed_data()
+            data['ai_parsed_at'] = self.ai_parsed_at.isoformat() if self.ai_parsed_at else None
+            data['ai_marketplace_data'] = self.get_ai_marketplace_data()
+            data['description_source'] = self.description_source
+        return data
+
+    def get_ai_parsed_data(self) -> dict:
+        """Получить AI-извлечённые данные"""
+        if not self.ai_parsed_data_json:
+            return {}
+        try:
+            import json
+            return json.loads(self.ai_parsed_data_json)
+        except Exception:
+            return {}
+
+    def get_ai_marketplace_data(self) -> dict:
+        """Получить данные в формате маркетплейса"""
+        if not self.ai_marketplace_json:
+            return {}
+        try:
+            import json
+            return json.loads(self.ai_marketplace_json)
+        except Exception:
+            return {}
+
+    def get_all_data_for_parsing(self) -> dict:
+        """Собрать все данные товара для AI парсинга"""
+        import json
+        data = {
+            'title': self.title or '',
+            'description': self.description or '',
+            'brand': self.brand or '',
+            'category': self.category or '',
+            'wb_category': self.wb_category_name or '',
+            'gender': self.gender or '',
+            'country': self.country or '',
+            'season': self.season or '',
+            'age_group': self.age_group or '',
+            'vendor_code': self.vendor_code or '',
+            'barcode': self.barcode or '',
+            'price': self.supplier_price,
+        }
+        # JSON поля
+        try:
+            data['colors'] = json.loads(self.colors_json) if self.colors_json else []
+        except Exception:
+            data['colors'] = []
+        try:
+            data['materials'] = json.loads(self.materials_json) if self.materials_json else []
+        except Exception:
+            data['materials'] = []
+        try:
+            data['sizes'] = json.loads(self.sizes_json) if self.sizes_json else {}
+        except Exception:
+            data['sizes'] = {}
+        try:
+            data['dimensions'] = json.loads(self.dimensions_json) if self.dimensions_json else {}
+        except Exception:
+            data['dimensions'] = {}
+        try:
+            data['characteristics'] = json.loads(self.characteristics_json) if self.characteristics_json else []
+        except Exception:
+            data['characteristics'] = []
+        try:
+            data['original_data'] = json.loads(self.original_data_json) if self.original_data_json else {}
+        except Exception:
+            data['original_data'] = {}
+        data['photos_count'] = len(self.get_photos())
+        data['ai_seo_title'] = self.ai_seo_title or ''
+        data['ai_description'] = self.ai_description or ''
         return data
 
 
@@ -2429,3 +2514,25 @@ class EnrichmentJob(db.Model):
     updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     seller = db.relationship('Seller', foreign_keys=[seller_id])
+
+
+class AIParseJob(db.Model):
+    """Задача фонового AI парсинга товаров поставщика"""
+    __tablename__ = 'ai_parse_jobs'
+
+    id             = db.Column(db.String(36), primary_key=True)   # UUID
+    supplier_id    = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
+    admin_user_id  = db.Column(db.Integer)                        # Кто запустил
+    job_type       = db.Column(db.String(30), default='parse')    # parse / parse_single / sync_descriptions
+    status         = db.Column(db.String(20), default='pending')  # pending / running / done / failed / cancelled
+    total          = db.Column(db.Integer, default=0)
+    processed      = db.Column(db.Integer, default=0)
+    succeeded      = db.Column(db.Integer, default=0)
+    failed         = db.Column(db.Integer, default=0)
+    current_product_title = db.Column(db.String(200))             # Название текущего обрабатываемого товара
+    results        = db.Column(db.Text)                           # JSON [{product_id, title, status, fill_pct, error}]
+    error_message  = db.Column(db.Text)                           # Общая ошибка если failed
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship('Supplier', foreign_keys=[supplier_id])

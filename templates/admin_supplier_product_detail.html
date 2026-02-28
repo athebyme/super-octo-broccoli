@@ -204,6 +204,65 @@
                                 class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 overflow-x-auto max-h-48">{{ product.ai_analysis_json }}</pre>
                         </div>
                         {% endif %}
+
+                        <!-- AI Полный парсинг -->
+                        {% if product.ai_parsed_data_json %}
+                        <hr class="my-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-sm font-semibold text-gray-700">AI Полный парсинг</h3>
+                            <div class="flex gap-2 items-center">
+                                {% set parsed = product.get_ai_parsed_data() %}
+                                {% set pm = parsed.get('parsing_meta', {}) %}
+                                <span class="text-xs text-gray-500">
+                                    {{ pm.get('total_fields_found', 0) }}/{{ pm.get('total_fields_possible', 0) }} полей
+                                    ({{ '%.0f'|format(pm.get('fill_percentage', 0)) }}%)
+                                </span>
+                                {% if product.ai_parsed_at %}
+                                <span class="text-xs text-gray-400">{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <!-- Маркетплейс данные (компактный вид) -->
+                        {% set mp = product.get_ai_marketplace_data() %}
+                        {% if mp %}
+                        <div class="bg-indigo-50 rounded-lg p-4 mb-3">
+                            <div class="flex justify-between items-center mb-2">
+                                <h4 class="text-xs font-semibold text-indigo-900">Данные для WB</h4>
+                                <button type="button" onclick="copyText(document.getElementById('mpJson').textContent)" class="text-xs text-indigo-600 hover:text-indigo-800">Копировать</button>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 text-xs mb-2">
+                                {% if mp.get('title') %}<div><span class="text-indigo-600">Заголовок:</span> {{ mp.title[:50] }}</div>{% endif %}
+                                {% if mp.get('brand') %}<div><span class="text-indigo-600">Бренд:</span> {{ mp.brand }}</div>{% endif %}
+                                {% if mp.get('color') %}<div><span class="text-indigo-600">Цвет:</span> {{ mp.color }}</div>{% endif %}
+                                {% if mp.get('category') %}<div><span class="text-indigo-600">Категория:</span> {{ mp.category[:30] }}</div>{% endif %}
+                            </div>
+                            {% if mp.get('characteristics') %}
+                            <div class="text-xs text-indigo-700 mb-1"><strong>Характеристики:</strong></div>
+                            <div class="grid grid-cols-2 gap-1 text-xs">
+                                {% for k, v in mp.characteristics.items() %}
+                                <div class="text-indigo-600">{{ k }}: <span class="text-indigo-900">{{ v }}</span></div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            <pre id="mpJson" class="hidden">{{ product.ai_marketplace_json }}</pre>
+                        </div>
+                        {% endif %}
+
+                        <!-- Полный парсинг (свёрнутый) -->
+                        <details class="mb-2">
+                            <summary class="text-xs font-medium text-gray-600 cursor-pointer hover:text-indigo-600">
+                                Полные данные AI парсинга (JSON)
+                            </summary>
+                            <div class="mt-2 relative">
+                                <button type="button" onclick="copyText(document.getElementById('parsedJson').textContent)"
+                                        class="absolute top-2 right-2 text-xs text-gray-500 hover:text-indigo-600 bg-white px-2 py-0.5 rounded border">
+                                    Копировать
+                                </button>
+                                <pre id="parsedJson" class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 overflow-x-auto max-h-64 border">{{ product.ai_parsed_data_json }}</pre>
+                            </div>
+                        </details>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -320,10 +379,125 @@
                             Полное AI обогащение
                         </button>
                     </form>
+                    <hr class="my-2">
+                    <button type="button" id="parseBtn"
+                        onclick="startAsyncParse()"
+                        class="w-full text-left px-3 py-2 text-sm rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors font-medium">
+                        AI Полный парсинг
+                    </button>
+                    <div id="parseProgress" class="hidden px-3 mt-2">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="inline-block animate-spin h-3 w-3 border-2 border-orange-500 border-t-transparent rounded-full"></span>
+                            <span id="parseStatus" class="text-xs text-orange-700">Запуск...</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div id="parseBar" class="bg-orange-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div id="parseResult" class="hidden px-3 mt-2"></div>
+                    {% if product.ai_parsed_at %}
+                    <p class="text-xs text-gray-400 px-3 mt-1">
+                        Последний: {{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}
+                    </p>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}
+
+            <!-- Raw JSON -->
+            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Аналитика</h3>
+                <div class="space-y-2">
+                    <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"
+                       class="block w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
+                        Raw JSON (все данные)
+                    </a>
+                    {% if supplier.ai_enabled %}
+                    <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
+                       class="block w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
+                        AI Парсер (массовый)
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 </div>
+<script>
+function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Скопировано в буфер обмена');
+    });
+}
+
+function startAsyncParse() {
+    const btn = document.getElementById('parseBtn');
+    const progress = document.getElementById('parseProgress');
+    const resultDiv = document.getElementById('parseResult');
+    const statusText = document.getElementById('parseStatus');
+    const bar = document.getElementById('parseBar');
+
+    btn.disabled = true;
+    btn.classList.add('opacity-50');
+    progress.classList.remove('hidden');
+    resultDiv.classList.add('hidden');
+
+    const form = new FormData();
+    form.append('product_id', '{{ product.id }}');
+
+    fetch('{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: form
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            showParseError(data.error);
+            return;
+        }
+        if (data.job_id) {
+            pollParseJob(data.job_id);
+        }
+    })
+    .catch(err => showParseError('Ошибка сети: ' + err.message));
+
+    function pollParseJob(jobId) {
+        fetch(`/admin/suppliers/{{ supplier.id }}/ai/parse-job/${jobId}/status`)
+        .then(r => r.json())
+        .then(j => {
+            bar.style.width = (j.progress_pct || 0) + '%';
+            if (j.status === 'running') {
+                statusText.textContent = j.current_product ? `Анализ: ${j.current_product}` : 'AI анализирует...';
+                setTimeout(() => pollParseJob(jobId), 2000);
+            } else if (j.status === 'done') {
+                progress.classList.add('hidden');
+                const r0 = (j.results && j.results[0]) || {};
+                const fillPct = r0.fill_pct ? r0.fill_pct.toFixed(0) : '?';
+                resultDiv.innerHTML = `
+                    <div class="bg-green-50 rounded-lg p-2 text-xs">
+                        <span class="text-green-700 font-semibold">Готово!</span>
+                        Заполнено ${fillPct}% характеристик.
+                        <a href="" class="underline text-green-600 ml-1">Обновить страницу</a>
+                    </div>`;
+                resultDiv.classList.remove('hidden');
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            } else {
+                const errMsg = j.error_message || (j.results && j.results[0] && j.results[0].error) || 'Неизвестная ошибка';
+                showParseError(errMsg);
+            }
+        })
+        .catch(() => setTimeout(() => pollParseJob(jobId), 3000));
+    }
+
+    function showParseError(msg) {
+        progress.classList.add('hidden');
+        resultDiv.innerHTML = `<div class="bg-red-50 rounded-lg p-2 text-xs text-red-700">${msg}</div>`;
+        resultDiv.classList.remove('hidden');
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
+    }
+}
+</script>
 {% endblock %}

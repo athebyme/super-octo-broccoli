@@ -162,6 +162,40 @@
                     {% endif %}
 
                     <hr class="my-4">
+                    <h3 class="text-sm font-semibold text-gray-700">Файл описаний товаров</h3>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">URL CSV с описаниями</label>
+                        <input type="url" name="description_file_url" value="{{ supplier.description_file_url if supplier and supplier.description_file_url else '' }}"
+                               placeholder="http://sexoptovik.ru/files/all_prod_descriptions.csv"
+                               class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                        <p class="mt-1 text-xs text-gray-400">CSV: id;описание — описания подтянутся к товарам по ID</p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Разделитель</label>
+                            <input type="text" name="description_file_delimiter" value="{{ supplier.description_file_delimiter if supplier else ';' }}" maxlength="5"
+                                   class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Кодировка</label>
+                            <select name="description_file_encoding"
+                                    class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                                <option value="cp1251" {{ 'selected' if supplier and supplier.description_file_encoding == 'cp1251' else '' }}>cp1251 (Windows)</option>
+                                <option value="utf-8" {{ 'selected' if supplier and supplier.description_file_encoding == 'utf-8' else '' }}>UTF-8</option>
+                            </select>
+                        </div>
+                    </div>
+                    {% if mode == 'edit' and supplier.last_description_sync_at %}
+                    <div class="bg-gray-50 rounded-lg p-3 text-sm">
+                        <span class="text-gray-500">Последняя синхронизация описаний:</span>
+                        <span class="font-medium {{ 'text-green-600' if supplier.last_description_sync_status == 'success' else 'text-orange-600' }}">
+                            {{ supplier.last_description_sync_at.strftime('%d.%m.%Y %H:%M') }}
+                            ({{ supplier.last_description_sync_status }})
+                        </span>
+                    </div>
+                    {% endif %}
+
+                    <hr class="my-4">
                     <h3 class="text-sm font-semibold text-gray-700">Авторизация (для доступа к фото)</h3>
                     <div class="grid grid-cols-2 gap-4">
                         <div>
@@ -237,6 +271,12 @@
                         <label class="block text-sm font-medium text-gray-700 mb-1">Инструкция для описаний</label>
                         <textarea name="ai_description_instruction" rows="2"
                                   class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">{{ supplier.ai_description_instruction if supplier and supplier.ai_description_instruction else '' }}</textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Инструкция для AI парсинга (полное извлечение характеристик)</label>
+                        <textarea name="ai_parsing_instruction" rows="2"
+                                  placeholder="Оставьте пустым для стандартной инструкции. Опционально: укажите специфику товаров поставщика."
+                                  class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">{{ supplier.ai_parsing_instruction if supplier and supplier.ai_parsing_instruction else '' }}</textarea>
                     </div>
                 </div>
 

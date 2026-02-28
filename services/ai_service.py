@@ -1012,6 +1012,283 @@ Rich-контент на WB - это визуальные блоки (слайд
 }
 
 ВАЖНО: Заполняй ВСЕ поля что можешь определить. Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "full_product_parsing": {
+        "name": "Полный AI парсинг товара",
+        "description": "Комплексное извлечение ВСЕХ характеристик товара для маркетплейса",
+        "template": """Ты ведущий эксперт по товарным карточкам для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
+Твоя задача — извлечь АБСОЛЮТНО ВСЕ возможные характеристики и атрибуты товара из предоставленных данных.
+
+══════════════════════════════════════════════════════════════
+КАТЕГОРИИ ХАРАКТЕРИСТИК ДЛЯ ИЗВЛЕЧЕНИЯ:
+══════════════════════════════════════════════════════════════
+
+1. ИДЕНТИФИКАЦИЯ ТОВАРА:
+   - Тип/вид товара (product_type)
+   - Подтип/подкатегория (product_subtype)
+   - Предполагаемая категория WB (wb_category)
+   - Предмет WB (wb_subject)
+   - Назначение (purpose)
+   - Область применения (application_area)
+
+2. БРЕНД И ПРОИЗВОДИТЕЛЬ:
+   - Бренд (brand)
+   - Бренд нормализованный для WB (brand_normalized)
+   - Производитель (manufacturer)
+   - Серия/линейка (product_line)
+   - Артикул производителя (manufacturer_sku)
+
+3. ФИЗИЧЕСКИЕ ХАРАКТЕРИСТИКИ:
+   - Длина, см (length_cm)
+   - Ширина, см (width_cm)
+   - Высота, см (height_cm)
+   - Глубина, см (depth_cm)
+   - Диаметр, см (diameter_cm)
+   - Толщина, см (thickness_cm)
+   - Вес товара, г (weight_g)
+   - Объём, мл (volume_ml)
+   - Рабочая длина, см (working_length_cm)
+   - Максимальный диаметр, см (max_diameter_cm)
+   - Минимальный диаметр, см (min_diameter_cm)
+   - Обхват, см (circumference_cm)
+
+4. УПАКОВКА:
+   - Длина упаковки, см (package_length_cm)
+   - Ширина упаковки, см (package_width_cm)
+   - Высота упаковки, см (package_height_cm)
+   - Вес с упаковкой, г (package_weight_g)
+   - Тип упаковки (package_type)
+
+5. МАТЕРИАЛЫ И СОСТАВ:
+   - Основной материал (primary_material)
+   - Полный состав с % (composition)
+   - Список материалов (materials_list)
+   - Свойства материала (material_properties) — гипоаллергенный, водонепроницаемый и т.д.
+   - Текстура поверхности (surface_texture)
+
+6. ЦВЕТ:
+   - Основной цвет (primary_color)
+   - Цвет для WB (wb_color)
+   - Дополнительные цвета (secondary_colors)
+   - Цветовое семейство (color_family)
+   - Многоцветный? (is_multicolor)
+   - Прозрачный? (is_transparent)
+   - Принт/узор (pattern)
+
+7. РАЗМЕРЫ ОДЕЖДЫ (если применимо):
+   - Тип размерной сетки (size_type): letter/numeric/one_size
+   - Доступные размеры (available_sizes)
+   - Российские размеры (ru_sizes)
+   - Международные размеры (international_sizes)
+   - Обхват груди, см (chest_cm)
+   - Обхват талии, см (waist_cm)
+   - Обхват бёдер, см (hips_cm)
+   - Тип посадки (fit_type): slim/regular/loose/oversized
+
+8. ЦЕЛЕВАЯ АУДИТОРИЯ:
+   - Пол (gender): male/female/unisex
+   - Возрастная группа (age_group): adult/teen/child/baby
+   - Возрастной диапазон (age_range)
+   - Целевая аудитория текстом (target_audience)
+
+9. СЕЗОННОСТЬ И УСЛОВИЯ:
+   - Сезон (season): all_season/summer/winter/demi
+   - Условия эксплуатации (usage_conditions)
+   - Температурный режим (temperature_range)
+   - Водонепроницаемость (waterproof): yes/no/splash_proof
+
+10. КОМПЛЕКТАЦИЯ:
+    - Список элементов в комплекте (package_contents)
+    - Количество предметов (items_count)
+    - Включены ли батарейки (batteries_included)
+    - Тип батареек/питания (power_type)
+    - Зарядное устройство (charger_included)
+
+11. ФУНКЦИОНАЛЬНОСТЬ:
+    - Особенности/фичи (special_features)
+    - Количество режимов (modes_count)
+    - Тип управления (control_type)
+    - Бесшумный (is_silent)
+    - Совместимость (compatibility)
+
+12. УХОД И ХРАНЕНИЕ:
+    - Инструкции по уходу (care_instructions)
+    - Условия хранения (storage_conditions)
+    - Можно стирать? (washable)
+
+13. ПРОИСХОЖДЕНИЕ:
+    - Страна производства (country_of_origin)
+    - Импортёр (importer)
+
+14. БЕЗОПАСНОСТЬ И СЕРТИФИКАЦИЯ:
+    - Сертификаты (certifications)
+    - Предупреждения (warnings)
+    - Класс защиты (protection_class)
+
+15. ГАРАНТИЯ:
+    - Срок гарантии (warranty_period)
+    - Срок годности (shelf_life)
+
+16. ДОПОЛНИТЕЛЬНО:
+    - Аромат/запах (fragrance)
+    - Вкус (flavor)
+    - Форма (shape)
+    - Тип поверхности (surface_type)
+    - Совместимость со смазками (lubricant_compatible)
+
+══════════════════════════════════════════════════════════════
+ПРАВИЛА ПАРСИНГА:
+══════════════════════════════════════════════════════════════
+
+1. ЧИСЛОВЫЕ значения — ТОЛЬКО числа без единиц: "length_cm": 15.5 (не "15.5 см")
+2. ТЕКСТОВЫЕ значения — полный текст: "primary_material": "медицинский силикон"
+3. СПИСКИ — массив строк: "materials_list": ["силикон", "ABS пластик"]
+4. БУЛЕВЫ — true/false: "waterproof": true
+5. Запятые → точки: 7,5 → 7.5
+6. НЕ придумывай данных — только из текста. Если не ясно — не включай
+7. Вес ВСЕГДА в граммах, длины в см, объём в мл
+8. Для WB цветов используй стандартные: белый, чёрный, красный, синий, зелёный, розовый, фиолетовый, серый, бежевый, коричневый, оранжевый, жёлтый, голубой, бордовый, золотой, серебристый, телесный, прозрачный, мультиколор
+
+══════════════════════════════════════════════════════════════
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+══════════════════════════════════════════════════════════════
+{
+    "product_identity": {
+        "product_type": "<тип товара>",
+        "product_subtype": "<подтип>",
+        "wb_category": "<предполагаемая категория WB>",
+        "wb_subject": "<предмет WB>",
+        "purpose": "<назначение>",
+        "application_area": "<область применения>"
+    },
+    "brand_info": {
+        "brand": "<бренд>",
+        "brand_normalized": "<для WB>",
+        "manufacturer": "<производитель>",
+        "product_line": "<серия>",
+        "manufacturer_sku": "<артикул>"
+    },
+    "physical": {
+        "length_cm": null,
+        "width_cm": null,
+        "height_cm": null,
+        "depth_cm": null,
+        "diameter_cm": null,
+        "thickness_cm": null,
+        "weight_g": null,
+        "volume_ml": null,
+        "working_length_cm": null,
+        "max_diameter_cm": null,
+        "min_diameter_cm": null,
+        "circumference_cm": null
+    },
+    "package": {
+        "package_length_cm": null,
+        "package_width_cm": null,
+        "package_height_cm": null,
+        "package_weight_g": null,
+        "package_type": null
+    },
+    "materials": {
+        "primary_material": "<основной>",
+        "composition": "<полный состав>",
+        "materials_list": [],
+        "material_properties": [],
+        "surface_texture": null
+    },
+    "color": {
+        "primary_color": "<основной>",
+        "wb_color": "<для WB>",
+        "secondary_colors": [],
+        "color_family": null,
+        "is_multicolor": false,
+        "is_transparent": false,
+        "pattern": null
+    },
+    "sizing": {
+        "size_type": null,
+        "available_sizes": [],
+        "ru_sizes": [],
+        "international_sizes": [],
+        "chest_cm": null,
+        "waist_cm": null,
+        "hips_cm": null,
+        "fit_type": null
+    },
+    "audience": {
+        "gender": null,
+        "age_group": null,
+        "age_range": null,
+        "target_audience": null
+    },
+    "seasonality": {
+        "season": null,
+        "usage_conditions": null,
+        "temperature_range": null,
+        "waterproof": null
+    },
+    "contents": {
+        "package_contents": [],
+        "items_count": null,
+        "batteries_included": null,
+        "power_type": null,
+        "charger_included": null
+    },
+    "functionality": {
+        "special_features": [],
+        "modes_count": null,
+        "control_type": null,
+        "is_silent": null,
+        "compatibility": null
+    },
+    "care": {
+        "care_instructions": null,
+        "storage_conditions": null,
+        "washable": null
+    },
+    "origin": {
+        "country_of_origin": null,
+        "importer": null
+    },
+    "safety": {
+        "certifications": [],
+        "warnings": [],
+        "protection_class": null
+    },
+    "warranty": {
+        "warranty_period": null,
+        "shelf_life": null
+    },
+    "extra": {
+        "fragrance": null,
+        "flavor": null,
+        "shape": null,
+        "surface_type": null
+    },
+    "marketplace_ready": {
+        "wb_title_suggestion": "<предложение SEO заголовка до 60 символов>",
+        "wb_description_short": "<краткое описание для карточки до 1000 символов>",
+        "search_keywords": ["ключевое1", "ключевое2"],
+        "bullet_points": ["преимущество1", "преимущество2"]
+    },
+    "parsing_meta": {
+        "total_fields_found": 0,
+        "total_fields_possible": 0,
+        "fill_percentage": 0.0,
+        "confidence": 0.0,
+        "data_sources_used": ["title", "description", "original_data"],
+        "notes": "<заметки о парсинге>"
+    }
+}
+
+══════════════════════════════════════════════════════════════
+ВАЖНО:
+- Заполни МАКСИМУМ полей из всех доступных данных
+- Если данных недостаточно — поставь null, не придумывай
+- Верни ТОЛЬКО валидный JSON
+- marketplace_ready — обязательно заполни, это ключевые данные для продавца
+══════════════════════════════════════════════════════════════"""
     }
 }
 
@@ -1046,6 +1323,7 @@ class AIConfig:
     custom_material_instruction: str = ""
     custom_color_instruction: str = ""
     custom_attributes_instruction: str = ""
+    custom_parsing_instruction: str = ""
     # Для логирования
     seller_id: int = 0
 
@@ -1099,6 +1377,7 @@ class AIConfig:
             custom_material_instruction=getattr(settings, 'ai_material_instruction', '') or '',
             custom_color_instruction=getattr(settings, 'ai_color_instruction', '') or '',
             custom_attributes_instruction=getattr(settings, 'ai_attributes_instruction', '') or '',
+            custom_parsing_instruction=getattr(settings, 'ai_parsing_instruction', '') or '',
             seller_id=getattr(settings, 'seller_id', 0) or 0
         )
 
@@ -2189,6 +2468,167 @@ class AllCharacteristicsTask(AITask):
         return match.group() if match else text
 
 
+class FullProductParsingTask(AITask):
+    """Задача полного AI парсинга товара — извлечение ВСЕХ возможных характеристик"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["full_product_parsing"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        product_data = kwargs.get('product_data', {})
+
+        parts = []
+        parts.append("=" * 60)
+        parts.append("ПОЛНЫЕ ДАННЫЕ ТОВАРА ДЛЯ АНАЛИЗА:")
+        parts.append("=" * 60)
+
+        if product_data.get('title'):
+            parts.append(f"\nНАЗВАНИЕ: {product_data['title']}")
+
+        if product_data.get('description'):
+            parts.append(f"\nОПИСАНИЕ:\n{product_data['description'][:3000]}")
+
+        if product_data.get('brand'):
+            parts.append(f"\nБРЕНД: {product_data['brand']}")
+
+        if product_data.get('category'):
+            parts.append(f"\nКАТЕГОРИЯ ПОСТАВЩИКА: {product_data['category']}")
+
+        if product_data.get('wb_category'):
+            parts.append(f"\nКАТЕГОРИЯ WB: {product_data['wb_category']}")
+
+        if product_data.get('vendor_code'):
+            parts.append(f"\nАРТИКУЛ: {product_data['vendor_code']}")
+
+        if product_data.get('barcode'):
+            parts.append(f"\nШТРИХКОД: {product_data['barcode']}")
+
+        if product_data.get('price'):
+            parts.append(f"\nЦЕНА: {product_data['price']} руб.")
+
+        if product_data.get('gender'):
+            parts.append(f"\nПОЛ: {product_data['gender']}")
+
+        if product_data.get('country'):
+            parts.append(f"\nСТРАНА: {product_data['country']}")
+
+        if product_data.get('season'):
+            parts.append(f"\nСЕЗОН: {product_data['season']}")
+
+        # Цвета
+        colors = product_data.get('colors', [])
+        if colors:
+            if isinstance(colors, list):
+                parts.append(f"\nЦВЕТА: {', '.join(str(c) for c in colors)}")
+            else:
+                parts.append(f"\nЦВЕТА: {colors}")
+
+        # Материалы
+        materials = product_data.get('materials', [])
+        if materials:
+            if isinstance(materials, list):
+                parts.append(f"\nМАТЕРИАЛЫ: {', '.join(str(m) for m in materials)}")
+            else:
+                parts.append(f"\nМАТЕРИАЛЫ: {materials}")
+
+        # Размеры
+        sizes = product_data.get('sizes', {})
+        if sizes:
+            parts.append(f"\nРАЗМЕРЫ: {json.dumps(sizes, ensure_ascii=False) if isinstance(sizes, (dict, list)) else sizes}")
+
+        # Габариты
+        dimensions = product_data.get('dimensions', {})
+        if dimensions:
+            parts.append(f"\nГАБАРИТЫ: {json.dumps(dimensions, ensure_ascii=False) if isinstance(dimensions, dict) else dimensions}")
+
+        # Характеристики
+        characteristics = product_data.get('characteristics', [])
+        if characteristics:
+            parts.append("\nХАРАКТЕРИСТИКИ:")
+            if isinstance(characteristics, list):
+                for ch in characteristics:
+                    if isinstance(ch, dict):
+                        parts.append(f"  - {ch.get('name', '?')}: {ch.get('value', '?')}")
+                    else:
+                        parts.append(f"  - {ch}")
+            elif isinstance(characteristics, dict):
+                for k, v in characteristics.items():
+                    parts.append(f"  - {k}: {v}")
+
+        # Оригинальные данные поставщика
+        original = product_data.get('original_data', {})
+        if original and isinstance(original, dict):
+            parts.append("\nОРИГИНАЛЬНЫЕ ДАННЫЕ ПОСТАВЩИКА:")
+            for k, v in original.items():
+                if v and k not in ('photo_urls', 'photo_codes', 'processed_photos'):
+                    val_str = str(v)[:500]
+                    parts.append(f"  - {k}: {val_str}")
+
+        # AI данные если уже есть
+        if product_data.get('ai_seo_title'):
+            parts.append(f"\nAI SEO ЗАГОЛОВОК: {product_data['ai_seo_title']}")
+        if product_data.get('ai_description'):
+            parts.append(f"\nAI ОПИСАНИЕ:\n{product_data['ai_description'][:1500]}")
+
+        parts.append(f"\nФОТОГРАФИЙ: {product_data.get('photos_count', 0)}")
+
+        parts.append("\n" + "=" * 60)
+        parts.append("ЗАДАНИЕ: Извлеки ВСЕ характеристики из данных выше. Заполни максимум полей.")
+        parts.append("Верни результат строго в JSON формате.")
+        parts.append("=" * 60)
+
+        return "\n".join(parts)
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+
+            # Подсчитываем заполненность
+            filled = 0
+            total = 0
+
+            def count_fields(obj, prefix=''):
+                nonlocal filled, total
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if k in ('parsing_meta', 'marketplace_ready'):
+                            continue
+                        if isinstance(v, (dict, list)):
+                            count_fields(v, f"{prefix}.{k}")
+                        else:
+                            total += 1
+                            if v is not None and v != '' and v != 0 and v is not False:
+                                filled += 1
+                elif isinstance(obj, list):
+                    if len(obj) > 0:
+                        filled += 1
+                    total += 1
+
+            count_fields(data)
+
+            # Обновляем parsing_meta
+            if 'parsing_meta' not in data:
+                data['parsing_meta'] = {}
+            data['parsing_meta']['total_fields_found'] = filled
+            data['parsing_meta']['total_fields_possible'] = total
+            data['parsing_meta']['fill_percentage'] = round(filled / total * 100, 1) if total > 0 else 0
+
+            return data
+        except Exception:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
 class ClothingSizesTask(AITask):
     """Задача парсинга и стандартизации размеров одежды"""
 
@@ -2917,6 +3357,28 @@ class AIService:
         if success and result:
             return True, result, ""
         return False, {}, error or "Ошибка AI"
+
+    def full_product_parse(
+        self,
+        product_data: Dict
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Полный AI парсинг товара — извлекает ВСЕ возможные характеристики.
+
+        Args:
+            product_data: Словарь со всеми данными товара (из get_all_data_for_parsing())
+
+        Returns:
+            Tuple[success, {product_identity, brand_info, physical, package, materials,
+                           color, sizing, audience, seasonality, contents, functionality,
+                           care, origin, safety, warranty, extra, marketplace_ready,
+                           parsing_meta}, error]
+        """
+        task = FullProductParsingTask(self.client, self.config.custom_parsing_instruction)
+        success, result, error = task.execute(product_data=product_data)
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI парсинга"
 
     def full_optimize(
         self,
