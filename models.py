@@ -2514,3 +2514,25 @@ class EnrichmentJob(db.Model):
     updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     seller = db.relationship('Seller', foreign_keys=[seller_id])
+
+
+class AIParseJob(db.Model):
+    """Задача фонового AI парсинга товаров поставщика"""
+    __tablename__ = 'ai_parse_jobs'
+
+    id             = db.Column(db.String(36), primary_key=True)   # UUID
+    supplier_id    = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
+    admin_user_id  = db.Column(db.Integer)                        # Кто запустил
+    job_type       = db.Column(db.String(30), default='parse')    # parse / parse_single / sync_descriptions
+    status         = db.Column(db.String(20), default='pending')  # pending / running / done / failed / cancelled
+    total          = db.Column(db.Integer, default=0)
+    processed      = db.Column(db.Integer, default=0)
+    succeeded      = db.Column(db.Integer, default=0)
+    failed         = db.Column(db.Integer, default=0)
+    current_product_title = db.Column(db.String(200))             # Название текущего обрабатываемого товара
+    results        = db.Column(db.Text)                           # JSON [{product_id, title, status, fill_pct, error}]
+    error_message  = db.Column(db.Text)                           # Общая ошибка если failed
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship('Supplier', foreign_keys=[supplier_id])

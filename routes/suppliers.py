@@ -653,73 +653,63 @@ def register_supplier_routes(app):
     @login_required
     @admin_required
     def admin_supplier_ai_parse(supplier_id):
-        """AI полный парсинг одного товара — извлечение всех характеристик"""
+        """AI парсинг одного или нескольких товаров — запуск в фоне"""
         product_id = request.form.get('product_id', type=int)
-        if not product_id:
-            flash('Не указан товар', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        result = SupplierService.ai_full_parse(product_id)
-        log_admin_action(
-            admin_user_id=current_user.id,
-            action='ai_full_parse_supplier_product',
-            target_type='supplier_product',
-            target_id=product_id,
-            details={
-                'supplier_id': supplier_id,
-                'success': result.get('success'),
-                'fill_pct': result.get('fill_percentage', 0),
-            },
-            request=request
-        )
-
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return jsonify(result)
-
-        if result.get('success'):
-            fill_pct = result.get('fill_percentage', 0)
-            flash(f'AI парсинг завершён. Заполнено {fill_pct:.0f}% характеристик', 'success')
-        else:
-            flash(f'Ошибка AI парсинга: {result.get("error", "?")}', 'danger')
-        return redirect(url_for('admin_supplier_product_detail',
-                                supplier_id=supplier_id, product_id=product_id))
-
-    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-bulk', methods=['POST'])
-    @login_required
-    @admin_required
-    def admin_supplier_ai_parse_bulk(supplier_id):
-        """Массовый AI парсинг выбранных товаров"""
         product_ids_raw = request.form.getlist('product_ids')
         product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
 
+        # Одиночный товар
+        if product_id and not product_ids:
+            product_ids = [product_id]
+
         if not product_ids:
-            flash('Не выбраны товары', 'warning')
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'error': 'Не указаны товары'}), 400
+            flash('Не указаны товары', 'warning')
             return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
-        result = SupplierService.ai_full_parse_bulk(supplier_id, product_ids)
+        result = SupplierService.start_ai_parse_job(
+            supplier_id, product_ids, admin_user_id=current_user.id
+        )
+
+        if result.get('error'):
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'error': result['error']}), 400
+            flash(result['error'], 'danger')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
         log_admin_action(
             admin_user_id=current_user.id,
-            action='ai_full_parse_bulk',
+            action='start_ai_parse_job',
             target_type='supplier',
             target_id=supplier_id,
-            details={
-                'count': len(product_ids),
-                'parsed': result.get('parsed', 0),
-                'errors': result.get('errors', 0),
-            },
+            details={'job_id': result['job_id'], 'count': result['total']},
             request=request
         )
 
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify(result)
 
-        flash(
-            f'AI парсинг: {result.get("parsed", 0)} успешно, '
-            f'{result.get("errors", 0)} ошибок из {len(product_ids)} товаров',
-            'success' if result.get('errors', 0) == 0 else 'warning'
-        )
-        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+        flash(f'AI парсинг запущен в фоне ({result["total"]} товаров)', 'success')
+        return redirect(url_for('admin_supplier_ai_parser', supplier_id=supplier_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-job/<job_id>/status')
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parse_status(supplier_id, job_id):
+        """API: статус фоновой задачи AI парсинга (поллинг)"""
+        data = SupplierService.get_ai_parse_job(job_id)
+        if not data:
+            return jsonify({'error': 'Задача не найдена'}), 404
+        return jsonify(data)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-job/<job_id>/cancel', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parse_cancel(supplier_id, job_id):
+        """API: отмена фоновой задачи AI парсинга"""
+        ok = SupplierService.cancel_ai_parse_job(job_id)
+        return jsonify({'cancelled': ok})
 
     @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/raw-json')
     @login_required
@@ -744,14 +734,14 @@ def register_supplier_routes(app):
                                raw_data=json.dumps(raw_data, ensure_ascii=False, indent=2))
 
     # -------------------------------------------------------------------
-    # СИНХРОНИЗАЦИЯ ОПИСАНИЙ
+    # СИНХРОНИЗАЦИЯ ОПИСАНИЙ (фон)
     # -------------------------------------------------------------------
 
     @app.route('/admin/suppliers/<int:supplier_id>/sync-descriptions', methods=['POST'])
     @login_required
     @admin_required
     def admin_supplier_sync_descriptions(supplier_id):
-        """Синхронизация описаний товаров из CSV файла"""
+        """Синхронизация описаний — запуск в фоне"""
         supplier = SupplierService.get_supplier(supplier_id)
         if not supplier:
             flash('Поставщик не найден', 'danger')
@@ -761,32 +751,25 @@ def register_supplier_routes(app):
             flash('URL файла описаний не задан', 'warning')
             return redirect(url_for('admin_supplier_edit', supplier_id=supplier_id))
 
-        result = SupplierService.sync_descriptions(supplier_id)
+        result = SupplierService.start_description_sync_job(
+            supplier_id, admin_user_id=current_user.id
+        )
 
         log_admin_action(
             admin_user_id=current_user.id,
             action='sync_supplier_descriptions',
             target_type='supplier',
             target_id=supplier_id,
-            details={
-                'updated': result.get('updated', 0),
-                'not_found': result.get('not_found', 0),
-                'errors': result.get('errors', 0),
-            },
+            details={'job_id': result.get('job_id')},
             request=request
         )
 
-        if result.get('success'):
-            flash(
-                f'Описания: {result.get("updated", 0)} обновлено, '
-                f'{result.get("not_found", 0)} не найдено, '
-                f'{result.get("errors", 0)} ошибок',
-                'success'
-            )
+        if result.get('error'):
+            flash(f'Ошибка: {result["error"]}', 'danger')
         else:
-            flash(f'Ошибка: {result.get("error", "?")}', 'danger')
+            flash('Синхронизация описаний запущена в фоне', 'success')
 
-        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+        return redirect(url_for('admin_supplier_ai_parser', supplier_id=supplier_id))
 
     # -------------------------------------------------------------------
     # AI ПАРСЕР — СТРАНИЦА
@@ -827,17 +810,21 @@ def register_supplier_routes(app):
 
         stats = SupplierService.get_product_stats(supplier_id)
 
-        # Статистика по AI парсингу
         parsed_count = SupplierProduct.query.filter(
             SupplierProduct.supplier_id == supplier_id,
             SupplierProduct.ai_parsed_data_json.isnot(None)
         ).count()
 
+        active_jobs = SupplierService.get_active_ai_parse_jobs(supplier_id)
+        recent_jobs = SupplierService.get_recent_ai_parse_jobs(supplier_id, limit=5)
+
         return render_template('admin_supplier_ai_parser.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                stock_status=stock_status,
-                               parsed_count=parsed_count)
+                               parsed_count=parsed_count,
+                               active_jobs=active_jobs,
+                               recent_jobs=recent_jobs)
 
     # -------------------------------------------------------------------
     # Управление подключёнными продавцами

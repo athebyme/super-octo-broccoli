@@ -380,14 +380,21 @@
                         </button>
                     </form>
                     <hr class="my-2">
-                    <form method="POST" action="{{ url_for('admin_supplier_ai_parse', supplier_id=supplier.id) }}">
-                        <input type="hidden" name="product_id" value="{{ product.id }}">
-                        <button type="submit"
-                            onclick="return confirm('Запустить полный AI парсинг? AI извлечёт все характеристики.')"
-                            class="w-full text-left px-3 py-2 text-sm rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors font-medium">
-                            AI Полный парсинг
-                        </button>
-                    </form>
+                    <button type="button" id="parseBtn"
+                        onclick="startAsyncParse()"
+                        class="w-full text-left px-3 py-2 text-sm rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors font-medium">
+                        AI Полный парсинг
+                    </button>
+                    <div id="parseProgress" class="hidden px-3 mt-2">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="inline-block animate-spin h-3 w-3 border-2 border-orange-500 border-t-transparent rounded-full"></span>
+                            <span id="parseStatus" class="text-xs text-orange-700">Запуск...</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-1.5">
+                            <div id="parseBar" class="bg-orange-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div id="parseResult" class="hidden px-3 mt-2"></div>
                     {% if product.ai_parsed_at %}
                     <p class="text-xs text-gray-400 px-3 mt-1">
                         Последний: {{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}
@@ -421,6 +428,76 @@ function copyText(text) {
     navigator.clipboard.writeText(text).then(() => {
         alert('Скопировано в буфер обмена');
     });
+}
+
+function startAsyncParse() {
+    const btn = document.getElementById('parseBtn');
+    const progress = document.getElementById('parseProgress');
+    const resultDiv = document.getElementById('parseResult');
+    const statusText = document.getElementById('parseStatus');
+    const bar = document.getElementById('parseBar');
+
+    btn.disabled = true;
+    btn.classList.add('opacity-50');
+    progress.classList.remove('hidden');
+    resultDiv.classList.add('hidden');
+
+    const form = new FormData();
+    form.append('product_id', '{{ product.id }}');
+
+    fetch('{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: form
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            showParseError(data.error);
+            return;
+        }
+        if (data.job_id) {
+            pollParseJob(data.job_id);
+        }
+    })
+    .catch(err => showParseError('Ошибка сети: ' + err.message));
+
+    function pollParseJob(jobId) {
+        fetch(`/admin/suppliers/{{ supplier.id }}/ai/parse-job/${jobId}/status`)
+        .then(r => r.json())
+        .then(j => {
+            bar.style.width = (j.progress_pct || 0) + '%';
+            if (j.status === 'running') {
+                statusText.textContent = j.current_product ? `Анализ: ${j.current_product}` : 'AI анализирует...';
+                setTimeout(() => pollParseJob(jobId), 2000);
+            } else if (j.status === 'done') {
+                progress.classList.add('hidden');
+                const r0 = (j.results && j.results[0]) || {};
+                const fillPct = r0.fill_pct ? r0.fill_pct.toFixed(0) : '?';
+                resultDiv.innerHTML = `
+                    <div class="bg-green-50 rounded-lg p-2 text-xs">
+                        <span class="text-green-700 font-semibold">Готово!</span>
+                        Заполнено ${fillPct}% характеристик.
+                        <a href="" class="underline text-green-600 ml-1">Обновить страницу</a>
+                    </div>`;
+                resultDiv.classList.remove('hidden');
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            } else {
+                const errMsg = j.error_message || (j.results && j.results[0] && j.results[0].error) || 'Неизвестная ошибка';
+                showParseError(errMsg);
+            }
+        })
+        .catch(() => setTimeout(() => pollParseJob(jobId), 3000));
+    }
+
+    function showParseError(msg) {
+        progress.classList.add('hidden');
+        resultDiv.innerHTML = `<div class="bg-red-50 rounded-lg p-2 text-xs text-red-700">${msg}</div>`;
+        resultDiv.classList.remove('hidden');
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
+    }
 }
 </script>
 {% endblock %}

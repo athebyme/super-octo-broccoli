@@ -7,6 +7,7 @@
 - suppliers: description_file_url, description_file_delimiter, description_file_encoding,
   last_description_sync_at, last_description_sync_status, ai_parsing_instruction
 - supplier_products: ai_parsed_data_json, ai_parsed_at, ai_marketplace_json, description_source
+- ai_parse_jobs: таблица фоновых задач AI парсинга
 """
 import os
 import sys
@@ -85,6 +86,36 @@ def run_migration():
                 logger.info(f"  + supplier_products.{col_name}")
             else:
                 logger.info(f"  = supplier_products.{col_name} (уже есть)")
+
+        # ============================================================
+        # Таблица ai_parse_jobs: фоновые задачи AI парсинга
+        # ============================================================
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_parse_jobs'")
+        if not cursor.fetchone():
+            logger.info("Создание таблицы ai_parse_jobs...")
+            cursor.execute("""
+                CREATE TABLE ai_parse_jobs (
+                    id VARCHAR(36) PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+                    admin_user_id INTEGER,
+                    job_type VARCHAR(30) DEFAULT 'parse',
+                    status VARCHAR(20) DEFAULT 'pending',
+                    total INTEGER DEFAULT 0,
+                    processed INTEGER DEFAULT 0,
+                    succeeded INTEGER DEFAULT 0,
+                    failed INTEGER DEFAULT 0,
+                    current_product_title VARCHAR(200),
+                    results TEXT,
+                    error_message TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_ai_parse_jobs_supplier ON ai_parse_jobs(supplier_id)")
+            cursor.execute("CREATE INDEX idx_ai_parse_jobs_status ON ai_parse_jobs(status)")
+            logger.info("  + ai_parse_jobs (таблица создана)")
+        else:
+            logger.info("  = ai_parse_jobs (уже существует)")
 
         conn.commit()
         logger.info("Миграция AI парсера завершена успешно")

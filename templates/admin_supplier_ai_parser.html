@@ -16,18 +16,14 @@
         <div class="flex justify-between items-start">
             <div>
                 <h1 class="text-2xl font-bold text-gray-900">AI Парсер данных</h1>
-                <p class="text-sm text-gray-500 mt-1">
-                    Извлечение всех характеристик товаров с помощью AI для маркетплейсов
-                </p>
+                <p class="text-sm text-gray-500 mt-1">Извлечение характеристик товаров для маркетплейсов</p>
             </div>
             <div class="flex gap-2">
                 {% if supplier.description_file_url %}
-                <form method="POST" action="{{ url_for('admin_supplier_sync_descriptions', supplier_id=supplier.id) }}" class="inline">
-                    <button type="submit" onclick="return confirm('Синхронизировать описания из CSV?')"
-                            class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
-                        Синхр. описания
-                    </button>
-                </form>
+                <button onclick="startDescSync()" id="descSyncBtn"
+                        class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                    Синхр. описания
+                </button>
                 {% endif %}
                 <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
@@ -45,7 +41,7 @@
         </div>
         <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
             <p class="text-xs text-gray-500">AI спарсено</p>
-            <p class="text-2xl font-bold text-indigo-600">{{ parsed_count }}</p>
+            <p class="text-2xl font-bold text-indigo-600" id="statParsed">{{ parsed_count }}</p>
         </div>
         <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
             <p class="text-xs text-gray-500">Не спарсено</p>
@@ -59,27 +55,54 @@
 
     {% if not supplier.ai_enabled %}
     <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-        <p class="text-yellow-800 font-medium">AI не активирован для этого поставщика.</p>
+        <p class="text-yellow-800 font-medium">AI не активирован.</p>
         <p class="text-yellow-600 text-sm mt-1">
-            Перейдите в <a href="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) }}" class="underline">настройки поставщика</a>
-            и включите AI с указанием API ключа.
+            <a href="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) }}" class="underline">Настройки поставщика</a> — включите AI.
         </p>
     </div>
     {% else %}
 
+    <!-- ===== ПАНЕЛЬ АКТИВНЫХ ЗАДАЧ ===== -->
+    <div id="jobsPanel" class="space-y-3 mb-6" style="{% if not active_jobs %}display:none{% endif %}">
+    </div>
+
+    <!-- История задач (свёрнутая) -->
+    {% if recent_jobs %}
+    <details class="mb-6">
+        <summary class="text-sm text-gray-500 cursor-pointer hover:text-indigo-600">
+            История задач (последние {{ recent_jobs|length }})
+        </summary>
+        <div class="mt-2 space-y-2">
+            {% for j in recent_jobs %}
+            {% if j.status in ('done', 'failed', 'cancelled') %}
+            <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex justify-between items-center text-sm">
+                <div>
+                    <span class="font-medium {% if j.status == 'done' %}text-green-700{% elif j.status == 'failed' %}text-red-600{% else %}text-gray-500{% endif %}">
+                        {{ j.status|upper }}
+                    </span>
+                    <span class="text-gray-500 ml-2">{{ j.job_type }}</span>
+                    <span class="text-gray-400 ml-2">{{ j.succeeded }} ok / {{ j.failed }} fail / {{ j.total }} total</span>
+                </div>
+                <span class="text-xs text-gray-400">{{ j.created_at[:16] if j.created_at else '' }}</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
     <!-- Инструкция -->
     <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
-        <h3 class="text-indigo-900 font-semibold text-sm mb-2">Как работает AI парсер</h3>
+        <h3 class="text-indigo-900 font-semibold text-sm mb-2">Как работает</h3>
         <ol class="text-indigo-700 text-sm space-y-1 list-decimal list-inside">
-            <li>Выберите товары галочками или используйте "Выбрать все на странице"</li>
-            <li>Нажмите "AI Парсинг выбранных" для массовой обработки</li>
-            <li>AI извлечёт: физические размеры, материалы, цвета, бренд, комплектацию, сезон и 50+ других характеристик</li>
-            <li>Результат будет сохранён и доступен в формате для WB/Ozon</li>
-            <li>Для одного товара можно использовать кнопку "Парсинг" в строке</li>
+            <li>Выберите товары галочками</li>
+            <li>Нажмите "AI Парсинг выбранных" — задача уйдёт в фон</li>
+            <li>Прогресс отобразится в панели вверху — страница не зависает</li>
+            <li>AI извлечёт 50+ характеристик в формате WB/Ozon</li>
         </ol>
     </div>
 
-    <!-- Фильтры и поиск -->
+    <!-- Фильтры -->
     <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
         <div class="flex gap-3 items-end">
             <div class="flex-1">
@@ -93,153 +116,131 @@
                     <option value="out_of_stock" {{ 'selected' if stock_status == 'out_of_stock' }}>Нет в наличии</option>
                 </select>
             </div>
-            <button type="submit" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">
-                Найти
-            </button>
+            <button type="submit" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Найти</button>
         </div>
     </form>
 
-    <!-- Массовые действия -->
-    <form id="bulkParseForm" method="POST" action="{{ url_for('admin_supplier_ai_parse_bulk', supplier_id=supplier.id) }}">
-        <div class="bg-white rounded-lg border border-gray-200 mb-6">
-            <div class="p-4 border-b border-gray-200 flex justify-between items-center">
-                <div class="flex items-center gap-3">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" id="selectAll" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                        <span class="text-sm font-medium text-gray-700">Выбрать все на странице</span>
-                    </label>
-                    <span id="selectedCount" class="text-sm text-gray-500 hidden">
-                        Выбрано: <span class="font-bold text-indigo-600">0</span>
-                    </span>
-                </div>
-                <div class="flex gap-2">
-                    <button type="submit" id="bulkParseBtn" disabled
-                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                            onclick="return confirm('Запустить AI парсинг выбранных товаров? Это может занять время.')">
-                        AI Парсинг выбранных
-                    </button>
-                </div>
+    <!-- Таблица товаров -->
+    <div class="bg-white rounded-lg border border-gray-200 mb-6">
+        <div class="p-4 border-b border-gray-200 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="selectAll" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                    <span class="text-sm font-medium text-gray-700">Выбрать все</span>
+                </label>
+                <span id="selectedCount" class="text-sm text-gray-500 hidden">
+                    Выбрано: <span class="font-bold text-indigo-600">0</span>
+                </span>
             </div>
+            <div class="flex gap-2">
+                <button type="button" id="bulkParseBtn" disabled onclick="startBulkParse()"
+                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                    AI Парсинг выбранных
+                </button>
+            </div>
+        </div>
 
-            <!-- Таблица товаров -->
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-4 py-3 text-left w-8"></th>
-                            <th class="px-4 py-3 text-left font-medium text-gray-500">Товар</th>
-                            <th class="px-4 py-3 text-left font-medium text-gray-500">Бренд</th>
-                            <th class="px-4 py-3 text-left font-medium text-gray-500">Категория</th>
-                            <th class="px-4 py-3 text-right font-medium text-gray-500">Цена</th>
-                            <th class="px-4 py-3 text-center font-medium text-gray-500">Описание</th>
-                            <th class="px-4 py-3 text-center font-medium text-gray-500">AI парсинг</th>
-                            <th class="px-4 py-3 text-center font-medium text-gray-500">Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-100">
-                        {% for product in pagination.items %}
-                        <tr class="hover:bg-gray-50 transition-colors">
-                            <td class="px-4 py-3">
-                                <input type="checkbox" name="product_ids" value="{{ product.id }}"
-                                       class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-                            </td>
-                            <td class="px-4 py-3">
-                                <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
-                                   class="font-medium text-gray-900 hover:text-indigo-600 line-clamp-1">
-                                    {{ product.title or 'Без названия' }}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left w-8"></th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-500">Товар</th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-500">Бренд</th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-500">Категория</th>
+                        <th class="px-4 py-3 text-right font-medium text-gray-500">Цена</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">Описание</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">AI парсинг</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">Действия</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for product in pagination.items %}
+                    <tr class="hover:bg-gray-50 transition-colors" id="row-{{ product.id }}">
+                        <td class="px-4 py-3">
+                            <input type="checkbox" data-product-id="{{ product.id }}"
+                                   class="product-checkbox rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                        </td>
+                        <td class="px-4 py-3">
+                            <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
+                               class="font-medium text-gray-900 hover:text-indigo-600 line-clamp-1">
+                                {{ product.title or 'Без названия' }}
+                            </a>
+                            <p class="text-xs text-gray-400 mt-0.5">{{ product.external_id }}</p>
+                        </td>
+                        <td class="px-4 py-3 text-gray-600">{{ product.brand or '—' }}</td>
+                        <td class="px-4 py-3 text-gray-600 text-xs">{{ (product.wb_category_name or product.category or '—')[:30] }}</td>
+                        <td class="px-4 py-3 text-right text-gray-900 font-medium">
+                            {{ '%.0f'|format(product.supplier_price) if product.supplier_price else '—' }}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            {% if product.description %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">{{ product.description_source or 'есть' }}</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">нет</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center" id="parse-status-{{ product.id }}">
+                            {% if product.ai_parsed_at %}
+                            {% set pdata = product.get_ai_parsed_data() %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
+                                  title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
+                                {{ '%.0f'|format(pdata.get('parsing_meta', {}).get('fill_percentage', 0)) }}%
+                            </span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <div class="flex justify-center gap-1">
+                                <button type="button" onclick="startSingleParse({{ product.id }})"
+                                        class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 transition-colors">
+                                    Парсинг
+                                </button>
+                                <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"
+                                   class="px-2 py-1 text-xs bg-gray-50 text-gray-600 rounded hover:bg-gray-100 transition-colors">
+                                    JSON
                                 </a>
-                                <p class="text-xs text-gray-400 mt-0.5">{{ product.external_id }} | {{ product.vendor_code or '—' }}</p>
-                            </td>
-                            <td class="px-4 py-3 text-gray-600">{{ product.brand or '—' }}</td>
-                            <td class="px-4 py-3 text-gray-600 text-xs">{{ (product.wb_category_name or product.category or '—')[:30] }}</td>
-                            <td class="px-4 py-3 text-right text-gray-900 font-medium">
-                                {{ '%.0f'|format(product.supplier_price) if product.supplier_price else '—' }}
-                            </td>
-                            <td class="px-4 py-3 text-center">
-                                {% if product.description %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                                    {{ product.description_source or 'есть' }}
-                                </span>
-                                {% else %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">нет</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 text-center">
-                                {% if product.ai_parsed_at %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
-                                      title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
-                                    {% set pdata = product.get_ai_parsed_data() %}
-                                    {{ '%.0f'|format(pdata.get('parsing_meta', {}).get('fill_percentage', 0)) }}%
-                                </span>
-                                {% else %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-400">—</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 text-center">
-                                <div class="flex justify-center gap-1">
-                                    <button type="button" onclick="parseSingle({{ product.id }})"
-                                            class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 transition-colors"
-                                            title="AI парсинг">
-                                        Парсинг
-                                    </button>
-                                    <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"
-                                       class="px-2 py-1 text-xs bg-gray-50 text-gray-600 rounded hover:bg-gray-100 transition-colors"
-                                       title="Просмотр JSON">
-                                        JSON
-                                    </a>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-
-            {% if pagination.pages > 1 %}
-            <div class="p-4 border-t border-gray-200 flex justify-center">
-                <nav class="flex gap-1">
-                    {% for page_num in pagination.iter_pages(left_edge=2, left_current=2, right_current=3, right_edge=2) %}
-                    {% if page_num %}
-                    <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, page=page_num, search=search, stock_status=stock_status) }}"
-                       class="px-3 py-1 rounded text-sm {{ 'bg-indigo-600 text-white' if page_num == pagination.page else 'text-gray-600 hover:bg-gray-100' }}">
-                        {{ page_num }}
-                    </a>
-                    {% else %}
-                    <span class="px-2 py-1 text-gray-400">...</span>
-                    {% endif %}
+                            </div>
+                        </td>
+                    </tr>
                     {% endfor %}
-                </nav>
-            </div>
-            {% endif %}
+                </tbody>
+            </table>
         </div>
-    </form>
+
+        {% if pagination.pages > 1 %}
+        <div class="p-4 border-t border-gray-200 flex justify-center">
+            <nav class="flex gap-1">
+                {% for page_num in pagination.iter_pages(left_edge=2, left_current=2, right_current=3, right_edge=2) %}
+                {% if page_num %}
+                <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, page=page_num, search=search, stock_status=stock_status) }}"
+                   class="px-3 py-1 rounded text-sm {{ 'bg-indigo-600 text-white' if page_num == pagination.page else 'text-gray-600 hover:bg-gray-100' }}">
+                    {{ page_num }}
+                </a>
+                {% else %}
+                <span class="px-2 py-1 text-gray-400">...</span>
+                {% endif %}
+                {% endfor %}
+            </nav>
+        </div>
+        {% endif %}
+    </div>
 
     {% endif %}
 </div>
 
-<!-- Модальное окно результата -->
-<div id="parseResultModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center">
-    <div class="bg-white rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
-        <div class="p-6 border-b border-gray-200 flex justify-between items-center">
-            <h3 class="text-lg font-bold text-gray-900">Результат AI парсинга</h3>
-            <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-            </button>
-        </div>
-        <div id="parseResultContent" class="p-6 overflow-y-auto flex-1">
-            <div class="text-center text-gray-500">Загрузка...</div>
-        </div>
-    </div>
-</div>
-
 <script>
-// Чекбоксы
+const SUPPLIER_ID = {{ supplier.id }};
+const PARSE_URL = '{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}';
+const DESC_SYNC_URL = '{{ url_for("admin_supplier_sync_descriptions", supplier_id=supplier.id) }}';
+
+// ===== Чекбоксы =====
 const selectAll = document.getElementById('selectAll');
-const checkboxes = document.querySelectorAll('.product-checkbox');
 const bulkBtn = document.getElementById('bulkParseBtn');
 const selectedCount = document.getElementById('selectedCount');
+
+function getCheckboxes() { return document.querySelectorAll('.product-checkbox'); }
 
 function updateSelection() {
     const checked = document.querySelectorAll('.product-checkbox:checked').length;
@@ -254,76 +255,224 @@ function updateSelection() {
 
 if (selectAll) {
     selectAll.addEventListener('change', function() {
-        checkboxes.forEach(cb => cb.checked = this.checked);
+        getCheckboxes().forEach(cb => cb.checked = this.checked);
         updateSelection();
     });
 }
-checkboxes.forEach(cb => cb.addEventListener('change', updateSelection));
+document.addEventListener('change', e => { if (e.target.classList.contains('product-checkbox')) updateSelection(); });
 
-// Парсинг одного товара
-function parseSingle(productId) {
-    if (!confirm('Запустить AI парсинг этого товара?')) return;
+// ===== Активные задачи (поллинг) =====
+let activeJobIds = new Set();
+{% for j in active_jobs %}
+activeJobIds.add('{{ j.job_id }}');
+{% endfor %}
 
-    const modal = document.getElementById('parseResultModal');
-    const content = document.getElementById('parseResultContent');
-    modal.classList.remove('hidden');
-    content.innerHTML = '<div class="text-center py-8"><div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-indigo-600 border-t-transparent"></div><p class="mt-3 text-gray-500">AI анализирует товар...</p></div>';
+function statusUrl(jobId) {
+    return `/admin/suppliers/${SUPPLIER_ID}/ai/parse-job/${jobId}/status`;
+}
+function cancelUrl(jobId) {
+    return `/admin/suppliers/${SUPPLIER_ID}/ai/parse-job/${jobId}/cancel`;
+}
+
+function renderJobCard(j) {
+    const pct = j.progress_pct || 0;
+    const isDone = (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled');
+    const barColor = j.status === 'failed' ? 'bg-red-500' : j.status === 'cancelled' ? 'bg-gray-400' : j.status === 'done' ? 'bg-green-500' : 'bg-indigo-500';
+    const borderColor = j.status === 'failed' ? 'border-red-200' : j.status === 'done' ? 'border-green-200' : 'border-indigo-200';
+    const bgColor = j.status === 'failed' ? 'bg-red-50' : j.status === 'done' ? 'bg-green-50' : 'bg-indigo-50';
+
+    let statusIcon = '';
+    if (j.status === 'running') statusIcon = '<span class="inline-block animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full mr-2"></span>';
+    else if (j.status === 'done') statusIcon = '<svg class="inline w-4 h-4 text-green-600 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>';
+    else if (j.status === 'failed') statusIcon = '<svg class="inline w-4 h-4 text-red-500 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+
+    const typeLabel = j.job_type === 'sync_descriptions' ? 'Синхронизация описаний' : j.total === 1 ? 'AI Парсинг товара' : `AI Парсинг (${j.total} товаров)`;
+
+    let details = '';
+    if (j.current_product && j.status === 'running') {
+        details = `<p class="text-xs text-gray-500 mt-1 truncate">Обрабатывается: ${j.current_product}</p>`;
+    }
+    if (isDone && j.results && j.results.length > 0) {
+        const last5 = j.results.slice(-5);
+        details = '<div class="mt-2 space-y-1">' + last5.map(r => {
+            const icon = r.status === 'success' ? '<span class="text-green-600">&#10003;</span>' : '<span class="text-red-500">&#10007;</span>';
+            const extra = r.fill_pct ? ` (${r.fill_pct.toFixed(0)}%)` : '';
+            const err = r.error ? ` — ${r.error}` : '';
+            return `<p class="text-xs text-gray-500">${icon} ${r.title || r.product_id}${extra}${err}</p>`;
+        }).join('') + '</div>';
+    }
+
+    const cancelBtn = (!isDone) ? `<button onclick="cancelJob('${j.job_id}')" class="text-xs text-red-500 hover:text-red-700">Отменить</button>` : '';
+    const dismissBtn = isDone ? `<button onclick="dismissJob('${j.job_id}')" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>` : '';
+
+    return `
+    <div id="job-${j.job_id}" class="${bgColor} border ${borderColor} rounded-lg p-4 transition-all">
+        <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center">
+                ${statusIcon}
+                <span class="font-semibold text-sm text-gray-900">${typeLabel}</span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-500">${j.succeeded} ok / ${j.failed} fail / ${j.processed}/${j.total}</span>
+                ${cancelBtn}${dismissBtn}
+            </div>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5 mb-1">
+            <div class="${barColor} h-2.5 rounded-full transition-all duration-500" style="width: ${pct}%"></div>
+        </div>
+        <div class="flex justify-between text-xs text-gray-500">
+            <span>${pct}%</span>
+            <span>${j.status}</span>
+        </div>
+        ${details}
+        ${j.error_message ? '<p class="text-xs text-red-600 mt-1">' + j.error_message + '</p>' : ''}
+    </div>`;
+}
+
+function renderAllJobs() {
+    const panel = document.getElementById('jobsPanel');
+    if (activeJobIds.size === 0) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = 'block';
+}
+
+function pollJob(jobId) {
+    fetch(statusUrl(jobId))
+    .then(r => r.json())
+    .then(data => {
+        const panel = document.getElementById('jobsPanel');
+        let el = document.getElementById('job-' + jobId);
+        const html = renderJobCard(data);
+
+        if (el) {
+            el.outerHTML = html;
+        } else {
+            panel.insertAdjacentHTML('afterbegin', html);
+            panel.style.display = 'block';
+        }
+
+        const isDone = ['done', 'failed', 'cancelled'].includes(data.status);
+        if (!isDone) {
+            setTimeout(() => pollJob(jobId), 2000);
+        } else {
+            activeJobIds.delete(jobId);
+        }
+    })
+    .catch(() => {
+        setTimeout(() => pollJob(jobId), 5000);
+    });
+}
+
+// Начать поллинг активных задач
+activeJobIds.forEach(id => pollJob(id));
+
+function cancelJob(jobId) {
+    if (!confirm('Отменить задачу?')) return;
+    fetch(cancelUrl(jobId), { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    .then(r => r.json())
+    .then(() => pollJob(jobId));
+}
+
+function dismissJob(jobId) {
+    const el = document.getElementById('job-' + jobId);
+    if (el) el.remove();
+    activeJobIds.delete(jobId);
+    renderAllJobs();
+}
+
+// ===== Запуск задач =====
+
+function startBulkParse() {
+    const ids = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.dataset.productId);
+    if (!ids.length) return;
+    if (!confirm(`Запустить AI парсинг для ${ids.length} товаров?`)) return;
+
+    bulkBtn.disabled = true;
+    bulkBtn.textContent = 'Запуск...';
 
     const form = new FormData();
-    form.append('product_id', productId);
+    ids.forEach(id => form.append('product_ids', id));
 
-    fetch('{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}', {
+    fetch(PARSE_URL, {
         method: 'POST',
         headers: { 'X-Requested-With': 'XMLHttpRequest' },
         body: form
     })
     .then(r => r.json())
     .then(data => {
-        if (data.success) {
-            const mp = data.marketplace_data || {};
-            const parsed = data.parsed_data || {};
-            const meta = parsed.parsing_meta || {};
-            content.innerHTML = `
-                <div class="space-y-4">
-                    <div class="bg-green-50 rounded-lg p-4">
-                        <p class="text-green-800 font-semibold">Парсинг завершён</p>
-                        <p class="text-green-600 text-sm">Заполнено: ${meta.fill_percentage || 0}% (${meta.total_fields_found || 0} из ${meta.total_fields_possible || 0} полей)</p>
-                    </div>
-                    <div>
-                        <h4 class="font-semibold text-gray-900 mb-2">Данные для маркетплейса (WB)</h4>
-                        <pre class="bg-gray-50 rounded-lg p-4 text-xs overflow-x-auto max-h-48 border">${JSON.stringify(mp, null, 2)}</pre>
-                    </div>
-                    <div>
-                        <h4 class="font-semibold text-gray-900 mb-2">Полный парсинг (все характеристики)</h4>
-                        <pre class="bg-gray-50 rounded-lg p-4 text-xs overflow-x-auto max-h-64 border">${JSON.stringify(parsed, null, 2)}</pre>
-                    </div>
-                    <div class="flex gap-2">
-                        <button onclick="copyToClipboard(JSON.stringify(${JSON.stringify(mp)}, null, 2))" class="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded text-sm hover:bg-indigo-200">
-                            Копировать WB JSON
-                        </button>
-                        <button onclick="copyToClipboard(JSON.stringify(${JSON.stringify(parsed)}, null, 2))" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">
-                            Копировать полный JSON
-                        </button>
-                    </div>
-                </div>`;
-        } else {
-            content.innerHTML = `<div class="bg-red-50 rounded-lg p-4"><p class="text-red-800 font-semibold">Ошибка</p><p class="text-red-600 text-sm">${data.error || 'Неизвестная ошибка'}</p></div>`;
+        bulkBtn.textContent = 'AI Парсинг выбранных';
+        updateSelection();
+
+        if (data.error) {
+            alert('Ошибка: ' + data.error);
+            return;
+        }
+        if (data.job_id) {
+            activeJobIds.add(data.job_id);
+            pollJob(data.job_id);
+            // Сбросить чекбоксы
+            getCheckboxes().forEach(cb => cb.checked = false);
+            if (selectAll) selectAll.checked = false;
+            updateSelection();
         }
     })
     .catch(err => {
-        content.innerHTML = `<div class="bg-red-50 rounded-lg p-4"><p class="text-red-800">Ошибка сети: ${err.message}</p></div>`;
+        bulkBtn.textContent = 'AI Парсинг выбранных';
+        updateSelection();
+        alert('Ошибка сети: ' + err.message);
     });
 }
 
-function closeModal() {
-    document.getElementById('parseResultModal').classList.add('hidden');
-    location.reload();
+function startSingleParse(productId) {
+    const form = new FormData();
+    form.append('product_id', productId);
+
+    // Обновляем ячейку статуса на спиннер
+    const cell = document.getElementById('parse-status-' + productId);
+    if (cell) cell.innerHTML = '<span class="inline-block animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full"></span>';
+
+    fetch(PARSE_URL, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        body: form
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.job_id) {
+            activeJobIds.add(data.job_id);
+            pollJob(data.job_id);
+        } else if (data.error) {
+            if (cell) cell.innerHTML = '<span class="text-xs text-red-500">err</span>';
+        }
+    })
+    .catch(() => {
+        if (cell) cell.innerHTML = '<span class="text-xs text-red-500">err</span>';
+    });
 }
 
-function copyToClipboard(text) {
-    navigator.clipboard.writeText(text).then(() => {
-        alert('Скопировано в буфер обмена');
+function startDescSync() {
+    if (!confirm('Запустить синхронизацию описаний из CSV?')) return;
+    const btn = document.getElementById('descSyncBtn');
+    btn.disabled = true;
+    btn.textContent = 'Запуск...';
+
+    fetch(DESC_SYNC_URL, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+    .then(r => {
+        // Это redirect при обычном POST, но мы отправляем без XHR header в form
+        // Используем form submit вместо
     });
+
+    // Fallback — просто сабмитим форму
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = DESC_SYNC_URL;
+    document.body.appendChild(form);
+    form.submit();
 }
 </script>
 {% endblock %}

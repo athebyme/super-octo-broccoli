@@ -15,6 +15,8 @@ import hashlib
 import logging
 import re
 import time
+import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
@@ -1643,41 +1645,322 @@ class SupplierService:
 
         return {'success': False, 'error': error or 'Ошибка AI парсинга'}
 
+    # ===================================================================
+    # ФОНОВЫЙ AI ПАРСИНГ
+    # ===================================================================
+
     @staticmethod
-    def ai_full_parse_bulk(supplier_id: int, product_ids: List[int]) -> dict:
+    def start_ai_parse_job(supplier_id: int, product_ids: List[int],
+                           admin_user_id: int = None) -> dict:
         """
-        Массовый AI парсинг товаров.
+        Запускает фоновый AI парсинг товаров.
 
         Returns:
-            dict: {success, parsed, errors, results: [{product_id, fill_percentage, error}]}
+            dict: {job_id, total} или {error}
         """
+        from models import AIParseJob
+
         supplier = Supplier.query.get(supplier_id)
         if not supplier or not supplier.ai_enabled:
-            return {'success': False, 'error': 'AI не включен', 'parsed': 0, 'errors': 0, 'results': []}
+            return {'error': 'AI не включен для этого поставщика'}
+
+        if not product_ids:
+            return {'error': 'Не выбраны товары'}
+
+        job_id = str(uuid.uuid4())
+        job = AIParseJob(
+            id=job_id,
+            supplier_id=supplier_id,
+            admin_user_id=admin_user_id,
+            job_type='parse' if len(product_ids) > 1 else 'parse_single',
+            status='pending',
+            total=len(product_ids),
+            processed=0,
+            succeeded=0,
+            failed=0,
+            results=json.dumps([]),
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        thread = threading.Thread(
+            target=SupplierService._run_ai_parse_job,
+            args=(job_id, supplier_id, product_ids),
+            daemon=True,
+            name=f'AIParse-{job_id[:8]}'
+        )
+        thread.start()
+
+        logger.info(f"[AI Parse] Job {job_id} started: {len(product_ids)} products, supplier={supplier_id}")
+        return {'job_id': job_id, 'total': len(product_ids)}
+
+    @staticmethod
+    def _run_ai_parse_job(job_id: str, supplier_id: int, product_ids: List[int]):
+        """Фоновый поток AI парсинга."""
+        from seller_platform import app as flask_app
+        from models import AIParseJob
+
+        with flask_app.app_context():
+            job = AIParseJob.query.get(job_id)
+            if not job:
+                logger.error(f"[AI Parse] Job {job_id} not found")
+                return
+
+            job.status = 'running'
+            db.session.commit()
+
+            supplier = Supplier.query.get(supplier_id)
+            if not supplier or not supplier.ai_enabled:
+                job.status = 'failed'
+                job.error_message = 'AI не включен'
+                db.session.commit()
+                return
+
+            ai_svc = SupplierService._get_ai_service(supplier)
+            if not ai_svc:
+                job.status = 'failed'
+                job.error_message = 'Не удалось создать AI сервис'
+                db.session.commit()
+                return
+
+            results = []
+            succeeded = 0
+            failed = 0
+
+            for i, pid in enumerate(product_ids):
+                # Проверяем отмену
+                db.session.refresh(job)
+                if job.status == 'cancelled':
+                    logger.info(f"[AI Parse] Job {job_id} cancelled at {i}/{len(product_ids)}")
+                    break
+
+                product = SupplierProduct.query.get(pid)
+                if not product or product.supplier_id != supplier_id:
+                    failed += 1
+                    results.append({
+                        'product_id': pid,
+                        'title': '',
+                        'status': 'error',
+                        'error': 'Товар не найден',
+                    })
+                    job.processed = i + 1
+                    job.failed = failed
+                    job.results = json.dumps(results, ensure_ascii=False)
+                    db.session.commit()
+                    continue
+
+                job.current_product_title = (product.title or 'Без названия')[:200]
+                db.session.commit()
+
+                try:
+                    product_data = product.get_all_data_for_parsing()
+                    success, result, error = ai_svc.full_product_parse(product_data)
+
+                    if success and result:
+                        product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
+                        product.ai_parsed_at = datetime.utcnow()
+
+                        marketplace_data = _build_marketplace_data(product, result)
+                        product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
+
+                        _apply_parsed_data_to_product(product, result)
+                        product.updated_at = datetime.utcnow()
+
+                        fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+
+                        succeeded += 1
+                        results.append({
+                            'product_id': pid,
+                            'title': (product.title or '')[:80],
+                            'status': 'success',
+                            'fill_pct': fill_pct,
+                        })
+                    else:
+                        failed += 1
+                        results.append({
+                            'product_id': pid,
+                            'title': (product.title or '')[:80],
+                            'status': 'error',
+                            'error': error or 'Ошибка AI',
+                        })
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"[AI Parse] Error parsing product {pid}: {e}")
+                    results.append({
+                        'product_id': pid,
+                        'title': getattr(product, 'title', '')[:80] if product else '',
+                        'status': 'error',
+                        'error': str(e)[:200],
+                    })
+
+                job.processed = i + 1
+                job.succeeded = succeeded
+                job.failed = failed
+                job.results = json.dumps(results, ensure_ascii=False)
+                db.session.commit()
+
+                # Пауза между запросами чтобы не перегрузить API
+                if i < len(product_ids) - 1:
+                    time.sleep(0.5)
+
+            # Завершение
+            if job.status != 'cancelled':
+                job.status = 'done'
+            job.processed = len(product_ids) if job.status != 'cancelled' else job.processed
+            job.succeeded = succeeded
+            job.failed = failed
+            job.current_product_title = None
+            job.results = json.dumps(results, ensure_ascii=False)
+            job.updated_at = datetime.utcnow()
+            db.session.commit()
+
+            logger.info(
+                f"[AI Parse] Job {job_id} {job.status}: "
+                f"{succeeded} ok, {failed} fail out of {len(product_ids)}"
+            )
+
+    @staticmethod
+    def start_description_sync_job(supplier_id: int, admin_user_id: int = None) -> dict:
+        """
+        Запускает фоновую синхронизацию описаний.
+
+        Returns:
+            dict: {job_id} или {error}
+        """
+        from models import AIParseJob
+
+        supplier = Supplier.query.get(supplier_id)
+        if not supplier:
+            return {'error': 'Поставщик не найден'}
+        if not supplier.description_file_url:
+            return {'error': 'URL файла описаний не задан'}
+
+        job_id = str(uuid.uuid4())
+        job = AIParseJob(
+            id=job_id,
+            supplier_id=supplier_id,
+            admin_user_id=admin_user_id,
+            job_type='sync_descriptions',
+            status='pending',
+            total=0,
+            processed=0,
+            succeeded=0,
+            failed=0,
+            results=json.dumps([]),
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        thread = threading.Thread(
+            target=SupplierService._run_description_sync_job,
+            args=(job_id, supplier_id),
+            daemon=True,
+            name=f'DescSync-{job_id[:8]}'
+        )
+        thread.start()
+
+        return {'job_id': job_id}
+
+    @staticmethod
+    def _run_description_sync_job(job_id: str, supplier_id: int):
+        """Фоновый поток синхронизации описаний."""
+        from seller_platform import app as flask_app
+        from models import AIParseJob
+
+        with flask_app.app_context():
+            job = AIParseJob.query.get(job_id)
+            if not job:
+                return
+
+            job.status = 'running'
+            job.current_product_title = 'Загрузка CSV...'
+            db.session.commit()
+
+            result = SupplierService.sync_descriptions(supplier_id)
+
+            job.status = 'done' if result.get('success') else 'failed'
+            job.succeeded = result.get('updated', 0)
+            job.failed = result.get('errors', 0)
+            job.processed = job.succeeded + job.failed + result.get('not_found', 0)
+            job.total = job.processed
+            job.error_message = result.get('error')
+            job.current_product_title = None
+            job.results = json.dumps([{
+                'updated': result.get('updated', 0),
+                'not_found': result.get('not_found', 0),
+                'errors': result.get('errors', 0),
+                'error_messages': result.get('error_messages', []),
+            }], ensure_ascii=False)
+            job.updated_at = datetime.utcnow()
+            db.session.commit()
+
+            logger.info(f"[Desc Sync] Job {job_id} done: {result}")
+
+    @staticmethod
+    def get_ai_parse_job(job_id: str) -> Optional[dict]:
+        """Получить статус фоновой задачи AI парсинга."""
+        from models import AIParseJob
+
+        job = AIParseJob.query.get(job_id)
+        if not job:
+            return None
 
         results = []
-        parsed_count = 0
-        error_count = 0
-
-        for pid in product_ids:
-            res = SupplierService.ai_full_parse(pid)
-            results.append({
-                'product_id': pid,
-                'success': res.get('success', False),
-                'fill_percentage': res.get('fill_percentage', 0),
-                'error': res.get('error'),
-            })
-            if res.get('success'):
-                parsed_count += 1
-            else:
-                error_count += 1
+        if job.results:
+            try:
+                results = json.loads(job.results)
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         return {
-            'success': error_count == 0,
-            'parsed': parsed_count,
-            'errors': error_count,
-            'results': results,
+            'job_id': job.id,
+            'job_type': job.job_type,
+            'status': job.status,
+            'total': job.total,
+            'processed': job.processed,
+            'succeeded': job.succeeded,
+            'failed': job.failed,
+            'current_product': job.current_product_title,
+            'error_message': job.error_message,
+            'progress_pct': round(job.processed / job.total * 100) if job.total else 0,
+            'results': results[-50:],
+            'created_at': job.created_at.isoformat() if job.created_at else None,
+            'updated_at': job.updated_at.isoformat() if job.updated_at else None,
         }
+
+    @staticmethod
+    def cancel_ai_parse_job(job_id: str) -> bool:
+        """Отменить фоновую задачу AI парсинга."""
+        from models import AIParseJob
+
+        job = AIParseJob.query.get(job_id)
+        if not job or job.status not in ('pending', 'running'):
+            return False
+        job.status = 'cancelled'
+        db.session.commit()
+        return True
+
+    @staticmethod
+    def get_active_ai_parse_jobs(supplier_id: int) -> List[dict]:
+        """Получить активные задачи AI парсинга для поставщика."""
+        from models import AIParseJob
+
+        jobs = AIParseJob.query.filter(
+            AIParseJob.supplier_id == supplier_id,
+            AIParseJob.status.in_(['pending', 'running'])
+        ).order_by(AIParseJob.created_at.desc()).all()
+
+        return [SupplierService.get_ai_parse_job(j.id) for j in jobs]
+
+    @staticmethod
+    def get_recent_ai_parse_jobs(supplier_id: int, limit: int = 10) -> List[dict]:
+        """Получить последние задачи AI парсинга."""
+        from models import AIParseJob
+
+        jobs = AIParseJob.query.filter_by(supplier_id=supplier_id)\
+            .order_by(AIParseJob.created_at.desc()).limit(limit).all()
+
+        return [SupplierService.get_ai_parse_job(j.id) for j in jobs]
 
     @staticmethod
     def get_product_raw_json(product_id: int) -> dict:
