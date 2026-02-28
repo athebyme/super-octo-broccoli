@@ -627,6 +627,25 @@ WB is migrating from v2 to v3 (v2 scheduled for deprecation). The plan:
 - Endpoint builder respects version (`/content/v2/...` vs `/content/v3/...`)
 - Test both and switch when ready
 
+### 7.8 Interactive Prompt Testing Playground (Admin UI)
+
+Add a testing interface specifically for tuning characteristic AI instructions.
+- Admins can open a characteristic (e.g., "Цвет"), paste a sample product description, and click "Test AI".
+- Instantly preview if the AI extracts the characteristic correctly based on the `ai_instruction` and dictionary without running a full product parse.
+
+### 7.9 Schema Change Detection & Revalidation
+
+When WB updates a category characteristic (e.g., a field becomes required, or dictionary changes):
+- The `MarketplaceService` detects the diff during the background sync.
+- System automatically flags previously validated supplier products as "Needs Revalidation" or invalid.
+- Generates an alert/dashboard notification.
+
+### 7.10 Live Frontend Validation API
+
+Add a `/api/marketplaces/<id>/validate_characteristic` endpoint:
+- Enables the UI on the Supplier Product detail page to give instant feedback when an admin manually edits a mapped field.
+- Uses `MarketplaceValidator` dynamically without a full page reload or saving bad data.
+
 ---
 
 ## Implementation Order
