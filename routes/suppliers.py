@@ -646,6 +646,200 @@ def register_supplier_routes(app):
                                supplier=supplier, pagination=pagination)
 
     # -------------------------------------------------------------------
+    # AI ПОЛНЫЙ ПАРСИНГ ТОВАРА
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parse(supplier_id):
+        """AI полный парсинг одного товара — извлечение всех характеристик"""
+        product_id = request.form.get('product_id', type=int)
+        if not product_id:
+            flash('Не указан товар', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.ai_full_parse(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_full_parse_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={
+                'supplier_id': supplier_id,
+                'success': result.get('success'),
+                'fill_pct': result.get('fill_percentage', 0),
+            },
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        if result.get('success'):
+            fill_pct = result.get('fill_percentage', 0)
+            flash(f'AI парсинг завершён. Заполнено {fill_pct:.0f}% характеристик', 'success')
+        else:
+            flash(f'Ошибка AI парсинга: {result.get("error", "?")}', 'danger')
+        return redirect(url_for('admin_supplier_product_detail',
+                                supplier_id=supplier_id, product_id=product_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-bulk', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parse_bulk(supplier_id):
+        """Массовый AI парсинг выбранных товаров"""
+        product_ids_raw = request.form.getlist('product_ids')
+        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+
+        if not product_ids:
+            flash('Не выбраны товары', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.ai_full_parse_bulk(supplier_id, product_ids)
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_full_parse_bulk',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'count': len(product_ids),
+                'parsed': result.get('parsed', 0),
+                'errors': result.get('errors', 0),
+            },
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        flash(
+            f'AI парсинг: {result.get("parsed", 0)} успешно, '
+            f'{result.get("errors", 0)} ошибок из {len(product_ids)} товаров',
+            'success' if result.get('errors', 0) == 0 else 'warning'
+        )
+        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/raw-json')
+    @login_required
+    @admin_required
+    def admin_supplier_product_raw_json(supplier_id, product_id):
+        """Полный JSON дамп товара для анализа"""
+        supplier = SupplierService.get_supplier(supplier_id)
+        product = SupplierService.get_product(product_id)
+        if not supplier or not product or product.supplier_id != supplier_id:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'error': 'Товар не найден'}), 404
+            flash('Товар не найден', 'danger')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        raw_data = SupplierService.get_product_raw_json(product_id)
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(raw_data)
+
+        return render_template('admin_supplier_product_raw_json.html',
+                               supplier=supplier, product=product,
+                               raw_data=json.dumps(raw_data, ensure_ascii=False, indent=2))
+
+    # -------------------------------------------------------------------
+    # СИНХРОНИЗАЦИЯ ОПИСАНИЙ
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/suppliers/<int:supplier_id>/sync-descriptions', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_sync_descriptions(supplier_id):
+        """Синхронизация описаний товаров из CSV файла"""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            flash('Поставщик не найден', 'danger')
+            return redirect(url_for('admin_suppliers'))
+
+        if not supplier.description_file_url:
+            flash('URL файла описаний не задан', 'warning')
+            return redirect(url_for('admin_supplier_edit', supplier_id=supplier_id))
+
+        result = SupplierService.sync_descriptions(supplier_id)
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='sync_supplier_descriptions',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'updated': result.get('updated', 0),
+                'not_found': result.get('not_found', 0),
+                'errors': result.get('errors', 0),
+            },
+            request=request
+        )
+
+        if result.get('success'):
+            flash(
+                f'Описания: {result.get("updated", 0)} обновлено, '
+                f'{result.get("not_found", 0)} не найдено, '
+                f'{result.get("errors", 0)} ошибок',
+                'success'
+            )
+        else:
+            flash(f'Ошибка: {result.get("error", "?")}', 'danger')
+
+        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+    # -------------------------------------------------------------------
+    # AI ПАРСЕР — СТРАНИЦА
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parser')
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parser(supplier_id):
+        """Страница AI парсера с выбором товаров"""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            flash('Поставщик не найден', 'danger')
+            return redirect(url_for('admin_suppliers'))
+
+        page = request.args.get('page', 1, type=int)
+        search = request.args.get('search', '').strip()
+        stock_status = request.args.get('stock_status', '').strip()
+
+        query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+        if search:
+            search_term = f'%{search}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.title.ilike(search_term),
+                    SupplierProduct.external_id.ilike(search_term),
+                    SupplierProduct.brand.ilike(search_term),
+                )
+            )
+        if stock_status == 'in_stock':
+            query = query.filter(SupplierProduct.supplier_status == 'in_stock')
+        elif stock_status == 'out_of_stock':
+            query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
+
+        pagination = query.order_by(SupplierProduct.title).paginate(
+            page=page, per_page=50, error_out=False
+        )
+
+        stats = SupplierService.get_product_stats(supplier_id)
+
+        # Статистика по AI парсингу
+        parsed_count = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.ai_parsed_data_json.isnot(None)
+        ).count()
+
+        return render_template('admin_supplier_ai_parser.html',
+                               supplier=supplier, pagination=pagination,
+                               stats=stats, search=search,
+                               stock_status=stock_status,
+                               parsed_count=parsed_count)
+
+    # -------------------------------------------------------------------
     # Управление подключёнными продавцами
     # -------------------------------------------------------------------
     @app.route('/admin/suppliers/<int:supplier_id>/sellers')
@@ -892,12 +1086,14 @@ def _extract_supplier_form_data(form) -> dict:
         'csv_encoding', 'api_endpoint', 'auth_login', 'auth_password',
         'price_file_url', 'price_file_inf_url', 'price_file_delimiter',
         'price_file_encoding',
+        'description_file_url', 'description_file_delimiter', 'description_file_encoding',
         'ai_provider', 'ai_api_key', 'ai_api_base_url', 'ai_model',
         'ai_client_id', 'ai_client_secret',
         'image_background_color',
         'ai_category_instruction', 'ai_size_instruction',
         'ai_seo_title_instruction', 'ai_keywords_instruction',
         'ai_description_instruction', 'ai_analysis_instruction',
+        'ai_parsing_instruction',
     ]
     for f in text_fields:
         val = form.get(f, '').strip()

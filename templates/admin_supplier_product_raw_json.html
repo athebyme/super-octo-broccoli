@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}JSON: {{ product.title or 'Товар' }} — {{ supplier.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:text-indigo-600">Поставщики</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}" class="hover:text-indigo-600">{{ supplier.name }}</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}" class="hover:text-indigo-600">{{ (product.title or 'Товар')[:40] }}</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">Raw JSON</span>
+    </nav>
+
+    <div class="mb-6 flex justify-between items-start">
+        <div>
+            <h1 class="text-xl font-bold text-gray-900">Raw JSON: {{ (product.title or 'Без названия')[:60] }}</h1>
+            <p class="text-sm text-gray-500 mt-1">
+                Полный дамп данных товара для анализа и отладки
+            </p>
+        </div>
+        <div class="flex gap-2">
+            <button onclick="copyAll()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+                Копировать JSON
+            </button>
+            <button onclick="downloadJson()" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">
+                Скачать .json
+            </button>
+            <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
+               class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                Назад
+            </a>
+        </div>
+    </div>
+
+    <!-- Навигация по секциям -->
+    <div class="flex flex-wrap gap-2 mb-4">
+        <button onclick="filterSection('all')" class="section-btn px-3 py-1.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700 hover:bg-indigo-200" data-section="all">Все данные</button>
+        <button onclick="filterSection('ai_parsed_data')" class="section-btn px-3 py-1.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200" data-section="ai_parsed_data">AI парсинг</button>
+        <button onclick="filterSection('ai_marketplace_data')" class="section-btn px-3 py-1.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200" data-section="ai_marketplace_data">Маркетплейс</button>
+        <button onclick="filterSection('original_data')" class="section-btn px-3 py-1.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200" data-section="original_data">Оригинал поставщика</button>
+        <button onclick="filterSection('all_data_for_parsing')" class="section-btn px-3 py-1.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200" data-section="all_data_for_parsing">Данные для парсинга</button>
+    </div>
+
+    <!-- Сводка -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+            <p class="text-xs text-gray-500">Бренд</p>
+            <p class="text-sm font-bold text-gray-900">{{ product.brand or '—' }}</p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+            <p class="text-xs text-gray-500">Категория</p>
+            <p class="text-sm font-bold text-gray-900">{{ (product.wb_category_name or product.category or '—')[:25] }}</p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+            <p class="text-xs text-gray-500">Цена</p>
+            <p class="text-sm font-bold text-gray-900">{{ '%.0f'|format(product.supplier_price) if product.supplier_price else '—' }}</p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+            <p class="text-xs text-gray-500">AI парсинг</p>
+            <p class="text-sm font-bold {{ 'text-green-600' if product.ai_parsed_at else 'text-gray-400' }}">
+                {{ product.ai_parsed_at.strftime('%d.%m %H:%M') if product.ai_parsed_at else 'Нет' }}
+            </p>
+        </div>
+        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+            <p class="text-xs text-gray-500">Описание</p>
+            <p class="text-sm font-bold {{ 'text-green-600' if product.description else 'text-red-400' }}">
+                {{ product.description_source or ('есть' if product.description else 'нет') }}
+            </p>
+        </div>
+    </div>
+
+    <!-- JSON -->
+    <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div class="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+            <span class="text-sm font-medium text-gray-700" id="jsonLabel">Все данные</span>
+            <span class="text-xs text-gray-400" id="jsonSize"></span>
+        </div>
+        <pre id="jsonContent" class="p-4 text-xs text-gray-800 overflow-x-auto max-h-[70vh] font-mono leading-relaxed"></pre>
+    </div>
+</div>
+
+<script>
+const fullData = {{ raw_data|safe }};
+
+function renderJson(data, label) {
+    const jsonStr = JSON.stringify(data, null, 2);
+    document.getElementById('jsonContent').textContent = jsonStr;
+    document.getElementById('jsonLabel').textContent = label;
+    document.getElementById('jsonSize').textContent = `${(jsonStr.length / 1024).toFixed(1)} KB`;
+}
+
+function filterSection(section) {
+    document.querySelectorAll('.section-btn').forEach(btn => {
+        btn.classList.remove('bg-indigo-100', 'text-indigo-700');
+        btn.classList.add('bg-gray-100', 'text-gray-600');
+    });
+    document.querySelector(`[data-section="${section}"]`).classList.remove('bg-gray-100', 'text-gray-600');
+    document.querySelector(`[data-section="${section}"]`).classList.add('bg-indigo-100', 'text-indigo-700');
+
+    if (section === 'all') {
+        renderJson(fullData, 'Все данные');
+    } else if (fullData[section]) {
+        renderJson(fullData[section], section);
+    } else {
+        renderJson({}, section + ' (пусто)');
+    }
+}
+
+function copyAll() {
+    const section = document.getElementById('jsonContent').textContent;
+    navigator.clipboard.writeText(section).then(() => alert('JSON скопирован'));
+}
+
+function downloadJson() {
+    const blob = new Blob([JSON.stringify(fullData, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `product_${fullData.id || 'unknown'}_raw.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// Инициализация
+renderJson(fullData, 'Все данные');
+</script>
+{% endblock %}
