@@ -115,8 +115,8 @@
             {% for mp in marketplaces %}
         {% set conn = connections.get(mp.id) %}
         "{{ mp.id }}": {
-            is_active: { { 'true' if conn and conn.is_active else 'false' } },
-            auto_map_categories: { { 'true' if conn and conn.auto_map_categories else 'false' } },
+            is_active: { { (conn and conn.is_active) | tojson } },
+            auto_map_categories: { { (conn and conn.auto_map_categories) | tojson } },
             default_category_id: '{{ conn.default_category_id or "" if conn else "" }}',
             },
         {% endfor %}

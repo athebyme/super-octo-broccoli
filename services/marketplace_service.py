@@ -248,6 +248,8 @@ class MarketplaceService:
         }
 
         results = {}
+        has_errors = False
+        error_messages = []
         for d_type, fetcher in dirs_to_fetch.items():
             try:
                 res = fetcher()
@@ -276,8 +278,13 @@ class MarketplaceService:
             except Exception as e:
                 logger.error(f"Failed to fetch {d_type}: {e}")
                 results[d_type] = f"Error: {e}"
+                has_errors = True
+                error_messages.append(f"{d_type}: {e}")
         
-        marketplace.directories_synced_at = datetime.utcnow()
-        db.session.commit()
-
-        return {"success": True, "results": results}
+        if not has_errors:
+            marketplace.directories_synced_at = datetime.utcnow()
+            db.session.commit()
+            return {"success": True, "results": results}
+        else:
+            db.session.commit() # save successful ones
+            return {"success": False, "error": f"Errors during sync: {'; '.join(error_messages)}", "results": results}

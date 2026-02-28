@@ -117,7 +117,7 @@
         return {
             enabledStates: {
             {% for charc in characteristics %}
-        "{{ charc.id }}": { { 'true' if charc.is_enabled else 'false' } },
+        "{{ charc.id }}": { { charc.is_enabled | tojson } },
         {% endfor %}
     },
     instructions: {
