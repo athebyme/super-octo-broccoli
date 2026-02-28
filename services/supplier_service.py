@@ -1789,59 +1789,63 @@ class SupplierService:
                 """
                 Парсит один товар. Запускается в воркер-потоке.
                 Каждый вызов создаёт свой AIService (свою HTTP-сессию).
+                Оборачивается в app_context(), т.к. потоки пула не наследуют
+                Flask application context из родительского потока.
                 """
                 if cancelled.is_set():
                     return {'product_id': pid, 'status': 'cancelled'}
 
-                # Каждый воркер читает данные товара в контексте приложения
-                product = SupplierProduct.query.get(pid)
-                if not product or product.supplier_id != supplier_id:
-                    return {
-                        'product_id': pid, 'title': '',
-                        'status': 'error', 'error': 'Товар не найден',
-                    }
-
-                title = (product.title or '')[:80]
-
-                try:
-                    product_data = product.get_all_data_for_parsing()
-
-                    # Создаём отдельный AIService для этого воркера
-                    worker_svc = SupplierService._get_ai_service(supplier)
-                    if not worker_svc:
+                with flask_app.app_context():
+                    product = SupplierProduct.query.get(pid)
+                    if not product or product.supplier_id != supplier_id:
                         return {
-                            'product_id': pid, 'title': title,
-                            'status': 'error', 'error': 'AI сервис недоступен',
+                            'product_id': pid, 'title': '',
+                            'status': 'error', 'error': 'Товар не найден',
                         }
 
-                    success, result, error = worker_svc.full_product_parse(product_data)
+                    title = (product.title or '')[:80]
 
-                    if success and result:
-                        product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
-                        product.ai_parsed_at = datetime.utcnow()
+                    try:
+                        product_data = product.get_all_data_for_parsing()
 
-                        marketplace_data = _build_marketplace_data(product, result)
-                        product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
+                        # Создаём отдельный AIService для этого воркера
+                        worker_svc = SupplierService._get_ai_service(supplier)
+                        if not worker_svc:
+                            return {
+                                'product_id': pid, 'title': title,
+                                'status': 'error', 'error': 'AI сервис недоступен',
+                            }
 
-                        _apply_parsed_data_to_product(product, result)
-                        product.updated_at = datetime.utcnow()
+                        success, result, error = worker_svc.full_product_parse(product_data)
 
-                        fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+                        if success and result:
+                            product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
+                            product.ai_parsed_at = datetime.utcnow()
+
+                            marketplace_data = _build_marketplace_data(product, result)
+                            product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
+
+                            _apply_parsed_data_to_product(product, result)
+                            product.updated_at = datetime.utcnow()
+                            db.session.commit()
+
+                            fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+                            return {
+                                'product_id': pid, 'title': title,
+                                'status': 'success', 'fill_pct': fill_pct,
+                            }
+                        else:
+                            return {
+                                'product_id': pid, 'title': title,
+                                'status': 'error', 'error': error or 'Ошибка AI',
+                            }
+                    except Exception as e:
+                        db.session.rollback()
+                        logger.error(f"[AI Parse] Worker error pid={pid}: {e}")
                         return {
                             'product_id': pid, 'title': title,
-                            'status': 'success', 'fill_pct': fill_pct,
+                            'status': 'error', 'error': str(e)[:200],
                         }
-                    else:
-                        return {
-                            'product_id': pid, 'title': title,
-                            'status': 'error', 'error': error or 'Ошибка AI',
-                        }
-                except Exception as e:
-                    logger.error(f"[AI Parse] Worker error pid={pid}: {e}")
-                    return {
-                        'product_id': pid, 'title': title,
-                        'status': 'error', 'error': str(e)[:200],
-                    }
 
             # Запускаем пул
             with ThreadPoolExecutor(max_workers=effective_workers,
@@ -1873,13 +1877,8 @@ class SupplierService:
 
                     # Обновляем прогресс в БД каждые N завершений
                     if done_count % check_interval == 0 or done_count == len(product_ids):
-                        with lock:
-                            in_progress_titles = [
-                                (SupplierProduct.query.get(futures[f]).title or '?')[:60]
-                                for f in futures if not f.done()
-                            ][:3]
-                            current = ', '.join(in_progress_titles) if in_progress_titles else None
-                        _update_job_progress(current)
+                        current_title = res.get('title') if res.get('status') != 'success' else None
+                        _update_job_progress(current_title)
 
                         # Проверяем отмену
                         if done_count % (check_interval * 2) == 0:
@@ -1887,19 +1886,6 @@ class SupplierService:
                             if cancelled.is_set():
                                 pool.shutdown(wait=False, cancel_futures=True)
                                 break
-
-                    # Коммитим изменения продуктов порциями
-                    if done_count % effective_workers == 0:
-                        try:
-                            db.session.commit()
-                        except Exception:
-                            db.session.rollback()
-
-            # Финальный коммит продуктов
-            try:
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
 
             # Завершение задачи
             try:
