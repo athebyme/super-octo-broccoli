@@ -31,7 +31,8 @@
                         </div>
                         <p class="text-sm text-gray-500 mt-1">ID: {{ product.external_id }} | Артикул: {{
                             product.vendor_code or '—' }}
-                            {% if product.additional_vendor_code %} | Доп: {{ product.additional_vendor_code }}{% endif %}
+                            {% if product.additional_vendor_code %} | Доп: {{ product.additional_vendor_code }}{% endif
+                            %}
                         </p>
                     </div>
 
@@ -98,7 +99,8 @@
                                     value="{{ product.supplier_price or '' }}"
                                     class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
                                 {% if product.previous_price and product.previous_price != product.supplier_price %}
-                                <p class="mt-0.5 text-xs text-gray-400">Была: {{ '%.0f'|format(product.previous_price) }} &#8381;</p>
+                                <p class="mt-0.5 text-xs text-gray-400">Была: {{ '%.0f'|format(product.previous_price)
+                                    }} &#8381;</p>
                                 {% endif %}
                             </div>
                             <div>
@@ -109,13 +111,16 @@
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">РРЦ</label>
-                                <div class="w-full rounded-lg bg-gray-50 text-sm border border-gray-200 px-3 py-2 text-gray-700">
-                                    {{ '%.0f ₽'|format(product.recommended_retail_price) if product.recommended_retail_price else '—' }}
+                                <div
+                                    class="w-full rounded-lg bg-gray-50 text-sm border border-gray-200 px-3 py-2 text-gray-700">
+                                    {{ '%.0f ₽'|format(product.recommended_retail_price) if
+                                    product.recommended_retail_price else '—' }}
                                 </div>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-1">Наличие</label>
-                                <div class="w-full rounded-lg text-sm border border-gray-200 px-3 py-2 {{ 'bg-green-50 text-green-700' if product.supplier_status == 'in_stock' else 'bg-red-50 text-red-600' if product.supplier_status == 'out_of_stock' else 'bg-gray-50 text-gray-500' }}">
+                                <div
+                                    class="w-full rounded-lg text-sm border border-gray-200 px-3 py-2 {{ 'bg-green-50 text-green-700' if product.supplier_status == 'in_stock' else 'bg-red-50 text-red-600' if product.supplier_status == 'out_of_stock' else 'bg-gray-50 text-gray-500' }}">
                                     {% if product.supplier_status == 'in_stock' %}
                                     В наличии
                                     {% elif product.supplier_status == 'out_of_stock' %}
@@ -130,7 +135,8 @@
                         <!-- Расчёт розничной цены -->
                         {% if price_calc %}
                         <div class="bg-indigo-50 rounded-lg p-4 mt-3">
-                            <h4 class="text-sm font-semibold text-indigo-900 mb-2">Расчёт розничной цены (по умолчанию)</h4>
+                            <h4 class="text-sm font-semibold text-indigo-900 mb-2">Расчёт розничной цены (по умолчанию)
+                            </h4>
                             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
                                 <div>
                                     <span class="text-indigo-600">Закупочная (P)</span>
@@ -149,7 +155,9 @@
                                     <p class="font-bold text-indigo-900">{{ '%.0f'|format(price_calc.Y) }} &#8381;</p>
                                 </div>
                             </div>
-                            <p class="text-xs text-indigo-500 mt-2">Прибыль Q: {{ '%.0f'|format(price_calc.Q) }} &#8381; ({{ '%.0f'|format(price_calc.Q / price_calc.P * 100) if price_calc.P else 0 }}%) | Доставка S: {{ '%.0f'|format(price_calc.S) }} &#8381;</p>
+                            <p class="text-xs text-indigo-500 mt-2">Прибыль Q: {{ '%.0f'|format(price_calc.Q) }} &#8381;
+                                ({{ '%.0f'|format(price_calc.Q / price_calc.P * 100) if price_calc.P else 0 }}%) |
+                                Доставка S: {{ '%.0f'|format(price_calc.S) }} &#8381;</p>
                         </div>
                         {% endif %}
 
@@ -218,36 +226,142 @@
                                     ({{ '%.0f'|format(pm.get('fill_percentage', 0)) }}%)
                                 </span>
                                 {% if product.ai_parsed_at %}
-                                <span class="text-xs text-gray-400">{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                                <span class="text-xs text-gray-400">{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M')
+                                    }}</span>
                                 {% endif %}
                             </div>
                         </div>
 
-                        <!-- Маркетплейс данные (компактный вид) -->
-                        {% set mp = product.get_ai_marketplace_data() %}
-                        {% if mp %}
-                        <div class="bg-indigo-50 rounded-lg p-4 mb-3">
+                        <!-- Характеристики маркетплейса с Валидацией (Новая Версия) -->
+                        <div x-data="marketplaceValidator()" class="bg-indigo-50 rounded-lg p-4 mb-3 border"
+                            :class="validationStatus === 'valid' ? 'border-green-300' : (validationStatus === 'invalid' ? 'border-red-300' : 'border-indigo-100')">
                             <div class="flex justify-between items-center mb-2">
-                                <h4 class="text-xs font-semibold text-indigo-900">Данные для WB</h4>
-                                <button type="button" onclick="copyText(document.getElementById('mpJson').textContent)" class="text-xs text-indigo-600 hover:text-indigo-800">Копировать</button>
+                                <h4 class="text-sm font-semibold text-indigo-900">Характеристики маркетплейса (WB)</h4>
+                                <div class="flex items-center gap-2">
+                                    <span x-show="fillPct !== null"
+                                        class="text-xs text-indigo-700 bg-white px-2 py-0.5 rounded border">Заполнено:
+                                        <span x-text="fillPct + '%'"></span></span>
+                                    <span x-show="validationStatus === 'valid'"
+                                        class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded border border-green-200">✓
+                                        Валидно</span>
+                                    <span x-show="validationStatus === 'invalid'"
+                                        class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded border border-red-200">✗
+                                        Ошибки</span>
+
+                                    <button type="button" @click="validateFields" :disabled="loading"
+                                        class="text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 transition-colors disabled:opacity-50">
+                                        <span x-show="!loading">Проверить & Сохранить</span>
+                                        <span x-show="loading">Загрузка...</span>
+                                    </button>
+                                </div>
                             </div>
-                            <div class="grid grid-cols-2 gap-2 text-xs mb-2">
-                                {% if mp.get('title') %}<div><span class="text-indigo-600">Заголовок:</span> {{ mp.title[:50] }}</div>{% endif %}
-                                {% if mp.get('brand') %}<div><span class="text-indigo-600">Бренд:</span> {{ mp.brand }}</div>{% endif %}
-                                {% if mp.get('color') %}<div><span class="text-indigo-600">Цвет:</span> {{ mp.color }}</div>{% endif %}
-                                {% if mp.get('category') %}<div><span class="text-indigo-600">Категория:</span> {{ mp.category[:30] }}</div>{% endif %}
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                                <template x-for="(value, key) in fields" :key="key">
+                                    <div>
+                                        <label class="block text-xs font-medium text-indigo-800 mb-1"
+                                            x-text="key"></label>
+                                        <div class="relative">
+                                            <input type="text" x-model="fields[key]"
+                                                class="w-full rounded-md border-gray-300 shadow-sm sm:text-sm px-2 py-1.5"
+                                                :class="{'border-red-300 bg-red-50': errors[key]}">
+                                            <p x-show="errors[key]" class="mt-0.5 text-[10px] text-red-600"
+                                                x-text="errors[key]"></p>
+                                        </div>
+                                    </div>
+                                </template>
                             </div>
-                            {% if mp.get('characteristics') %}
-                            <div class="text-xs text-indigo-700 mb-1"><strong>Характеристики:</strong></div>
-                            <div class="grid grid-cols-2 gap-1 text-xs">
-                                {% for k, v in mp.characteristics.items() %}
-                                <div class="text-indigo-600">{{ k }}: <span class="text-indigo-900">{{ v }}</span></div>
-                                {% endfor %}
+
+                            <div x-show="Object.keys(fields).length === 0" class="text-sm text-gray-500 py-2">
+                                Нет данных для валидации. Запустите AI Полный парсинг.
                             </div>
-                            {% endif %}
-                            <pre id="mpJson" class="hidden">{{ product.ai_marketplace_json }}</pre>
+
+                            <!-- Добавление нового свойства вручную -->
+                            <div class="mt-4 pt-3 border-t border-indigo-100 flex gap-2">
+                                <input type="text" x-model="newFieldKey" placeholder="Новая характеристика"
+                                    class="flex-1 rounded-md border-gray-300 sm:text-sm px-2 py-1">
+                                <input type="text" x-model="newFieldValue" placeholder="Значение"
+                                    class="flex-1 rounded-md border-gray-300 sm:text-sm px-2 py-1">
+                                <button type="button" @click="addField"
+                                    class="text-xs bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 px-3 py-1 rounded">Добавить</button>
+                            </div>
+
+                            <div x-show="globalError"
+                                class="mt-3 p-2 bg-red-100 text-red-700 text-xs rounded border border-red-200"
+                                x-text="globalError"></div>
                         </div>
-                        {% endif %}
+
+                        <script>
+                            function marketplaceValidator() {
+                                return {
+                                    loading: false,
+                                    fields: {{ product.marketplace_fields_json | default ('{}', true) | safe }
+                            },
+                            validationStatus: '{{ product.marketplace_validation_status or "" }}',
+                                fillPct: { { product.marketplace_fill_pct or 0 } },
+                            errors: { },
+                            globalError: "",
+                                newFieldKey: "",
+                                    newFieldValue: "",
+
+                                        addField() {
+                                if (this.newFieldKey.trim() !== '') {
+                                    this.fields[this.newFieldKey.trim()] = this.newFieldValue;
+                                    this.newFieldKey = "";
+                                    this.newFieldValue = "";
+                                }
+                            },
+
+                                async validateFields() {
+                                this.loading = true;
+                                this.errors = {};
+                                this.globalError = "";
+
+                                try {
+                                    const res = await fetch('{{ url_for("admin_supplier_product_validate_marketplace", supplier_id=supplier.id, product_id=product.id) }}', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            marketplace_fields: this.fields,
+                                            save_to_product: true
+                                        })
+                                    });
+
+                                    const data = await res.json();
+                                    if (data.success) {
+                                        this.validationStatus = data.is_valid ? 'valid' : 'invalid';
+                                        this.fillPct = data.fill_percentage;
+
+                                        if (!data.is_valid && data.errors) {
+                                            // Convert errors array to object
+                                            data.errors.forEach(err => {
+                                                const parts = err.split(':');
+                                                if (parts.length > 1) {
+                                                    const keyMatch = err.match(/'([^']+)'/);
+                                                    if (keyMatch) {
+                                                        this.errors[keyMatch[1]] = err;
+                                                    } else {
+                                                        this.globalError += err + "\\n";
+                                                    }
+                                                } else {
+                                                    this.globalError += err + "\\n";
+                                                }
+                                            });
+                                        } else if (!data.is_valid) {
+                                            this.globalError = "Ошибки валидации (подробности неизвестны)";
+                                        }
+                                    } else {
+                                        this.globalError = data.error || 'Server error';
+                                    }
+                                } catch (err) {
+                                    this.globalError = "Ошибка сети: " + err.message;
+                                } finally {
+                                    this.loading = false;
+                                }
+                            }
+                            }
+                        }
+                        </script>
 
                         <!-- Полный парсинг (свёрнутый) -->
                         <details class="mb-2">
@@ -255,11 +369,13 @@
                                 Полные данные AI парсинга (JSON)
                             </summary>
                             <div class="mt-2 relative">
-                                <button type="button" onclick="copyText(document.getElementById('parsedJson').textContent)"
-                                        class="absolute top-2 right-2 text-xs text-gray-500 hover:text-indigo-600 bg-white px-2 py-0.5 rounded border">
+                                <button type="button"
+                                    onclick="copyText(document.getElementById('parsedJson').textContent)"
+                                    class="absolute top-2 right-2 text-xs text-gray-500 hover:text-indigo-600 bg-white px-2 py-0.5 rounded border">
                                     Копировать
                                 </button>
-                                <pre id="parsedJson" class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 overflow-x-auto max-h-64 border">{{ product.ai_parsed_data_json }}</pre>
+                                <pre id="parsedJson"
+                                    class="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 overflow-x-auto max-h-64 border">{{ product.ai_parsed_data_json }}</pre>
                             </div>
                         </details>
                         {% endif %}
@@ -316,7 +432,8 @@
                     {% if product.last_price_sync_at %}
                     <div>
                         <dt class="text-gray-500">Синхр. цен</dt>
-                        <dd class="text-gray-600 mt-0.5">{{ product.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }}</dd>
+                        <dd class="text-gray-600 mt-0.5">{{ product.last_price_sync_at.strftime('%d.%m.%Y %H:%M') }}
+                        </dd>
                     </div>
                     {% endif %}
                     {% if product.price_changed_at %}
@@ -380,18 +497,19 @@
                         </button>
                     </form>
                     <hr class="my-2">
-                    <button type="button" id="parseBtn"
-                        onclick="startAsyncParse()"
+                    <button type="button" id="parseBtn" onclick="startAsyncParse()"
                         class="w-full text-left px-3 py-2 text-sm rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors font-medium">
                         AI Полный парсинг
                     </button>
                     <div id="parseProgress" class="hidden px-3 mt-2">
                         <div class="flex items-center gap-2 mb-1">
-                            <span class="inline-block animate-spin h-3 w-3 border-2 border-orange-500 border-t-transparent rounded-full"></span>
+                            <span
+                                class="inline-block animate-spin h-3 w-3 border-2 border-orange-500 border-t-transparent rounded-full"></span>
                             <span id="parseStatus" class="text-xs text-orange-700">Запуск...</span>
                         </div>
                         <div class="w-full bg-gray-200 rounded-full h-1.5">
-                            <div id="parseBar" class="bg-orange-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            <div id="parseBar" class="bg-orange-500 h-1.5 rounded-full transition-all duration-500"
+                                style="width: 0%"></div>
                         </div>
                     </div>
                     <div id="parseResult" class="hidden px-3 mt-2"></div>
@@ -409,12 +527,12 @@
                 <h3 class="text-sm font-semibold text-gray-900 mb-3">Аналитика</h3>
                 <div class="space-y-2">
                     <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"
-                       class="block w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
+                        class="block w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
                         Raw JSON (все данные)
                     </a>
                     {% if supplier.ai_enabled %}
                     <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
-                       class="block w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
+                        class="block w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors">
                         AI Парсер (массовый)
                     </a>
                     {% endif %}
@@ -424,80 +542,80 @@
     </div>
 </div>
 <script>
-function copyText(text) {
-    navigator.clipboard.writeText(text).then(() => {
-        alert('Скопировано в буфер обмена');
-    });
-}
+    function copyText(text) {
+        navigator.clipboard.writeText(text).then(() => {
+            alert('Скопировано в буфер обмена');
+        });
+    }
 
-function startAsyncParse() {
-    const btn = document.getElementById('parseBtn');
-    const progress = document.getElementById('parseProgress');
-    const resultDiv = document.getElementById('parseResult');
-    const statusText = document.getElementById('parseStatus');
-    const bar = document.getElementById('parseBar');
+    function startAsyncParse() {
+        const btn = document.getElementById('parseBtn');
+        const progress = document.getElementById('parseProgress');
+        const resultDiv = document.getElementById('parseResult');
+        const statusText = document.getElementById('parseStatus');
+        const bar = document.getElementById('parseBar');
 
-    btn.disabled = true;
-    btn.classList.add('opacity-50');
-    progress.classList.remove('hidden');
-    resultDiv.classList.add('hidden');
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+        progress.classList.remove('hidden');
+        resultDiv.classList.add('hidden');
 
-    const form = new FormData();
-    form.append('product_id', '{{ product.id }}');
+        const form = new FormData();
+        form.append('product_id', '{{ product.id }}');
 
-    fetch('{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}', {
-        method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
-        body: form
-    })
-    .then(r => r.json())
-    .then(data => {
-        if (data.error) {
-            showParseError(data.error);
-            return;
-        }
-        if (data.job_id) {
-            pollParseJob(data.job_id);
-        }
-    })
-    .catch(err => showParseError('Ошибка сети: ' + err.message));
+        fetch('{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body: form
+        })
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    showParseError(data.error);
+                    return;
+                }
+                if (data.job_id) {
+                    pollParseJob(data.job_id);
+                }
+            })
+            .catch(err => showParseError('Ошибка сети: ' + err.message));
 
-    function pollParseJob(jobId) {
-        fetch(`/admin/suppliers/{{ supplier.id }}/ai/parse-job/${jobId}/status`)
-        .then(r => r.json())
-        .then(j => {
-            bar.style.width = (j.progress_pct || 0) + '%';
-            if (j.status === 'running') {
-                statusText.textContent = j.current_product ? `Анализ: ${j.current_product}` : 'AI анализирует...';
-                setTimeout(() => pollParseJob(jobId), 2000);
-            } else if (j.status === 'done') {
-                progress.classList.add('hidden');
-                const r0 = (j.results && j.results[0]) || {};
-                const fillPct = r0.fill_pct ? r0.fill_pct.toFixed(0) : '?';
-                resultDiv.innerHTML = `
+        function pollParseJob(jobId) {
+            fetch(`/admin/suppliers/{{ supplier.id }}/ai/parse-job/${jobId}/status`)
+                .then(r => r.json())
+                .then(j => {
+                    bar.style.width = (j.progress_pct || 0) + '%';
+                    if (j.status === 'running') {
+                        statusText.textContent = j.current_product ? `Анализ: ${j.current_product}` : 'AI анализирует...';
+                        setTimeout(() => pollParseJob(jobId), 2000);
+                    } else if (j.status === 'done') {
+                        progress.classList.add('hidden');
+                        const r0 = (j.results && j.results[0]) || {};
+                        const fillPct = r0.fill_pct ? r0.fill_pct.toFixed(0) : '?';
+                        resultDiv.innerHTML = `
                     <div class="bg-green-50 rounded-lg p-2 text-xs">
                         <span class="text-green-700 font-semibold">Готово!</span>
                         Заполнено ${fillPct}% характеристик.
                         <a href="" class="underline text-green-600 ml-1">Обновить страницу</a>
                     </div>`;
-                resultDiv.classList.remove('hidden');
-                btn.disabled = false;
-                btn.classList.remove('opacity-50');
-            } else {
-                const errMsg = j.error_message || (j.results && j.results[0] && j.results[0].error) || 'Неизвестная ошибка';
-                showParseError(errMsg);
-            }
-        })
-        .catch(() => setTimeout(() => pollParseJob(jobId), 3000));
-    }
+                        resultDiv.classList.remove('hidden');
+                        btn.disabled = false;
+                        btn.classList.remove('opacity-50');
+                    } else {
+                        const errMsg = j.error_message || (j.results && j.results[0] && j.results[0].error) || 'Неизвестная ошибка';
+                        showParseError(errMsg);
+                    }
+                })
+                .catch(() => setTimeout(() => pollParseJob(jobId), 3000));
+        }
 
-    function showParseError(msg) {
-        progress.classList.add('hidden');
-        resultDiv.innerHTML = `<div class="bg-red-50 rounded-lg p-2 text-xs text-red-700">${msg}</div>`;
-        resultDiv.classList.remove('hidden');
-        btn.disabled = false;
-        btn.classList.remove('opacity-50');
+        function showParseError(msg) {
+            progress.classList.add('hidden');
+            resultDiv.innerHTML = `<div class="bg-red-50 rounded-lg p-2 text-xs text-red-700">${msg}</div>`;
+            resultDiv.classList.remove('hidden');
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+        }
     }
-}
 </script>
 {% endblock %}

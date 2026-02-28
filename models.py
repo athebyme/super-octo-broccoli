@@ -2267,6 +2267,11 @@ class SupplierProduct(db.Model):
     status = db.Column(db.String(50), default='draft', index=True)
     validation_errors_json = db.Column(db.Text)
 
+    # Marketplace Integration
+    marketplace_fields_json = db.Column(db.Text)
+    marketplace_validation_status = db.Column(db.String(50))
+    marketplace_fill_pct = db.Column(db.Float)
+
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -2361,6 +2366,9 @@ class SupplierProduct(db.Model):
             'ai_validation_score': self.ai_validation_score,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'marketplace_validation_status': self.marketplace_validation_status,
+            'marketplace_fill_pct': self.marketplace_fill_pct,
+            'marketplace_fields': self.get_marketplace_fields(),
         }
         if include_ai:
             data['ai_seo_title'] = self.ai_seo_title
@@ -2393,6 +2401,16 @@ class SupplierProduct(db.Model):
         try:
             import json
             return json.loads(self.ai_marketplace_json)
+        except Exception:
+            return {}
+
+    def get_marketplace_fields(self) -> dict:
+        """Получить валидированные данные маркетплейса"""
+        if not self.marketplace_fields_json:
+            return {}
+        try:
+            import json
+            return json.loads(self.marketplace_fields_json)
         except Exception:
             return {}
 
@@ -2536,3 +2554,205 @@ class AIParseJob(db.Model):
     updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     supplier = db.relationship('Supplier', foreign_keys=[supplier_id])
+
+
+# ============= MARKETPLACE INTEGRATION MODELS =============
+
+class Marketplace(db.Model):
+    """Маркетплейс (WB, Ozon, Yandex Market и т.д.)"""
+    __tablename__ = 'marketplaces'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)          # "Wildberries"
+    code = db.Column(db.String(50), unique=True, nullable=False)  # "wb"
+    logo_url = db.Column(db.String(500))
+    is_active = db.Column(db.Boolean, default=True)
+
+    # API configuration
+    api_base_url = db.Column(db.String(500))                  # base URL
+    _api_key_encrypted = db.Column('api_key', db.String(500)) # encrypted key
+    api_version = db.Column(db.String(20), default='v2')      # v2 / v3
+
+    # Category sync state
+    categories_synced_at = db.Column(db.DateTime)
+    categories_sync_status = db.Column(db.String(50))         # success/failed/running
+    total_categories = db.Column(db.Integer, default=0)
+    total_characteristics = db.Column(db.Integer, default=0)
+
+    # Directories sync
+    directories_synced_at = db.Column(db.DateTime)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Расшифровать API ключ"""
+        if not self._api_key_encrypted:
+            return None
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            return self._api_key_encrypted
+        try:
+            f = Fernet(encryption_key.encode())
+            return f.decrypt(self._api_key_encrypted.encode()).decode()
+        except Exception:
+            return self._api_key_encrypted
+
+    @api_key.setter
+    def api_key(self, value: Optional[str]) -> None:
+        """Зашифровать API ключ"""
+        if value is None:
+            self._api_key_encrypted = None
+            return
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            self._api_key_encrypted = value
+            return
+        try:
+            f = Fernet(encryption_key.encode())
+            self._api_key_encrypted = f.encrypt(value.encode()).decode()
+        except Exception:
+            self._api_key_encrypted = value
+
+
+class MarketplaceCategory(db.Model):
+    """Категория маркетплейса (subject / предмет)"""
+    __tablename__ = 'marketplace_categories'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+
+    # From WB API: /content/v2/object/all
+    subject_id = db.Column(db.Integer, nullable=False)         # subjectID from API
+    subject_name = db.Column(db.String(300))                   # "Анальные пробки"
+    parent_id = db.Column(db.Integer)                          # parentID
+    parent_name = db.Column(db.String(300))                    # "Товары для взрослых"
+
+    # Hierarchy management
+    is_enabled = db.Column(db.Boolean, default=False)          # Admin toggle
+    is_leaf = db.Column(db.Boolean, default=True)
+
+    # Characteristics cache state
+    characteristics_synced_at = db.Column(db.DateTime)
+    characteristics_count = db.Column(db.Integer, default=0)
+    required_count = db.Column(db.Integer, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    marketplace = db.relationship('Marketplace', backref=db.backref('categories', lazy='dynamic', cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.UniqueConstraint('marketplace_id', 'subject_id', name='uq_mp_category'),
+        db.Index('idx_mp_category_parent', 'marketplace_id', 'parent_id'),
+        db.Index('idx_mp_category_enabled', 'marketplace_id', 'is_enabled'),
+    )
+
+
+class MarketplaceCategoryCharacteristic(db.Model):
+    """Характеристика категории маркетплейса"""
+    __tablename__ = 'marketplace_category_characteristics'
+
+    id = db.Column(db.Integer, primary_key=True)
+    category_id = db.Column(db.Integer, db.ForeignKey('marketplace_categories.id'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+
+    # From WB API: /content/v2/object/charcs/{subjectId}
+    charc_id = db.Column(db.Integer, nullable=False)           # charcID
+    name = db.Column(db.String(300), nullable=False)           # "Длина"
+    charc_type = db.Column(db.Integer, nullable=False)         # 0=unused, 1=string[], 4=number
+    required = db.Column(db.Boolean, default=False)
+    unit_name = db.Column(db.String(50))                       # "см", "г", etc
+    max_count = db.Column(db.Integer, default=0)               # Max values (0=unlimited)
+    popular = db.Column(db.Boolean, default=False)
+
+    # Dictionary of allowed values (JSON array)
+    dictionary_json = db.Column(db.Text)                       # [{"value":"Черный"},...]
+
+    # AI parsing instruction — auto-generated or admin-customized
+    ai_instruction = db.Column(db.Text)                        # Per-field AI instruction
+    ai_example_value = db.Column(db.String(500))               # Example for AI prompt
+
+    # Admin customization
+    is_enabled = db.Column(db.Boolean, default=True)           # Include in AI parsing
+    display_order = db.Column(db.Integer, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    category = db.relationship('MarketplaceCategory', backref=db.backref('characteristics', lazy='dynamic', cascade='all, delete-orphan'))
+    # NOTE: marketplace can be accessed via self.category.marketplace
+
+    __table_args__ = (
+        db.UniqueConstraint('category_id', 'charc_id', name='uq_category_charc'),
+        db.Index('idx_mp_charc_required', 'category_id', 'required'),
+    )
+
+
+class MarketplaceDirectory(db.Model):
+    """Справочник маркетплейса (цвета, страны, пол, сезоны и т.д.)"""
+    __tablename__ = 'marketplace_directories'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    directory_type = db.Column(db.String(50), nullable=False)  # colors/countries/kinds/seasons/vat/tnved
+    data_json = db.Column(db.Text, nullable=False)             # Cached response from API
+    synced_at = db.Column(db.DateTime)
+    items_count = db.Column(db.Integer, default=0)
+
+    marketplace = db.relationship('Marketplace', backref=db.backref('directories', lazy='dynamic', cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.UniqueConstraint('marketplace_id', 'directory_type', name='uq_mp_directory'),
+    )
+
+
+class MarketplaceConnection(db.Model):
+    """Привязка поставщика к маркетплейсу"""
+    __tablename__ = 'marketplace_connections'
+
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+
+    is_active = db.Column(db.Boolean, default=True)
+
+    # Which categories are enabled for this supplier on this marketplace
+    enabled_categories_json = db.Column(db.Text)
+
+    # Auto-mapping settings
+    auto_map_categories = db.Column(db.Boolean, default=True)
+    default_category_id = db.Column(db.Integer)  # Fallback category
+
+    # Stats
+    products_mapped = db.Column(db.Integer, default=0)
+    products_validated = db.Column(db.Integer, default=0)
+    last_mapping_at = db.Column(db.DateTime)
+
+    connected_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    supplier = db.relationship('Supplier', backref=db.backref('marketplace_connections', lazy='dynamic', cascade='all, delete-orphan'))
+    marketplace = db.relationship('Marketplace', backref=db.backref('supplier_connections', lazy='dynamic', cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.UniqueConstraint('supplier_id', 'marketplace_id', name='uq_supplier_marketplace'),
+    )
+
+
+class MarketplaceSyncJob(db.Model):
+    """Background job for syncing marketplace data"""
+    __tablename__ = 'marketplace_sync_jobs'
+
+    id = db.Column(db.String(36), primary_key=True)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    job_type = db.Column(db.String(30))       # categories/characteristics/directories/validate
+    status = db.Column(db.String(20))         # pending/running/done/failed
+    total = db.Column(db.Integer, default=0)
+    processed = db.Column(db.Integer, default=0)
+    error_message = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    marketplace = db.relationship('Marketplace', backref=db.backref('sync_jobs', lazy='dynamic', cascade='all, delete-orphan'))

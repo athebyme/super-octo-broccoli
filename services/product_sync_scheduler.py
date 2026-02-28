@@ -61,6 +61,15 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Задача регулярной фоновой синхронизации общих справочников маркетплейсов (каждые 24 часа)
+    scheduler.add_job(
+        func=lambda: sync_marketplaces(flask_app),
+        trigger=IntervalTrigger(hours=24),
+        id='sync_marketplaces_data',
+        name='Sync marketplace directories and categories globally',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
@@ -394,7 +403,7 @@ def _upsert_shadowed_cards(seller_id, api_data, db):
             )
             db.session.add(card)
 
-    # Помечаем карточки, которых нет в API, как неактивные (вернулись в каталог)
+    # Помечаем карточки, которых нет в API, как неактивные (разблокированы)
     ShadowedCard.query.filter(
         ShadowedCard.seller_id == seller_id,
         ShadowedCard.is_active == True,
@@ -402,6 +411,36 @@ def _upsert_shadowed_cards(seller_id, api_data, db):
     ).update({'is_active': False, 'last_seen_at': now}, synchronize_session='fetch')
 
     db.session.commit()
+
+
+def sync_marketplaces(flask_app):
+    """
+    Периодическая синхронизация справочников и категорий всех маркетплейсов.
+    """
+    from models import Marketplace, db
+    from services.marketplace_service import MarketplaceService
+    import logging
+
+    logger = logging.getLogger(__name__)
+    with flask_app.app_context():
+        try:
+            logger.info("🌍 Starting global marketplace sync...")
+            marketplaces = Marketplace.query.filter_by(is_active=True).all()
+            for mp in marketplaces:
+                logger.info(f"Syncing directories for {mp.name} ({mp.code})")
+                res = MarketplaceService.sync_directories(mp.id)
+                if not res.get('success'):
+                    logger.error(f"Failed to sync directories for {mp.code}: {res.get('error')}")
+
+                logger.info(f"Syncing categories for {mp.name} ({mp.code})")
+                res2 = MarketplaceService.sync_categories(mp.id)
+                if not res2.get('success'):
+                    logger.error(f"Failed to sync categories for {mp.code}: {res2.get('error')}")
+
+            logger.info("✅ Global marketplace sync finished.")
+        except Exception as e:
+            logger.exception(f"❌ Error in sync_marketplaces: {e}")
+
 
 
 def shutdown_scheduler():

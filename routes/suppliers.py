@@ -452,6 +452,83 @@ def register_supplier_routes(app):
     # -------------------------------------------------------------------
     # AI операции с товарами поставщика
     # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/validate_marketplace', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_product_validate_marketplace(supplier_id, product_id):
+        """Интерактивная валидация JSON данных товара для маркетплейса"""
+        supplier = SupplierService.get_supplier(supplier_id)
+        product = SupplierService.get_product(product_id)
+        if not supplier or not product or product.supplier_id != supplier_id:
+            return jsonify({'success': False, 'error': 'Product not found'}), 404
+            
+        data = request.json
+        fields = data.get('marketplace_fields', {})
+        
+        from services.marketplace_validator import MarketplaceValidator
+        
+        # Determine marketplace and category
+        marketplace_id = data.get('marketplace_id') or 1 # default WB
+        subject_id = data.get('subject_id') or product.wb_subject_id
+        
+        if not subject_id:
+            return jsonify({
+                'success': False, 
+                'error': 'Category (subject_id) is required for validation.'
+            }), 400
+            
+        validator = MarketplaceValidator(marketplace_id)
+        validation_result = validator.validate_product_data(subject_id, fields)
+        
+        # Optional: Save back to product
+        return jsonify({
+            'success': True,
+            'is_valid': validation_result['is_valid'],
+            'fill_percentage': validation_result['fill_percentage'],
+            'errors': validation_result['errors']
+        })
+
+    @app.route('/admin/suppliers/<int:supplier_id>/marketplace_bulk_validate', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_marketplace_bulk_validate(supplier_id):
+        """Bulk auto-map and validation of marketplace fields for supplier products"""
+        product_ids_raw = request.form.getlist('product_ids')
+        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+
+        if not product_ids:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'error': 'Не указаны товары'}), 400
+            flash('Не указаны товары', 'warning')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        result = SupplierService.start_bulk_marketplace_validation(
+            supplier_id, product_ids,
+            admin_user_id=current_user.id
+        )
+
+        if result.get('error'):
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'error': result['error']}), 400
+            flash(result['error'], 'danger')
+            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='start_marketplace_bulk_validation',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={'job_id': result['job_id'], 'count': result['total']},
+            request=request
+        )
+
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify(result)
+
+        flash(f'Bulk marketplace mapping & validation started in background ({result["total"]} products)', 'success')
+        return redirect(url_for('admin_supplier_ai_parser', supplier_id=supplier_id))
+
+
     @app.route('/admin/suppliers/<int:supplier_id>/ai/validate', methods=['POST'])
     @login_required
     @admin_required
@@ -741,6 +818,53 @@ def register_supplier_routes(app):
     # -------------------------------------------------------------------
     # СИНХРОНИЗАЦИЯ ОПИСАНИЙ (фон)
     # -------------------------------------------------------------------
+
+    @app.route('/admin/suppliers/<int:supplier_id>/marketplaces', methods=['GET'])
+    @login_required
+    @admin_required
+    def admin_supplier_marketplaces(supplier_id):
+        """Интеграции с маркетплейсами для поставщика"""
+        supplier = Supplier.query.get_or_404(supplier_id)
+        from models import Marketplace, MarketplaceConnection
+        marketplaces = Marketplace.query.all()
+        connections_qs = MarketplaceConnection.query.filter_by(supplier_id=supplier.id).all()
+        connections = {c.marketplace_id: c for c in connections_qs}
+        
+        return render_template('admin_supplier_marketplaces.html', 
+                               supplier=supplier, 
+                               marketplaces=marketplaces, 
+                               connections=connections)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/marketplaces/update', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_marketplaces_update(supplier_id):
+        """Обновление настроек интеграции"""
+        supplier = Supplier.query.get_or_404(supplier_id)
+        data = request.json
+        marketplace_id = data.get('marketplace_id')
+        if not marketplace_id:
+            return jsonify({"success": False, "error": "Missing marketplace_id"}), 400
+            
+        from models import MarketplaceConnection, db
+        conn = MarketplaceConnection.query.filter_by(supplier_id=supplier.id, marketplace_id=marketplace_id).first()
+        if not conn:
+            conn = MarketplaceConnection(supplier_id=supplier.id, marketplace_id=marketplace_id)
+            db.session.add(conn)
+            
+        if 'is_active' in data:
+            conn.is_active = bool(data['is_active'])
+        if 'auto_map_categories' in data:
+            conn.auto_map_categories = bool(data['auto_map_categories'])
+        if 'default_category_id' in data:
+            try:
+                conn.default_category_id = int(data['default_category_id']) if data['default_category_id'] else None
+            except (ValueError, TypeError):
+                conn.default_category_id = None
+                
+        db.session.commit()
+        return jsonify({"success": True})
+
 
     @app.route('/admin/suppliers/<int:supplier_id>/sync-descriptions', methods=['POST'])
     @login_required

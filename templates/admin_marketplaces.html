@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Маркетплейсы - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Header -->
+    <div class="mb-8 flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900">Маркетплейсы</h1>
+            <p class="mt-2 text-sm text-gray-600">
+                Управление интеграциями, словарями и характеристиками
+            </p>
+        </div>
+        <div class="flex space-x-3">
+            <a href="{{ url_for('marketplaces.prompt_tester') }}"
+                class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                <svg class="h-5 w-5 mr-2 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                </svg>
+                API Playground
+            </a>
+        </div>
+    </div>
+
+    <!-- Marketplace Cards -->
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mb-8">
+        {% for mp in marketplaces %}
+        <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
+            <div class="p-6">
+                <div class="flex items-center mb-4">
+                    <div
+                        class="flex-shrink-0 h-10 w-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+                        <span class="text-white font-bold text-lg">{{ mp.name[0] }}</span>
+                    </div>
+                    <div class="ml-4">
+                        <h3 class="text-lg font-semibold text-gray-900">{{ mp.name }}</h3>
+                        <p class="text-sm text-gray-500 uppercase tracking-widest">{{ mp.code }}</p>
+                    </div>
+                </div>
+
+                <div class="space-y-3 mb-6">
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-gray-500">Категории:</span>
+                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{
+                            mp.categories|length }}</span>
+                    </div>
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-gray-500">Справочники:</span>
+                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{
+                            mp.directories|length }}</span>
+                    </div>
+                </div>
+
+                <div class="flex flex-col space-y-3">
+                    <form method="POST" action="{{ url_for('marketplaces.sync_categories', marketplace_id=mp.id) }}"
+                        class="w-full">
+                        <button type="submit"
+                            class="w-full flex justify-center items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+                            Синхронизировать категории
+                        </button>
+                    </form>
+                    <form method="POST" action="{{ url_for('marketplaces.sync_directories', marketplace_id=mp.id) }}"
+                        class="w-full">
+                        <button type="submit"
+                            class="w-full flex justify-center items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                            Обновить справочники
+                        </button>
+                    </form>
+
+                    <a href="{{ url_for('marketplaces.categories', marketplace_id=mp.id) }}"
+                        class="w-full flex justify-center items-center px-4 py-2 border border-purple-200 shadow-sm text-sm font-medium rounded-md text-purple-700 bg-purple-50 hover:bg-purple-100 mt-2">
+                        Настроить характеристики →
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+</div>
+{% endblock %}

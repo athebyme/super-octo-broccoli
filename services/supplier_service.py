@@ -1631,6 +1631,9 @@ class SupplierService:
 
             # Обновляем поля товара из результатов парсинга если они были пустые
             _apply_parsed_data_to_product(product, result)
+            
+            # Интеграция с MarketplaceAwareParsingTask
+            _run_marketplace_aware_parse(product, result, ai_svc)
 
             product.updated_at = datetime.utcnow()
             db.session.commit()
@@ -1826,6 +1829,10 @@ class SupplierService:
                             product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
 
                             _apply_parsed_data_to_product(product, result)
+                            
+                            # Интеграция с MarketplaceAwareParsingTask
+                            _run_marketplace_aware_parse(product, result, worker_svc)
+                            
                             product.updated_at = datetime.utcnow()
                             db.session.commit()
 
@@ -1943,6 +1950,10 @@ class SupplierService:
                 marketplace_data = _build_marketplace_data(product, result)
                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                 _apply_parsed_data_to_product(product, result)
+                
+                # Интеграция с MarketplaceAwareParsingTask
+                _run_marketplace_aware_parse(product, result, ai_svc)
+                
                 product.updated_at = datetime.utcnow()
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
@@ -2290,6 +2301,82 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
     if not product.season and seasonality.get('season'):
         season_map = {'all_season': 'Всесезонный', 'summer': 'Лето', 'winter': 'Зима', 'demi': 'Демисезон'}
         product.season = season_map.get(seasonality['season'], seasonality['season'])
+
+
+def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
+    """Запускает MarketplaceAwareParsingTask если удалось определить категорию WB."""
+    from models import MarketplaceCategory, MarketplaceCategoryCharacteristic, MarketplaceConnection, Marketplace
+    from services.marketplace_ai_parser import MarketplaceAwareParsingTask
+    from services.marketplace_validator import MarketplaceValidator
+    
+    # 1. Пытаемся определить subject_id
+    subject_id = product.wb_subject_id
+    if not subject_id:
+        wb_subject_name = parsed_data.get('product_identity', {}).get('wb_subject')
+        if wb_subject_name:
+            # Ищем категорию по имени
+            cat = MarketplaceCategory.query.filter(MarketplaceCategory.subject_name.ilike(wb_subject_name)).first()
+            if cat:
+                subject_id = cat.subject_id
+                product.wb_subject_id = subject_id
+                product.wb_subject_name = cat.subject_name
+
+    # Если не нашли, ищем категорию по умолчанию у поставщика
+    if not subject_id:
+        conn = MarketplaceConnection.query.filter_by(supplier_id=product.supplier_id, is_active=True).first()
+        if conn and conn.auto_map_categories and conn.default_category_id:
+            cat = MarketplaceCategory.query.get(conn.default_category_id)
+            if cat:
+                subject_id = cat.subject_id
+                product.wb_subject_id = subject_id
+                product.wb_subject_name = cat.subject_name
+                
+    if not subject_id:
+        logger.info(f"Skipping MarketplaceAwareParsingTask for {product.id} - no subject_id found.")
+        return
+        
+    # Ищем характеристики для этой категории
+    wb_marketplace = Marketplace.query.filter_by(code='wb').first()
+    if not wb_marketplace:
+        return
+        
+    cat = MarketplaceCategory.query.filter_by(marketplace_id=wb_marketplace.id, subject_id=subject_id).first()
+    if not cat:
+        return
+        
+    characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=cat.id, is_enabled=True).all()
+    if not characteristics:
+        return
+        
+    # Запускаем таску
+    task = MarketplaceAwareParsingTask(
+        client=ai_svc.client, 
+        characteristics=characteristics,
+        custom_instruction=ai_svc.config.custom_parsing_instruction
+    )
+    
+    product_info = {
+        'title': product.title or product.ai_seo_title,
+        'description': product.description or product.ai_description,
+        'brand': product.brand
+    }
+    
+    success, result, error = task.execute(product_info=product_info, original_data=parsed_data)
+    
+    if success and result:
+        # Сохраняем в marketplace_fields_json
+        product.marketplace_fields_json = json.dumps(result, ensure_ascii=False)
+        
+        # Валидируем
+        validator = MarketplaceValidator(wb_marketplace.id)
+        validation_result = validator.validate_product_data(subject_id, result)
+        
+        product.marketplace_validation_status = 'valid' if validation_result['is_valid'] else 'invalid'
+        product.marketplace_fill_pct = validation_result['fill_percentage']
+        
+        logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result['is_valid']}")
+    else:
+        logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
 
     if not product.age_group and audience.get('age_group'):
         age_map = {'adult': 'Взрослый', 'teen': 'Подросток', 'child': 'Детский', 'baby': 'Малыш'}
