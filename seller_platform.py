@@ -5541,6 +5541,10 @@ register_photo_routes(app)
 from routes.docs import register_docs_routes
 register_docs_routes(app)
 
+# ============= РОУТЫ МАРКЕТПЛЕЙСОВ =============
+from routes.marketplaces import register_marketplaces_routes
+register_marketplaces_routes(app)
+
 
 if __name__ == '__main__':
     with app.app_context():
