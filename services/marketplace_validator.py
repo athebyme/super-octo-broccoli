@@ -40,13 +40,10 @@ class MarketplaceValidator:
         required_count = 0
 
         for charc in schema_charcs:
-            if charc.required:
-                required_count += 1
-                
             value = parsed_data.get(charc.name)
             is_valid, err_msg, coerced_val = cls.validate_single_characteristic(value, charc)
             
-            if is_valid and value is not None:
+            if is_valid and value is not None and value != "" and value != []:
                 filled_count += 1
                 
             if not is_valid and charc.required:
@@ -62,7 +59,8 @@ class MarketplaceValidator:
                 "required": charc.required
             })
 
-        fill_pct = (filled_count / required_count * 100) if required_count > 0 else 100.0
+        total_characteristics = len(schema_charcs)
+        fill_pct = (filled_count / total_characteristics * 100) if total_characteristics > 0 else 100.0
         
         status = "valid"
         if errors:
@@ -99,7 +97,7 @@ class MarketplaceValidator:
             try:
                 if isinstance(value, str):
                     import re
-                    val = re.sub(r'[^\d.,]', '', str(value).replace(',', '.'))
+                    val = re.sub(r'[^\d.,-]', '', str(value).replace(',', '.'))
                     num_val = float(val) if '.' in val else int(val)
                 else:
                     num_val = float(value) if isinstance(value, float) else int(value)
@@ -113,7 +111,6 @@ class MarketplaceValidator:
             
             # Max count constraint
             if charc.max_count > 0 and len(arr_val) > charc.max_count:
-                # Optionally truncate, here we just enforce validation strictly
                 return False, f"Maximum {charc.max_count} values allowed", arr_val
 
             # Dictionary constraint
@@ -130,12 +127,21 @@ class MarketplaceValidator:
                     for v in arr_val:
                         vl = str(v).strip().lower()
                         if vl in allowed_values:
-                            # Maintain the passed value case
                             validated_arr.append(v)
                         else:
                             return False, f"Value '{v}' is not in the allowed dictionary", arr_val
                     return True, None, validated_arr
             
             return True, None, arr_val
+
+        elif charc.charc_type == 0: # String
+            str_val = str(value) if not isinstance(value, list) else str(value[0]) if value else ""
+            if not str_val:
+                if charc.required:
+                    return False, "Required field is missing", None
+                return True, None, None
+            return True, None, str_val
+
+        return True, None, value
 
         return True, None, value
