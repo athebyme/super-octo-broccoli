@@ -96,8 +96,8 @@
         <h3 class="text-indigo-900 font-semibold text-sm mb-2">Как работает</h3>
         <ol class="text-indigo-700 text-sm space-y-1 list-decimal list-inside">
             <li>Выберите товары галочками</li>
-            <li>Нажмите "AI Парсинг выбранных" — задача уйдёт в фон</li>
-            <li>Прогресс отобразится в панели вверху — страница не зависает</li>
+            <li>Выберите кол-во потоков (параллельных AI-запросов) и нажмите "AI Парсинг выбранных"</li>
+            <li>Прогресс отобразится в панели вверху — страница не зависает, обработка идёт параллельно</li>
             <li>AI извлечёт 50+ характеристик в формате WB/Ozon</li>
         </ol>
     </div>
@@ -132,7 +132,17 @@
                     Выбрано: <span class="font-bold text-indigo-600">0</span>
                 </span>
             </div>
-            <div class="flex gap-2">
+            <div class="flex gap-2 items-center">
+                <label class="flex items-center gap-1.5 text-xs text-gray-500" title="Количество параллельных потоков AI-запросов">
+                    <span>Потоки:</span>
+                    <select id="maxWorkers" class="rounded border-gray-300 text-xs border px-2 py-1.5 w-16 focus:border-indigo-500 focus:ring-indigo-500">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="4" selected>4</option>
+                        <option value="6">6</option>
+                        <option value="8">8</option>
+                    </select>
+                </label>
                 <button type="button" id="bulkParseBtn" disabled onclick="startBulkParse()"
                         class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
                     AI Парсинг выбранных
@@ -394,6 +404,7 @@ function startBulkParse() {
 
     const form = new FormData();
     ids.forEach(id => form.append('product_ids', id));
+    form.append('max_workers', document.getElementById('maxWorkers').value);
 
     fetch(PARSE_URL, {
         method: 'POST',

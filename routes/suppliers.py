@@ -668,8 +668,13 @@ def register_supplier_routes(app):
             flash('Не указаны товары', 'warning')
             return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
+        max_workers = request.form.get('max_workers', 4, type=int)
+        max_workers = max(1, min(max_workers, 8))
+
         result = SupplierService.start_ai_parse_job(
-            supplier_id, product_ids, admin_user_id=current_user.id
+            supplier_id, product_ids,
+            admin_user_id=current_user.id,
+            max_workers=max_workers,
         )
 
         if result.get('error'):

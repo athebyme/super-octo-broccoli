@@ -17,6 +17,7 @@ import re
 import time
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
@@ -1651,7 +1652,8 @@ class SupplierService:
 
     @staticmethod
     def start_ai_parse_job(supplier_id: int, product_ids: List[int],
-                           admin_user_id: int = None) -> dict:
+                           admin_user_id: int = None,
+                           max_workers: int = 4) -> dict:
         """
         Запускает фоновый AI парсинг товаров.
 
@@ -1683,20 +1685,32 @@ class SupplierService:
         db.session.add(job)
         db.session.commit()
 
+        effective_workers = max(1, min(max_workers, 8, len(product_ids)))
+
         thread = threading.Thread(
             target=SupplierService._run_ai_parse_job,
-            args=(job_id, supplier_id, product_ids),
+            args=(job_id, supplier_id, product_ids, effective_workers),
             daemon=True,
             name=f'AIParse-{job_id[:8]}'
         )
         thread.start()
 
-        logger.info(f"[AI Parse] Job {job_id} started: {len(product_ids)} products, supplier={supplier_id}")
+        logger.info(
+            f"[AI Parse] Job {job_id} started: {len(product_ids)} products, "
+            f"{effective_workers} workers, supplier={supplier_id}"
+        )
         return {'job_id': job_id, 'total': len(product_ids)}
 
     @staticmethod
-    def _run_ai_parse_job(job_id: str, supplier_id: int, product_ids: List[int]):
-        """Фоновый поток AI парсинга."""
+    def _run_ai_parse_job(job_id: str, supplier_id: int, product_ids: List[int],
+                          max_workers: int = 4):
+        """
+        Фоновый поток AI парсинга с параллельной обработкой.
+
+        Использует ThreadPoolExecutor для одновременной отправки нескольких
+        AI-запросов. Каждый воркер получает свой AIService (свою HTTP-сессию).
+        Прогресс обновляется thread-safe через Lock.
+        """
         from seller_platform import app as flask_app
         from models import AIParseJob
 
@@ -1716,45 +1730,91 @@ class SupplierService:
                 db.session.commit()
                 return
 
-            ai_svc = SupplierService._get_ai_service(supplier)
-            if not ai_svc:
+            # Проверяем что AI сервис создаётся
+            test_svc = SupplierService._get_ai_service(supplier)
+            if not test_svc:
                 job.status = 'failed'
                 job.error_message = 'Не удалось создать AI сервис'
                 db.session.commit()
                 return
 
+            # Для одного товара — без пула
+            if len(product_ids) == 1:
+                SupplierService._parse_single_in_job(
+                    job_id, supplier_id, product_ids[0], test_svc
+                )
+                return
+
+            # --- Параллельный режим ---
+            effective_workers = min(max_workers, len(product_ids))
+            logger.info(
+                f"[AI Parse] Job {job_id}: {len(product_ids)} products, "
+                f"{effective_workers} parallel workers"
+            )
+
+            # Thread-safe счётчики и результаты
+            lock = threading.Lock()
+            counters = {'processed': 0, 'succeeded': 0, 'failed': 0}
             results = []
-            succeeded = 0
-            failed = 0
+            cancelled = threading.Event()
 
-            for i, pid in enumerate(product_ids):
-                # Проверяем отмену
-                db.session.refresh(job)
-                if job.status == 'cancelled':
-                    logger.info(f"[AI Parse] Job {job_id} cancelled at {i}/{len(product_ids)}")
-                    break
+            def _update_job_progress(current_title=None):
+                """Обновляет прогресс в БД (вызывается под lock из main thread)."""
+                try:
+                    job_ref = AIParseJob.query.get(job_id)
+                    if not job_ref:
+                        return
+                    job_ref.processed = counters['processed']
+                    job_ref.succeeded = counters['succeeded']
+                    job_ref.failed = counters['failed']
+                    job_ref.current_product_title = current_title
+                    job_ref.results = json.dumps(results[-100:], ensure_ascii=False)
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
 
+            def _check_cancelled():
+                """Проверяет не отменена ли задача."""
+                try:
+                    db.session.expire_all()
+                    j = AIParseJob.query.get(job_id)
+                    if j and j.status == 'cancelled':
+                        cancelled.set()
+                        return True
+                except Exception:
+                    pass
+                return False
+
+            def _parse_one(pid: int) -> dict:
+                """
+                Парсит один товар. Запускается в воркер-потоке.
+                Каждый вызов создаёт свой AIService (свою HTTP-сессию).
+                """
+                if cancelled.is_set():
+                    return {'product_id': pid, 'status': 'cancelled'}
+
+                # Каждый воркер читает данные товара в контексте приложения
                 product = SupplierProduct.query.get(pid)
                 if not product or product.supplier_id != supplier_id:
-                    failed += 1
-                    results.append({
-                        'product_id': pid,
-                        'title': '',
-                        'status': 'error',
-                        'error': 'Товар не найден',
-                    })
-                    job.processed = i + 1
-                    job.failed = failed
-                    job.results = json.dumps(results, ensure_ascii=False)
-                    db.session.commit()
-                    continue
+                    return {
+                        'product_id': pid, 'title': '',
+                        'status': 'error', 'error': 'Товар не найден',
+                    }
 
-                job.current_product_title = (product.title or 'Без названия')[:200]
-                db.session.commit()
+                title = (product.title or '')[:80]
 
                 try:
                     product_data = product.get_all_data_for_parsing()
-                    success, result, error = ai_svc.full_product_parse(product_data)
+
+                    # Создаём отдельный AIService для этого воркера
+                    worker_svc = SupplierService._get_ai_service(supplier)
+                    if not worker_svc:
+                        return {
+                            'product_id': pid, 'title': title,
+                            'status': 'error', 'error': 'AI сервис недоступен',
+                        }
+
+                    success, result, error = worker_svc.full_product_parse(product_data)
 
                     if success and result:
                         product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
@@ -1767,57 +1827,172 @@ class SupplierService:
                         product.updated_at = datetime.utcnow()
 
                         fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
-
-                        succeeded += 1
-                        results.append({
-                            'product_id': pid,
-                            'title': (product.title or '')[:80],
-                            'status': 'success',
-                            'fill_pct': fill_pct,
-                        })
+                        return {
+                            'product_id': pid, 'title': title,
+                            'status': 'success', 'fill_pct': fill_pct,
+                        }
                     else:
-                        failed += 1
-                        results.append({
-                            'product_id': pid,
-                            'title': (product.title or '')[:80],
-                            'status': 'error',
-                            'error': error or 'Ошибка AI',
-                        })
+                        return {
+                            'product_id': pid, 'title': title,
+                            'status': 'error', 'error': error or 'Ошибка AI',
+                        }
                 except Exception as e:
-                    failed += 1
-                    logger.error(f"[AI Parse] Error parsing product {pid}: {e}")
-                    results.append({
-                        'product_id': pid,
-                        'title': getattr(product, 'title', '')[:80] if product else '',
-                        'status': 'error',
-                        'error': str(e)[:200],
-                    })
+                    logger.error(f"[AI Parse] Worker error pid={pid}: {e}")
+                    return {
+                        'product_id': pid, 'title': title,
+                        'status': 'error', 'error': str(e)[:200],
+                    }
 
-                job.processed = i + 1
-                job.succeeded = succeeded
-                job.failed = failed
-                job.results = json.dumps(results, ensure_ascii=False)
+            # Запускаем пул
+            with ThreadPoolExecutor(max_workers=effective_workers,
+                                    thread_name_prefix='AIParse') as pool:
+                futures = {}
+                for pid in product_ids:
+                    if cancelled.is_set():
+                        break
+                    fut = pool.submit(_parse_one, pid)
+                    futures[fut] = pid
+
+                # Проверяем отмену периодически
+                check_interval = max(1, effective_workers)
+                done_count = 0
+
+                for fut in as_completed(futures):
+                    res = fut.result()
+                    done_count += 1
+
+                    with lock:
+                        counters['processed'] += 1
+                        if res.get('status') == 'success':
+                            counters['succeeded'] += 1
+                        elif res.get('status') == 'cancelled':
+                            pass  # не считаем
+                        else:
+                            counters['failed'] += 1
+                        results.append(res)
+
+                    # Обновляем прогресс в БД каждые N завершений
+                    if done_count % check_interval == 0 or done_count == len(product_ids):
+                        with lock:
+                            in_progress_titles = [
+                                (SupplierProduct.query.get(futures[f]).title or '?')[:60]
+                                for f in futures if not f.done()
+                            ][:3]
+                            current = ', '.join(in_progress_titles) if in_progress_titles else None
+                        _update_job_progress(current)
+
+                        # Проверяем отмену
+                        if done_count % (check_interval * 2) == 0:
+                            _check_cancelled()
+                            if cancelled.is_set():
+                                pool.shutdown(wait=False, cancel_futures=True)
+                                break
+
+                    # Коммитим изменения продуктов порциями
+                    if done_count % effective_workers == 0:
+                        try:
+                            db.session.commit()
+                        except Exception:
+                            db.session.rollback()
+
+            # Финальный коммит продуктов
+            try:
                 db.session.commit()
+            except Exception:
+                db.session.rollback()
 
-                # Пауза между запросами чтобы не перегрузить API
-                if i < len(product_ids) - 1:
-                    time.sleep(0.5)
-
-            # Завершение
-            if job.status != 'cancelled':
-                job.status = 'done'
-            job.processed = len(product_ids) if job.status != 'cancelled' else job.processed
-            job.succeeded = succeeded
-            job.failed = failed
-            job.current_product_title = None
-            job.results = json.dumps(results, ensure_ascii=False)
-            job.updated_at = datetime.utcnow()
-            db.session.commit()
+            # Завершение задачи
+            try:
+                job_final = AIParseJob.query.get(job_id)
+                if job_final:
+                    if job_final.status != 'cancelled':
+                        job_final.status = 'done'
+                    job_final.processed = counters['processed']
+                    job_final.succeeded = counters['succeeded']
+                    job_final.failed = counters['failed']
+                    job_final.current_product_title = None
+                    job_final.results = json.dumps(results[-100:], ensure_ascii=False)
+                    job_final.updated_at = datetime.utcnow()
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
 
             logger.info(
-                f"[AI Parse] Job {job_id} {job.status}: "
-                f"{succeeded} ok, {failed} fail out of {len(product_ids)}"
+                f"[AI Parse] Job {job_id} done: "
+                f"{counters['succeeded']} ok, {counters['failed']} fail "
+                f"out of {len(product_ids)} ({effective_workers} workers)"
             )
+
+    @staticmethod
+    def _parse_single_in_job(job_id: str, supplier_id: int, product_id: int, ai_svc):
+        """Парсит один товар в рамках job (без пула)."""
+        from models import AIParseJob
+
+        job = AIParseJob.query.get(job_id)
+        if not job:
+            return
+
+        product = SupplierProduct.query.get(product_id)
+        if not product or product.supplier_id != supplier_id:
+            job.status = 'done'
+            job.processed = 1
+            job.failed = 1
+            job.results = json.dumps([{
+                'product_id': product_id, 'status': 'error',
+                'error': 'Товар не найден',
+            }], ensure_ascii=False)
+            db.session.commit()
+            return
+
+        job.current_product_title = (product.title or 'Без названия')[:200]
+        db.session.commit()
+
+        try:
+            product_data = product.get_all_data_for_parsing()
+            success, result, error = ai_svc.full_product_parse(product_data)
+
+            if success and result:
+                product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
+                product.ai_parsed_at = datetime.utcnow()
+                marketplace_data = _build_marketplace_data(product, result)
+                product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
+                _apply_parsed_data_to_product(product, result)
+                product.updated_at = datetime.utcnow()
+                fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+
+                job.status = 'done'
+                job.processed = 1
+                job.succeeded = 1
+                job.results = json.dumps([{
+                    'product_id': product_id,
+                    'title': (product.title or '')[:80],
+                    'status': 'success',
+                    'fill_pct': fill_pct,
+                }], ensure_ascii=False)
+            else:
+                job.status = 'done'
+                job.processed = 1
+                job.failed = 1
+                job.results = json.dumps([{
+                    'product_id': product_id,
+                    'title': (product.title or '')[:80],
+                    'status': 'error',
+                    'error': error or 'Ошибка AI',
+                }], ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[AI Parse] Single parse error {product_id}: {e}")
+            job.status = 'done'
+            job.processed = 1
+            job.failed = 1
+            job.results = json.dumps([{
+                'product_id': product_id,
+                'status': 'error',
+                'error': str(e)[:200],
+            }], ensure_ascii=False)
+
+        job.current_product_title = None
+        job.updated_at = datetime.utcnow()
+        db.session.commit()
 
     @staticmethod
     def start_description_sync_job(supplier_id: int, admin_user_id: int = None) -> dict:
