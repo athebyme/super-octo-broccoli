@@ -5545,6 +5545,10 @@ register_docs_routes(app)
 from routes.marketplaces import register_marketplaces_routes
 register_marketplaces_routes(app)
 
+# ============= РОУТЫ БРЕНДОВ =============
+from routes.brands import register_brand_routes
+register_brand_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""

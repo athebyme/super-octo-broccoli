@@ -70,6 +70,24 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Фоновая синхронизация брендов с WB (каждые 6 часов)
+    scheduler.add_job(
+        func=lambda: sync_brands_background(flask_app),
+        trigger=IntervalTrigger(hours=6),
+        id='brand_wb_sync',
+        name='Sync brands from WB API',
+        replace_existing=True
+    )
+
+    # Авто-резолв pending брендов (каждый час)
+    scheduler.add_job(
+        func=lambda: auto_resolve_pending_brands(flask_app),
+        trigger=IntervalTrigger(hours=1),
+        id='brand_auto_resolve',
+        name='Auto-resolve pending brands',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
@@ -481,3 +499,48 @@ def get_scheduler_status():
         'running': scheduler.running,
         'jobs': jobs_info
     }
+
+
+def sync_brands_background(flask_app):
+    """Фоновая синхронизация брендов из WB API."""
+    with flask_app.app_context():
+        try:
+            from models import Seller
+            from services.brand_engine import get_brand_engine
+
+            # Находим продавца с WB API ключом
+            seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
+            if not seller or not seller.wb_api_key:
+                logger.info("Brand sync skipped: no WB API key available")
+                return
+
+            from services.wb_api_client import WildberriesAPIClient
+            with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                engine = get_brand_engine(flask_app)
+                stats = engine.sync_wb_brands(wb_client)
+                logger.info(f"Brand sync completed: {stats}")
+
+        except Exception as e:
+            logger.error(f"Brand sync background task failed: {e}")
+
+
+def auto_resolve_pending_brands(flask_app):
+    """Фоновый авто-резолв pending брендов."""
+    with flask_app.app_context():
+        try:
+            from models import Seller
+            from services.brand_engine import get_brand_engine
+
+            seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
+            if not seller or not seller.wb_api_key:
+                logger.info("Brand auto-resolve skipped: no WB API key available")
+                return
+
+            from services.wb_api_client import WildberriesAPIClient
+            with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                engine = get_brand_engine(flask_app)
+                stats = engine.auto_resolve_pending(wb_client)
+                logger.info(f"Brand auto-resolve completed: {stats}")
+
+        except Exception as e:
+            logger.error(f"Brand auto-resolve background task failed: {e}")

@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}{{ brand.name }} - Бренды{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Breadcrumb + заголовок -->
+    <div class="mb-6">
+        <nav class="text-sm text-gray-500 mb-2">
+            <a href="{{ url_for('brands.index') }}" class="hover:text-indigo-600">Бренды</a>
+            <span class="mx-2">/</span>
+            <span class="text-gray-900">{{ brand.name }}</span>
+        </nav>
+        <div class="flex justify-between items-start">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900" id="brandName">{{ brand.name }}</h1>
+                <div class="mt-2 flex items-center gap-3">
+                    <select id="statusSelect" onchange="updateStatus(this.value)"
+                        class="rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500
+                        {% if brand.status == 'verified' %}text-green-700 bg-green-50
+                        {% elif brand.status == 'pending' %}text-gray-700 bg-gray-50
+                        {% elif brand.status == 'needs_review' %}text-yellow-700 bg-yellow-50
+                        {% elif brand.status == 'rejected' %}text-red-700 bg-red-50
+                        {% endif %}">
+                        <option value="verified" {% if brand.status == 'verified' %}selected{% endif %}>Verified</option>
+                        <option value="pending" {% if brand.status == 'pending' %}selected{% endif %}>Pending</option>
+                        <option value="needs_review" {% if brand.status == 'needs_review' %}selected{% endif %}>Needs Review</option>
+                        <option value="rejected" {% if brand.status == 'rejected' %}selected{% endif %}>Rejected</option>
+                    </select>
+                    {% if brand.wb_brand_id %}
+                    <span class="text-sm text-gray-500">WB ID: <strong>{{ brand.wb_brand_id }}</strong></span>
+                    {% endif %}
+                    {% if brand.verified_at %}
+                    <span class="text-sm text-gray-500">Проверен: {{ brand.verified_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="verifyBrand()" class="px-3 py-2 border border-green-300 rounded-lg text-sm text-green-700 hover:bg-green-50">
+                    Проверить через WB
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Основная информация -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Алиасы -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                    <h2 class="text-lg font-medium text-gray-900">Алиасы (варианты написания)</h2>
+                    <button onclick="showAddAlias()" class="text-sm text-indigo-600 hover:text-indigo-800">+ Добавить</button>
+                </div>
+                <div class="divide-y divide-gray-100" id="aliasesList">
+                    {% for alias in aliases %}
+                    <div class="px-6 py-3 flex items-center justify-between hover:bg-gray-50" id="alias-{{ alias.id }}">
+                        <div>
+                            <span class="text-sm font-medium text-gray-900">"{{ alias.alias }}"</span>
+                            <span class="ml-2 text-xs text-gray-500">{{ alias.source }}</span>
+                            {% if alias.confidence < 1.0 %}
+                            <span class="ml-1 text-xs text-gray-400">({{ '%.0f'|format(alias.confidence * 100) }}%)</span>
+                            {% endif %}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            {% if alias.is_active %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">active</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-500">inactive</span>
+                            {% endif %}
+                            <button onclick="deleteAlias({{ alias.id }})" class="text-gray-400 hover:text-red-500" title="Удалить">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <!-- Форма добавления alias (скрыта по умолчанию) -->
+                <div id="addAliasForm" class="hidden px-6 py-3 border-t border-gray-200 bg-gray-50">
+                    <div class="flex gap-2">
+                        <input type="text" id="newAliasInput" placeholder="Вариант написания бренда..."
+                            class="flex-1 rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        <button onclick="addAlias()" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Добавить</button>
+                        <button onclick="hideAddAlias()" class="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300">Отмена</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Категории WB -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">Допустимые категории WB</h2>
+                </div>
+                {% if category_links %}
+                <div class="divide-y divide-gray-100">
+                    {% for link in category_links %}
+                    <div class="px-6 py-3 flex items-center justify-between">
+                        <div>
+                            <span class="text-sm text-gray-900">{{ link.wb_subject_name or 'Subject #' + link.wb_subject_id|string }}</span>
+                            <span class="ml-2 text-xs text-gray-400">ID: {{ link.wb_subject_id }}</span>
+                        </div>
+                        <div>
+                            {% if link.is_available %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">Доступен</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">Недоступен</span>
+                            {% endif %}
+                            {% if link.verified_at %}
+                            <span class="ml-2 text-xs text-gray-400">{{ link.verified_at.strftime('%d.%m.%Y') }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-6 py-8 text-center text-sm text-gray-500">
+                    Категории ещё не проверены
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Заметки -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">Заметки</h2>
+                </div>
+                <div class="px-6 py-4">
+                    <textarea id="notesField" rows="3" class="w-full rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="Заметки администратора...">{{ brand.notes or '' }}</textarea>
+                    <button onclick="saveNotes()" class="mt-2 px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">Сохранить</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Боковая панель -->
+        <div class="space-y-6">
+            <!-- Статистика товаров -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-sm font-medium text-gray-500 uppercase mb-4">Товары</h3>
+                <dl class="space-y-3">
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-600">ImportedProducts (по FK)</dt>
+                        <dd class="text-sm font-medium text-gray-900">{{ imported_count }}</dd>
+                    </div>
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-600">ImportedProducts (по имени)</dt>
+                        <dd class="text-sm font-medium text-gray-900">{{ imported_by_name }}</dd>
+                    </div>
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-600">SupplierProducts (по FK)</dt>
+                        <dd class="text-sm font-medium text-gray-900">{{ supplier_count }}</dd>
+                    </div>
+                    <div class="flex justify-between">
+                        <dt class="text-sm text-gray-600">SupplierProducts (по имени)</dt>
+                        <dd class="text-sm font-medium text-gray-900">{{ supplier_by_name }}</dd>
+                    </div>
+                </dl>
+            </div>
+
+            <!-- Мерж -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-sm font-medium text-gray-500 uppercase mb-4">Объединение</h3>
+                <p class="text-xs text-gray-500 mb-3">Объединить этот бренд с другим (все aliases и товары будут перенесены)</p>
+                <div class="flex gap-2">
+                    <input type="number" id="mergeTargetId" placeholder="ID бренда"
+                        class="flex-1 rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500">
+                    <button onclick="mergeBrand()" class="px-3 py-2 bg-orange-500 text-white rounded-lg text-sm hover:bg-orange-600">Объединить</button>
+                </div>
+            </div>
+
+            <!-- Информация -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+                <h3 class="text-sm font-medium text-gray-500 uppercase mb-4">Информация</h3>
+                <dl class="space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">ID</dt>
+                        <dd class="text-gray-900">{{ brand.id }}</dd>
+                    </div>
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">Создан</dt>
+                        <dd class="text-gray-900">{{ brand.created_at.strftime('%d.%m.%Y %H:%M') }}</dd>
+                    </div>
+                    {% if brand.country %}
+                    <div class="flex justify-between">
+                        <dt class="text-gray-500">Страна</dt>
+                        <dd class="text-gray-900">{{ brand.country }}</dd>
+                    </div>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const BRAND_ID = {{ brand.id }};
+const API_BASE = '{{ url_for("brands.index") }}';
+
+async function apiCall(url, method='POST', body=null) {
+    const opts = {method, headers: {'Content-Type': 'application/json'}};
+    if (body) opts.body = JSON.stringify(body);
+    const resp = await fetch(url, opts);
+    return resp.json();
+}
+
+async function updateStatus(status) {
+    const data = await apiCall(`${API_BASE}/api/${BRAND_ID}/update`, 'POST', {status});
+    if (!data.success) alert(data.error || 'Ошибка');
+    else location.reload();
+}
+
+async function verifyBrand() {
+    const data = await apiCall(`${API_BASE}/api/${BRAND_ID}/verify`);
+    if (data.success) {
+        if (data.verified) {
+            alert('Бренд подтверждён в WB! ID: ' + (data.wb_brand?.id || ''));
+            location.reload();
+        } else {
+            const suggestions = (data.suggestions || []).map(s => s.name).join(', ');
+            alert('Бренд не найден в WB.' + (suggestions ? '\nПохожие: ' + suggestions : ''));
+        }
+    } else {
+        alert(data.error || 'Ошибка');
+    }
+}
+
+function showAddAlias() { document.getElementById('addAliasForm').classList.remove('hidden'); }
+function hideAddAlias() { document.getElementById('addAliasForm').classList.add('hidden'); }
+
+async function addAlias() {
+    const alias = document.getElementById('newAliasInput').value.trim();
+    if (!alias) return;
+    const data = await apiCall(`${API_BASE}/api/${BRAND_ID}/aliases`, 'POST', {alias});
+    if (data.success) location.reload();
+    else alert(data.error || 'Ошибка');
+}
+
+async function deleteAlias(aliasId) {
+    if (!confirm('Удалить alias?')) return;
+    const data = await apiCall(`${API_BASE}/api/aliases/${aliasId}/delete`);
+    if (data.success) document.getElementById('alias-' + aliasId).remove();
+    else alert(data.error || 'Ошибка');
+}
+
+async function saveNotes() {
+    const notes = document.getElementById('notesField').value;
+    const data = await apiCall(`${API_BASE}/api/${BRAND_ID}/update`, 'POST', {notes});
+    if (data.success) alert('Сохранено');
+    else alert(data.error || 'Ошибка');
+}
+
+async function mergeBrand() {
+    const targetId = parseInt(document.getElementById('mergeTargetId').value);
+    if (!targetId) return alert('Введите ID целевого бренда');
+    if (!confirm(`Объединить бренд #${BRAND_ID} в бренд #${targetId}? Текущий бренд будет удалён.`)) return;
+    const data = await apiCall(`${API_BASE}/api/${BRAND_ID}/merge`, 'POST', {target_id: targetId});
+    if (data.success) {
+        alert('Объединено! ' + JSON.stringify(data.stats));
+        window.location.href = `${API_BASE}/${targetId}`;
+    } else {
+        alert(data.error || 'Ошибка');
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}Очередь проверки брендов{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Заголовок -->
+    <div class="mb-8">
+        <nav class="text-sm text-gray-500 mb-2">
+            <a href="{{ url_for('brands.index') }}" class="hover:text-indigo-600">Бренды</a>
+            <span class="mx-2">/</span>
+            <span class="text-gray-900">Очередь проверки</span>
+        </nav>
+        <div class="flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Очередь проверки брендов</h1>
+                <p class="mt-2 text-sm text-gray-600">
+                    Pending: <strong>{{ stats.pending }}</strong> | Needs Review: <strong>{{ stats.needs_review }}</strong>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    {% if not brand_data %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-12 text-center">
+        <svg class="mx-auto h-12 w-12 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <h3 class="mt-4 text-lg font-medium text-gray-900">Все бренды проверены!</h3>
+        <p class="mt-2 text-sm text-gray-500">Нет брендов, требующих проверки</p>
+    </div>
+    {% else %}
+
+    <div class="space-y-4" id="reviewList">
+        {% for item in brand_data %}
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden" id="review-{{ item.brand.id }}">
+            <div class="px-6 py-4">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <div class="flex items-center gap-3">
+                            <h3 class="text-lg font-medium text-gray-900">"{{ item.brand.name }}"</h3>
+                            {% if item.brand.status == 'needs_review' %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Needs Review</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Pending</span>
+                            {% endif %}
+                        </div>
+                        <p class="mt-1 text-sm text-gray-500">
+                            {{ item.product_count }} товар(ов)
+                            {% if item.aliases %}
+                            | Алиасы: {{ item.aliases|map(attribute='alias')|join(', ') }}
+                            {% endif %}
+                            {% if item.aliases and item.aliases[0].supplier_id %}
+                            | Поставщик ID: {{ item.aliases[0].supplier_id }}
+                            {% endif %}
+                        </p>
+                    </div>
+                    <a href="{{ url_for('brands.detail', brand_id=item.brand.id) }}" class="text-sm text-indigo-600 hover:text-indigo-800">
+                        Подробнее
+                    </a>
+                </div>
+
+                <!-- Поиск через WB API -->
+                <div class="mt-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <button onclick="searchWB({{ item.brand.id }}, '{{ item.brand.name|e }}')"
+                            class="text-sm text-indigo-600 hover:text-indigo-800 underline" id="searchBtn-{{ item.brand.id }}">
+                            Найти в WB
+                        </button>
+                        <div id="searchSpinner-{{ item.brand.id }}" class="hidden">
+                            <svg class="animate-spin h-4 w-4 text-indigo-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </div>
+                    </div>
+                    <div id="suggestions-{{ item.brand.id }}" class="hidden mt-2 space-y-1"></div>
+                </div>
+
+                <!-- Действия -->
+                <div class="mt-4 flex gap-2 items-center border-t border-gray-100 pt-4">
+                    <button onclick="approveBrand({{ item.brand.id }})"
+                        class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
+                        Подтвердить как "{{ item.brand.name }}"
+                    </button>
+                    <span class="text-gray-400 text-sm">или</span>
+                    <input type="text" id="renameTo-{{ item.brand.id }}" placeholder="Правильное имя..."
+                        class="rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500 w-48">
+                    <button onclick="approveWithRename({{ item.brand.id }})"
+                        class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
+                        Подтвердить с именем
+                    </button>
+                    <button onclick="rejectBrand({{ item.brand.id }})"
+                        class="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 ml-auto">
+                        Отклонить
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% endif %}
+</div>
+
+<script>
+const API_BASE = '{{ url_for("brands.index") }}';
+
+async function apiCall(url, method='POST', body=null) {
+    const opts = {method, headers: {'Content-Type': 'application/json'}};
+    if (body) opts.body = JSON.stringify(body);
+    const resp = await fetch(url, opts);
+    return resp.json();
+}
+
+async function searchWB(brandId, brandName) {
+    const spinner = document.getElementById('searchSpinner-' + brandId);
+    const container = document.getElementById('suggestions-' + brandId);
+    spinner.classList.remove('hidden');
+
+    try {
+        const data = await apiCall(`${API_BASE}/api/resolve`, 'POST', {brand: brandName});
+        container.classList.remove('hidden');
+        container.innerHTML = '';
+
+        if (data.success) {
+            const res = data.resolution;
+            if (res.canonical_name) {
+                const div = document.createElement('div');
+                div.className = 'flex items-center gap-2 text-sm';
+                div.innerHTML = `
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs ${res.status === 'exact' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${res.status}</span>
+                    <strong>${res.canonical_name}</strong>
+                    <span class="text-gray-400">(${Math.round(res.confidence * 100)}%)</span>
+                    <button onclick="document.getElementById('renameTo-${brandId}').value='${res.canonical_name}'" class="text-indigo-600 hover:underline text-xs">Использовать</button>
+                `;
+                container.appendChild(div);
+            }
+            if (res.suggestions && res.suggestions.length > 0) {
+                res.suggestions.slice(0, 5).forEach(s => {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center gap-2 text-sm text-gray-600';
+                    const name = s.name || '';
+                    div.innerHTML = `
+                        <span class="text-gray-400 text-xs">suggestion</span>
+                        ${name}
+                        ${s.score ? `<span class="text-gray-400">(${Math.round(s.score * 100)}%)</span>` : ''}
+                        <button onclick="document.getElementById('renameTo-${brandId}').value='${name}'" class="text-indigo-600 hover:underline text-xs">Использовать</button>
+                    `;
+                    container.appendChild(div);
+                });
+            }
+            if (!res.canonical_name && (!res.suggestions || res.suggestions.length === 0)) {
+                container.innerHTML = '<p class="text-sm text-gray-500">Ничего не найдено в WB</p>';
+            }
+        }
+    } catch (e) {
+        container.innerHTML = '<p class="text-sm text-red-500">Ошибка поиска</p>';
+    }
+    spinner.classList.add('hidden');
+}
+
+async function approveBrand(brandId) {
+    const data = await apiCall(`${API_BASE}/api/review/${brandId}/approve`);
+    if (data.success) {
+        document.getElementById('review-' + brandId).remove();
+    } else {
+        alert(data.error || 'Ошибка');
+    }
+}
+
+async function approveWithRename(brandId) {
+    const newName = document.getElementById('renameTo-' + brandId).value.trim();
+    if (!newName) return alert('Введите имя');
+    const data = await apiCall(`${API_BASE}/api/review/${brandId}/approve`, 'POST', {target_name: newName});
+    if (data.success) {
+        document.getElementById('review-' + brandId).remove();
+    } else {
+        alert(data.error || 'Ошибка');
+    }
+}
+
+async function rejectBrand(brandId) {
+    if (!confirm('Отклонить бренд?')) return;
+    const data = await apiCall(`${API_BASE}/api/review/${brandId}/reject`);
+    if (data.success) {
+        document.getElementById('review-' + brandId).remove();
+    } else {
+        alert(data.error || 'Ошибка');
+    }
+}
+</script>
+{% endblock %}
