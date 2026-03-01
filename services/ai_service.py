@@ -1390,6 +1390,7 @@ class AIClient:
 
     def __init__(self, config: AIConfig):
         self.config = config
+        self.last_error: Optional[str] = None  # детали последней ошибки
         self._session = requests.Session()
         self._session.headers.update({
             'Content-Type': 'application/json'
@@ -1452,6 +1453,8 @@ class AIClient:
         if response_format and self.config.provider != AIProvider.CLOUDRU:
             payload["response_format"] = response_format
 
+        self.last_error = None
+
         try:
             logger.info(f"🤖 AI запрос к {self.config.provider.value}: модель={self.config.model}")
             logger.info(f"📍 URL: {url}")
@@ -1461,7 +1464,8 @@ class AIClient:
             # Получаем актуальный Authorization header
             auth_header = self._get_auth_header()
             if not auth_header:
-                logger.error("❌ Не удалось получить Authorization header")
+                self.last_error = f"Ошибка авторизации: не удалось получить токен для {self.config.provider.value}"
+                logger.error(f"❌ {self.last_error}")
                 return None
 
             # Логируем полный запрос для отладки
@@ -1487,7 +1491,11 @@ class AIClient:
             content = data.get('choices', [{}])[0].get('message', {}).get('content')
 
             if content is None:
-                logger.error(f"❌ AI вернул пустой ответ: {data}")
+                self.last_error = (
+                    f"AI вернул пустой ответ (модель: {self.config.model}, "
+                    f"провайдер: {self.config.provider.value})"
+                )
+                logger.error(f"❌ {self.last_error}: {data}")
                 return None
 
             logger.info(f"✅ AI ответ получен ({len(content)} символов)")
@@ -1496,13 +1504,45 @@ class AIClient:
             return content
 
         except requests.exceptions.Timeout:
-            logger.error(f"⏱️ AI запрос превысил таймаут ({self.config.timeout}с)")
+            self.last_error = (
+                f"Таймаут {self.config.timeout}с — AI не ответил вовремя "
+                f"(провайдер: {self.config.provider.value}, модель: {self.config.model})"
+            )
+            logger.error(f"⏱️ {self.last_error}")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            self.last_error = (
+                f"Нет соединения с AI API ({self.config.provider.value}): {str(e)[:150]}"
+            )
+            logger.error(f"❌ {self.last_error}")
             return None
         except requests.exceptions.HTTPError as e:
-            logger.error(f"❌ AI HTTP ошибка: {e.response.status_code} - {e.response.text[:500]}")
+            status = e.response.status_code
+            body = e.response.text[:300]
+            if status == 401 or status == 403:
+                self.last_error = (
+                    f"Ошибка авторизации AI (HTTP {status}): проверьте API-ключ "
+                    f"для {self.config.provider.value}"
+                )
+            elif status == 429:
+                self.last_error = (
+                    f"Превышен лимит запросов AI (HTTP 429) — "
+                    f"провайдер {self.config.provider.value} ограничил частоту"
+                )
+            elif status >= 500:
+                self.last_error = (
+                    f"Сервер AI недоступен (HTTP {status}): "
+                    f"{self.config.provider.value} — {body[:100]}"
+                )
+            else:
+                self.last_error = (
+                    f"HTTP {status} от AI ({self.config.provider.value}): {body[:150]}"
+                )
+            logger.error(f"❌ {self.last_error}")
             return None
         except Exception as e:
-            logger.error(f"❌ AI ошибка: {e}")
+            self.last_error = f"Непредвиденная ошибка AI: {type(e).__name__}: {str(e)[:200]}"
+            logger.error(f"❌ {self.last_error}")
             import traceback
             logger.error(traceback.format_exc())
             return None
@@ -1544,19 +1584,30 @@ class AITask(ABC):
         try:
             system_prompt = self.custom_instruction if self.custom_instruction else self.get_system_prompt()
 
+            user_prompt = self.build_user_prompt(**kwargs)
+
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": self.build_user_prompt(**kwargs)}
+                {"role": "user", "content": user_prompt}
             ]
 
+            prompt_len = len(system_prompt) + len(user_prompt)
             response = self.client.chat_completion(messages)
 
             if not response:
-                return False, None, "Не удалось получить ответ от AI"
+                detail = self.client.last_error or "пустой ответ"
+                task_name = getattr(self, 'task_name', self.__class__.__name__)
+                return False, None, f"[{task_name}] {detail} (промпт: {prompt_len} символов)"
 
             result = self.parse_response(response)
             if result is None:
-                return False, None, f"Не удалось распарсить ответ AI: {response[:200]}"
+                task_name = getattr(self, 'task_name', self.__class__.__name__)
+                # Показываем начало ответа для диагностики
+                snippet = response[:300].replace('\n', ' ')
+                return False, None, (
+                    f"[{task_name}] AI ответил, но формат некорректный. "
+                    f"Ответ ({len(response)} симв.): «{snippet}»"
+                )
 
             return True, result, None
 
@@ -1564,7 +1615,8 @@ class AITask(ABC):
             logger.error(f"❌ Ошибка выполнения AI задачи: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return False, None, str(e)
+            task_name = getattr(self, 'task_name', self.__class__.__name__)
+            return False, None, f"[{task_name}] {type(e).__name__}: {str(e)[:200]}"
 
 
 class CategoryDetectionTask(AITask):
@@ -2471,10 +2523,24 @@ class AllCharacteristicsTask(AITask):
 class FullProductParsingTask(AITask):
     """Задача полного AI парсинга товара — извлечение ВСЕХ возможных характеристик"""
 
+    def __init__(self, client, custom_instruction: str = "", marketplace_categories_block: str = ""):
+        super().__init__(client, custom_instruction)
+        self.marketplace_categories_block = marketplace_categories_block
+
     def get_system_prompt(self) -> str:
         if self.custom_instruction:
-            return self.custom_instruction
-        return DEFAULT_INSTRUCTIONS["full_product_parsing"]["template"]
+            base = self.custom_instruction
+        else:
+            base = DEFAULT_INSTRUCTIONS["full_product_parsing"]["template"]
+
+        if self.marketplace_categories_block:
+            base += (
+                "\n\n══════════════════════════════════════════════════════════════\n"
+                + self.marketplace_categories_block
+                + "\n══════════════════════════════════════════════════════════════"
+            )
+
+        return base
 
     def build_user_prompt(self, **kwargs) -> str:
         product_data = kwargs.get('product_data', {})
@@ -3360,13 +3426,16 @@ class AIService:
 
     def full_product_parse(
         self,
-        product_data: Dict
+        product_data: Dict,
+        marketplace_categories_block: str = ""
     ) -> Tuple[bool, Dict, str]:
         """
         Полный AI парсинг товара — извлекает ВСЕ возможные характеристики.
 
         Args:
             product_data: Словарь со всеми данными товара (из get_all_data_for_parsing())
+            marketplace_categories_block: Текстовый блок с включёнными категориями маркетплейса
+                                          (из MarketplaceService.get_enabled_categories_for_prompt())
 
         Returns:
             Tuple[success, {product_identity, brand_info, physical, package, materials,
@@ -3374,7 +3443,11 @@ class AIService:
                            care, origin, safety, warranty, extra, marketplace_ready,
                            parsing_meta}, error]
         """
-        task = FullProductParsingTask(self.client, self.config.custom_parsing_instruction)
+        task = FullProductParsingTask(
+            self.client,
+            self.config.custom_parsing_instruction,
+            marketplace_categories_block=marketplace_categories_block
+        )
         success, result, error = task.execute(product_data=product_data)
         if success and result:
             return True, result, ""

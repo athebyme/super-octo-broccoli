@@ -76,6 +76,7 @@ def run_migration():
         product_columns = {
             'ai_parsed_data_json': "TEXT",
             'ai_parsed_at': "DATETIME",
+            'ai_model_used': "VARCHAR(100)",
             'ai_marketplace_json': "TEXT",
             'description_source': "VARCHAR(50)",
         }

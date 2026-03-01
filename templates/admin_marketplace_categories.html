@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+
+{% block title %}Категории {{ marketplace.name }} - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+     x-data="categoriesManager({{ marketplace.id }})">
+    <!-- Header -->
+    <div class="mb-8 flex justify-between items-center">
+        <div>
+            <nav class="flex mb-3" aria-label="Breadcrumb">
+                <ol class="flex items-center space-x-2 text-sm text-gray-500">
+                    <li><a href="{{ url_for('marketplaces.index') }}" class="hover:text-gray-900">Маркетплейсы</a></li>
+                    <li><svg class="flex-shrink-0 h-4 w-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd"
+                                d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                                clip-rule="evenodd" />
+                        </svg></li>
+                    <li class="font-medium text-gray-900">{{ marketplace.name }}</li>
+                </ol>
+            </nav>
+            <h1 class="text-3xl font-bold text-gray-900">Категории</h1>
+            <p class="mt-1 text-sm text-gray-500">
+                {{ total_count }} категорий в {{ grouped_categories|length }} группах
+                <span class="ml-2 text-indigo-600 font-medium" x-show="enabledCount > 0" x-cloak>
+                    (<span x-text="enabledCount"></span> включено для AI)
+                </span>
+            </p>
+        </div>
+        <div class="flex items-center space-x-3">
+            <button @click="syncAllEnabled()"
+                :disabled="syncing"
+                class="inline-flex items-center px-3 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-wait">
+                <svg x-show="syncing" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span x-text="syncing ? 'Синхронизация...' : 'Синхронизировать включённые'"></span>
+            </button>
+            <button @click="expandAll = !expandAll"
+                class="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                <span x-text="expandAll ? 'Свернуть все' : 'Развернуть все'"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Search Form -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 mb-6 p-4">
+        <form method="GET" action="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
+            class="flex items-center max-w-lg">
+            <div class="relative flex-grow">
+                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+                <input type="text" name="search" value="{{ search }}"
+                    class="focus:ring-indigo-500 focus:border-indigo-500 block w-full pl-10 sm:text-sm border-gray-300 rounded-md"
+                    placeholder="Поиск по категории или группе...">
+            </div>
+            <button type="submit"
+                class="ml-3 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700">Найти</button>
+            {% if search %}
+            <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
+                class="ml-2 inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">Сброс</a>
+            {% endif %}
+        </form>
+    </div>
+
+    <!-- Toast -->
+    <div x-show="toast.show" x-transition x-cloak
+        :class="toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-green-50 border-green-200 text-green-800'"
+        class="fixed bottom-4 right-4 z-50 border rounded-lg px-4 py-3 shadow-lg text-sm flex items-center max-w-md">
+        <span x-text="toast.message"></span>
+    </div>
+
+    <!-- Categories Tree -->
+    {% if grouped_categories %}
+    <div class="space-y-3">
+        {% for parent_name, children in grouped_categories.items() %}
+        {% set group_key = parent_name if parent_name != 'Без родителя' else '__none__' %}
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden"
+             x-data="{ open: expandAll || {{ 'true' if search else 'false' }} }"
+             x-effect="if (expandAll) open = true">
+            <!-- Parent group header -->
+            <div class="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors">
+                <button @click="open = !open" class="flex items-center space-x-3 flex-1 text-left">
+                    <svg class="h-5 w-5 text-gray-400 transform transition-transform" :class="{ 'rotate-90': open }"
+                        fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd"
+                            d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                            clip-rule="evenodd" />
+                    </svg>
+                    <span class="text-sm font-semibold text-gray-900">{{ parent_name }}</span>
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                        {{ children|length }}
+                    </span>
+                    {% set enabled_in_group = children|selectattr('is_enabled')|list|length %}
+                    {% if enabled_in_group > 0 %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        {{ enabled_in_group }} вкл
+                    </span>
+                    {% endif %}
+                </button>
+                <div class="flex items-center space-x-2 ml-4">
+                    <button @click="toggleGroup('{{ group_key|e }}', true)"
+                        class="text-xs text-green-600 hover:text-green-800 font-medium px-2 py-1 rounded hover:bg-green-50"
+                        title="Включить все в группе">Вкл. все</button>
+                    <button @click="toggleGroup('{{ group_key|e }}', false)"
+                        class="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50"
+                        title="Выключить все в группе">Выкл. все</button>
+                </div>
+            </div>
+
+            <!-- Children categories table -->
+            <div x-show="open" x-collapse x-cloak>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="w-16 px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Вкл</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">ID</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Название</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Характеристики</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Синхронизация</th>
+                            <th class="px-6 py-2 w-28"><span class="sr-only">Действия</span></th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-100">
+                        {% for cat in children %}
+                        <tr class="hover:bg-gray-50 transition-opacity"
+                            :class="{ 'opacity-50': !enabled[{{ cat.id }}] }"
+                            x-data="{ charCount: {{ cat.characteristics_count or 0 }}, syncStatus: '' }">
+                            <td class="px-4 py-3 text-center">
+                                <button @click="toggleCategory({{ cat.id }}, $data)"
+                                    :disabled="toggling[{{ cat.id }}]"
+                                    class="relative inline-flex flex-shrink-0 h-5 w-9 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-indigo-500 disabled:opacity-50"
+                                    :class="enabled[{{ cat.id }}] ? 'bg-indigo-600' : 'bg-gray-200'"
+                                    role="switch" :aria-checked="enabled[{{ cat.id }}]">
+                                    <span class="pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform ring-0 transition ease-in-out duration-200"
+                                        :class="enabled[{{ cat.id }}] ? 'translate-x-4' : 'translate-x-0'"></span>
+                                </button>
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 font-mono">{{ cat.subject_id }}</td>
+                            <td class="px-6 py-3 text-sm font-medium text-gray-900">
+                                {{ cat.subject_name }}
+                                <span x-show="syncStatus" x-text="syncStatus" x-cloak
+                                    class="ml-2 text-xs text-green-600 font-normal"></span>
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                <template x-if="charCount > 0">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                        <span x-text="charCount"></span>
+                                        {% if cat.required_count %}<span class="ml-1 text-red-600">({{ cat.required_count }} обяз.)</span>{% endif %}
+                                    </span>
+                                </template>
+                                <template x-if="charCount === 0">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">0</span>
+                                </template>
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap text-xs text-gray-500">
+                                {{ cat.characteristics_synced_at.strftime('%d.%m.%Y %H:%M') if cat.characteristics_synced_at else 'Никогда' }}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap text-right text-sm font-medium">
+                                <a href="{{ url_for('marketplaces.category_detail', category_id=cat.id) }}"
+                                    class="text-indigo-600 hover:text-indigo-900">Настроить</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 px-6 py-12 text-center text-gray-500 text-sm">
+        {% if search %}
+        Ничего не найдено по запросу "{{ search }}".
+        <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}" class="text-indigo-600 hover:text-indigo-900 ml-1">Сбросить поиск</a>
+        {% else %}
+        Нет категорий. Запустите синхронизацию каталога.
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function categoriesManager(marketplaceId) {
+    return {
+        expandAll: false,
+        syncing: false,
+        toggling: {},
+        enabled: {
+            {% for parent_name, children in grouped_categories.items() %}
+            {% for cat in children %}
+            {{ cat.id }}: {{ 'true' if cat.is_enabled else 'false' }},
+            {% endfor %}
+            {% endfor %}
+        },
+        toast: { show: false, message: '', type: 'success' },
+
+        get enabledCount() {
+            return Object.values(this.enabled).filter(Boolean).length;
+        },
+
+        async toggleCategory(catId, rowData) {
+            const newState = !this.enabled[catId];
+            this.enabled[catId] = newState;
+            this.toggling[catId] = true;
+            try {
+                const res = await fetch(`/admin/marketplaces/categories/${catId}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_enabled: newState })
+                });
+                if (!res.ok) throw new Error('API Error');
+                const data = await res.json();
+
+                if (data.synced) {
+                    rowData.charCount = data.characteristics_count;
+                    rowData.syncStatus = 'синхронизировано';
+                    this.showToast(`Включено + синхронизировано (${data.characteristics_count} хар.)`, 'success');
+                    setTimeout(() => { rowData.syncStatus = ''; }, 3000);
+                } else if (data.sync_error) {
+                    this.showToast(`Включено, но синхронизация: ${data.sync_error}`, 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                this.enabled[catId] = !newState;
+                this.showToast('Ошибка сохранения', 'error');
+            } finally {
+                this.toggling[catId] = false;
+            }
+        },
+
+        async toggleGroup(parentName, state) {
+            try {
+                const res = await fetch(`/admin/marketplaces/${marketplaceId}/categories/toggle_group`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parent_name: parentName, is_enabled: state })
+                });
+                if (!res.ok) throw new Error('API Error');
+                const data = await res.json();
+                if (data.success) {
+                    this.showToast(`${state ? 'Включено' : 'Выключено'} ${data.updated} категорий`);
+                    setTimeout(() => location.reload(), 800);
+                }
+            } catch (err) {
+                console.error(err);
+                this.showToast('Ошибка сохранения', 'error');
+            }
+        },
+
+        async syncAllEnabled() {
+            this.syncing = true;
+            try {
+                const res = await fetch(`/admin/marketplaces/${marketplaceId}/categories/sync_enabled`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                if (!res.ok) throw new Error('API Error');
+                const data = await res.json();
+                if (data.synced === 0 && data.failed === 0) {
+                    this.showToast('Все включённые категории уже синхронизированы');
+                } else {
+                    let msg = `Синхронизировано: ${data.synced}`;
+                    if (data.failed > 0) msg += `, ошибок: ${data.failed}`;
+                    this.showToast(msg, data.failed > 0 ? 'error' : 'success');
+                    if (data.synced > 0) {
+                        setTimeout(() => location.reload(), 1500);
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+                this.showToast('Ошибка синхронизации', 'error');
+            } finally {
+                this.syncing = false;
+            }
+        },
+
+        showToast(msg, type = 'success') {
+            this.toast.message = msg;
+            this.toast.type = type;
+            this.toast.show = true;
+            setTimeout(() => { this.toast.show = false; }, 4000);
+        }
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}Маркетплейсы - Промпт Тестер - WB Seller Platform{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="promptTester()">
+    <!-- Header -->
+    <div class="mb-8 flex justify-between items-center">
+        <div>
+            <nav class="flex mb-3" aria-label="Breadcrumb">
+                <ol class="flex items-center space-x-2 text-sm text-gray-500">
+                    <li><a href="{{ url_for('marketplaces.index') }}" class="hover:text-gray-900">Маркетплейсы</a></li>
+                    <li><svg class="flex-shrink-0 h-4 w-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd"
+                                d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                                clip-rule="evenodd" />
+                        </svg></li>
+                    <li class="font-medium text-gray-900">Тестирование Промптов</li>
+                </ol>
+            </nav>
+            <h1 class="text-3xl font-bold text-gray-900">Ai Prompt Tester</h1>
+            <p class="mt-2 text-sm text-gray-600">
+                Заменитель старого AllCharacteristicsTask. Динамически генерирует промпт на основе требуемой схемы
+                категории.
+            </p>
+        </div>
+    </div>
+
+    <!-- Playground Form -->
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 mb-6 p-6">
+        <form @submit.prevent="generatePrompt" class="space-y-4">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="category_id" class="block text-sm font-medium text-gray-700">Категория (со
+                        словарями)</label>
+                    <select x-model="selectedCategory" id="category_id" name="category_id"
+                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md shadow-sm">
+                        <option value="" disabled selected>Выберите категорию...</option>
+                        {% for cat in categories %}
+                        <option value="{{ cat.id }}">{{ cat.subject_name }} ({{ cat.characteristics_count }} хар-к)
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="product_id" class="block text-sm font-medium text-gray-700">Товар для теста</label>
+                    <select x-model="selectedProduct" id="product_id" name="product_id"
+                        class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md shadow-sm">
+                        <option value="" disabled selected>Выберите товар...</option>
+                        {% for p in products %}
+                        <option value="{{ p.id }}">{{ p.title }} [{{ p.supplier.name }}]</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="pt-4 flex items-center justify-end">
+                <button type="submit"
+                    class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    :class="{'opacity-50 cursor-not-allowed': loading}"
+                    :disabled="!selectedCategory || !selectedProduct || loading">
+                    <span x-show="!loading">Тестировать</span>
+                    <span x-show="loading">Генерация...</span>
+                    <svg x-show="loading" class="animate-spin -mr-1 ml-3 h-5 w-5 text-white" fill="none"
+                        viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4">
+                        </circle>
+                        <path class="opacity-75" fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
+                        </path>
+                    </svg>
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Playground Results -->
+    <div x-show="results" x-cloak class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Prompts -->
+        <div class="space-y-6">
+            <div class="bg-gray-900 rounded-lg shadow overflow-hidden">
+                <div class="bg-gray-800 px-4 py-2 border-b border-gray-700 flex justify-between items-center">
+                    <h3 class="text-xs font-semibold text-gray-300 uppercase tracking-wider">System Prompt (Schema)</h3>
+                </div>
+                <div class="p-4">
+                    <pre class="text-xs text-gray-300 whitespace-pre-wrap font-mono" x-text="results?.sys_prompt"></pre>
+                </div>
+            </div>
+
+            <div class="bg-gray-900 rounded-lg shadow overflow-hidden">
+                <div class="bg-gray-800 px-4 py-2 border-b border-gray-700 flex justify-between items-center">
+                    <h3 class="text-xs font-semibold text-gray-300 uppercase tracking-wider">User Prompt (Data to
+                        extract)</h3>
+                </div>
+                <div class="p-4">
+                    <pre class="text-xs text-gray-300 whitespace-pre-wrap font-mono overflow-y-auto max-h-96"
+                        x-text="results?.user_prompt"></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Responses -->
+        <div class="space-y-6">
+            <div class="bg-green-50 rounded-lg shadow border border-green-200 overflow-hidden">
+                <div class="bg-green-100 px-4 py-2 border-b border-green-200 flex justify-between items-center">
+                    <h3 class="text-xs font-semibold text-green-800 uppercase tracking-wider">Parsed JSON Result</h3>
+                </div>
+                <div class="p-4 bg-white">
+                    <pre class="text-sm text-gray-800 whitespace-pre-wrap font-mono overflow-y-auto max-h-96"
+                        x-text="JSON.stringify(results?.parsed_result, null, 2)"></pre>
+                </div>
+            </div>
+
+            <div class="bg-indigo-50 rounded-lg shadow border border-indigo-200 overflow-hidden">
+                <div class="bg-indigo-100 px-4 py-2 border-b border-indigo-200 flex justify-between items-center">
+                    <h3 class="text-xs font-semibold text-indigo-800 uppercase tracking-wider">Raw AI Response</h3>
+                </div>
+                <div class="p-4">
+                    <pre class="text-xs text-gray-700 whitespace-pre-wrap font-mono overflow-y-auto max-h-64"
+                        x-text="results?.raw_response"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error state -->
+    <div x-show="error" x-cloak class="mt-6 bg-red-50 border border-red-200 rounded-lg p-6">
+        <h3 class="text-red-800 font-semibold mb-2">Error during generation:</h3>
+        <p class="text-red-600 font-mono text-sm whitespace-pre-wrap" x-text="error"></p>
+    </div>
+
+</div>
+
+<script>
+    function promptTester() {
+        return {
+            selectedCategory: '',
+            selectedProduct: '',
+            loading: false,
+            results: null,
+            error: null,
+
+            async generatePrompt() {
+                if (!this.selectedCategory || !this.selectedProduct) return;
+
+                this.loading = true;
+                this.results = null;
+                this.error = null;
+
+                try {
+                    const res = await fetch('{{ url_for("marketplaces.test_prompt") }}', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            category_id: this.selectedCategory,
+                            product_id: this.selectedProduct
+                        })
+                    });
+                    const data = await res.json();
+
+                    if (data.success) {
+                        this.results = data;
+                    } else {
+                        this.error = data.error + (data.traceback ? "\n" + data.traceback : "");
+                    }
+                } catch (err) {
+                    console.error(err);
+                    this.error = String(err);
+                } finally {
+                    this.loading = false;
+                }
+            }
+        }
+    }
+</script>
+{% endblock %}

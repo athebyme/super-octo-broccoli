@@ -34,6 +34,28 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+def _get_marketplace_categories_block(supplier_id: int) -> str:
+    """
+    Получить текстовый блок включённых категорий маркетплейса для AI промпта.
+    Если у поставщика нет активных подключений к маркетплейсам — возвращает ''.
+    """
+    try:
+        from models import MarketplaceConnection
+        from services.marketplace_service import MarketplaceService
+
+        conn = MarketplaceConnection.query.filter_by(
+            supplier_id=supplier_id,
+            is_active=True
+        ).first()
+        if not conn:
+            return ""
+
+        return MarketplaceService.get_enabled_categories_for_prompt(conn.marketplace_id)
+    except Exception as e:
+        logger.debug(f"Could not load marketplace categories for supplier {supplier_id}: {e}")
+        return ""
+
+
 # ============================================================================
 # RESULT DATACLASSES
 # ============================================================================
@@ -1218,12 +1240,14 @@ class SupplierService:
     # ===================================================================
 
     @staticmethod
-    def _get_ai_service(supplier: Supplier):
+    def _get_ai_service(supplier: Supplier, model_override: str = None):
         """Создать AIService из настроек поставщика"""
         from services.ai_service import AIConfig, AIService as AISvc
         config = AIConfig.from_settings(supplier)
         if not config:
             return None
+        if model_override:
+            config.model = model_override
         return AISvc(config)
 
     @staticmethod
@@ -1618,12 +1642,18 @@ class SupplierService:
         # Собираем все данные товара
         product_data = product.get_all_data_for_parsing()
 
-        success, result, error = ai_svc.full_product_parse(product_data)
+        # Включённые категории маркетплейса для AI
+        mp_categories = _get_marketplace_categories_block(supplier.id)
+
+        success, result, error = ai_svc.full_product_parse(
+            product_data, marketplace_categories_block=mp_categories
+        )
 
         if success and result:
             # Сохраняем полный результат парсинга
             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
             product.ai_parsed_at = datetime.utcnow()
+            product.ai_model_used = ai_svc.config.model
 
             # Формируем данные для маркетплейса (WB)
             marketplace_data = _build_marketplace_data(product, result)
@@ -1631,6 +1661,9 @@ class SupplierService:
 
             # Обновляем поля товара из результатов парсинга если они были пустые
             _apply_parsed_data_to_product(product, result)
+            
+            # Интеграция с MarketplaceAwareParsingTask
+            _run_marketplace_aware_parse(product, result, ai_svc)
 
             product.updated_at = datetime.utcnow()
             db.session.commit()
@@ -1653,7 +1686,8 @@ class SupplierService:
     @staticmethod
     def start_ai_parse_job(supplier_id: int, product_ids: List[int],
                            admin_user_id: int = None,
-                           max_workers: int = 4) -> dict:
+                           max_workers: int = 4,
+                           model_override: str = None) -> dict:
         """
         Запускает фоновый AI парсинг товаров.
 
@@ -1689,7 +1723,7 @@ class SupplierService:
 
         thread = threading.Thread(
             target=SupplierService._run_ai_parse_job,
-            args=(job_id, supplier_id, product_ids, effective_workers),
+            args=(job_id, supplier_id, product_ids, effective_workers, model_override),
             daemon=True,
             name=f'AIParse-{job_id[:8]}'
         )
@@ -1703,7 +1737,7 @@ class SupplierService:
 
     @staticmethod
     def _run_ai_parse_job(job_id: str, supplier_id: int, product_ids: List[int],
-                          max_workers: int = 4):
+                          max_workers: int = 4, model_override: str = None):
         """
         Фоновый поток AI парсинга с параллельной обработкой.
 
@@ -1744,6 +1778,9 @@ class SupplierService:
                     job_id, supplier_id, product_ids[0], test_svc
                 )
                 return
+
+            # Resolve marketplace categories once for all workers
+            mp_categories = _get_marketplace_categories_block(supplier_id)
 
             # --- Параллельный режим ---
             effective_workers = min(max_workers, len(product_ids))
@@ -1809,23 +1846,30 @@ class SupplierService:
                         product_data = product.get_all_data_for_parsing()
 
                         # Создаём отдельный AIService для этого воркера
-                        worker_svc = SupplierService._get_ai_service(supplier)
+                        worker_svc = SupplierService._get_ai_service(supplier, model_override=model_override)
                         if not worker_svc:
                             return {
                                 'product_id': pid, 'title': title,
                                 'status': 'error', 'error': 'AI сервис недоступен',
                             }
 
-                        success, result, error = worker_svc.full_product_parse(product_data)
+                        success, result, error = worker_svc.full_product_parse(
+                            product_data, marketplace_categories_block=mp_categories
+                        )
 
                         if success and result:
                             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                             product.ai_parsed_at = datetime.utcnow()
+                            product.ai_model_used = worker_svc.config.model
 
                             marketplace_data = _build_marketplace_data(product, result)
                             product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
 
                             _apply_parsed_data_to_product(product, result)
+                            
+                            # Интеграция с MarketplaceAwareParsingTask
+                            _run_marketplace_aware_parse(product, result, worker_svc)
+                            
                             product.updated_at = datetime.utcnow()
                             db.session.commit()
 
@@ -1935,14 +1979,22 @@ class SupplierService:
 
         try:
             product_data = product.get_all_data_for_parsing()
-            success, result, error = ai_svc.full_product_parse(product_data)
+            mp_categories = _get_marketplace_categories_block(supplier_id)
+            success, result, error = ai_svc.full_product_parse(
+                product_data, marketplace_categories_block=mp_categories
+            )
 
             if success and result:
                 product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                 product.ai_parsed_at = datetime.utcnow()
+                product.ai_model_used = ai_svc.config.model
                 marketplace_data = _build_marketplace_data(product, result)
                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                 _apply_parsed_data_to_product(product, result)
+
+                # Интеграция с MarketplaceAwareParsingTask
+                _run_marketplace_aware_parse(product, result, ai_svc)
+
                 product.updated_at = datetime.utcnow()
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
@@ -2196,6 +2248,28 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
     identity = parsed.get('product_identity', {})
     origin = parsed.get('origin', {})
 
+    # --- Оценка веса, если AI не извлёк ---
+    estimated_weight_g = _estimate_weight_g(product, parsed)
+
+    # Габариты товара
+    dims_length = physical.get('length_cm')
+    dims_width = physical.get('width_cm')
+    dims_height = physical.get('height_cm')
+    dims_weight_kg = round(physical.get('weight_g', 0) / 1000, 2) if physical.get('weight_g') else None
+
+    if not dims_weight_kg and estimated_weight_g:
+        dims_weight_kg = round(estimated_weight_g / 1000, 2)
+
+    # Габариты упаковки — fallback 20×20×30 если ничего нет
+    pkg_length = pkg.get('package_length_cm') or 20
+    pkg_width = pkg.get('package_width_cm') or 20
+    pkg_height = pkg.get('package_height_cm') or 30
+    pkg_weight_kg = round(pkg.get('package_weight_g', 0) / 1000, 2) if pkg.get('package_weight_g') else None
+
+    if not pkg_weight_kg and dims_weight_kg:
+        # Упаковка ≈ товар + 50-100г на коробку/пакет
+        pkg_weight_kg = round(dims_weight_kg + 0.08, 2)
+
     wb_data = {
         'title': mp.get('wb_title_suggestion') or product.ai_seo_title or product.title or '',
         'description': mp.get('wb_description_short') or product.ai_description or product.description or '',
@@ -2220,16 +2294,16 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
 
         # Габариты для WB
         'dimensions': {
-            'length': physical.get('length_cm'),
-            'width': physical.get('width_cm'),
-            'height': physical.get('height_cm'),
-            'weight_kg': round(physical.get('weight_g', 0) / 1000, 2) if physical.get('weight_g') else None,
+            'length': dims_length,
+            'width': dims_width,
+            'height': dims_height,
+            'weight_kg': dims_weight_kg,
         },
         'package_dimensions': {
-            'length': pkg.get('package_length_cm'),
-            'width': pkg.get('package_width_cm'),
-            'height': pkg.get('package_height_cm'),
-            'weight_kg': round(pkg.get('package_weight_g', 0) / 1000, 2) if pkg.get('package_weight_g') else None,
+            'length': pkg_length,
+            'width': pkg_width,
+            'height': pkg_height,
+            'weight_kg': pkg_weight_kg,
         },
 
         # Характеристики
@@ -2321,6 +2395,233 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
 
     if not product.ai_bullets_json and mp.get('bullet_points'):
         product.ai_bullets_json = json.dumps(mp['bullet_points'], ensure_ascii=False)
+
+
+def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
+    """Запускает MarketplaceAwareParsingTask если удалось определить категорию WB."""
+    from models import MarketplaceCategory, MarketplaceCategoryCharacteristic, MarketplaceConnection, Marketplace
+    from services.marketplace_ai_parser import MarketplaceAwareParsingTask
+    from services.marketplace_validator import MarketplaceValidator
+    
+    # 1. Пытаемся определить subject_id
+    subject_id = product.wb_subject_id
+    if not subject_id:
+        wb_subject_name = parsed_data.get('product_identity', {}).get('wb_subject')
+        if wb_subject_name:
+            # Ищем категорию по имени
+            cat = MarketplaceCategory.query.filter(MarketplaceCategory.subject_name.ilike(wb_subject_name)).first()
+            if cat:
+                subject_id = cat.subject_id
+                product.wb_subject_id = subject_id
+                product.wb_subject_name = cat.subject_name
+
+    # Если не нашли, ищем категорию по умолчанию у поставщика
+    if not subject_id:
+        conn = MarketplaceConnection.query.filter_by(supplier_id=product.supplier_id, is_active=True).first()
+        if conn and conn.auto_map_categories and conn.default_category_id:
+            cat = MarketplaceCategory.query.get(conn.default_category_id)
+            if cat:
+                subject_id = cat.subject_id
+                product.wb_subject_id = subject_id
+                product.wb_subject_name = cat.subject_name
+                
+    if not subject_id:
+        logger.info(f"Skipping MarketplaceAwareParsingTask for {product.id} - no subject_id found.")
+        return
+        
+    # Ищем характеристики для этой категории
+    wb_marketplace = Marketplace.query.filter_by(code='wb').first()
+    if not wb_marketplace:
+        return
+        
+    cat = MarketplaceCategory.query.filter_by(marketplace_id=wb_marketplace.id, subject_id=subject_id).first()
+    if not cat:
+        return
+        
+    characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=cat.id, is_enabled=True).all()
+    if not characteristics:
+        return
+        
+    # Запускаем таску
+    task = MarketplaceAwareParsingTask(
+        client=ai_svc.client, 
+        characteristics=characteristics,
+        custom_instruction=ai_svc.config.custom_parsing_instruction
+    )
+    
+    product_info = {
+        'title': product.title or product.ai_seo_title,
+        'description': product.description or product.ai_description,
+        'brand': product.brand
+    }
+    
+    success, result, error = task.execute(product_info=product_info, original_data=parsed_data)
+    
+    if success and result:
+        # Сохраняем в marketplace_fields_json
+        product.marketplace_fields_json = json.dumps(result, ensure_ascii=False)
+
+        # Валидируем
+        validation_result = MarketplaceValidator.validate_product_for_marketplace(product, wb_marketplace.id)
+
+        product.marketplace_validation_status = 'valid' if validation_result.get('valid') else 'invalid'
+        product.marketplace_fill_pct = validation_result.get('fill_pct', 0)
+
+        logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result.get('valid')}")
+    else:
+        logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
+
+
+# ============================================================================
+# WEIGHT / DIMENSIONS ESTIMATION
+# ============================================================================
+
+# Оценка веса по категории / типу товара (граммы)
+# Ключ — подстрока в wb_subject, category или product_type (lowercase)
+_WEIGHT_ESTIMATES = {
+    # Белье и одежда
+    'белье': 120,
+    'бельё': 120,
+    'трусы': 60,
+    'стринг': 40,
+    'бюстгальтер': 80,
+    'лиф': 80,
+    'корсет': 250,
+    'корсаж': 200,
+    'боди': 150,
+    'комбинезон': 250,
+    'пеньюар': 150,
+    'халат': 300,
+    'сорочка': 120,
+    'чулки': 60,
+    'колготки': 80,
+    'носки': 40,
+    'перчатки': 50,
+    'маска': 60,
+    'повязка': 30,
+    'костюм': 350,
+    'платье': 250,
+    'юбка': 150,
+    'накидка': 150,
+    'плетка': 200,
+    'флоггер': 250,
+
+    # БДСМ аксессуары
+    'наручники': 200,
+    'кляп': 100,
+    'ошейник': 120,
+    'поводок': 80,
+    'привязь': 150,
+    'бондаж': 300,
+    'фиксатор': 200,
+    'зажим': 40,
+    'шлепалка': 120,
+    'стек': 150,
+    'кнут': 200,
+    'паддл': 180,
+    'веревка': 250,
+    'верёвка': 250,
+    'лента': 60,
+    'ремень': 150,
+
+    # Вибраторы и секс-игрушки
+    'вибратор': 180,
+    'массажер': 250,
+    'массажёр': 250,
+    'стимулятор': 120,
+    'фаллоимитатор': 300,
+    'дилдо': 300,
+    'анальн': 100,
+    'пробка': 100,
+    'plug': 100,
+    'кольцо': 50,
+    'насадка': 80,
+    'помпа': 250,
+    'мастурбатор': 350,
+    'вагина': 400,
+    'яйцо': 60,
+    'шарик': 80,
+    'бусы': 80,
+    'клитор': 80,
+
+    # Косметика и смазки
+    'смазка': 150,
+    'лубрикант': 150,
+    'гель': 120,
+    'крем': 100,
+    'масло': 200,
+    'спрей': 100,
+    'духи': 80,
+    'парфюм': 80,
+    'свеча': 250,
+
+    # Презервативы
+    'презерватив': 40,
+
+    # Прочее
+    'батарейк': 30,
+    'зарядк': 80,
+    'чехол': 60,
+    'сумка': 150,
+}
+
+
+def _estimate_weight_g(product, parsed: dict) -> Optional[int]:
+    """
+    Оценивает вес товара на основе категории, типа и материалов.
+    Возвращает вес в граммах или None если оценить невозможно.
+    """
+    physical = parsed.get('physical', {})
+
+    # Если AI уже извлёк вес — не трогаем
+    if physical.get('weight_g'):
+        return physical['weight_g']
+
+    # Собираем текстовые подсказки для определения типа
+    identity = parsed.get('product_identity', {})
+    hints = ' '.join(filter(None, [
+        (identity.get('wb_subject') or '').lower(),
+        (identity.get('product_type') or '').lower(),
+        (identity.get('product_subtype') or '').lower(),
+        (product.category or '').lower(),
+        (product.wb_subject_name or '').lower(),
+        (product.title or '').lower(),
+    ]))
+
+    # Ищем совпадение по таблице
+    best_weight = None
+    best_len = 0
+    for keyword, weight in _WEIGHT_ESTIMATES.items():
+        if keyword in hints and len(keyword) > best_len:
+            best_weight = weight
+            best_len = len(keyword)
+
+    if best_weight:
+        # Корректируем вес по материалу
+        materials = parsed.get('materials', {})
+        mat_hint = (materials.get('primary_material') or '').lower()
+        composition = (materials.get('composition') or '').lower()
+        mat_text = mat_hint + ' ' + composition
+
+        # Силикон / латекс тяжелее
+        if 'силикон' in mat_text or 'латекс' in mat_text:
+            best_weight = int(best_weight * 1.3)
+        # Металл значительно тяжелее
+        elif 'металл' in mat_text or 'нержав' in mat_text or 'сталь' in mat_text:
+            best_weight = int(best_weight * 2.0)
+        elif 'стекл' in mat_text:
+            best_weight = int(best_weight * 1.8)
+        # Кожа чуть тяжелее
+        elif 'кожа' in mat_text or 'кожан' in mat_text:
+            best_weight = int(best_weight * 1.15)
+        # Кружево / сетка легче
+        elif 'кружев' in mat_text or 'сетк' in mat_text or 'сетч' in mat_text:
+            best_weight = int(best_weight * 0.7)
+
+        return best_weight
+
+    # Если ничего не подошло — базовая оценка 150г
+    return 150
 
 
 # ============================================================================
