@@ -2337,6 +2337,37 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
         season_map = {'all_season': 'Всесезонный', 'summer': 'Лето', 'winter': 'Зима', 'demi': 'Демисезон'}
         product.season = season_map.get(seasonality['season'], seasonality['season'])
 
+    if not product.age_group and audience.get('age_group'):
+        age_map = {'adult': 'Взрослый', 'teen': 'Подросток', 'child': 'Детский', 'baby': 'Малыш'}
+        product.age_group = age_map.get(audience['age_group'], audience['age_group'])
+
+    # Обновляем JSON поля если пустые
+    if not product.colors_json and color.get('primary_color'):
+        colors = [color['primary_color']]
+        if color.get('secondary_colors'):
+            colors.extend(color['secondary_colors'])
+        product.colors_json = json.dumps(colors, ensure_ascii=False)
+
+    if not product.materials_json and materials.get('materials_list'):
+        product.materials_json = json.dumps(materials['materials_list'], ensure_ascii=False)
+
+    if not product.dimensions_json and any(v for v in physical.values() if v is not None):
+        product.dimensions_json = json.dumps(physical, ensure_ascii=False)
+
+    # Маркетплейс-ready данные
+    mp = parsed.get('marketplace_ready', {})
+    if not product.ai_seo_title and mp.get('wb_title_suggestion'):
+        product.ai_seo_title = mp['wb_title_suggestion'][:60]
+
+    if not product.ai_description and mp.get('wb_description_short'):
+        product.ai_description = mp['wb_description_short']
+
+    if not product.ai_keywords_json and mp.get('search_keywords'):
+        product.ai_keywords_json = json.dumps(mp['search_keywords'], ensure_ascii=False)
+
+    if not product.ai_bullets_json and mp.get('bullet_points'):
+        product.ai_bullets_json = json.dumps(mp['bullet_points'], ensure_ascii=False)
+
 
 def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
     """Запускает MarketplaceAwareParsingTask если удалось определить категорию WB."""
@@ -2411,37 +2442,6 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
         logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result.get('valid')}")
     else:
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
-
-    if not product.age_group and audience.get('age_group'):
-        age_map = {'adult': 'Взрослый', 'teen': 'Подросток', 'child': 'Детский', 'baby': 'Малыш'}
-        product.age_group = age_map.get(audience['age_group'], audience['age_group'])
-
-    # Обновляем JSON поля если пустые
-    if not product.colors_json and color.get('primary_color'):
-        colors = [color['primary_color']]
-        if color.get('secondary_colors'):
-            colors.extend(color['secondary_colors'])
-        product.colors_json = json.dumps(colors, ensure_ascii=False)
-
-    if not product.materials_json and materials.get('materials_list'):
-        product.materials_json = json.dumps(materials['materials_list'], ensure_ascii=False)
-
-    if not product.dimensions_json and any(v for v in physical.values() if v is not None):
-        product.dimensions_json = json.dumps(physical, ensure_ascii=False)
-
-    # Маркетплейс-ready данные
-    mp = parsed.get('marketplace_ready', {})
-    if not product.ai_seo_title and mp.get('wb_title_suggestion'):
-        product.ai_seo_title = mp['wb_title_suggestion'][:60]
-
-    if not product.ai_description and mp.get('wb_description_short'):
-        product.ai_description = mp['wb_description_short']
-
-    if not product.ai_keywords_json and mp.get('search_keywords'):
-        product.ai_keywords_json = json.dumps(mp['search_keywords'], ensure_ascii=False)
-
-    if not product.ai_bullets_json and mp.get('bullet_points'):
-        product.ai_bullets_json = json.dumps(mp['bullet_points'], ensure_ascii=False)
 
 
 # ============================================================================
