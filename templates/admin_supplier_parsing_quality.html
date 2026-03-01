@@ -143,11 +143,11 @@
                             <div class="flex justify-between text-sm mb-1">
                                 <span class="text-gray-600">Покрытие кэша</span>
                                 <span class="font-medium text-indigo-600"
-                                      x-text="((data.ai_cache.cached_products / data.ai_cache.total_products) * 100).toFixed(1) + '%'"></span>
+                                      x-text="(data.ai_cache.total_products > 0 ? (data.ai_cache.cached_products / data.ai_cache.total_products * 100).toFixed(1) : '0.0') + '%'"></span>
                             </div>
                             <div class="w-full bg-gray-200 rounded-full h-2">
                                 <div class="bg-indigo-500 h-2 rounded-full"
-                                     :style="`width: ${((data.ai_cache.cached_products / data.ai_cache.total_products) * 100).toFixed(1)}%`"></div>
+                                     :style="`width: ${data.ai_cache.total_products > 0 ? (data.ai_cache.cached_products / data.ai_cache.total_products * 100).toFixed(1) : 0}%`"></div>
                             </div>
                         </div>
                         <p class="text-xs text-gray-400 mt-2">
@@ -158,6 +158,77 @@
                 <div x-show="!data.ai_cache || data.ai_cache.total_products === 0" class="text-sm text-gray-400 py-4 text-center">
                     AI парсинг ещё не запускался.
                 </div>
+            </div>
+        </div>
+
+        <!-- Маркетплейсовые характеристики -->
+        <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Маркетплейсовые характеристики (WB)</h3>
+            <template x-if="data.marketplace_fill_rates && Object.keys(data.marketplace_fill_rates).length > 0">
+                <div>
+                    <!-- Валидация маркетплейса -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5" x-show="data.marketplace_fill_rates.validation_stats">
+                        <div class="text-center p-3 bg-green-50 rounded-lg border border-green-100">
+                            <p class="text-xl font-bold text-green-600" x-text="data.marketplace_fill_rates.validation_stats?.valid || 0"></p>
+                            <p class="text-xs text-gray-500">Валидные</p>
+                        </div>
+                        <div class="text-center p-3 bg-yellow-50 rounded-lg border border-yellow-100">
+                            <p class="text-xl font-bold text-yellow-600" x-text="data.marketplace_fill_rates.validation_stats?.partial || 0"></p>
+                            <p class="text-xs text-gray-500">Частичные</p>
+                        </div>
+                        <div class="text-center p-3 bg-red-50 rounded-lg border border-red-100">
+                            <p class="text-xl font-bold text-red-600" x-text="data.marketplace_fill_rates.validation_stats?.invalid || 0"></p>
+                            <p class="text-xs text-gray-500">Невалидные</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-50 rounded-lg border border-gray-100">
+                            <p class="text-xl font-bold text-gray-500" x-text="data.marketplace_fill_rates.validation_stats?.not_checked || 0"></p>
+                            <p class="text-xs text-gray-500">Не проверены</p>
+                        </div>
+                    </div>
+
+                    <!-- Средняя уверенность маппинга -->
+                    <div class="mb-5 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-700">Средняя уверенность маппинга категорий</span>
+                            <span class="text-lg font-bold"
+                                  :class="(data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.8 ? 'text-green-600' :
+                                          (data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.5 ? 'text-yellow-600' : 'text-red-600'"
+                                  x-text="((data.marketplace_fill_rates.category_confidence_avg || 0) * 100).toFixed(1) + '%'"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
+                            <div class="h-2 rounded-full transition-all"
+                                 :class="(data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.8 ? 'bg-green-500' :
+                                         (data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.5 ? 'bg-yellow-400' : 'bg-red-500'"
+                                 :style="`width: ${((data.marketplace_fill_rates.category_confidence_avg || 0) * 100).toFixed(1)}%`"></div>
+                        </div>
+                    </div>
+
+                    <!-- Fill rates по полям -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-3">
+                        <template x-for="field in ['wb_subject_id', 'wb_subject_name', 'characteristics', 'sizes', 'dimensions',
+                                                    'ai_seo_title', 'ai_description', 'ai_keywords', 'ai_bullets', 'marketplace_data']" :key="field">
+                            <div x-show="data.marketplace_fill_rates[field] !== undefined">
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="text-gray-600" x-text="marketplaceLabel(field)"></span>
+                                    <span class="font-medium"
+                                          :class="data.marketplace_fill_rates[field] >= 0.8 ? 'text-green-600' :
+                                                  data.marketplace_fill_rates[field] >= 0.5 ? 'text-yellow-600' : 'text-red-600'"
+                                          x-text="((data.marketplace_fill_rates[field] || 0) * 100).toFixed(1) + '%'"></span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="h-2 rounded-full transition-all"
+                                         :class="data.marketplace_fill_rates[field] >= 0.8 ? 'bg-green-500' :
+                                                 data.marketplace_fill_rates[field] >= 0.5 ? 'bg-yellow-400' : 'bg-red-500'"
+                                         :style="`width: ${((data.marketplace_fill_rates[field] || 0) * 100).toFixed(1)}%`"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+            <div x-show="!data.marketplace_fill_rates || Object.keys(data.marketplace_fill_rates).length === 0"
+                 class="text-sm text-gray-400 py-4 text-center">
+                Нет данных по маркетплейсовым характеристикам.
             </div>
         </div>
 
@@ -248,6 +319,22 @@ function parsingQuality() {
                 'colors': 'Цвета',
                 'materials': 'Материалы',
                 'photo_urls': 'Фото',
+            };
+            return labels[field] || field;
+        },
+
+        marketplaceLabel(field) {
+            const labels = {
+                'wb_subject_id': 'WB категория (ID)',
+                'wb_subject_name': 'WB категория (название)',
+                'characteristics': 'Характеристики WB',
+                'sizes': 'Размеры',
+                'dimensions': 'Габариты (д/ш/в/вес)',
+                'ai_seo_title': 'AI SEO заголовок',
+                'ai_description': 'AI описание',
+                'ai_keywords': 'AI ключевые слова',
+                'ai_bullets': 'AI преимущества',
+                'marketplace_data': 'Данные для WB',
             };
             return labels[field] || field;
         },

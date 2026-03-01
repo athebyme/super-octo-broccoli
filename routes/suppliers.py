@@ -1335,11 +1335,58 @@ def register_supplier_routes(app):
         if recent_logs and recent_logs[0].field_fill_rates:
             field_fill = recent_logs[0].field_fill_rates
 
+        # Маркетплейсовые характеристики — считаем из БД
+        marketplace_fill = {}
+        all_sp = SupplierProduct.query.filter_by(supplier_id=supplier_id).limit(5000).all()
+        if all_sp:
+            total = len(all_sp)
+            # WB категория
+            marketplace_fill['wb_subject_id'] = round(
+                sum(1 for p in all_sp if p.wb_subject_id) / total, 3)
+            marketplace_fill['wb_subject_name'] = round(
+                sum(1 for p in all_sp if p.wb_subject_name) / total, 3)
+            # Уверенность маппинга (средняя по тем, у кого есть)
+            confs = [p.category_confidence for p in all_sp if p.category_confidence and p.category_confidence > 0]
+            marketplace_fill['category_confidence_avg'] = round(
+                sum(confs) / len(confs), 3) if confs else 0.0
+            # Характеристики WB
+            marketplace_fill['characteristics'] = round(
+                sum(1 for p in all_sp if p.characteristics_json and p.characteristics_json not in ('[]', '{}', '')) / total, 3)
+            # Размеры
+            marketplace_fill['sizes'] = round(
+                sum(1 for p in all_sp if p.sizes_json and p.sizes_json not in ('[]', '{}', '')) / total, 3)
+            # Габариты
+            marketplace_fill['dimensions'] = round(
+                sum(1 for p in all_sp if p.dimensions_json and p.dimensions_json not in ('[]', '{}', '')) / total, 3)
+            # AI-контент
+            marketplace_fill['ai_seo_title'] = round(
+                sum(1 for p in all_sp if p.ai_seo_title) / total, 3)
+            marketplace_fill['ai_description'] = round(
+                sum(1 for p in all_sp if p.ai_description) / total, 3)
+            marketplace_fill['ai_keywords'] = round(
+                sum(1 for p in all_sp if p.ai_keywords_json and p.ai_keywords_json not in ('[]', '')) / total, 3)
+            marketplace_fill['ai_bullets'] = round(
+                sum(1 for p in all_sp if p.ai_bullets_json and p.ai_bullets_json not in ('[]', '')) / total, 3)
+            # Маркетплейс-специфичные поля
+            marketplace_fill['marketplace_data'] = round(
+                sum(1 for p in all_sp if p.ai_marketplace_json and p.ai_marketplace_json not in ('{}', '')) / total, 3)
+            # Статус валидации
+            valid_count = sum(1 for p in all_sp if p.marketplace_validation_status == 'valid')
+            partial_count = sum(1 for p in all_sp if p.marketplace_validation_status == 'partial')
+            invalid_count = sum(1 for p in all_sp if p.marketplace_validation_status == 'invalid')
+            marketplace_fill['validation_stats'] = {
+                'valid': valid_count,
+                'partial': partial_count,
+                'invalid': invalid_count,
+                'not_checked': total - valid_count - partial_count - invalid_count,
+            }
+
         return jsonify({
             'supplier': {'id': supplier.id, 'name': supplier.name, 'code': supplier.code},
             'quality_distribution': quality_dist,
             'ai_cache': cache_stats,
             'field_fill_rates': field_fill,
+            'marketplace_fill_rates': marketplace_fill,
             'recent_logs': logs_data,
             'total_products': supplier.total_products,
         })
