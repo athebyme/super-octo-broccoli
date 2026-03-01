@@ -1272,6 +1272,105 @@ def register_supplier_routes(app):
             return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
         return redirect(url_for('supplier_catalog'))
 
+    # -------------------------------------------------------------------
+    # API: Качество парсинга
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/parsing-quality')
+    @login_required
+    @admin_required
+    def admin_supplier_parsing_quality(supplier_id):
+        """Дашборд качества парсинга для поставщика (JSON API)."""
+        from models import ParsingLog
+        from services.parsing_confidence import ParsingConfidenceScorer
+        from services.ai_parsing_cache import AIParsingCache
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        # Распределение по качеству
+        quality_dist = ParsingConfidenceScorer.get_quality_distribution(supplier_id)
+
+        # Статистика AI-кэша
+        cache_stats = AIParsingCache.get_cache_stats(supplier_id)
+
+        # Последние логи парсинга
+        recent_logs = ParsingLog.query.filter_by(
+            supplier_id=supplier_id
+        ).order_by(ParsingLog.created_at.desc()).limit(10).all()
+
+        logs_data = []
+        for log in recent_logs:
+            logs_data.append({
+                'event_type': log.event_type,
+                'created_at': log.created_at.isoformat() if log.created_at else None,
+                'total_products': log.total_products,
+                'processed_successfully': log.processed_successfully,
+                'errors_count': log.errors_count,
+                'duration_seconds': log.duration_seconds,
+                'field_fill_rates': log.field_fill_rates,
+                'ai_cache_hits': log.ai_cache_hits,
+                'ai_cache_misses': log.ai_cache_misses,
+            })
+
+        # Средняя заполненность по полям (из последнего лога)
+        field_fill = {}
+        if recent_logs and recent_logs[0].field_fill_rates:
+            field_fill = recent_logs[0].field_fill_rates
+
+        return jsonify({
+            'supplier': {'id': supplier.id, 'name': supplier.name, 'code': supplier.code},
+            'quality_distribution': quality_dist,
+            'ai_cache': cache_stats,
+            'field_fill_rates': field_fill,
+            'recent_logs': logs_data,
+            'total_products': supplier.total_products,
+        })
+
+    # -------------------------------------------------------------------
+    # API: Предпросмотр CSV перед синхронизацией
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/csv-preview', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_csv_preview(supplier_id):
+        """Предпросмотр CSV файла перед синхронизацией."""
+        from services.csv_pre_validator import CSVPreValidator
+        from services.supplier_service import SupplierCSVParser
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        parser = SupplierCSVParser(supplier)
+
+        # Пробуем скачать raw для предвалидации
+        raw_bytes = parser.fetch_csv_raw()
+        if not raw_bytes:
+            return jsonify({'error': 'Failed to download CSV'}), 400
+
+        pre_result = CSVPreValidator.validate_raw(
+            raw_bytes,
+            expected_delimiter=supplier.csv_delimiter,
+            expected_encoding=supplier.csv_encoding,
+            column_mapping=supplier.csv_column_mapping,
+        )
+
+        return jsonify({
+            'is_valid': pre_result.is_valid,
+            'encoding_detected': pre_result.encoding_detected,
+            'encoding_confidence': pre_result.encoding_confidence,
+            'delimiter_detected': pre_result.delimiter_detected,
+            'total_rows': pre_result.total_rows,
+            'columns_count': pre_result.columns_count,
+            'empty_rows': pre_result.empty_rows,
+            'duplicate_ids': pre_result.duplicate_ids,
+            'sample_products': pre_result.sample_products,
+            'warnings': pre_result.warnings,
+            'errors': pre_result.errors,
+            'field_fill_rates': pre_result.field_fill_rates,
+        })
+
 
 # ============================================================================
 # HELPERS
@@ -1315,6 +1414,15 @@ def _extract_supplier_form_data(form) -> dict:
     data['is_active'] = form.get('is_active') == 'on'
     data['resize_images'] = form.get('resize_images') == 'on'
     data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
+    data['csv_has_header'] = form.get('csv_has_header') == 'on'
+
+    # JSON поля
+    csv_column_mapping = form.get('csv_column_mapping', '').strip()
+    if csv_column_mapping:
+        try:
+            data['csv_column_mapping'] = json.loads(csv_column_mapping)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     return data
 

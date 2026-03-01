@@ -120,7 +120,13 @@ class BulkActionResult:
 class SupplierCSVParser:
     """
     Парсер CSV для различных поставщиков.
-    Сейчас поддерживает формат sexoptovik, расширяемо для других.
+
+    Поддерживает:
+    - Конфигурируемый маппинг колонок (через csv_column_mapping в Supplier)
+    - Legacy-формат sexoptovik (hardcoded, для обратной совместимости)
+    - Generic парсинг (заголовки в первой строке)
+    - Автоматическую нормализацию данных через DataNormalizer
+    - Предвалидацию CSV через CSVPreValidator
     """
 
     def __init__(self, supplier: Supplier):
@@ -142,15 +148,198 @@ class SupplierCSVParser:
             logger.error(f"Ошибка загрузки CSV для {self.supplier.code}: {e}")
             return None
 
+    def fetch_csv_raw(self) -> Optional[bytes]:
+        """Скачать CSV как raw bytes (для предвалидации с автодетекцией кодировки)."""
+        if not self.supplier.csv_source_url:
+            logger.error(f"Supplier {self.supplier.code}: CSV URL не задан")
+            return None
+        try:
+            resp = requests.get(self.supplier.csv_source_url, timeout=60)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as e:
+            logger.error(f"Ошибка загрузки CSV для {self.supplier.code}: {e}")
+            return None
+
     def parse(self, csv_content: str) -> List[Dict]:
-        """Парсит CSV и возвращает список товаров"""
+        """
+        Парсит CSV и возвращает список товаров.
+
+        Приоритет выбора стратегии:
+        1. Конфигурируемый маппинг (csv_column_mapping)
+        2. Legacy-формат по коду поставщика (sexoptovik)
+        3. Generic парсинг (заголовки в первой строке)
+        """
+        # Конфигурируемый маппинг — универсальный парсинг
+        if self.supplier.csv_column_mapping:
+            return self._parse_with_mapping(csv_content)
+
+        # Legacy — hardcoded форматы
         if self.supplier.code == 'sexoptovik':
             return self._parse_sexoptovik(csv_content)
-        # Для других поставщиков — generic парсинг
+
+        # Generic — DictReader
         return self._parse_generic(csv_content)
 
+    def parse_and_normalize(self, csv_content: str) -> List[Dict]:
+        """
+        Парсит CSV и автоматически нормализует данные.
+        Рекомендуемый метод для новых интеграций.
+        """
+        from services.data_normalizer import DataNormalizer
+
+        products = self.parse(csv_content)
+        return DataNormalizer.normalize_product_list(products)
+
+    # ------------------------------------------------------------------
+    # Конфигурируемый маппинг колонок
+    # ------------------------------------------------------------------
+
+    def _parse_with_mapping(self, csv_content: str) -> List[Dict]:
+        """
+        Парсинг CSV с конфигурируемым маппингом колонок.
+
+        csv_column_mapping формат:
+        {
+            "external_id": {"column": 0, "type": "string"},
+            "vendor_code": {"column": 1, "type": "string"},
+            "title": {"column": 2, "type": "string"},
+            "categories": {"column": 3, "type": "list", "separator": "#"},
+            "brand": {"column": 4, "type": "string"},
+            "country": {"column": 5, "type": "string"},
+            "gender": {"column": 8, "type": "string"},
+            "colors": {"column": 9, "type": "list", "separator": ","},
+            "sizes_raw": {"column": 10, "type": "string"},
+            "photo_codes": {"column": 13, "type": "list", "separator": ","},
+            "barcodes": {"column": 14, "type": "list", "separator": "#"},
+            "materials": {"column": 15, "type": "list", "separator": ","},
+            "description": {"column": 16, "type": "string"},
+            "price": {"column": 7, "type": "number"}
+        }
+        """
+        mapping = self.supplier.csv_column_mapping
+        if not mapping or not isinstance(mapping, dict):
+            logger.error(f"Invalid csv_column_mapping for {self.supplier.code}")
+            return self._parse_generic(csv_content)
+
+        products = []
+        reader = csv.reader(StringIO(csv_content), delimiter=self.delimiter, quotechar='"')
+
+        # Определяем минимальное количество колонок
+        max_col = max(
+            (m.get('column', 0) for m in mapping.values() if isinstance(m, dict)),
+            default=0
+        )
+
+        has_header = getattr(self.supplier, 'csv_has_header', False)
+
+        for row_num, row in enumerate(reader, 1):
+            try:
+                # Пропускаем заголовок если указано
+                if has_header and row_num == 1:
+                    continue
+
+                if len(row) <= max_col:
+                    continue
+
+                product = self._extract_fields_by_mapping(row, mapping)
+                if not product:
+                    continue
+
+                # Фото — специальная обработка
+                if 'photo_codes' in mapping and product.get('_photo_codes'):
+                    product['photo_urls'] = self._build_photo_urls(
+                        product.get('external_id', ''),
+                        product['_photo_codes']
+                    )
+                    del product['_photo_codes']
+
+                products.append(product)
+
+            except Exception as e:
+                logger.error(f"Mapping-парсинг строка {row_num}: {e}")
+                continue
+
+        logger.info(
+            f"Mapping-парсинг: {len(products)} товаров из CSV ({self.supplier.code})"
+        )
+        return products
+
+    def _extract_fields_by_mapping(self, row: list, mapping: dict) -> Optional[Dict]:
+        """Извлечь поля из строки CSV по маппингу."""
+        product = {}
+
+        for field_name, config in mapping.items():
+            if not isinstance(config, dict):
+                continue
+
+            col_idx = config.get('column', 0)
+            field_type = config.get('type', 'string')
+            separator = config.get('separator', ',')
+
+            if col_idx >= len(row):
+                continue
+
+            raw_value = row[col_idx].strip()
+
+            if field_type == 'list':
+                values = [v.strip() for v in raw_value.split(separator) if v.strip()]
+                if field_name == 'categories':
+                    product['all_categories'] = values
+                    product['category'] = values[0] if values else ''
+                elif field_name == 'photo_codes':
+                    product['_photo_codes'] = values
+                else:
+                    product[field_name] = values
+            elif field_type == 'number':
+                try:
+                    product[field_name] = float(raw_value.replace(',', '.').replace(' ', ''))
+                except (ValueError, TypeError):
+                    product[field_name] = None
+            else:
+                product[field_name] = raw_value
+
+        # Валидация минимальных полей
+        if not product.get('external_id') or not product.get('title'):
+            return None
+
+        # Заполняем дефолтные значения для отсутствующих полей
+        defaults = {
+            'vendor_code': '', 'category': '', 'all_categories': [],
+            'brand': '', 'country': '', 'gender': '',
+            'colors': [], 'sizes_raw': '', 'photo_urls': [],
+            'barcodes': [], 'materials': [], 'description': '',
+        }
+        for key, default in defaults.items():
+            if key not in product:
+                product[key] = default
+
+        return product
+
+    def _build_photo_urls(self, external_id: str, photo_codes: List[str]) -> List[Dict]:
+        """Формирует URL фото (универсальная версия для конфигурируемого маппинга)."""
+        if not photo_codes or not external_id:
+            return []
+
+        # Для sexoptovik формата — сохраняем совместимость
+        if self.supplier.code == 'sexoptovik':
+            return self._parse_sexoptovik_photos(external_id, ','.join(photo_codes))
+
+        # Для других поставщиков — фото-коды могут быть URL
+        photos = []
+        for code in photo_codes:
+            if code.startswith('http'):
+                photos.append({'original': code})
+            else:
+                photos.append({'code': code})
+        return photos
+
+    # ------------------------------------------------------------------
+    # Legacy: sexoptovik
+    # ------------------------------------------------------------------
+
     def _parse_sexoptovik(self, csv_content: str) -> List[Dict]:
-        """Парсинг формата sexoptovik"""
+        """Парсинг формата sexoptovik (legacy, hardcoded)"""
         products = []
         reader = csv.reader(StringIO(csv_content), delimiter=self.delimiter, quotechar='"')
 
@@ -241,6 +430,10 @@ class SupplierCSVParser:
             })
 
         return photos
+
+    # ------------------------------------------------------------------
+    # Generic
+    # ------------------------------------------------------------------
 
     def _parse_generic(self, csv_content: str) -> List[Dict]:
         """Generic парсинг CSV (заголовки в первой строке)"""
@@ -366,7 +559,8 @@ class SupplierService:
         # Обычные поля
         simple_fields = [
             'name', 'description', 'website', 'csv_source_url', 'csv_delimiter',
-            'csv_encoding', 'api_endpoint', 'auth_login', 'ai_enabled', 'ai_provider',
+            'csv_encoding', 'csv_column_mapping', 'csv_has_header',
+            'api_endpoint', 'auth_login', 'ai_enabled', 'ai_provider',
             'ai_api_base_url', 'ai_model', 'ai_temperature', 'ai_max_tokens',
             'ai_timeout', 'ai_client_id', 'ai_client_secret',
             'resize_images', 'image_target_size', 'image_background_color',
@@ -431,7 +625,15 @@ class SupplierService:
     def sync_from_csv(supplier_id: int, price_data: Dict[str, float] = None) -> SyncResult:
         """
         Синхронизация каталога поставщика из CSV.
-        Скачивает CSV, парсит, создаёт/обновляет SupplierProduct.
+
+        Pipeline:
+        1. Скачивание CSV
+        2. Предвалидация (CSVPreValidator)
+        3. Парсинг (SupplierCSVParser)
+        4. Нормализация данных (DataNormalizer)
+        5. Создание/обновление SupplierProduct
+        6. Расчёт confidence score
+        7. Логирование метрик (ParsingLog)
         """
         result = SyncResult()
         start_time = time.time()
@@ -457,7 +659,30 @@ class SupplierService:
                 db.session.commit()
                 return result
 
-            parsed_products = parser.parse(csv_content)
+            # --- Предвалидация CSV ---
+            try:
+                from services.csv_pre_validator import CSVPreValidator
+                pre_result = CSVPreValidator.validate(
+                    csv_content,
+                    expected_delimiter=supplier.csv_delimiter,
+                    expected_encoding=supplier.csv_encoding,
+                    column_mapping=supplier.csv_column_mapping,
+                )
+                if not pre_result.is_valid:
+                    logger.error(
+                        f"CSV pre-validation failed for {supplier.code}: "
+                        f"{pre_result.errors}"
+                    )
+                    # Не прерываем — пытаемся парсить, но логируем
+                if pre_result.warnings:
+                    for w in pre_result.warnings:
+                        logger.warning(f"CSV pre-validation warning: {w}")
+                        result.error_messages.append(f"[pre-validation] {w}")
+            except Exception as e:
+                logger.warning(f"CSV pre-validation skipped: {e}")
+
+            # --- Парсинг + нормализация ---
+            parsed_products = parser.parse_and_normalize(csv_content)
             result.total_in_csv = len(parsed_products)
 
             if not parsed_products:
@@ -517,6 +742,42 @@ class SupplierService:
                 f"+{result.added} / ~{result.updated} / err={result.errors} "
                 f"({result.duration_seconds:.1f}s)"
             )
+
+            # --- Логирование метрик парсинга ---
+            try:
+                from models import ParsingLog
+                from services.parsing_confidence import ParsingConfidenceScorer
+
+                # Подсчёт заполненности полей
+                all_sp = SupplierProduct.query.filter_by(supplier_id=supplier_id).limit(500).all()
+                field_fill = {}
+                if all_sp:
+                    for field in ('title', 'brand', 'category', 'vendor_code', 'country',
+                                  'gender', 'barcode', 'description'):
+                        filled = sum(1 for p in all_sp if getattr(p, field, None))
+                        field_fill[field] = round(filled / len(all_sp), 3)
+                    # JSON поля
+                    for field in ('colors_json', 'materials_json', 'photo_urls_json'):
+                        filled = sum(
+                            1 for p in all_sp
+                            if getattr(p, field, None) and getattr(p, field) != '[]'
+                        )
+                        field_fill[field.replace('_json', '')] = round(filled / len(all_sp), 3)
+
+                parsing_log = ParsingLog(
+                    supplier_id=supplier_id,
+                    event_type='sync',
+                    total_products=result.total_in_csv,
+                    processed_successfully=result.added + result.updated,
+                    errors_count=result.errors,
+                    duration_seconds=result.duration_seconds,
+                    field_fill_rates=field_fill,
+                    errors_json=result.error_messages[:20] if result.error_messages else None,
+                )
+                db.session.add(parsing_log)
+                db.session.commit()
+            except Exception as e:
+                logger.debug(f"Failed to save parsing log: {e}")
 
             # Автоматическая синхронизация цен/остатков после каталога
             if supplier.price_file_url:
@@ -2468,21 +2729,24 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     if not characteristics:
         return
         
-    # Запускаем таску
+    # Запускаем таску с двухпроходным парсингом и кэшированием
     task = MarketplaceAwareParsingTask(
-        client=ai_svc.client, 
+        client=ai_svc.client,
         characteristics=characteristics,
-        custom_instruction=ai_svc.config.custom_parsing_instruction
+        custom_instruction=ai_svc.config.custom_parsing_instruction,
+        category_id=subject_id,
     )
-    
+
     product_info = {
         'title': product.title or product.ai_seo_title,
         'description': product.description or product.ai_description,
         'brand': product.brand
     }
-    
-    success, result, error = task.execute(product_info=product_info, original_data=parsed_data)
-    
+
+    success, result, error = task.execute_two_pass(
+        product=product, product_info=product_info, original_data=parsed_data
+    )
+
     if success and result:
         # Убираем метаданные из результата перед сохранением
         clean_fields = {k: v for k, v in result.items() if k != '_meta'}
@@ -2720,6 +2984,14 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
     # Контент хеш для отслеживания изменений
     content_str = f"{sp.title}|{sp.brand}|{sp.category}|{sp.supplier_price}"
     sp.content_hash = hashlib.md5(content_str.encode()).hexdigest()
+
+    # Расчёт confidence score
+    try:
+        from services.parsing_confidence import ParsingConfidenceScorer
+        sp.parsing_confidence = ParsingConfidenceScorer.score_product(data)
+        sp.normalization_applied = True
+    except Exception:
+        pass
 
 
 def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedProduct:
