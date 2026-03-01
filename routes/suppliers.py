@@ -798,6 +798,100 @@ def register_supplier_routes(app):
         ok = SupplierService.cancel_ai_parse_job(job_id)
         return jsonify({'cancelled': ok})
 
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-by-filter', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parse_by_filter(supplier_id):
+        """Массовый AI парсинг: собрать все товары по фильтрам и запустить job."""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Поставщик не найден'}), 404
+
+        # Фильтры из формы
+        search = request.form.get('search', '').strip()
+        stock_status = request.form.get('stock_status', '').strip()
+        parse_status = request.form.get('parse_status', '').strip()
+        fill_max = request.form.get('fill_max', '').strip()
+        limit = request.form.get('limit', 0, type=int)  # 0 = без лимита
+        max_workers = request.form.get('max_workers', 4, type=int)
+        max_workers = max(1, min(max_workers, 8))
+        model_override = request.form.get('model_override', '').strip() or None
+
+        # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)
+        query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+
+        if search:
+            search_term = f'%{search}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.title.ilike(search_term),
+                    SupplierProduct.external_id.ilike(search_term),
+                    SupplierProduct.brand.ilike(search_term),
+                )
+            )
+        if stock_status == 'in_stock':
+            query = query.filter(SupplierProduct.supplier_status == 'in_stock')
+        elif stock_status == 'out_of_stock':
+            query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
+
+        if parse_status == 'not_parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.is_(None))
+        elif parse_status == 'parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.isnot(None))
+        elif parse_status == 'fill_below' and fill_max:
+            try:
+                fill_threshold = float(fill_max)
+                query = query.filter(
+                    db.or_(
+                        SupplierProduct.marketplace_fill_pct.is_(None),
+                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                    )
+                )
+            except (ValueError, TypeError):
+                pass
+
+        # Собираем ID (с опциональным лимитом)
+        q = query.with_entities(SupplierProduct.id).order_by(SupplierProduct.title)
+        if limit > 0:
+            q = q.limit(limit)
+        product_ids = [row[0] for row in q.all()]
+
+        if not product_ids:
+            return jsonify({'error': 'По фильтрам не найдено товаров'}), 400
+
+        # Ограничение — не больше 10000 за раз
+        if len(product_ids) > 10000:
+            product_ids = product_ids[:10000]
+
+        result = SupplierService.start_ai_parse_job(
+            supplier_id, product_ids,
+            admin_user_id=current_user.id,
+            max_workers=max_workers,
+            model_override=model_override,
+        )
+
+        if result.get('error'):
+            return jsonify({'error': result['error']}), 400
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='start_ai_parse_by_filter',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'job_id': result['job_id'],
+                'count': result['total'],
+                'filters': {
+                    'search': search, 'stock_status': stock_status,
+                    'parse_status': parse_status, 'fill_max': fill_max,
+                    'limit': limit,
+                },
+            },
+            request=request
+        )
+
+        return jsonify(result)
+
     @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/refresh-data')
     @login_required
     @admin_required
