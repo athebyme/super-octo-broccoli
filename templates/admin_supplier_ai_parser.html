@@ -462,6 +462,7 @@
         else if (j.status === 'failed') statusIcon = '<svg class="inline w-4 h-4 text-red-500 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
 
         const typeLabel = j.job_type === 'sync_descriptions' ? 'Синхронизация описаний' : j.total === 1 ? 'AI Парсинг товара' : `AI Парсинг (${j.total} товаров)`;
+        const modelBadge = j.model_used ? `<span class="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">${j.model_used}</span>` : '';
 
         let details = '';
         if (j.current_product && j.status === 'running') {
@@ -485,7 +486,7 @@
         <div class="flex justify-between items-start mb-2">
             <div class="flex items-center">
                 ${statusIcon}
-                <span class="font-semibold text-sm text-gray-900">${typeLabel}</span>
+                <span class="font-semibold text-sm text-gray-900">${typeLabel}</span>${modelBadge}
             </div>
             <div class="flex items-center gap-3">
                 <span class="text-xs text-gray-500">${j.succeeded} ok / ${j.failed} fail / ${j.processed}/${j.total}</span>

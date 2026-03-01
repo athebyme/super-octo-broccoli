@@ -2565,6 +2565,7 @@ class AIParseJob(db.Model):
     succeeded      = db.Column(db.Integer, default=0)
     failed         = db.Column(db.Integer, default=0)
     current_product_title = db.Column(db.String(200))             # Название текущего обрабатываемого товара
+    model_used     = db.Column(db.String(100))                    # Название AI модели (gpt-4o, claude-sonnet и т.д.)
     results        = db.Column(db.Text)                           # JSON [{product_id, title, status, fill_pct, error}]
     error_message  = db.Column(db.Text)                           # Общая ошибка если failed
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)

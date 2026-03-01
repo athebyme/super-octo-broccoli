@@ -2063,12 +2063,19 @@ class SupplierService:
                 return
 
             # Проверяем что AI сервис создаётся
-            test_svc = SupplierService._get_ai_service(supplier)
+            test_svc = SupplierService._get_ai_service(supplier, model_override=model_override)
             if not test_svc:
                 job.status = 'failed'
                 job.error_message = 'Не удалось создать AI сервис'
                 db.session.commit()
                 return
+
+            # Сохраняем название модели в задаче
+            try:
+                job.model_used = test_svc.config.model
+                db.session.commit()
+            except Exception:
+                pass  # колонка может отсутствовать до миграции
 
             # Для одного товара — без пула
             if len(product_ids) == 1:
@@ -2440,6 +2447,7 @@ class SupplierService:
             'succeeded': job.succeeded,
             'failed': job.failed,
             'current_product': job.current_product_title,
+            'model_used': getattr(job, 'model_used', None),
             'error_message': job.error_message,
             'progress_pct': round(job.processed / job.total * 100) if job.total else 0,
             'results': results[-50:],
