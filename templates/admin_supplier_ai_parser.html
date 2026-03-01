@@ -71,25 +71,90 @@
 
     <!-- История задач (свёрнутая) -->
     {% if recent_jobs %}
-    <details class="mb-6">
+    <details class="mb-6" open>
         <summary class="text-sm text-gray-500 cursor-pointer hover:text-indigo-600">
             История задач (последние {{ recent_jobs|length }})
         </summary>
         <div class="mt-2 space-y-2">
             {% for j in recent_jobs %}
             {% if j.status in ('done', 'failed', 'cancelled') %}
-            <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex justify-between items-center text-sm">
-                <div>
-                    <span
-                        class="font-medium {% if j.status == 'done' %}text-green-700{% elif j.status == 'failed' %}text-red-600{% else %}text-gray-500{% endif %}">
-                        {{ j.status|upper }}
-                    </span>
-                    <span class="text-gray-500 ml-2">{{ j.job_type }}</span>
-                    <span class="text-gray-400 ml-2">{{ j.succeeded }} ok / {{ j.failed }} fail / {{ j.total }}
-                        total</span>
+            <details class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <summary class="px-4 py-3 flex justify-between items-center text-sm cursor-pointer hover:bg-gray-50">
+                    <div class="flex items-center gap-3">
+                        <span
+                            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold
+                            {% if j.status == 'done' and j.failed == 0 %}bg-green-100 text-green-700
+                            {% elif j.status == 'done' %}bg-yellow-100 text-yellow-700
+                            {% elif j.status == 'failed' %}bg-red-100 text-red-700
+                            {% else %}bg-gray-100 text-gray-600{% endif %}">
+                            {{ j.status|upper }}
+                        </span>
+                        <span class="text-gray-500">{{ j.job_type }}</span>
+                        <span class="text-green-600 font-medium">{{ j.succeeded }} ok</span>
+                        {% if j.failed > 0 %}
+                        <span class="text-red-500 font-medium">{{ j.failed }} fail</span>
+                        {% endif %}
+                        <span class="text-gray-400">/ {{ j.total }} total</span>
+                    </div>
+                    <span class="text-xs text-gray-400">{{ j.created_at[:16] if j.created_at else '' }}</span>
+                </summary>
+                {% if j.results %}
+                <div class="border-t border-gray-100 px-4 py-3 max-h-80 overflow-y-auto">
+                    {% if j.error_message %}
+                    <div class="mb-3 p-2 bg-red-50 rounded text-xs text-red-700 border border-red-200">
+                        {{ j.error_message }}
+                    </div>
+                    {% endif %}
+                    <table class="w-full text-xs">
+                        <thead>
+                            <tr class="text-left text-gray-500 border-b border-gray-100">
+                                <th class="pb-1.5 pr-3 font-medium">Товар</th>
+                                <th class="pb-1.5 pr-3 font-medium w-20">Статус</th>
+                                <th class="pb-1.5 font-medium">Детали</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-50">
+                            {% for r in j.results %}
+                            <tr class="{% if r.status == 'error' %}bg-red-50/50{% endif %}">
+                                <td class="py-1.5 pr-3">
+                                    {% if r.product_id %}
+                                    <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=r.product_id) }}"
+                                        class="text-indigo-600 hover:underline">
+                                        {{ r.title or ('ID ' ~ r.product_id) }}
+                                    </a>
+                                    {% else %}
+                                    {{ r.title or '—' }}
+                                    {% endif %}
+                                </td>
+                                <td class="py-1.5 pr-3">
+                                    {% if r.status == 'success' %}
+                                    <span class="text-green-600 font-medium">OK {{ '%.0f'|format(r.fill_pct|default(0)) }}%</span>
+                                    {% elif r.status == 'error' %}
+                                    <span class="text-red-600 font-medium">FAIL</span>
+                                    {% else %}
+                                    <span class="text-gray-400">{{ r.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="py-1.5 text-gray-500 max-w-md">
+                                    {% if r.status == 'success' %}
+                                    <span class="text-green-600">Заполнено {{ '%.0f'|format(r.fill_pct|default(0)) }}% характеристик</span>
+                                    {% elif r.error %}
+                                    <span class="text-red-600">{{ r.error[:150] }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
-                <span class="text-xs text-gray-400">{{ j.created_at[:16] if j.created_at else '' }}</span>
-            </div>
+                {% elif j.error_message %}
+                <div class="border-t border-gray-100 px-4 py-3">
+                    <div class="p-2 bg-red-50 rounded text-xs text-red-700 border border-red-200">
+                        {{ j.error_message }}
+                    </div>
+                </div>
+                {% endif %}
+            </details>
             {% endif %}
             {% endfor %}
         </div>
