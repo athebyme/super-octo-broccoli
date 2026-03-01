@@ -968,6 +968,11 @@ def register_supplier_routes(app):
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         stock_status = request.args.get('stock_status', '').strip()
+        parse_status = request.args.get('parse_status', '').strip()
+        fill_max = request.args.get('fill_max', '', type=str).strip()
+        per_page = request.args.get('per_page', 50, type=int)
+        per_page = max(10, min(per_page, 500))
+        auto_select = request.args.get('auto_select', '').strip()
 
         query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         if search:
@@ -984,8 +989,26 @@ def register_supplier_routes(app):
         elif stock_status == 'out_of_stock':
             query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
 
+        # Фильтр по статусу AI парсинга
+        if parse_status == 'not_parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.is_(None))
+        elif parse_status == 'parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.isnot(None))
+        elif parse_status == 'fill_below' and fill_max:
+            try:
+                fill_threshold = float(fill_max)
+                # Товары, которые не спарсены ИЛИ у которых fill_pct < threshold
+                query = query.filter(
+                    db.or_(
+                        SupplierProduct.marketplace_fill_pct.is_(None),
+                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                    )
+                )
+            except (ValueError, TypeError):
+                pass
+
         pagination = query.order_by(SupplierProduct.title).paginate(
-            page=page, per_page=50, error_out=False
+            page=page, per_page=per_page, error_out=False
         )
 
         stats = SupplierService.get_product_stats(supplier_id)
@@ -1006,6 +1029,10 @@ def register_supplier_routes(app):
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                stock_status=stock_status,
+                               parse_status=parse_status,
+                               fill_max=fill_max,
+                               per_page=per_page,
+                               auto_select=auto_select,
                                parsed_count=parsed_count,
                                active_jobs=active_jobs,
                                recent_jobs=recent_jobs,
