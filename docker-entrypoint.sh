@@ -33,6 +33,9 @@ ensure_storage_roots()
 with app.app_context():
     # create_all() безопасно - создает только отсутствующие таблицы
     db.create_all()
+    # Автоматическая миграция новых колонок
+    from seller_platform import _run_startup_migrations
+    _run_startup_migrations()
     print("✅ Базовая структура БД создана")
 
     # Включаем WAL mode для лучшей поддержки конкурентного доступа
@@ -89,6 +92,8 @@ python migrations/migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch
 python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
 python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
 python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
+python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
+python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
 else
