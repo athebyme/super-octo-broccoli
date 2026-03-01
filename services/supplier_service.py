@@ -2458,16 +2458,27 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     success, result, error = task.execute(product_info=product_info, original_data=parsed_data)
     
     if success and result:
-        # Сохраняем в marketplace_fields_json
-        product.marketplace_fields_json = json.dumps(result, ensure_ascii=False)
+        # Убираем метаданные из результата перед сохранением
+        clean_fields = {k: v for k, v in result.items() if k != '_meta'}
 
-        # Валидируем
+        # Сохраняем плоские поля для формы (массивы → строки через ";")
+        flat_fields = {}
+        for k, v in clean_fields.items():
+            if isinstance(v, list):
+                flat_fields[k] = '; '.join(str(x) for x in v) if v else ''
+            elif v is not None:
+                flat_fields[k] = v
+        product.marketplace_fields_json = json.dumps(flat_fields, ensure_ascii=False)
+
+        # Мержим AI-specific поля в ai_marketplace_json для валидатора
+        existing_mp = product.get_ai_marketplace_data()
+        existing_mp.update(clean_fields)
+        product.ai_marketplace_json = json.dumps(existing_mp, ensure_ascii=False)
+
+        # Валидируем (обновит marketplace_fields_json, validation_status, fill_pct)
         validation_result = MarketplaceValidator.validate_product_for_marketplace(product, wb_marketplace.id)
 
-        product.marketplace_validation_status = 'valid' if validation_result.get('valid') else 'invalid'
-        product.marketplace_fill_pct = validation_result.get('fill_pct', 0)
-
-        logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result.get('valid')}")
+        logger.info(f"Marketplace aware parse success for {product.id}, status: {validation_result.get('validation_status')}")
     else:
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
 

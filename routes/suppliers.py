@@ -396,10 +396,13 @@ def register_supplier_routes(app):
             except Exception:
                 pass
 
+        completeness = _calc_product_completeness(product)
+
         return render_template('admin_supplier_product_detail.html',
                                supplier=supplier, product=product,
                                import_count=import_count,
-                               price_calc=price_calc)
+                               price_calc=price_calc,
+                               completeness=completeness)
 
     # -------------------------------------------------------------------
     # Массовые действия с товарами
@@ -794,6 +797,44 @@ def register_supplier_routes(app):
         """API: отмена фоновой задачи AI парсинга"""
         ok = SupplierService.cancel_ai_parse_job(job_id)
         return jsonify({'cancelled': ok})
+
+    @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/refresh-data')
+    @login_required
+    @admin_required
+    def admin_supplier_product_refresh_data(supplier_id, product_id):
+        """API: свежие данные товара для динамического обновления карточки"""
+        product = SupplierService.get_product(product_id)
+        if not product or product.supplier_id != supplier_id:
+            return jsonify({'error': 'Товар не найден'}), 404
+
+        parsed = product.get_ai_parsed_data()
+        pm = parsed.get('parsing_meta', {})
+        mp_fields = product.get_marketplace_fields()
+
+        # Собираем статистику заполненности
+        completeness = _calc_product_completeness(product)
+
+        return jsonify({
+            'title': product.title or '',
+            'brand': product.brand or '',
+            'description': product.description or '',
+            'category': product.category or '',
+            'wb_category_name': product.wb_category_name or '',
+            'wb_subject_id': product.wb_subject_id or '',
+            'gender': product.gender or '',
+            'country': product.country or '',
+            'ai_seo_title': product.ai_seo_title or '',
+            'ai_description': product.ai_description or '',
+            'ai_keywords_json': product.ai_keywords_json or '',
+            'ai_parsed_data_json': product.ai_parsed_data_json or '',
+            'ai_model_used': product.ai_model_used or '',
+            'ai_parsed_at': product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') if product.ai_parsed_at else '',
+            'parsing_meta': pm,
+            'marketplace_fields': mp_fields,
+            'marketplace_validation_status': product.marketplace_validation_status or '',
+            'marketplace_fill_pct': product.marketplace_fill_pct or 0,
+            'completeness': completeness,
+        })
 
     @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/raw-json')
     @login_required
@@ -1249,6 +1290,118 @@ def _extract_supplier_form_data(form) -> dict:
     data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
 
     return data
+
+
+def _calc_product_completeness(product) -> dict:
+    """Расчёт заполненности полей товара по группам"""
+    import json
+
+    def _has(val):
+        if val is None:
+            return False
+        if isinstance(val, str):
+            val = val.strip()
+            if not val or val in ('[]', '{}', '""'):
+                return False
+            # JSON arrays/objects — check for content
+            if val.startswith('[') or val.startswith('{'):
+                try:
+                    parsed = json.loads(val)
+                    return bool(parsed)
+                except Exception:
+                    pass
+            return True
+        if isinstance(val, (int, float)):
+            return True
+        return bool(val)
+
+    groups = {
+        'basic': {
+            'label': 'Основные',
+            'fields': {
+                'Название': _has(product.title),
+                'Описание': _has(product.description),
+                'Бренд': _has(product.brand),
+                'Категория': _has(product.category),
+                'Артикул': _has(product.vendor_code),
+                'Штрихкод': _has(product.barcode),
+            }
+        },
+        'price': {
+            'label': 'Цены и остатки',
+            'fields': {
+                'Цена поставщика': _has(product.supplier_price),
+                'Остаток': _has(product.supplier_quantity),
+                'РРЦ': _has(product.recommended_retail_price),
+                'Статус наличия': _has(product.supplier_status),
+            }
+        },
+        'characteristics': {
+            'label': 'Характеристики',
+            'fields': {
+                'Пол': _has(product.gender),
+                'Страна': _has(product.country),
+                'Сезон': _has(product.season),
+                'Возрастная группа': _has(product.age_group),
+                'Цвета': _has(product.colors_json),
+                'Материалы': _has(product.materials_json),
+                'Размеры': _has(product.sizes_json),
+                'Габариты': _has(product.dimensions_json),
+                'Характеристики': _has(product.characteristics_json),
+            }
+        },
+        'ai': {
+            'label': 'AI данные',
+            'fields': {
+                'SEO заголовок': _has(product.ai_seo_title),
+                'AI описание': _has(product.ai_description),
+                'Ключевые слова': _has(product.ai_keywords_json),
+                'Буллеты': _has(product.ai_bullets_json),
+                'AI парсинг': _has(product.ai_parsed_data_json),
+            }
+        },
+        'marketplace': {
+            'label': 'Маркетплейс',
+            'fields': {
+                'Категория WB': _has(product.wb_category_name),
+                'WB Subject ID': _has(product.wb_subject_id),
+                'Поля маркетплейса': _has(product.marketplace_fields_json),
+                'Валидация': product.marketplace_validation_status == 'valid',
+            }
+        },
+        'media': {
+            'label': 'Медиа',
+            'fields': {
+                'Фотографии': bool(product.get_photos()),
+                'Видео': _has(product.video_url),
+            }
+        },
+    }
+
+    # Считаем по каждой группе
+    total_filled = 0
+    total_fields = 0
+    for key, group in groups.items():
+        filled = sum(1 for v in group['fields'].values() if v)
+        count = len(group['fields'])
+        group['filled'] = filled
+        group['total'] = count
+        group['pct'] = round(filled / count * 100) if count else 0
+        total_filled += filled
+        total_fields += count
+
+    return {
+        'groups': {k: {
+            'label': g['label'],
+            'pct': g['pct'],
+            'filled': g['filled'],
+            'total': g['total'],
+            'fields': g['fields'],
+        } for k, g in groups.items()},
+        'total_pct': round(total_filled / total_fields * 100) if total_fields else 0,
+        'total_filled': total_filled,
+        'total_fields': total_fields,
+    }
 
 
 def _extract_product_form_data(form) -> dict:

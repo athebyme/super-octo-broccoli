@@ -1302,7 +1302,7 @@ class AIConfig:
     model: str = "openai/gpt-oss-120b"
     temperature: float = 0.3
     max_tokens: int = 2000
-    timeout: int = 60
+    timeout: int = 120
     # Дополнительные параметры
     top_p: float = 0.95
     presence_penalty: float = 0.0
@@ -1358,7 +1358,7 @@ class AIConfig:
             model=settings.ai_model or default_model,
             temperature=getattr(settings, 'ai_temperature', 0.3) or 0.3,
             max_tokens=getattr(settings, 'ai_max_tokens', 2000) or 2000,
-            timeout=getattr(settings, 'ai_timeout', 60) or 60,
+            timeout=getattr(settings, 'ai_timeout', 120) or 120,
             top_p=getattr(settings, 'ai_top_p', 0.95) or 0.95,
             presence_penalty=getattr(settings, 'ai_presence_penalty', 0.0) or 0.0,
             frequency_penalty=getattr(settings, 'ai_frequency_penalty', 0.0) or 0.0,
