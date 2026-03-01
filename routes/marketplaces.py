@@ -53,12 +53,15 @@ def categories(marketplace_id):
 
     query = MarketplaceCategory.query.filter_by(marketplace_id=marketplace_id)
     if search:
-        query = query.filter(MarketplaceCategory.subject_name.ilike(f'%{search}%'))
+        query = query.filter(
+            MarketplaceCategory.subject_name.ilike(f'%{search}%') |
+            MarketplaceCategory.parent_name.ilike(f'%{search}%')
+        )
 
     all_categories = query.order_by(
         MarketplaceCategory.parent_name,
         MarketplaceCategory.subject_name
-    ).limit(1000).all()
+    ).all()
 
     # Group by parent_name for tree-view
     grouped = OrderedDict()
@@ -72,7 +75,6 @@ def categories(marketplace_id):
         'admin_marketplace_categories.html',
         marketplace=marketplace,
         grouped_categories=grouped,
-        categories=all_categories,
         search=search,
         total_count=len(all_categories)
     )
