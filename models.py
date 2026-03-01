@@ -2257,6 +2257,7 @@ class SupplierProduct(db.Model):
     # AI полный парсинг — результаты комплексного AI-извлечения
     ai_parsed_data_json = db.Column(db.Text)  # Полный JSON со всеми извлечёнными характеристиками
     ai_parsed_at = db.Column(db.DateTime)     # Когда был выполнен парсинг
+    ai_model_used = db.Column(db.String(100)) # Какой AI моделью спарсено (e.g. "openai/gpt-oss-120b")
     ai_marketplace_json = db.Column(db.Text)  # Данные форматированные для маркетплейса (WB)
     description_source = db.Column(db.String(50))  # csv/ai/manual — откуда описание
 

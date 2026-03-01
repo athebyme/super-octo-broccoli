@@ -1240,12 +1240,14 @@ class SupplierService:
     # ===================================================================
 
     @staticmethod
-    def _get_ai_service(supplier: Supplier):
+    def _get_ai_service(supplier: Supplier, model_override: str = None):
         """Создать AIService из настроек поставщика"""
         from services.ai_service import AIConfig, AIService as AISvc
         config = AIConfig.from_settings(supplier)
         if not config:
             return None
+        if model_override:
+            config.model = model_override
         return AISvc(config)
 
     @staticmethod
@@ -1651,6 +1653,7 @@ class SupplierService:
             # Сохраняем полный результат парсинга
             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
             product.ai_parsed_at = datetime.utcnow()
+            product.ai_model_used = ai_svc.config.model
 
             # Формируем данные для маркетплейса (WB)
             marketplace_data = _build_marketplace_data(product, result)
@@ -1683,7 +1686,8 @@ class SupplierService:
     @staticmethod
     def start_ai_parse_job(supplier_id: int, product_ids: List[int],
                            admin_user_id: int = None,
-                           max_workers: int = 4) -> dict:
+                           max_workers: int = 4,
+                           model_override: str = None) -> dict:
         """
         Запускает фоновый AI парсинг товаров.
 
@@ -1719,7 +1723,7 @@ class SupplierService:
 
         thread = threading.Thread(
             target=SupplierService._run_ai_parse_job,
-            args=(job_id, supplier_id, product_ids, effective_workers),
+            args=(job_id, supplier_id, product_ids, effective_workers, model_override),
             daemon=True,
             name=f'AIParse-{job_id[:8]}'
         )
@@ -1733,7 +1737,7 @@ class SupplierService:
 
     @staticmethod
     def _run_ai_parse_job(job_id: str, supplier_id: int, product_ids: List[int],
-                          max_workers: int = 4):
+                          max_workers: int = 4, model_override: str = None):
         """
         Фоновый поток AI парсинга с параллельной обработкой.
 
@@ -1842,7 +1846,7 @@ class SupplierService:
                         product_data = product.get_all_data_for_parsing()
 
                         # Создаём отдельный AIService для этого воркера
-                        worker_svc = SupplierService._get_ai_service(supplier)
+                        worker_svc = SupplierService._get_ai_service(supplier, model_override=model_override)
                         if not worker_svc:
                             return {
                                 'product_id': pid, 'title': title,
@@ -1856,6 +1860,7 @@ class SupplierService:
                         if success and result:
                             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                             product.ai_parsed_at = datetime.utcnow()
+                            product.ai_model_used = worker_svc.config.model
 
                             marketplace_data = _build_marketplace_data(product, result)
                             product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
@@ -1982,6 +1987,7 @@ class SupplierService:
             if success and result:
                 product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                 product.ai_parsed_at = datetime.utcnow()
+                product.ai_model_used = ai_svc.config.model
                 marketplace_data = _build_marketplace_data(product, result)
                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                 _apply_parsed_data_to_product(product, result)

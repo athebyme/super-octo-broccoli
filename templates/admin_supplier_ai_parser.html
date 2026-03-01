@@ -141,6 +141,19 @@
             </div>
             <div class="flex gap-2 items-center">
                 <label class="flex items-center gap-1.5 text-xs text-gray-500"
+                    title="AI модель для парсинга">
+                    <span>Модель:</span>
+                    <select id="modelOverride"
+                        class="rounded border-gray-300 text-xs border px-2 py-1.5 max-w-[200px] focus:border-indigo-500 focus:ring-indigo-500">
+                        <option value="">{{ supplier.ai_model or 'по умолчанию' }}</option>
+                        {% for model_id, model_info in available_models.items() %}
+                        {% if model_id != supplier.ai_model %}
+                        <option value="{{ model_id }}">{{ model_info.name }}{% if model_info.recommended %} ★{% endif %}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="flex items-center gap-1.5 text-xs text-gray-500"
                     title="Количество параллельных потоков AI-запросов">
                     <span>Потоки:</span>
                     <select id="maxWorkers"
@@ -210,11 +223,17 @@
                         <td class="px-4 py-3 text-center" id="parse-status-{{ product.id }}">
                             {% if product.ai_parsed_at %}
                             {% set pdata = product.get_ai_parsed_data() %}
-                            <span
-                                class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
-                                title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
-                                {{ '%.0f'|format(pdata.get('parsing_meta', {}).get('fill_percentage', 0)) }}%
-                            </span>
+                            <div class="flex flex-col items-center gap-0.5">
+                                <span
+                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
+                                    title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
+                                    {{ '%.0f'|format(pdata.get('parsing_meta', {}).get('fill_percentage', 0)) }}%
+                                </span>
+                                {% if product.ai_model_used %}
+                                <span class="text-[10px] text-gray-400 truncate max-w-[120px]"
+                                    title="{{ product.ai_model_used }}">{{ product.ai_model_used.split('/')[-1][:20] }}</span>
+                                {% endif %}
+                            </div>
                             {% else %}
                             <span
                                 class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-400">—</span>
@@ -426,6 +445,8 @@
         const form = new FormData();
         ids.forEach(id => form.append('product_ids', id));
         form.append('max_workers', document.getElementById('maxWorkers').value);
+        const modelVal = document.getElementById('modelOverride').value;
+        if (modelVal) form.append('model_override', modelVal);
 
         fetch(PARSE_URL, {
             method: 'POST',
@@ -502,6 +523,8 @@
     function startSingleParse(productId) {
         const form = new FormData();
         form.append('product_id', productId);
+        const modelVal = document.getElementById('modelOverride').value;
+        if (modelVal) form.append('model_override', modelVal);
 
         // Обновляем ячейку статуса на спиннер
         const cell = document.getElementById('parse-status-' + productId);

@@ -747,11 +747,13 @@ def register_supplier_routes(app):
 
         max_workers = request.form.get('max_workers', 4, type=int)
         max_workers = max(1, min(max_workers, 8))
+        model_override = request.form.get('model_override', '').strip() or None
 
         result = SupplierService.start_ai_parse_job(
             supplier_id, product_ids,
             admin_user_id=current_user.id,
             max_workers=max_workers,
+            model_override=model_override,
         )
 
         if result.get('error'):
@@ -955,13 +957,18 @@ def register_supplier_routes(app):
         active_jobs = SupplierService.get_active_ai_parse_jobs(supplier_id)
         recent_jobs = SupplierService.get_recent_ai_parse_jobs(supplier_id, limit=5)
 
+        # Модели для выбора в парсере
+        from services.ai_service import get_available_models
+        available_models = get_available_models(supplier.ai_provider or 'cloudru')
+
         return render_template('admin_supplier_ai_parser.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                stock_status=stock_status,
                                parsed_count=parsed_count,
                                active_jobs=active_jobs,
-                               recent_jobs=recent_jobs)
+                               recent_jobs=recent_jobs,
+                               available_models=available_models)
 
     # -------------------------------------------------------------------
     # Управление подключёнными продавцами

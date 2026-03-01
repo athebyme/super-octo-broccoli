@@ -218,13 +218,19 @@
                         <hr class="my-4">
                         <div class="flex justify-between items-center mb-2">
                             <h3 class="text-sm font-semibold text-gray-700">AI Полный парсинг</h3>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex gap-2 items-center flex-wrap">
                                 {% set parsed = product.get_ai_parsed_data() %}
                                 {% set pm = parsed.get('parsing_meta', {}) %}
                                 <span class="text-xs text-gray-500">
                                     {{ pm.get('total_fields_found', 0) }}/{{ pm.get('total_fields_possible', 0) }} полей
                                     ({{ '%.0f'|format(pm.get('fill_percentage', 0)) }}%)
                                 </span>
+                                {% if product.ai_model_used %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-100 text-violet-700 border border-violet-200"
+                                    title="AI модель: {{ product.ai_model_used }}">
+                                    {{ product.ai_model_used.split('/')[-1] }}
+                                </span>
+                                {% endif %}
                                 {% if product.ai_parsed_at %}
                                 <span class="text-xs text-gray-400">{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M')
                                     }}</span>
