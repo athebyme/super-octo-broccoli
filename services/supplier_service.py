@@ -2401,15 +2401,14 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     if success and result:
         # Сохраняем в marketplace_fields_json
         product.marketplace_fields_json = json.dumps(result, ensure_ascii=False)
-        
+
         # Валидируем
-        validator = MarketplaceValidator(wb_marketplace.id)
-        validation_result = validator.validate_product_data(subject_id, result)
-        
-        product.marketplace_validation_status = 'valid' if validation_result['is_valid'] else 'invalid'
-        product.marketplace_fill_pct = validation_result['fill_percentage']
-        
-        logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result['is_valid']}")
+        validation_result = MarketplaceValidator.validate_product_for_marketplace(product, wb_marketplace.id)
+
+        product.marketplace_validation_status = 'valid' if validation_result.get('valid') else 'invalid'
+        product.marketplace_fill_pct = validation_result.get('fill_pct', 0)
+
+        logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result.get('valid')}")
     else:
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
 
