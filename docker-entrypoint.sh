@@ -88,6 +88,7 @@ python migrations/migrate_add_safe_price_change.py || echo "⚠️ Safe price ch
 python migrations/migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch migration skipped (already applied or error)"
 python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
 python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
+python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
 else
