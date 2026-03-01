@@ -102,6 +102,24 @@ def prompt_tester():
 
 # ==================== ACTIONS / API ====================
 
+@marketplaces_bp.route('/<int:marketplace_id>/settings', methods=['POST'])
+@login_required
+@admin_required
+def update_settings(marketplace_id):
+    """Save marketplace settings (API key, etc.)."""
+    marketplace = Marketplace.query.get_or_404(marketplace_id)
+
+    api_key = request.form.get('api_key', '').strip()
+    if api_key:
+        marketplace.api_key = api_key
+        db.session.commit()
+        flash('API ключ сохранён.', 'success')
+    else:
+        flash('API ключ не может быть пустым.', 'warning')
+
+    return redirect(url_for('marketplaces.index'))
+
+
 @marketplaces_bp.route('/<int:marketplace_id>/sync_categories', methods=['POST'])
 @login_required
 @admin_required
