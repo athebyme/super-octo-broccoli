@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 import json
 
+from sqlalchemy import func
+
 from models import (
     db, Marketplace, MarketplaceCategory, MarketplaceCategoryCharacteristic,
     MarketplaceDirectory, MarketplaceConnection, SupplierProduct
@@ -234,11 +236,11 @@ class MarketplaceService:
             category.required_count = required_count
             db.session.commit()
 
-            # Update marketplace aggregates
+            # Update marketplace aggregates (unique charc_id only — same characteristic can exist in many categories)
             marketplace = category.marketplace
-            marketplace.total_characteristics = MarketplaceCategoryCharacteristic.query.filter_by(
-                marketplace_id=marketplace.id
-            ).count()
+            marketplace.total_characteristics = db.session.query(
+                func.count(func.distinct(MarketplaceCategoryCharacteristic.charc_id))
+            ).filter_by(marketplace_id=marketplace.id).scalar() or 0
             db.session.commit()
 
             return {
