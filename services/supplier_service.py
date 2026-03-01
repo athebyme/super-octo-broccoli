@@ -2242,6 +2242,28 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
     identity = parsed.get('product_identity', {})
     origin = parsed.get('origin', {})
 
+    # --- Оценка веса, если AI не извлёк ---
+    estimated_weight_g = _estimate_weight_g(product, parsed)
+
+    # Габариты товара
+    dims_length = physical.get('length_cm')
+    dims_width = physical.get('width_cm')
+    dims_height = physical.get('height_cm')
+    dims_weight_kg = round(physical.get('weight_g', 0) / 1000, 2) if physical.get('weight_g') else None
+
+    if not dims_weight_kg and estimated_weight_g:
+        dims_weight_kg = round(estimated_weight_g / 1000, 2)
+
+    # Габариты упаковки — fallback 20×20×30 если ничего нет
+    pkg_length = pkg.get('package_length_cm') or 20
+    pkg_width = pkg.get('package_width_cm') or 20
+    pkg_height = pkg.get('package_height_cm') or 30
+    pkg_weight_kg = round(pkg.get('package_weight_g', 0) / 1000, 2) if pkg.get('package_weight_g') else None
+
+    if not pkg_weight_kg and dims_weight_kg:
+        # Упаковка ≈ товар + 50-100г на коробку/пакет
+        pkg_weight_kg = round(dims_weight_kg + 0.08, 2)
+
     wb_data = {
         'title': mp.get('wb_title_suggestion') or product.ai_seo_title or product.title or '',
         'description': mp.get('wb_description_short') or product.ai_description or product.description or '',
@@ -2266,16 +2288,16 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
 
         # Габариты для WB
         'dimensions': {
-            'length': physical.get('length_cm'),
-            'width': physical.get('width_cm'),
-            'height': physical.get('height_cm'),
-            'weight_kg': round(physical.get('weight_g', 0) / 1000, 2) if physical.get('weight_g') else None,
+            'length': dims_length,
+            'width': dims_width,
+            'height': dims_height,
+            'weight_kg': dims_weight_kg,
         },
         'package_dimensions': {
-            'length': pkg.get('package_length_cm'),
-            'width': pkg.get('package_width_cm'),
-            'height': pkg.get('package_height_cm'),
-            'weight_kg': round(pkg.get('package_weight_g', 0) / 1000, 2) if pkg.get('package_weight_g') else None,
+            'length': pkg_length,
+            'width': pkg_width,
+            'height': pkg_height,
+            'weight_kg': pkg_weight_kg,
         },
 
         # Характеристики
@@ -2442,6 +2464,158 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
         logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result.get('valid')}")
     else:
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
+
+
+# ============================================================================
+# WEIGHT / DIMENSIONS ESTIMATION
+# ============================================================================
+
+# Оценка веса по категории / типу товара (граммы)
+# Ключ — подстрока в wb_subject, category или product_type (lowercase)
+_WEIGHT_ESTIMATES = {
+    # Белье и одежда
+    'белье': 120,
+    'бельё': 120,
+    'трусы': 60,
+    'стринг': 40,
+    'бюстгальтер': 80,
+    'лиф': 80,
+    'корсет': 250,
+    'корсаж': 200,
+    'боди': 150,
+    'комбинезон': 250,
+    'пеньюар': 150,
+    'халат': 300,
+    'сорочка': 120,
+    'чулки': 60,
+    'колготки': 80,
+    'носки': 40,
+    'перчатки': 50,
+    'маска': 60,
+    'повязка': 30,
+    'костюм': 350,
+    'платье': 250,
+    'юбка': 150,
+    'накидка': 150,
+    'плетка': 200,
+    'флоггер': 250,
+
+    # БДСМ аксессуары
+    'наручники': 200,
+    'кляп': 100,
+    'ошейник': 120,
+    'поводок': 80,
+    'привязь': 150,
+    'бондаж': 300,
+    'фиксатор': 200,
+    'зажим': 40,
+    'шлепалка': 120,
+    'стек': 150,
+    'кнут': 200,
+    'паддл': 180,
+    'веревка': 250,
+    'верёвка': 250,
+    'лента': 60,
+    'ремень': 150,
+
+    # Вибраторы и секс-игрушки
+    'вибратор': 180,
+    'массажер': 250,
+    'массажёр': 250,
+    'стимулятор': 120,
+    'фаллоимитатор': 300,
+    'дилдо': 300,
+    'анальн': 100,
+    'пробка': 100,
+    'plug': 100,
+    'кольцо': 50,
+    'насадка': 80,
+    'помпа': 250,
+    'мастурбатор': 350,
+    'вагина': 400,
+    'яйцо': 60,
+    'шарик': 80,
+    'бусы': 80,
+    'клитор': 80,
+
+    # Косметика и смазки
+    'смазка': 150,
+    'лубрикант': 150,
+    'гель': 120,
+    'крем': 100,
+    'масло': 200,
+    'спрей': 100,
+    'духи': 80,
+    'парфюм': 80,
+    'свеча': 250,
+
+    # Презервативы
+    'презерватив': 40,
+
+    # Прочее
+    'батарейк': 30,
+    'зарядк': 80,
+    'чехол': 60,
+    'сумка': 150,
+}
+
+
+def _estimate_weight_g(product, parsed: dict) -> Optional[int]:
+    """
+    Оценивает вес товара на основе категории, типа и материалов.
+    Возвращает вес в граммах или None если оценить невозможно.
+    """
+    physical = parsed.get('physical', {})
+
+    # Если AI уже извлёк вес — не трогаем
+    if physical.get('weight_g'):
+        return physical['weight_g']
+
+    # Собираем текстовые подсказки для определения типа
+    identity = parsed.get('product_identity', {})
+    hints = ' '.join(filter(None, [
+        (identity.get('wb_subject') or '').lower(),
+        (identity.get('product_type') or '').lower(),
+        (identity.get('product_subtype') or '').lower(),
+        (product.category or '').lower(),
+        (product.wb_subject_name or '').lower(),
+        (product.title or '').lower(),
+    ]))
+
+    # Ищем совпадение по таблице
+    best_weight = None
+    best_len = 0
+    for keyword, weight in _WEIGHT_ESTIMATES.items():
+        if keyword in hints and len(keyword) > best_len:
+            best_weight = weight
+            best_len = len(keyword)
+
+    if best_weight:
+        # Корректируем вес по материалу
+        materials = parsed.get('materials', {})
+        mat_hint = (materials.get('primary_material') or '').lower()
+        composition = (materials.get('composition') or '').lower()
+        mat_text = mat_hint + ' ' + composition
+
+        # Силикон / латекс тяжелее
+        if 'силикон' in mat_text or 'латекс' in mat_text:
+            best_weight = int(best_weight * 1.3)
+        # Металл значительно тяжелее
+        elif 'металл' in mat_text or 'нержав' in mat_text or 'сталь' in mat_text:
+            best_weight = int(best_weight * 2.0)
+        elif 'стекл' in mat_text:
+            best_weight = int(best_weight * 1.8)
+        # Кожа чуть тяжелее
+        elif 'кожа' in mat_text or 'кожан' in mat_text:
+            best_weight = int(best_weight * 1.15)
+        # Кружево / сетка легче
+        elif 'кружев' in mat_text or 'сетк' in mat_text or 'сетч' in mat_text:
+            best_weight = int(best_weight * 0.7)
+
+        return best_weight
+
+    # Если ничего не подошло — базовая оценка 150г
+    return 150
 
 
 # ============================================================================
