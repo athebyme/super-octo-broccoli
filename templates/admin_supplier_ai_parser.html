@@ -288,6 +288,11 @@
                     class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
                     Маппинг & Валидация
                 </button>
+                <button type="button" id="bulkFilterParseBtn" onclick="startFilterParse()"
+                    class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-all"
+                    title="Запустить AI парсинг для ВСЕХ товаров по текущим фильтрам (не только на странице)">
+                    Спарсить все по фильтру
+                </button>
             </div>
         </div>
 
@@ -406,6 +411,7 @@
 <script>
     const SUPPLIER_ID = {{ supplier.id }};
     const PARSE_URL = '{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}';
+    const PARSE_BY_FILTER_URL = '{{ url_for("admin_supplier_ai_parse_by_filter", supplier_id=supplier.id) }}';
     const DESC_SYNC_URL = '{{ url_for("admin_supplier_sync_descriptions", supplier_id=supplier.id) }}';
 
     // ===== Чекбоксы =====
@@ -462,6 +468,7 @@
         else if (j.status === 'failed') statusIcon = '<svg class="inline w-4 h-4 text-red-500 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
 
         const typeLabel = j.job_type === 'sync_descriptions' ? 'Синхронизация описаний' : j.total === 1 ? 'AI Парсинг товара' : `AI Парсинг (${j.total} товаров)`;
+        const modelBadge = j.model_used ? `<span class="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full">${j.model_used}</span>` : '';
 
         let details = '';
         if (j.current_product && j.status === 'running') {
@@ -485,7 +492,7 @@
         <div class="flex justify-between items-start mb-2">
             <div class="flex items-center">
                 ${statusIcon}
-                <span class="font-semibold text-sm text-gray-900">${typeLabel}</span>
+                <span class="font-semibold text-sm text-gray-900">${typeLabel}</span>${modelBadge}
             </div>
             <div class="flex items-center gap-3">
                 <span class="text-xs text-gray-500">${j.succeeded} ok / ${j.failed} fail / ${j.processed}/${j.total}</span>
@@ -608,6 +615,72 @@
             .catch(err => {
                 bulkBtn.textContent = 'AI Парсинг выбранных';
                 updateSelection();
+                alert('Ошибка сети: ' + err.message);
+            });
+    }
+
+    function startFilterParse() {
+        // Собираем текущие фильтры с URL
+        const params = new URLSearchParams(window.location.search);
+        const search = params.get('search') || '';
+        const stockStatus = params.get('stock_status') || '';
+        const parseStatus = params.get('parse_status') || '';
+        const fillMax = params.get('fill_max') || '';
+
+        // Описание фильтров для confirm
+        const filterParts = [];
+        if (search) filterParts.push(`поиск: "${search}"`);
+        if (stockStatus) filterParts.push(`наличие: ${stockStatus}`);
+        if (parseStatus) filterParts.push(`AI: ${parseStatus}`);
+        if (fillMax) filterParts.push(`заполнение < ${fillMax}%`);
+        const filterDesc = filterParts.length > 0 ? filterParts.join(', ') : 'без фильтров (ВСЕ товары!)';
+
+        // Спрашиваем лимит
+        const limitStr = prompt(
+            `Фильтры: ${filterDesc}\n\nСколько товаров обработать?\n(0 или пустое = все подходящие, макс. 10000)`,
+            '0'
+        );
+        if (limitStr === null) return;  // отмена
+        const limit = parseInt(limitStr) || 0;
+
+        if (!confirm(`Запустить AI парсинг для ${limit > 0 ? limit : 'ВСЕХ'} товаров по фильтру?\n${filterDesc}`)) return;
+
+        const btn = document.getElementById('bulkFilterParseBtn');
+        btn.disabled = true;
+        btn.textContent = 'Запуск...';
+
+        const form = new FormData();
+        form.append('search', search);
+        form.append('stock_status', stockStatus);
+        form.append('parse_status', parseStatus);
+        form.append('fill_max', fillMax);
+        if (limit > 0) form.append('limit', limit);
+        form.append('max_workers', document.getElementById('maxWorkers').value);
+        const modelVal = document.getElementById('modelOverride').value;
+        if (modelVal) form.append('model_override', modelVal);
+
+        fetch(PARSE_BY_FILTER_URL, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            body: form
+        })
+            .then(r => r.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.textContent = 'Спарсить все по фильтру';
+
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    return;
+                }
+                if (data.job_id) {
+                    activeJobIds.add(data.job_id);
+                    pollJob(data.job_id);
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.textContent = 'Спарсить все по фильтру';
                 alert('Ошибка сети: ' + err.message);
             });
     }

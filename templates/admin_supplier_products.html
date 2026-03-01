@@ -59,6 +59,10 @@
                 </button>
             </form>
             {% endif %}
+            <a href="{{ url_for('admin_supplier_parsing_quality_dashboard', supplier_id=supplier.id) }}"
+               class="px-4 py-2 border border-indigo-300 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-50">
+                Качество парсинга
+            </a>
         </div>
     </div>
 

@@ -2013,6 +2013,8 @@ class Supplier(db.Model):
     csv_source_url = db.Column(db.String(500))  # URL CSV для автоимпорта
     csv_delimiter = db.Column(db.String(5), default=';')
     csv_encoding = db.Column(db.String(20), default='cp1251')
+    csv_column_mapping = db.Column(db.JSON, default=None)  # Конфигурируемый маппинг колонок CSV
+    csv_has_header = db.Column(db.Boolean, default=False)  # Есть ли заголовок в CSV
     api_endpoint = db.Column(db.String(500))  # Для будущей API-интеграции
 
     # Источник цен и остатков (отдельный файл)
@@ -2263,6 +2265,10 @@ class SupplierProduct(db.Model):
 
     # Оригинальные данные для отката
     original_data_json = db.Column(db.Text)
+
+    # Качество парсинга
+    parsing_confidence = db.Column(db.Float)  # 0.0-1.0 оценка качества парсинга
+    normalization_applied = db.Column(db.Boolean, default=False)  # Была ли применена нормализация
 
     # Статус: draft → validated → ready → archived
     status = db.Column(db.String(50), default='draft', index=True)
@@ -2559,6 +2565,7 @@ class AIParseJob(db.Model):
     succeeded      = db.Column(db.Integer, default=0)
     failed         = db.Column(db.Integer, default=0)
     current_product_title = db.Column(db.String(200))             # Название текущего обрабатываемого товара
+    model_used     = db.Column(db.String(100))                    # Название AI модели (gpt-4o, claude-sonnet и т.д.)
     results        = db.Column(db.Text)                           # JSON [{product_id, title, status, fill_pct, error}]
     error_message  = db.Column(db.Text)                           # Общая ошибка если failed
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
@@ -2801,3 +2808,38 @@ class MarketplaceSyncJob(db.Model):
 
     def __repr__(self) -> str:
         return f'<MarketplaceSyncJob {self.id[:8]} {self.job_type} ({self.status})>'
+
+
+class ParsingLog(db.Model):
+    """Лог и метрики парсинга для отслеживания качества."""
+    __tablename__ = 'parsing_logs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=False, index=True)
+    event_type = db.Column(db.String(50), nullable=False)  # sync, ai_parse, validate, normalize, pre_validate
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    # Общие метрики
+    total_products = db.Column(db.Integer, default=0)
+    processed_successfully = db.Column(db.Integer, default=0)
+    errors_count = db.Column(db.Integer, default=0)
+    duration_seconds = db.Column(db.Float)
+
+    # Заполненность полей (JSON: {"title": 0.99, "brand": 0.87, ...})
+    field_fill_rates = db.Column(db.JSON)
+
+    # AI метрики
+    ai_tokens_used = db.Column(db.Integer)
+    ai_cache_hits = db.Column(db.Integer, default=0)
+    ai_cache_misses = db.Column(db.Integer, default=0)
+
+    # Детали ошибок (JSON массив)
+    errors_json = db.Column(db.JSON)
+
+    # Метрики нормализации
+    normalization_stats = db.Column(db.JSON)  # {"brands_normalized": 42, "barcodes_fixed": 12, ...}
+
+    supplier = db.relationship('Supplier', backref=db.backref('parsing_logs', lazy='dynamic'))
+
+    def __repr__(self) -> str:
+        return f'<ParsingLog {self.event_type} supplier={self.supplier_id} ({self.created_at})>'

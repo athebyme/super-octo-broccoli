@@ -135,6 +135,13 @@ DOCS_REGISTRY = {
         'category': 'Разработка',
         'order': 17,
     },
+    'PARSING_QUALITY': {
+        'title': 'Качество парсинга',
+        'description': 'Pipeline обработки товаров, нормализация, автокоррекция, маппинг категорий, дашборд качества',
+        'icon': 'check-circle',
+        'category': 'Инструменты',
+        'order': 18,
+    },
 }
 
 

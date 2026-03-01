@@ -5546,7 +5546,35 @@ from routes.marketplaces import register_marketplaces_routes
 register_marketplaces_routes(app)
 
 
+def _run_startup_migrations():
+    """Безопасно добавляет новые колонки, которых нет в БД."""
+    import sqlite3 as _sqlite3
+    from sqlalchemy import inspect as sa_inspect
+
+    bind = db.engine
+    insp = sa_inspect(bind)
+
+    migrations = [
+        # (таблица, колонка, тип)
+        ('ai_parse_jobs', 'model_used', 'VARCHAR(100)'),
+    ]
+
+    for table, column, col_type in migrations:
+        if table not in insp.get_table_names():
+            continue
+        existing = [c['name'] for c in insp.get_columns(table)]
+        if column not in existing:
+            try:
+                db.session.execute(db.text(
+                    f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'
+                ))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+        _run_startup_migrations()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))

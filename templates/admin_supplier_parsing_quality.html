@@ -1,0 +1,361 @@
+{% extends "base.html" %}
+
+{% block title %}Качество парсинга — {{ supplier.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+     x-data="parsingQuality()"
+     x-init="loadData()">
+
+    <!-- Хлебные крошки -->
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:text-indigo-600">Поставщики</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) }}" class="hover:text-indigo-600">{{ supplier.name }}</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">Качество парсинга</span>
+    </nav>
+
+    <div class="mb-6 flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900">Качество парсинга: {{ supplier.name }}</h1>
+            <p class="text-sm text-gray-500 mt-1">
+                {{ supplier.total_products or 0 }} товаров в базе
+            </p>
+        </div>
+        <div class="flex gap-2">
+            <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
+               class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                Товары
+            </a>
+            <button @click="loadData()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
+                Обновить
+            </button>
+        </div>
+    </div>
+
+    <!-- Загрузка -->
+    <div x-show="loading" class="text-center py-12">
+        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+        <p class="mt-2 text-sm text-gray-500">Загрузка данных...</p>
+    </div>
+
+    <!-- Ошибка -->
+    <div x-show="error" class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+        <p class="text-red-700 text-sm" x-text="error"></p>
+    </div>
+
+    <div x-show="!loading && !error" x-cloak>
+        <!-- KPI карточки -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <!-- Высокое качество -->
+            <div class="bg-white rounded-lg border border-gray-200 p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm text-gray-500">Высокое качество</span>
+                    <span class="text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full">&ge;0.8</span>
+                </div>
+                <p class="text-2xl font-bold text-green-600" x-text="data.quality_distribution?.high || 0"></p>
+                <div class="mt-1 w-full bg-gray-200 rounded-full h-1.5">
+                    <div class="bg-green-500 h-1.5 rounded-full" :style="`width: ${qualityPct('high')}%`"></div>
+                </div>
+            </div>
+
+            <!-- Среднее качество -->
+            <div class="bg-white rounded-lg border border-gray-200 p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm text-gray-500">Среднее</span>
+                    <span class="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full">0.6-0.8</span>
+                </div>
+                <p class="text-2xl font-bold text-yellow-600" x-text="data.quality_distribution?.medium || 0"></p>
+                <div class="mt-1 w-full bg-gray-200 rounded-full h-1.5">
+                    <div class="bg-yellow-400 h-1.5 rounded-full" :style="`width: ${qualityPct('medium')}%`"></div>
+                </div>
+            </div>
+
+            <!-- Низкое качество -->
+            <div class="bg-white rounded-lg border border-gray-200 p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm text-gray-500">Низкое</span>
+                    <span class="text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">0.4-0.6</span>
+                </div>
+                <p class="text-2xl font-bold text-orange-600" x-text="data.quality_distribution?.low || 0"></p>
+                <div class="mt-1 w-full bg-gray-200 rounded-full h-1.5">
+                    <div class="bg-orange-400 h-1.5 rounded-full" :style="`width: ${qualityPct('low')}%`"></div>
+                </div>
+            </div>
+
+            <!-- Критическое -->
+            <div class="bg-white rounded-lg border border-gray-200 p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm text-gray-500">Критическое</span>
+                    <span class="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full">&lt;0.4</span>
+                </div>
+                <p class="text-2xl font-bold text-red-600" x-text="data.quality_distribution?.critical || 0"></p>
+                <div class="mt-1 w-full bg-gray-200 rounded-full h-1.5">
+                    <div class="bg-red-500 h-1.5 rounded-full" :style="`width: ${qualityPct('critical')}%`"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Два блока в ряд -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <!-- Заполненность полей -->
+            <div class="bg-white rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Заполненность полей</h3>
+                <div class="space-y-3">
+                    <template x-for="(rate, field) in data.field_fill_rates || {}" :key="field">
+                        <div>
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-gray-600" x-text="fieldLabel(field)"></span>
+                                <span class="font-medium"
+                                      :class="rate >= 0.8 ? 'text-green-600' : rate >= 0.5 ? 'text-yellow-600' : 'text-red-600'"
+                                      x-text="(rate * 100).toFixed(1) + '%'"></span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2">
+                                <div class="h-2 rounded-full transition-all"
+                                     :class="rate >= 0.8 ? 'bg-green-500' : rate >= 0.5 ? 'bg-yellow-400' : 'bg-red-500'"
+                                     :style="`width: ${(rate * 100).toFixed(1)}%`"></div>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="!data.field_fill_rates || Object.keys(data.field_fill_rates).length === 0" class="text-sm text-gray-400 py-4 text-center">
+                        Нет данных. Запустите синхронизацию для сбора статистики.
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI кэш -->
+            <div class="bg-white rounded-lg border border-gray-200 p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">AI кэш</h3>
+                <template x-if="data.ai_cache && data.ai_cache.total_products > 0">
+                    <div>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div class="text-center p-3 bg-gray-50 rounded-lg">
+                                <p class="text-2xl font-bold text-indigo-600" x-text="data.ai_cache.cached_products"></p>
+                                <p class="text-xs text-gray-500">В кэше</p>
+                            </div>
+                            <div class="text-center p-3 bg-gray-50 rounded-lg">
+                                <p class="text-2xl font-bold text-gray-600" x-text="data.ai_cache.total_products"></p>
+                                <p class="text-xs text-gray-500">Всего товаров</p>
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <div class="flex justify-between text-sm mb-1">
+                                <span class="text-gray-600">Покрытие кэша</span>
+                                <span class="font-medium text-indigo-600"
+                                      x-text="(data.ai_cache.total_products > 0 ? (data.ai_cache.cached_products / data.ai_cache.total_products * 100).toFixed(1) : '0.0') + '%'"></span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2">
+                                <div class="bg-indigo-500 h-2 rounded-full"
+                                     :style="`width: ${data.ai_cache.total_products > 0 ? (data.ai_cache.cached_products / data.ai_cache.total_products * 100).toFixed(1) : 0}%`"></div>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-2">
+                            Экономия токенов на повторных синхронизациях
+                        </p>
+                    </div>
+                </template>
+                <div x-show="!data.ai_cache || data.ai_cache.total_products === 0" class="text-sm text-gray-400 py-4 text-center">
+                    AI парсинг ещё не запускался.
+                </div>
+            </div>
+        </div>
+
+        <!-- Маркетплейсовые характеристики -->
+        <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">Маркетплейсовые характеристики (WB)</h3>
+            <template x-if="data.marketplace_fill_rates && Object.keys(data.marketplace_fill_rates).length > 0">
+                <div>
+                    <!-- Валидация маркетплейса -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5" x-show="data.marketplace_fill_rates.validation_stats">
+                        <div class="text-center p-3 bg-green-50 rounded-lg border border-green-100">
+                            <p class="text-xl font-bold text-green-600" x-text="data.marketplace_fill_rates.validation_stats?.valid || 0"></p>
+                            <p class="text-xs text-gray-500">Валидные</p>
+                        </div>
+                        <div class="text-center p-3 bg-yellow-50 rounded-lg border border-yellow-100">
+                            <p class="text-xl font-bold text-yellow-600" x-text="data.marketplace_fill_rates.validation_stats?.partial || 0"></p>
+                            <p class="text-xs text-gray-500">Частичные</p>
+                        </div>
+                        <div class="text-center p-3 bg-red-50 rounded-lg border border-red-100">
+                            <p class="text-xl font-bold text-red-600" x-text="data.marketplace_fill_rates.validation_stats?.invalid || 0"></p>
+                            <p class="text-xs text-gray-500">Невалидные</p>
+                        </div>
+                        <div class="text-center p-3 bg-gray-50 rounded-lg border border-gray-100">
+                            <p class="text-xl font-bold text-gray-500" x-text="data.marketplace_fill_rates.validation_stats?.not_checked || 0"></p>
+                            <p class="text-xs text-gray-500">Не проверены</p>
+                        </div>
+                    </div>
+
+                    <!-- Средняя уверенность маппинга -->
+                    <div class="mb-5 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-700">Средняя уверенность маппинга категорий</span>
+                            <span class="text-lg font-bold"
+                                  :class="(data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.8 ? 'text-green-600' :
+                                          (data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.5 ? 'text-yellow-600' : 'text-red-600'"
+                                  x-text="((data.marketplace_fill_rates.category_confidence_avg || 0) * 100).toFixed(1) + '%'"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
+                            <div class="h-2 rounded-full transition-all"
+                                 :class="(data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.8 ? 'bg-green-500' :
+                                         (data.marketplace_fill_rates.category_confidence_avg || 0) >= 0.5 ? 'bg-yellow-400' : 'bg-red-500'"
+                                 :style="`width: ${((data.marketplace_fill_rates.category_confidence_avg || 0) * 100).toFixed(1)}%`"></div>
+                        </div>
+                    </div>
+
+                    <!-- Fill rates по полям -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-3">
+                        <template x-for="field in ['wb_subject_id', 'wb_subject_name', 'characteristics', 'sizes', 'dimensions',
+                                                    'ai_seo_title', 'ai_description', 'ai_keywords', 'ai_bullets', 'marketplace_data']" :key="field">
+                            <div x-show="data.marketplace_fill_rates[field] !== undefined">
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span class="text-gray-600" x-text="marketplaceLabel(field)"></span>
+                                    <span class="font-medium"
+                                          :class="data.marketplace_fill_rates[field] >= 0.8 ? 'text-green-600' :
+                                                  data.marketplace_fill_rates[field] >= 0.5 ? 'text-yellow-600' : 'text-red-600'"
+                                          x-text="((data.marketplace_fill_rates[field] || 0) * 100).toFixed(1) + '%'"></span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-2">
+                                    <div class="h-2 rounded-full transition-all"
+                                         :class="data.marketplace_fill_rates[field] >= 0.8 ? 'bg-green-500' :
+                                                 data.marketplace_fill_rates[field] >= 0.5 ? 'bg-yellow-400' : 'bg-red-500'"
+                                         :style="`width: ${((data.marketplace_fill_rates[field] || 0) * 100).toFixed(1)}%`"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+            <div x-show="!data.marketplace_fill_rates || Object.keys(data.marketplace_fill_rates).length === 0"
+                 class="text-sm text-gray-400 py-4 text-center">
+                Нет данных по маркетплейсовым характеристикам.
+            </div>
+        </div>
+
+        <!-- История парсинга -->
+        <div class="bg-white rounded-lg border border-gray-200 p-6">
+            <h3 class="text-lg font-semibold text-gray-900 mb-4">История парсинга</h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm" x-show="data.recent_logs && data.recent_logs.length > 0">
+                    <thead>
+                        <tr class="border-b border-gray-200">
+                            <th class="py-2 px-3 text-left text-gray-500 font-medium">Дата</th>
+                            <th class="py-2 px-3 text-left text-gray-500 font-medium">Тип</th>
+                            <th class="py-2 px-3 text-right text-gray-500 font-medium">Всего</th>
+                            <th class="py-2 px-3 text-right text-gray-500 font-medium">Успешно</th>
+                            <th class="py-2 px-3 text-right text-gray-500 font-medium">Ошибки</th>
+                            <th class="py-2 px-3 text-right text-gray-500 font-medium">Время</th>
+                            <th class="py-2 px-3 text-right text-gray-500 font-medium">AI кэш (hit/miss)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="log in data.recent_logs" :key="log.created_at">
+                            <tr class="border-b border-gray-100 hover:bg-gray-50">
+                                <td class="py-2 px-3 text-gray-700" x-text="formatDate(log.created_at)"></td>
+                                <td class="py-2 px-3">
+                                    <span class="px-2 py-0.5 rounded-full text-xs font-medium"
+                                          :class="eventTypeClass(log.event_type)"
+                                          x-text="log.event_type"></span>
+                                </td>
+                                <td class="py-2 px-3 text-right text-gray-700" x-text="log.total_products || '-'"></td>
+                                <td class="py-2 px-3 text-right text-green-600 font-medium" x-text="log.processed_successfully || '-'"></td>
+                                <td class="py-2 px-3 text-right"
+                                    :class="log.errors_count > 0 ? 'text-red-600 font-medium' : 'text-gray-400'"
+                                    x-text="log.errors_count || '0'"></td>
+                                <td class="py-2 px-3 text-right text-gray-500"
+                                    x-text="log.duration_seconds ? log.duration_seconds.toFixed(1) + 's' : '-'"></td>
+                                <td class="py-2 px-3 text-right text-gray-500"
+                                    x-text="(log.ai_cache_hits || 0) + ' / ' + (log.ai_cache_misses || 0)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                <div x-show="!data.recent_logs || data.recent_logs.length === 0" class="text-sm text-gray-400 py-4 text-center">
+                    Логов парсинга пока нет. Запустите синхронизацию.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function parsingQuality() {
+    return {
+        loading: true,
+        error: null,
+        data: {},
+
+        async loadData() {
+            this.loading = true;
+            this.error = null;
+            try {
+                const resp = await fetch('{{ url_for("admin_supplier_parsing_quality", supplier_id=supplier.id) }}');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                this.data = await resp.json();
+            } catch (e) {
+                this.error = 'Ошибка загрузки: ' + e.message;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        qualityPct(level) {
+            const dist = this.data.quality_distribution || {};
+            const total = (dist.high || 0) + (dist.medium || 0) + (dist.low || 0) + (dist.critical || 0);
+            if (total === 0) return 0;
+            return ((dist[level] || 0) / total * 100).toFixed(1);
+        },
+
+        fieldLabel(field) {
+            const labels = {
+                'title': 'Название',
+                'brand': 'Бренд',
+                'category': 'Категория',
+                'vendor_code': 'Артикул',
+                'country': 'Страна',
+                'gender': 'Пол',
+                'barcode': 'Баркод',
+                'description': 'Описание',
+                'colors': 'Цвета',
+                'materials': 'Материалы',
+                'photo_urls': 'Фото',
+            };
+            return labels[field] || field;
+        },
+
+        marketplaceLabel(field) {
+            const labels = {
+                'wb_subject_id': 'WB категория (ID)',
+                'wb_subject_name': 'WB категория (название)',
+                'characteristics': 'Характеристики WB',
+                'sizes': 'Размеры',
+                'dimensions': 'Габариты (д/ш/в/вес)',
+                'ai_seo_title': 'AI SEO заголовок',
+                'ai_description': 'AI описание',
+                'ai_keywords': 'AI ключевые слова',
+                'ai_bullets': 'AI преимущества',
+                'marketplace_data': 'Данные для WB',
+            };
+            return labels[field] || field;
+        },
+
+        eventTypeClass(type) {
+            const classes = {
+                'sync': 'bg-blue-100 text-blue-700',
+                'ai_parse': 'bg-purple-100 text-purple-700',
+                'validate': 'bg-green-100 text-green-700',
+                'normalize': 'bg-teal-100 text-teal-700',
+                'pre_validate': 'bg-yellow-100 text-yellow-700',
+            };
+            return classes[type] || 'bg-gray-100 text-gray-700';
+        },
+
+        formatDate(iso) {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+        }
+    };
+}
+</script>
+{% endblock %}

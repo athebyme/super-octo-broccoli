@@ -8,6 +8,8 @@ Key features:
 - Post-validation of AI responses against the marketplace schema
 - Dictionary fuzzy-matching to auto-correct AI output
 - Two-pass strategy: bulk parse + targeted re-query for missed required fields
+- Few-shot examples from validated products of the same category
+- AI response caching via content hash
 """
 import json
 import logging
@@ -66,16 +68,22 @@ class MarketplaceAwareParsingTask(AITask):
     Generates per-field prompts and validates AI output.
     """
 
-    def __init__(self, client, characteristics: List[MarketplaceCategoryCharacteristic], custom_instruction: str = ""):
+    def __init__(self, client, characteristics: List[MarketplaceCategoryCharacteristic],
+                 custom_instruction: str = "", category_id: int = None):
         super().__init__(client, custom_instruction)
         self.characteristics = characteristics
+        self.category_id = category_id
         # Build lookup for validation
         self._charc_by_name = {c.name: c for c in characteristics if c.is_enabled}
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, target_fields: List[str] = None) -> str:
         field_blocks = []
         for c in self.characteristics:
             if not c.is_enabled:
+                continue
+
+            # Если указаны целевые поля (2-й проход) — показываем только их
+            if target_fields and c.name not in target_fields:
                 continue
 
             # Type label
@@ -126,23 +134,83 @@ class MarketplaceAwareParsingTask(AITask):
 
             field_blocks.append(block)
 
-        sys_prompt = (
-            "Ты — эксперт по извлечению характеристик товаров для маркетплейсов.\n"
-            "Извлеки характеристики СТРОГО по схеме ниже из данных товара.\n\n"
-            "ПРАВИЛА:\n"
-            "1. Ответ — ТОЛЬКО валидный JSON объект. Без markdown-блоков (```), без комментариев.\n"
-            "2. Ключи JSON = точные имена FIELD ниже.\n"
-            "3. Для TYPE=NUMBER верни число (int/float), НЕ строку, НЕ массив.\n"
-            "4. Для TYPE=STRING ARRAY верни массив строк: [\"значение\"].\n"
-            "5. Если есть ALLOWED VALUES — значение ДОЛЖНО совпадать с одним из них.\n"
-            "6. Если REQUIRED поле не удалось найти — лучше пропусти (не ставь null).\n"
-            "7. НЕ придумывай характеристики, которых нет в списке.\n"
-            "8. Если в тексте единица измерения отличается от UNIT — конвертируй.\n\n"
-            "СХЕМА ХАРАКТЕРИСТИК:\n\n"
-        )
+        is_retry = bool(target_fields)
+        if is_retry:
+            sys_prompt = (
+                "Ты — эксперт по извлечению характеристик товаров для маркетплейсов.\n"
+                "ВАЖНО: Нижеперечисленные поля НЕ БЫЛИ заполнены при первом проходе.\n"
+                "Постарайся МАКСИМАЛЬНО точно извлечь их из данных товара.\n"
+                "Если данные позволяют — заполни обязательно. Используй логику и контекст.\n\n"
+                "ПРАВИЛА:\n"
+                "1. Ответ — ТОЛЬКО валидный JSON объект.\n"
+                "2. Ключи JSON = точные имена FIELD ниже.\n"
+                "3. Для TYPE=NUMBER верни число (int/float).\n"
+                "4. Для TYPE=STRING ARRAY верни массив строк.\n"
+                "5. Если есть ALLOWED VALUES — значение ДОЛЖНО совпадать с одним из них.\n\n"
+                "ПОЛЯ ДЛЯ ЗАПОЛНЕНИЯ:\n\n"
+            )
+        else:
+            sys_prompt = (
+                "Ты — эксперт по извлечению характеристик товаров для маркетплейсов.\n"
+                "Извлеки характеристики СТРОГО по схеме ниже из данных товара.\n\n"
+                "ПРАВИЛА:\n"
+                "1. Ответ — ТОЛЬКО валидный JSON объект. Без markdown-блоков (```), без комментариев.\n"
+                "2. Ключи JSON = точные имена FIELD ниже.\n"
+                "3. Для TYPE=NUMBER верни число (int/float), НЕ строку, НЕ массив.\n"
+                "4. Для TYPE=STRING ARRAY верни массив строк: [\"значение\"].\n"
+                "5. Если есть ALLOWED VALUES — значение ДОЛЖНО совпадать с одним из них.\n"
+                "6. Если REQUIRED поле не удалось найти — лучше пропусти (не ставь null).\n"
+                "7. НЕ придумывай характеристики, которых нет в списке.\n"
+                "8. Если в тексте единица измерения отличается от UNIT — конвертируй.\n\n"
+                "СХЕМА ХАРАКТЕРИСТИК:\n\n"
+            )
+
         sys_prompt += "\n".join(field_blocks)
 
+        # Добавляем few-shot примеры из уже валидированных товаров
+        if not is_retry:
+            examples = self._get_validated_examples(limit=2)
+            if examples:
+                sys_prompt += "\n\nПРИМЕРЫ ПРАВИЛЬНОГО ЗАПОЛНЕНИЯ:\n"
+                for ex in examples:
+                    sys_prompt += f"\nВход: {ex['title']}\n"
+                    sys_prompt += f"Выход: {json.dumps(ex['parsed'], ensure_ascii=False)}\n"
+
         return sys_prompt
+
+    def _get_validated_examples(self, limit: int = 2) -> List[Dict]:
+        """
+        Получить примеры из уже успешно валидированных товаров той же категории.
+        Используется для few-shot prompting.
+        """
+        if not self.category_id:
+            return []
+
+        try:
+            examples = []
+            products = SupplierProduct.query.filter(
+                SupplierProduct.wb_subject_id == self.category_id,
+                SupplierProduct.marketplace_validation_status == 'valid',
+                SupplierProduct.ai_marketplace_json.isnot(None),
+            ).order_by(SupplierProduct.ai_parsed_at.desc()).limit(limit).all()
+
+            for p in products:
+                try:
+                    parsed = json.loads(p.ai_marketplace_json)
+                    # Убираем мета-данные из примера
+                    parsed.pop('_meta', None)
+                    if parsed and p.title:
+                        examples.append({
+                            'title': p.title[:100],
+                            'parsed': parsed,
+                        })
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+            return examples
+        except Exception as e:
+            logger.debug(f"Could not load few-shot examples: {e}")
+            return []
 
     def build_user_prompt(self, **kwargs) -> str:
         product_info = kwargs.get('product_info', {})
@@ -360,3 +428,110 @@ class MarketplaceAwareParsingTask(AITask):
             else:
                 return None  # Can't salvage all values
         return result if result else None
+
+    # ------------------------------------------------------------------
+    # Two-pass execution with caching
+    # ------------------------------------------------------------------
+
+    def execute_two_pass(self, **kwargs) -> Tuple[bool, Optional[Dict], Optional[str]]:
+        """
+        Двухпроходное выполнение AI-парсинга:
+
+        Проход 1: Полный парсинг всех характеристик.
+        Проход 2: Точечный re-query только для пропущенных обязательных полей.
+
+        Также поддерживает кэширование через AIParsingCache.
+        """
+        product = kwargs.get('product')
+        product_info = kwargs.get('product_info', {})
+
+        # Проверяем кэш
+        if product:
+            from services.ai_parsing_cache import AIParsingCache
+            product_data = product.get_all_data_for_parsing() if hasattr(product, 'get_all_data_for_parsing') else product_info
+            if AIParsingCache.is_cache_valid(product, product_data):
+                cached = AIParsingCache.get_cached(product)
+                if cached:
+                    logger.info(f"AI parse cache hit for product {product.external_id}")
+                    return True, cached, None
+
+        # Проход 1: Полный парсинг
+        success, result, error = self.execute(**kwargs)
+        if not success or result is None:
+            return success, result, error
+
+        meta = result.get('_meta', {})
+        missing_required = meta.get('missing_required', [])
+
+        # Проход 2: Точечный retry для пропущенных обязательных полей
+        if missing_required:
+            logger.info(
+                f"Two-pass: {len(missing_required)} required fields missing, "
+                f"starting pass 2: {missing_required}"
+            )
+            retry_result = self._execute_targeted_retry(missing_required, **kwargs)
+
+            if retry_result:
+                # Мержим результаты
+                for field_name, value in retry_result.items():
+                    if field_name != '_meta' and field_name not in result:
+                        result[field_name] = value
+
+                # Пересчитываем метаданные
+                still_missing = [
+                    f for f in missing_required if f not in result
+                ]
+                result['_meta'] = {
+                    'total_fields': meta.get('total_fields', 0),
+                    'filled_fields': len([k for k in result if k != '_meta']),
+                    'missing_required': still_missing,
+                    'validation_issues': meta.get('validation_issues', []),
+                    'two_pass_recovered': [f for f in missing_required if f in result],
+                }
+
+                logger.info(
+                    f"Two-pass result: recovered {len(missing_required) - len(still_missing)}"
+                    f"/{len(missing_required)} fields"
+                )
+
+        # Сохраняем в кэш
+        if product:
+            from services.ai_parsing_cache import AIParsingCache
+            product_data = product.get_all_data_for_parsing() if hasattr(product, 'get_all_data_for_parsing') else product_info
+            model_name = getattr(self.client, 'model', '')
+            AIParsingCache.save_to_cache(product, product_data, result, model_used=model_name)
+
+        return True, result, None
+
+    def _execute_targeted_retry(
+        self, missing_fields: List[str], **kwargs
+    ) -> Optional[Dict]:
+        """
+        Второй проход: запрос AI только для конкретных пропущенных полей.
+        Использует более агрессивный промпт.
+        """
+        try:
+            system_prompt = self.get_system_prompt(target_fields=missing_fields)
+            user_prompt = self.build_user_prompt(**kwargs)
+
+            # Добавляем контекст о том, что это повторная попытка
+            user_prompt += (
+                f"\n\nВАЖНО: При предыдущей попытке не удалось извлечь "
+                f"следующие ОБЯЗАТЕЛЬНЫЕ поля: {', '.join(missing_fields)}. "
+                f"Пожалуйста, постарайся заполнить их максимально точно."
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+
+            response = self.client.chat_completion(messages)
+            if not response:
+                return None
+
+            return self.parse_response(response)
+
+        except Exception as e:
+            logger.error(f"Targeted retry failed: {e}")
+            return None

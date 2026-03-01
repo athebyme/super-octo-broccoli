@@ -798,6 +798,100 @@ def register_supplier_routes(app):
         ok = SupplierService.cancel_ai_parse_job(job_id)
         return jsonify({'cancelled': ok})
 
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-by-filter', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_parse_by_filter(supplier_id):
+        """Массовый AI парсинг: собрать все товары по фильтрам и запустить job."""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Поставщик не найден'}), 404
+
+        # Фильтры из формы
+        search = request.form.get('search', '').strip()
+        stock_status = request.form.get('stock_status', '').strip()
+        parse_status = request.form.get('parse_status', '').strip()
+        fill_max = request.form.get('fill_max', '').strip()
+        limit = request.form.get('limit', 0, type=int)  # 0 = без лимита
+        max_workers = request.form.get('max_workers', 4, type=int)
+        max_workers = max(1, min(max_workers, 8))
+        model_override = request.form.get('model_override', '').strip() or None
+
+        # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)
+        query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+
+        if search:
+            search_term = f'%{search}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.title.ilike(search_term),
+                    SupplierProduct.external_id.ilike(search_term),
+                    SupplierProduct.brand.ilike(search_term),
+                )
+            )
+        if stock_status == 'in_stock':
+            query = query.filter(SupplierProduct.supplier_status == 'in_stock')
+        elif stock_status == 'out_of_stock':
+            query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
+
+        if parse_status == 'not_parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.is_(None))
+        elif parse_status == 'parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.isnot(None))
+        elif parse_status == 'fill_below' and fill_max:
+            try:
+                fill_threshold = float(fill_max)
+                query = query.filter(
+                    db.or_(
+                        SupplierProduct.marketplace_fill_pct.is_(None),
+                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                    )
+                )
+            except (ValueError, TypeError):
+                pass
+
+        # Собираем ID (с опциональным лимитом)
+        q = query.with_entities(SupplierProduct.id).order_by(SupplierProduct.title)
+        if limit > 0:
+            q = q.limit(limit)
+        product_ids = [row[0] for row in q.all()]
+
+        if not product_ids:
+            return jsonify({'error': 'По фильтрам не найдено товаров'}), 400
+
+        # Ограничение — не больше 10000 за раз
+        if len(product_ids) > 10000:
+            product_ids = product_ids[:10000]
+
+        result = SupplierService.start_ai_parse_job(
+            supplier_id, product_ids,
+            admin_user_id=current_user.id,
+            max_workers=max_workers,
+            model_override=model_override,
+        )
+
+        if result.get('error'):
+            return jsonify({'error': result['error']}), 400
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='start_ai_parse_by_filter',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'job_id': result['job_id'],
+                'count': result['total'],
+                'filters': {
+                    'search': search, 'stock_status': stock_status,
+                    'parse_status': parse_status, 'fill_max': fill_max,
+                    'limit': limit,
+                },
+            },
+            request=request
+        )
+
+        return jsonify(result)
+
     @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/refresh-data')
     @login_required
     @admin_required
@@ -1272,6 +1366,208 @@ def register_supplier_routes(app):
             return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
         return redirect(url_for('supplier_catalog'))
 
+    # -------------------------------------------------------------------
+    # Дашборд качества парсинга (HTML)
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/parsing-quality/dashboard')
+    @login_required
+    @admin_required
+    def admin_supplier_parsing_quality_dashboard(supplier_id):
+        """HTML дашборд качества парсинга."""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            flash('Поставщик не найден', 'danger')
+            return redirect(url_for('admin_suppliers'))
+        return render_template(
+            'admin_supplier_parsing_quality.html',
+            supplier=supplier,
+        )
+
+    # -------------------------------------------------------------------
+    # API: Качество парсинга
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/parsing-quality')
+    @login_required
+    @admin_required
+    def admin_supplier_parsing_quality(supplier_id):
+        """Дашборд качества парсинга для поставщика (JSON API)."""
+        from models import ParsingLog
+        from services.parsing_confidence import ParsingConfidenceScorer
+        from services.ai_parsing_cache import AIParsingCache
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        # Распределение по качеству
+        quality_dist = ParsingConfidenceScorer.get_quality_distribution(supplier_id)
+
+        # Статистика AI-кэша
+        cache_stats = AIParsingCache.get_cache_stats(supplier_id)
+
+        # Последние логи парсинга
+        recent_logs = ParsingLog.query.filter_by(
+            supplier_id=supplier_id
+        ).order_by(ParsingLog.created_at.desc()).limit(10).all()
+
+        logs_data = []
+        for log in recent_logs:
+            logs_data.append({
+                'event_type': log.event_type,
+                'created_at': log.created_at.isoformat() if log.created_at else None,
+                'total_products': log.total_products,
+                'processed_successfully': log.processed_successfully,
+                'errors_count': log.errors_count,
+                'duration_seconds': log.duration_seconds,
+                'field_fill_rates': log.field_fill_rates,
+                'ai_cache_hits': log.ai_cache_hits,
+                'ai_cache_misses': log.ai_cache_misses,
+            })
+
+        # Средняя заполненность по полям (из последнего лога)
+        field_fill = {}
+        if recent_logs and recent_logs[0].field_fill_rates:
+            field_fill = recent_logs[0].field_fill_rates
+
+        # Маркетплейсовые характеристики — считаем из БД
+        marketplace_fill = {}
+        all_sp = SupplierProduct.query.filter_by(supplier_id=supplier_id).limit(5000).all()
+        if all_sp:
+            total = len(all_sp)
+            # WB категория
+            marketplace_fill['wb_subject_id'] = round(
+                sum(1 for p in all_sp if p.wb_subject_id) / total, 3)
+            marketplace_fill['wb_subject_name'] = round(
+                sum(1 for p in all_sp if p.wb_subject_name) / total, 3)
+            # Уверенность маппинга (средняя по тем, у кого есть)
+            confs = [p.category_confidence for p in all_sp if p.category_confidence and p.category_confidence > 0]
+            marketplace_fill['category_confidence_avg'] = round(
+                sum(confs) / len(confs), 3) if confs else 0.0
+            # Характеристики WB
+            marketplace_fill['characteristics'] = round(
+                sum(1 for p in all_sp if p.characteristics_json and p.characteristics_json not in ('[]', '{}', '')) / total, 3)
+            # Размеры
+            marketplace_fill['sizes'] = round(
+                sum(1 for p in all_sp if p.sizes_json and p.sizes_json not in ('[]', '{}', '')) / total, 3)
+            # Габариты
+            marketplace_fill['dimensions'] = round(
+                sum(1 for p in all_sp if p.dimensions_json and p.dimensions_json not in ('[]', '{}', '')) / total, 3)
+            # AI-контент
+            marketplace_fill['ai_seo_title'] = round(
+                sum(1 for p in all_sp if p.ai_seo_title) / total, 3)
+            marketplace_fill['ai_description'] = round(
+                sum(1 for p in all_sp if p.ai_description) / total, 3)
+            marketplace_fill['ai_keywords'] = round(
+                sum(1 for p in all_sp if p.ai_keywords_json and p.ai_keywords_json not in ('[]', '')) / total, 3)
+            marketplace_fill['ai_bullets'] = round(
+                sum(1 for p in all_sp if p.ai_bullets_json and p.ai_bullets_json not in ('[]', '')) / total, 3)
+            # Маркетплейс-специфичные поля
+            marketplace_fill['marketplace_data'] = round(
+                sum(1 for p in all_sp if p.ai_marketplace_json and p.ai_marketplace_json not in ('{}', '')) / total, 3)
+            # Статус валидации
+            valid_count = sum(1 for p in all_sp if p.marketplace_validation_status == 'valid')
+            partial_count = sum(1 for p in all_sp if p.marketplace_validation_status == 'partial')
+            invalid_count = sum(1 for p in all_sp if p.marketplace_validation_status == 'invalid')
+            marketplace_fill['validation_stats'] = {
+                'valid': valid_count,
+                'partial': partial_count,
+                'invalid': invalid_count,
+                'not_checked': total - valid_count - partial_count - invalid_count,
+            }
+
+        return jsonify({
+            'supplier': {'id': supplier.id, 'name': supplier.name, 'code': supplier.code},
+            'quality_distribution': quality_dist,
+            'ai_cache': cache_stats,
+            'field_fill_rates': field_fill,
+            'marketplace_fill_rates': marketplace_fill,
+            'recent_logs': logs_data,
+            'total_products': supplier.total_products,
+        })
+
+    # -------------------------------------------------------------------
+    # API: Проверка фото URL
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/verify-photos', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_verify_photos(supplier_id):
+        """Проверка доступности URL фотографий товаров поставщика."""
+        from services.photo_url_verifier import PhotoURLVerifier
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        limit = request.json.get('limit', 100) if request.is_json else 100
+        result = PhotoURLVerifier.verify_supplier_photos(
+            supplier_id, limit=min(limit, 500)
+        )
+
+        broken_details = []
+        for detail in result.details[:50]:
+            broken_details.append({
+                'product_id': detail.product_id,
+                'total_urls': detail.total_urls,
+                'valid_urls': detail.valid_urls,
+                'broken_urls': detail.broken_urls[:5],
+                'errors': dict(list(detail.errors.items())[:5]),
+            })
+
+        return jsonify({
+            'total_products': result.total_products,
+            'products_checked': result.products_checked,
+            'products_with_broken_photos': result.products_with_broken_photos,
+            'total_urls_checked': result.total_urls_checked,
+            'total_broken_urls': result.total_broken_urls,
+            'duration_seconds': round(result.duration_seconds, 2),
+            'broken_details': broken_details,
+        })
+
+    # -------------------------------------------------------------------
+    # API: Предпросмотр CSV перед синхронизацией
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/csv-preview', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_csv_preview(supplier_id):
+        """Предпросмотр CSV файла перед синхронизацией."""
+        from services.csv_pre_validator import CSVPreValidator
+        from services.supplier_service import SupplierCSVParser
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        parser = SupplierCSVParser(supplier)
+
+        # Пробуем скачать raw для предвалидации
+        raw_bytes = parser.fetch_csv_raw()
+        if not raw_bytes:
+            return jsonify({'error': 'Failed to download CSV'}), 400
+
+        pre_result = CSVPreValidator.validate_raw(
+            raw_bytes,
+            expected_delimiter=supplier.csv_delimiter,
+            expected_encoding=supplier.csv_encoding,
+            column_mapping=supplier.csv_column_mapping,
+        )
+
+        return jsonify({
+            'is_valid': pre_result.is_valid,
+            'encoding_detected': pre_result.encoding_detected,
+            'encoding_confidence': pre_result.encoding_confidence,
+            'delimiter_detected': pre_result.delimiter_detected,
+            'total_rows': pre_result.total_rows,
+            'columns_count': pre_result.columns_count,
+            'empty_rows': pre_result.empty_rows,
+            'duplicate_ids': pre_result.duplicate_ids,
+            'sample_products': pre_result.sample_products,
+            'warnings': pre_result.warnings,
+            'errors': pre_result.errors,
+            'field_fill_rates': pre_result.field_fill_rates,
+        })
+
 
 # ============================================================================
 # HELPERS
@@ -1315,6 +1611,15 @@ def _extract_supplier_form_data(form) -> dict:
     data['is_active'] = form.get('is_active') == 'on'
     data['resize_images'] = form.get('resize_images') == 'on'
     data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
+    data['csv_has_header'] = form.get('csv_has_header') == 'on'
+
+    # JSON поля
+    csv_column_mapping = form.get('csv_column_mapping', '').strip()
+    if csv_column_mapping:
+        try:
+            data['csv_column_mapping'] = json.loads(csv_column_mapping)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     return data
 
