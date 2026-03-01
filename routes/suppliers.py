@@ -825,15 +825,23 @@ def register_supplier_routes(app):
     def admin_supplier_marketplaces(supplier_id):
         """Интеграции с маркетплейсами для поставщика"""
         supplier = Supplier.query.get_or_404(supplier_id)
-        from models import Marketplace, MarketplaceConnection
+        from models import Marketplace, MarketplaceConnection, MarketplaceCategory
         marketplaces = Marketplace.query.all()
         connections_qs = MarketplaceConnection.query.filter_by(supplier_id=supplier.id).all()
         connections = {c.marketplace_id: c for c in connections_qs}
-        
-        return render_template('admin_supplier_marketplaces.html', 
-                               supplier=supplier, 
-                               marketplaces=marketplaces, 
-                               connections=connections)
+
+        # Pre-load only enabled categories per marketplace for dropdown (avoid loading 10k+ categories)
+        enabled_categories = {}
+        for mp in marketplaces:
+            enabled_categories[mp.id] = MarketplaceCategory.query.filter_by(
+                marketplace_id=mp.id, is_enabled=True
+            ).order_by(MarketplaceCategory.subject_name).all()
+
+        return render_template('admin_supplier_marketplaces.html',
+                               supplier=supplier,
+                               marketplaces=marketplaces,
+                               connections=connections,
+                               enabled_categories=enabled_categories)
 
     @app.route('/admin/suppliers/<int:supplier_id>/marketplaces/update', methods=['POST'])
     @login_required

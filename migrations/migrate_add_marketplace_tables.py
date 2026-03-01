@@ -53,7 +53,7 @@ def run_migration():
 
     with app.app_context():
         # 1. Создаем новые таблицы (db.create_all безопасен — не трогает существующие)
-        print("\n[1/3] Создание таблиц...")
+        print("\n[1/2] Создание таблиц...")
         db.create_all()
 
         tables_to_check = [
@@ -72,14 +72,10 @@ def run_migration():
                 print(f"  !! {t} НЕ СОЗДАНА")
 
         # 2. Добавляем колонки в supplier_products
-        print("\n[2/3] Колонки в supplier_products...")
+        print("\n[2/2] Колонки в supplier_products...")
         add_column_safe('supplier_products', 'marketplace_fields_json', 'TEXT')
         add_column_safe('supplier_products', 'marketplace_validation_status', 'VARCHAR(50)')
         add_column_safe('supplier_products', 'marketplace_fill_pct', 'FLOAT')
-
-        # 3. Добавляем колонки в marketplace_directories (created_at добавлена позже)
-        print("\n[3/3] Колонки в marketplace_directories...")
-        add_column_safe('marketplace_directories', 'created_at', 'DATETIME')
 
         db.session.commit()
         print("\n" + "=" * 60)

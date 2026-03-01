@@ -2404,16 +2404,6 @@ class SupplierProduct(db.Model):
         except Exception:
             return {}
 
-    def get_marketplace_fields(self) -> dict:
-        """Получить валидированные данные маркетплейса"""
-        if not self.marketplace_fields_json:
-            return {}
-        try:
-            import json
-            return json.loads(self.marketplace_fields_json)
-        except Exception:
-            return {}
-
     def get_all_data_for_parsing(self) -> dict:
         """Собрать все данные товара для AI парсинга"""
         import json
@@ -2744,7 +2734,6 @@ class MarketplaceDirectory(db.Model):
     data_json = db.Column(db.Text, nullable=False)             # Cached response from API
     synced_at = db.Column(db.DateTime)
     items_count = db.Column(db.Integer, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     marketplace = db.relationship('Marketplace', backref=db.backref('directories', lazy='dynamic', cascade='all, delete-orphan'))
 

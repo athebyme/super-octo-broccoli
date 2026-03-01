@@ -285,14 +285,15 @@ class MarketplaceValidator:
 
     @classmethod
     def validate_characteristic_live(
-        cls, value: Any, charc_id: int, marketplace_id: int
+        cls, value: Any, charc_id: int, category_id: int
     ) -> Dict[str, Any]:
         """
         Live validation of a single characteristic value.
         Used by the frontend for instant feedback.
+        Requires category_id because charc_id is not globally unique.
         """
         charc = MarketplaceCategoryCharacteristic.query.filter_by(
-            marketplace_id=marketplace_id,
+            category_id=category_id,
             charc_id=charc_id
         ).first()
 
