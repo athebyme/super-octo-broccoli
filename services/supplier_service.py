@@ -34,6 +34,28 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+def _get_marketplace_categories_block(supplier_id: int) -> str:
+    """
+    Получить текстовый блок включённых категорий маркетплейса для AI промпта.
+    Если у поставщика нет активных подключений к маркетплейсам — возвращает ''.
+    """
+    try:
+        from models import MarketplaceConnection
+        from services.marketplace_service import MarketplaceService
+
+        conn = MarketplaceConnection.query.filter_by(
+            supplier_id=supplier_id,
+            is_active=True
+        ).first()
+        if not conn:
+            return ""
+
+        return MarketplaceService.get_enabled_categories_for_prompt(conn.marketplace_id)
+    except Exception as e:
+        logger.debug(f"Could not load marketplace categories for supplier {supplier_id}: {e}")
+        return ""
+
+
 # ============================================================================
 # RESULT DATACLASSES
 # ============================================================================
@@ -1618,7 +1640,12 @@ class SupplierService:
         # Собираем все данные товара
         product_data = product.get_all_data_for_parsing()
 
-        success, result, error = ai_svc.full_product_parse(product_data)
+        # Включённые категории маркетплейса для AI
+        mp_categories = _get_marketplace_categories_block(supplier.id)
+
+        success, result, error = ai_svc.full_product_parse(
+            product_data, marketplace_categories_block=mp_categories
+        )
 
         if success and result:
             # Сохраняем полный результат парсинга
@@ -1748,6 +1775,9 @@ class SupplierService:
                 )
                 return
 
+            # Resolve marketplace categories once for all workers
+            mp_categories = _get_marketplace_categories_block(supplier_id)
+
             # --- Параллельный режим ---
             effective_workers = min(max_workers, len(product_ids))
             logger.info(
@@ -1819,7 +1849,9 @@ class SupplierService:
                                 'status': 'error', 'error': 'AI сервис недоступен',
                             }
 
-                        success, result, error = worker_svc.full_product_parse(product_data)
+                        success, result, error = worker_svc.full_product_parse(
+                            product_data, marketplace_categories_block=mp_categories
+                        )
 
                         if success and result:
                             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
@@ -1942,7 +1974,10 @@ class SupplierService:
 
         try:
             product_data = product.get_all_data_for_parsing()
-            success, result, error = ai_svc.full_product_parse(product_data)
+            mp_categories = _get_marketplace_categories_block(supplier_id)
+            success, result, error = ai_svc.full_product_parse(
+                product_data, marketplace_categories_block=mp_categories
+            )
 
             if success and result:
                 product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
@@ -1950,10 +1985,10 @@ class SupplierService:
                 marketplace_data = _build_marketplace_data(product, result)
                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                 _apply_parsed_data_to_product(product, result)
-                
+
                 # Интеграция с MarketplaceAwareParsingTask
                 _run_marketplace_aware_parse(product, result, ai_svc)
-                
+
                 product.updated_at = datetime.utcnow()
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 

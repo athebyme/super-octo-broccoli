@@ -71,12 +71,17 @@ def categories(marketplace_id):
             grouped[parent] = []
         grouped[parent].append(cat)
 
+    enabled_count = MarketplaceCategory.query.filter_by(
+        marketplace_id=marketplace_id, is_enabled=True
+    ).count()
+
     return render_template(
         'admin_marketplace_categories.html',
         marketplace=marketplace,
         grouped_categories=grouped,
         search=search,
-        total_count=len(all_categories)
+        total_count=len(all_categories),
+        enabled_count=enabled_count
     )
 
 
@@ -159,6 +164,41 @@ def sync_characteristics(category_id):
     else:
         flash(f"Ошибка синхронизации: {result.get('error')}", 'danger')
     return redirect(url_for('marketplaces.category_detail', category_id=category_id))
+
+
+@marketplaces_bp.route('/categories/<int:category_id>/toggle', methods=['POST'])
+@login_required
+@admin_required
+def toggle_category(category_id):
+    """Toggle is_enabled for a single category."""
+    category = MarketplaceCategory.query.get_or_404(category_id)
+    data = request.json
+    category.is_enabled = bool(data.get('is_enabled', not category.is_enabled))
+    db.session.commit()
+    return jsonify({"success": True, "is_enabled": category.is_enabled})
+
+
+@marketplaces_bp.route('/<int:marketplace_id>/categories/toggle_group', methods=['POST'])
+@login_required
+@admin_required
+def toggle_category_group(marketplace_id):
+    """Toggle is_enabled for all categories in a parent group."""
+    data = request.json
+    parent_name = data.get('parent_name')
+    is_enabled = bool(data.get('is_enabled', True))
+
+    if parent_name is None:
+        return jsonify({"success": False, "error": "parent_name required"}), 400
+
+    query = MarketplaceCategory.query.filter_by(marketplace_id=marketplace_id)
+    if parent_name == '__none__':
+        query = query.filter(MarketplaceCategory.parent_name.is_(None))
+    else:
+        query = query.filter_by(parent_name=parent_name)
+
+    count = query.update({MarketplaceCategory.is_enabled: is_enabled}, synchronize_session='fetch')
+    db.session.commit()
+    return jsonify({"success": True, "updated": count, "is_enabled": is_enabled})
 
 
 @marketplaces_bp.route('/characteristics/<int:charc_id>/update', methods=['POST'])

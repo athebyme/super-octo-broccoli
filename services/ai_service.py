@@ -2471,10 +2471,24 @@ class AllCharacteristicsTask(AITask):
 class FullProductParsingTask(AITask):
     """Задача полного AI парсинга товара — извлечение ВСЕХ возможных характеристик"""
 
+    def __init__(self, client, custom_instruction: str = "", marketplace_categories_block: str = ""):
+        super().__init__(client, custom_instruction)
+        self.marketplace_categories_block = marketplace_categories_block
+
     def get_system_prompt(self) -> str:
         if self.custom_instruction:
-            return self.custom_instruction
-        return DEFAULT_INSTRUCTIONS["full_product_parsing"]["template"]
+            base = self.custom_instruction
+        else:
+            base = DEFAULT_INSTRUCTIONS["full_product_parsing"]["template"]
+
+        if self.marketplace_categories_block:
+            base += (
+                "\n\n══════════════════════════════════════════════════════════════\n"
+                + self.marketplace_categories_block
+                + "\n══════════════════════════════════════════════════════════════"
+            )
+
+        return base
 
     def build_user_prompt(self, **kwargs) -> str:
         product_data = kwargs.get('product_data', {})
@@ -3360,13 +3374,16 @@ class AIService:
 
     def full_product_parse(
         self,
-        product_data: Dict
+        product_data: Dict,
+        marketplace_categories_block: str = ""
     ) -> Tuple[bool, Dict, str]:
         """
         Полный AI парсинг товара — извлекает ВСЕ возможные характеристики.
 
         Args:
             product_data: Словарь со всеми данными товара (из get_all_data_for_parsing())
+            marketplace_categories_block: Текстовый блок с включёнными категориями маркетплейса
+                                          (из MarketplaceService.get_enabled_categories_for_prompt())
 
         Returns:
             Tuple[success, {product_identity, brand_info, physical, package, materials,
@@ -3374,7 +3391,11 @@ class AIService:
                            care, origin, safety, warranty, extra, marketplace_ready,
                            parsing_meta}, error]
         """
-        task = FullProductParsingTask(self.client, self.config.custom_parsing_instruction)
+        task = FullProductParsingTask(
+            self.client,
+            self.config.custom_parsing_instruction,
+            marketplace_categories_block=marketplace_categories_block
+        )
         success, result, error = task.execute(product_data=product_data)
         if success and result:
             return True, result, ""

@@ -439,3 +439,65 @@ class MarketplaceService:
 
         db.session.commit()
         return {"success": True, "results": results}
+
+    # =========================================================================
+    # ENABLED CATEGORIES FOR AI PROMPT
+    # =========================================================================
+
+    @classmethod
+    def get_enabled_categories_for_prompt(cls, marketplace_id: int) -> str:
+        """
+        Формирует текстовый блок со списком включённых категорий
+        для вставки в AI-промпт. Группирует по parent_name.
+
+        Возвращает пустую строку если нет включённых категорий.
+        """
+        categories = MarketplaceCategory.query.filter_by(
+            marketplace_id=marketplace_id,
+            is_enabled=True
+        ).order_by(
+            MarketplaceCategory.parent_name,
+            MarketplaceCategory.subject_name
+        ).all()
+
+        if not categories:
+            return ""
+
+        lines = []
+        lines.append("ДОСТУПНЫЕ КАТЕГОРИИ МАРКЕТПЛЕЙСА (wb_subject):")
+        lines.append("Выбери ОДНУ наиболее подходящую категорию из списка ниже.")
+        lines.append("Значение wb_subject ДОЛЖНО точно совпадать с одним из предметов.")
+        lines.append("")
+
+        current_parent = None
+        for cat in categories:
+            parent = cat.parent_name or 'Другое'
+            if parent != current_parent:
+                current_parent = parent
+                lines.append(f"  [{parent}]")
+            lines.append(f"    - {cat.subject_name} (ID: {cat.subject_id})")
+
+        lines.append("")
+        lines.append(f"Всего доступно {len(categories)} категорий.")
+
+        return "\n".join(lines)
+
+    @classmethod
+    def get_enabled_categories_list(cls, marketplace_id: int) -> List[Dict[str, Any]]:
+        """
+        Возвращает список включённых категорий в виде простых dict-ов
+        для использования в AI-задачах или API.
+        """
+        categories = MarketplaceCategory.query.filter_by(
+            marketplace_id=marketplace_id,
+            is_enabled=True
+        ).order_by(MarketplaceCategory.subject_name).all()
+
+        return [
+            {
+                "subject_id": c.subject_id,
+                "subject_name": c.subject_name,
+                "parent_name": c.parent_name,
+            }
+            for c in categories
+        ]
