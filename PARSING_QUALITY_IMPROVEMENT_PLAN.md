@@ -495,3 +495,421 @@ class JSONAPIFeedParser(BaseFeedParser):
 | Время парсинга 10K товаров | ~15 мин | <10 мин |
 | Расход AI-токенов на ре-синк | 100% (каждый раз) | ~30% (только изменённые) |
 | Доля битых фото | Неизвестно | <1% |
+
+---
+---
+
+# РЕАЛИЗАЦИЯ: Что сделано
+
+## Статус реализации по фазам
+
+| Фаза | Задача | Статус | Файл |
+|------|--------|--------|------|
+| 1.2 | Предпарсинг и валидация CSV | ✅ Готово | `services/csv_pre_validator.py` |
+| 1.3 | Нормализация данных | ✅ Готово | `services/data_normalizer.py` |
+| 2.1 | Многоуровневый маппинг категорий | ✅ Готово | `services/smart_category_mapper.py` |
+| 2.2 | Обратная связь от ручных коррекций | ✅ Готово | `services/smart_category_mapper.py` + `routes/auto_import.py` |
+| 3.1 | Кэширование AI-результатов | ✅ Готово | `services/ai_parsing_cache.py` |
+| 3.4 | Конфиденс-скоринг | ✅ Готово | `services/parsing_confidence.py` |
+| 4.1 | Дашборд качества парсинга | ✅ Готово | `templates/admin_supplier_parsing_quality.html` + `routes/suppliers.py` |
+| 4.2 | Structured logging (миграция БД) | ✅ Готово | `migrations/add_parsing_quality_fields.py` |
+| 5.2 | Проверка фото-URL | ✅ Готово | `services/photo_url_verifier.py` |
+| 5.3 | Обогащение из описания | ✅ Готово | `services/description_enricher.py` |
+| 6.3 | Правила автокоррекции | ✅ Готово | `services/auto_correction_rules.py` |
+
+---
+
+## Полный pipeline обработки товаров
+
+### Схема потока данных
+
+```
+CSV файл от поставщика
+        │
+        ▼
+┌─────────────────────────────────┐
+│  1. CSVPreValidator             │  services/csv_pre_validator.py
+│  - Автодетекция кодировки      │
+│  - Автодетекция разделителя    │
+│  - Подсчёт строк и колонок    │
+│  - Поиск дубликатов            │
+│  - Preview первых 5 товаров    │
+│  - Генерация warnings          │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  2. SupplierCSVParser.parse()   │  services/supplier_service.py
+│  - Парсинг CSV (sexoptovik     │
+│    или generic формат)          │
+│  - Извлечение полей в dict     │
+│  - Формирование URL фото       │
+│  - Парсинг баркодов            │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  3. DataNormalizer               │  services/data_normalizer.py
+│  - normalize_title: очистка     │
+│    пробелов, HTML, unicode      │
+│  - normalize_brand: каноническое│
+│    написание (lelo → LELO)      │
+│  - normalize_color: маппинг к   │
+│    стандартным цветам WB         │
+│  - normalize_barcode: валидация │
+│    EAN-13/EAN-8 + контр. цифра  │
+│  - normalize_materials: список  │
+│    с нормализацией каждого      │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  4. DescriptionEnricher          │  services/description_enricher.py
+│  - Извлечение размеров (regex)  │
+│  - Извлечение материалов        │
+│  - Извлечение цвета             │
+│  - Извлечение страны            │
+│  - Извлечение типа питания      │
+│  ⚠ Только пустые поля           │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  5. AutoCorrectionEngine         │  services/auto_correction_rules.py
+│  Правила (по приоритету):        │
+│  100: brand_from_title           │
+│   90: country_from_brand         │
+│   80: gender_from_category       │
+│   70: clean_title_vendor_code    │
+│   60: clean_garbage_values       │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  6. Сохранение в БД              │  services/supplier_service.py
+│  (_update_supplier_product)      │
+│                                  │
+│  6a. SmartCategoryMapper         │  services/smart_category_mapper.py
+│  - Маппинг CSV → WB категория   │
+│  - Контекстный анализ            │
+│  - Обратная связь из коррекций   │
+│                                  │
+│  6b. ParsingConfidenceScorer     │  services/parsing_confidence.py
+│  - Расчёт confidence 0.0-1.0    │
+│  - Сохранение в поле модели     │
+│                                  │
+│  6c. AIParsingCache              │  services/ai_parsing_cache.py
+│  - Хэш входных данных (SHA-256) │
+│  - Кэширование AI-результатов   │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  7. Мониторинг                   │
+│                                  │
+│  7a. Parsing Quality Dashboard   │  templates/admin_supplier_parsing_quality.html
+│  - Распределение confidence      │
+│  - Fill rates по полям           │
+│  - AI кэш статистика             │
+│  - История парсингов             │
+│                                  │
+│  7b. PhotoURLVerifier            │  services/photo_url_verifier.py
+│  - HEAD-запросы к URL фото      │
+│  - Batch проверка (10 потоков)   │
+│  - Content-Type валидация        │
+└─────────────────────────────────┘
+```
+
+### Вызов pipeline в коде
+
+```python
+# services/supplier_service.py — метод parse_and_normalize()
+def parse_and_normalize(self, csv_content: str) -> List[Dict]:
+    """Pipeline: parse → normalize → enrich → auto-correct"""
+    products = self.parse(csv_content)                        # Шаг 2
+    normalized = DataNormalizer.normalize_product_list(products)  # Шаг 3
+    normalized = DescriptionEnricher.enrich_product_list(normalized)  # Шаг 4
+    engine = get_default_engine()
+    normalized = engine.apply_to_list(normalized)             # Шаг 5
+    return normalized
+```
+
+Далее при сохранении в `_update_supplier_product()` применяются SmartCategoryMapper (шаг 6a) и ParsingConfidenceScorer (шаг 6b).
+
+---
+
+## Описание каждого сервиса
+
+### 1. `services/csv_pre_validator.py` — CSVPreValidator
+
+**Назначение:** Быстрая проверка CSV файла ДО начала полного парсинга.
+
+**Возможности:**
+- Автодетекция кодировки (cp1251, utf-8 и др.) через анализ BOM и частотных байтов
+- Автодетекция разделителя (`csv.Sniffer` + fallback на `;` / `,` / `\t`)
+- Подсчёт строк, колонок, пустых строк
+- Поиск дублей по полю `external_id`
+- Preview первых N товаров для визуальной проверки
+- Генерация списка warnings
+
+**Ключевой класс:** `CSVPreValidator`
+**Результат:** `PreValidationResult` (dataclass)
+
+```python
+result = CSVPreValidator.validate(csv_content, expected_columns=16)
+# result.is_valid, result.encoding_detected, result.delimiter_detected,
+# result.total_rows, result.duplicate_ids, result.warnings, result.sample_rows
+```
+
+---
+
+### 2. `services/data_normalizer.py` — DataNormalizer
+
+**Назначение:** Нормализация и очистка данных товаров. Работает до AI — чистые данные на входе = лучший результат.
+
+**Возможности:**
+- **Title**: Удаление двойных пробелов, HTML-entities (`&amp;` → `&`), Unicode-мусора, капитализация
+- **Brand**: Приведение к каноническому написанию по словарю (~30 брендов): `lelo` → `LELO`, `we vibe` → `We-Vibe`
+- **Color**: Нормализация русских цветов + маппинг к WB-палитре: `чёрный` = `черный` → `Черный`
+- **Barcode**: Валидация EAN-13/EAN-8 с проверкой контрольной суммы, удаление нечисловых символов
+- **Materials**: Нормализация каждого материала в списке, удаление коротких/мусорных
+
+**Ключевой класс:** `DataNormalizer` (все методы `@staticmethod`)
+
+```python
+products = DataNormalizer.normalize_product_list(raw_products)
+```
+
+---
+
+### 3. `services/smart_category_mapper.py` — SmartCategoryMapper
+
+**Назначение:** Многоуровневый маппинг категорий поставщика → WB subject_id с контекстным анализом.
+
+**Уровни маппинга (по приоритету):**
+1. **Ручные исправления** (`ProductCategoryCorrection`) → confidence 1.0
+2. **Обученные маппинги** (`CategoryMapping` в БД) → confidence из БД
+3. **Точное совпадение** (`CSV_TO_WB_EXACT_MAPPING` dict) → confidence 0.95
+4. **Контекстный поиск** (анализ title + brand + description с keyword-скорингом) → confidence 0.6–0.85
+5. **Fuzzy matching** (SequenceMatcher с порогом 0.65) → confidence по ratio
+6. **Keyword match** (базовый поиск ключевых слов) → confidence 0.5–0.75
+7. **Дефолт** → confidence 0.3
+
+**Обратная связь:**
+- `SmartCategoryMapper.learn_from_correction()` — автоматически создаёт `CategoryMapping` из ручного исправления
+- `SmartCategoryMapper.sync_corrections_to_mappings()` — bulk-синхронизация всех `ProductCategoryCorrection` в маппинги
+- Интегрировано в `routes/auto_import.py` — при каждом ручном исправлении категории вызывается `learn_from_correction()`
+
+**Контекстный анализ:**
+- Brand-category hints: словарь `brand → [(subject_id, subject_name, score)]`
+  - Пример: `satisfyer` → `(5576, 'Вакуумно-волновые стимуляторы', 0.85)`
+- Category keywords: словарь `category_id → [keywords]` для скоринга по title/description
+
+```python
+subj_id, subj_name, confidence = SmartCategoryMapper.map_category(
+    csv_category='Вибраторы', product_title='LELO Soraya 2',
+    brand='LELO', description='...', source_type='sexoptovik'
+)
+```
+
+---
+
+### 4. `services/ai_parsing_cache.py` — AIParsingCache
+
+**Назначение:** Кэширование результатов AI-парсинга на основе content hash.
+
+**Как работает:**
+- Вычисляет SHA-256 хэш из ключевых полей товара (title, description, brand, category и др.)
+- Если хэш совпадает с сохранённым `content_hash` в модели `SupplierProduct` — возвращает кэшированный результат из `ai_parsed_data_json`
+- Если данные изменились — запускает AI-парсинг и сохраняет результат + новый хэш
+
+**Экономия:** 50–80% расходов на AI при повторных синхронизациях (неизменённые товары пропускаются).
+
+```python
+cache = AIParsingCache()
+result = cache.get_or_parse(product, parse_function)
+# result: dict с AI-результатом (из кэша или свежий)
+```
+
+---
+
+### 5. `services/parsing_confidence.py` — ParsingConfidenceScorer
+
+**Назначение:** Расчёт оценки качества заполнения товара (0.0–1.0).
+
+**Формула:**
+- Базовый балл: `1.0`
+- Штрафы за отсутствие обязательных полей (веса: title 0.15, vendor_code 0.1, photos 0.1, brand 0.08, barcode 0.08, category 0.08, ...)
+- Штрафы за fuzzy-matched значения
+- Бонус за полноту заполнения необязательных полей
+
+**Использование:**
+- Сохраняется в поле `supplier_products.parsing_confidence`
+- Отображается в дашборде с цветовой кодировкой:
+  - ≥ 0.8 — зелёный (высокое качество)
+  - ≥ 0.5 — жёлтый (среднее)
+  - ≥ 0.3 — оранжевый (низкое)
+  - < 0.3 — красный (критическое)
+
+```python
+score = ParsingConfidenceScorer.score_product(product_data)
+# score: float 0.0–1.0
+```
+
+---
+
+### 6. `services/description_enricher.py` — DescriptionEnricher
+
+**Назначение:** Извлечение структурированных характеристик из текстового описания товара с помощью regex-паттернов.
+
+**Что извлекает:**
+- **Размеры:** длина, диаметр, ширина, высота, рабочая длина, вес (с конвертацией см→мм, кг→г)
+- **Материалы:** паттерны `материал: ...`, `изготовлен из ...`
+- **Цвета:** паттерн `цвет: ...`
+- **Страна:** паттерны `страна: ...`, `made in ...`, `производство: ...` + словарь стран (Китай, Россия, Германия, США, ...)
+- **Тип питания:** батарейки, USB, аккумулятор и т.д.
+
+**Принцип:** Заполняет ТОЛЬКО пустые поля — никогда не перезаписывает существующие данные.
+
+```python
+enriched = DescriptionEnricher.enrich_from_description(product_data)
+# или для списка:
+enriched_list = DescriptionEnricher.enrich_product_list(products)
+```
+
+---
+
+### 7. `services/auto_correction_rules.py` — AutoCorrectionEngine
+
+**Назначение:** Конфигурируемый движок автокоррекции с приоритетными правилами.
+
+**Встроенные правила:**
+
+| Приоритет | Имя | Условие | Действие |
+|-----------|-----|---------|----------|
+| 100 | `brand_from_title` | brand пустой, title есть | Извлечь бренд из title по словарю (~27 брендов) |
+| 90 | `country_from_brand` | country пустой, brand есть | Определить страну по бренду (~24 маппинга) |
+| 80 | `gender_from_category` | gender пустой, category есть | Определить пол по категории (женские / мужские наборы) |
+| 70 | `clean_title_vendor_code` | title и vendor_code есть | Убрать артикул поставщика из начала title |
+| 60 | `clean_garbage_values` | всегда | Удалить мусорные значения: `-`, `n/a`, `нет данных`, `null`, `undefined` и т.д. |
+
+**Расширяемость:** Можно добавлять новые правила через `engine.add_rule(CorrectionRule(...))`.
+
+```python
+engine = get_default_engine()  # Синглтон
+corrected = engine.apply_all(product_data)      # Один товар
+corrected_list = engine.apply_to_list(products)  # Список
+```
+
+---
+
+### 8. `services/photo_url_verifier.py` — PhotoURLVerifier
+
+**Назначение:** Пакетная проверка доступности URL фотографий товаров.
+
+**Как работает:**
+- HEAD-запрос к каждому URL (fallback на GET с Range при 405)
+- Проверка HTTP-статуса (>= 400 = битая ссылка)
+- Проверка Content-Type (должен быть `image/*`)
+- Параллельная проверка через `ThreadPoolExecutor` (до 10 потоков)
+- Поддержка HTTP Basic Auth для закрытых каталогов
+
+**API endpoint:** `POST /admin/suppliers/<id>/verify-photos`
+
+```python
+result = PhotoURLVerifier.verify_supplier_photos(supplier_id=1, limit=200, max_workers=10)
+# result.total_products, result.products_checked, result.total_broken_urls
+```
+
+---
+
+## Миграция базы данных
+
+**Файл:** `migrations/add_parsing_quality_fields.py`
+
+**Новые поля:**
+- `suppliers.csv_column_mapping` (TEXT/JSON) — конфигурируемый маппинг колонок
+- `suppliers.csv_has_header` (BOOLEAN) — есть ли заголовок в CSV
+- `supplier_products.parsing_confidence` (REAL) — оценка качества 0.0–1.0
+- `supplier_products.normalization_applied` (BOOLEAN) — применялась ли нормализация
+
+**Новая таблица:** `parsing_logs` — метрики каждого парсинга:
+- `supplier_id`, `event_type`, `created_at`
+- `total_products`, `processed_successfully`, `errors_count`
+- `duration_seconds`, `field_fill_rates` (JSON)
+- `ai_tokens_used`, `ai_cache_hits`, `ai_cache_misses`
+- `errors_json`, `normalization_stats`
+
+**Индексы:**
+- `idx_parsing_logs_supplier` — по `(supplier_id, created_at DESC)`
+- `idx_supplier_product_confidence` — по `(supplier_id, parsing_confidence)`
+
+**Запуск миграции:**
+```bash
+# Локально
+python migrations/add_parsing_quality_fields.py
+
+# В Docker (с явным путём к БД)
+docker exec -it seller-platform python3 -c "
+from migrations.add_parsing_quality_fields import run_migration
+run_migration('/app/data/seller_platform.db')
+"
+```
+
+---
+
+## Дашборд качества парсинга
+
+**URL:** `/admin/suppliers/<id>/parsing-quality/dashboard`
+**Шаблон:** `templates/admin_supplier_parsing_quality.html`
+
+**Компоненты:**
+1. **Карточки распределения quality** — количество товаров по уровням confidence (high/medium/low/critical) с progress-bar
+2. **Fill rates по полям** — процент заполненности каждого поля с цветовой кодировкой (зелёный ≥80%, жёлтый ≥50%, красный <50%)
+3. **Статистика AI кэша** — сколько % товаров покрыто кэшем, хиты/миссы
+4. **История парсингов** — таблица parsing_logs с типом события, количеством товаров, ошибками, длительностью
+
+**API эндпоинт для данных:** `GET /admin/suppliers/<id>/parsing-quality` (JSON)
+
+**Кнопка проверки фото:** `POST /admin/suppliers/<id>/verify-photos` — запускает batch-проверку URL фотографий
+
+---
+
+## Маршруты (routes)
+
+### Новые эндпоинты в `routes/suppliers.py`:
+
+| Метод | URL | Назначение |
+|-------|-----|------------|
+| GET | `/admin/suppliers/<id>/parsing-quality` | JSON API: метрики качества парсинга |
+| GET | `/admin/suppliers/<id>/parsing-quality/dashboard` | HTML: дашборд качества |
+| POST | `/admin/suppliers/<id>/verify-photos` | JSON API: запуск проверки фото |
+
+### Изменения в `routes/auto_import.py`:
+
+- При ручной коррекции категории (`ProductCategoryCorrection`) — автоматически вызывается `SmartCategoryMapper.learn_from_correction()` для создания `CategoryMapping`, чтобы в будущем аналогичные товары маппились автоматически.
+
+### Изменения в `templates/admin_supplier_products.html`:
+
+- Добавлена кнопка «Качество парсинга» со ссылкой на дашборд.
+
+---
+
+## Список всех созданных файлов
+
+| Файл | Тип | Описание |
+|------|-----|----------|
+| `services/csv_pre_validator.py` | Новый | Предвалидация CSV |
+| `services/data_normalizer.py` | Новый | Нормализация данных |
+| `services/smart_category_mapper.py` | Новый | Умный маппинг категорий |
+| `services/ai_parsing_cache.py` | Новый | Кэширование AI-результатов |
+| `services/parsing_confidence.py` | Новый | Скоринг качества |
+| `services/description_enricher.py` | Новый | Обогащение из описания |
+| `services/auto_correction_rules.py` | Новый | Движок автокоррекции |
+| `services/photo_url_verifier.py` | Новый | Проверка URL фото |
+| `templates/admin_supplier_parsing_quality.html` | Новый | Дашборд качества |
+| `migrations/add_parsing_quality_fields.py` | Новый | Миграция БД |
+| `services/supplier_service.py` | Изменён | Интеграция pipeline |
+| `routes/suppliers.py` | Изменён | Новые эндпоинты |
+| `routes/auto_import.py` | Изменён | Обратная связь из коррекций |
+| `templates/admin_supplier_products.html` | Изменён | Кнопка дашборда |
