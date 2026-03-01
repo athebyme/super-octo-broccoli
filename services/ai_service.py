@@ -1454,98 +1454,139 @@ class AIClient:
             payload["response_format"] = response_format
 
         self.last_error = None
+        max_retries = 3
+        retryable_statuses = {429, 500, 502, 503, 504}
 
-        try:
-            logger.info(f"🤖 AI запрос к {self.config.provider.value}: модель={self.config.model}")
-            logger.info(f"📍 URL: {url}")
-            logger.debug(f"Messages: {messages}")
-            logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+        # Получаем актуальный Authorization header
+        auth_header = self._get_auth_header()
+        if not auth_header:
+            self.last_error = f"Ошибка авторизации: не удалось получить токен для {self.config.provider.value}"
+            logger.error(f"❌ {self.last_error}")
+            return None
 
-            # Получаем актуальный Authorization header
-            auth_header = self._get_auth_header()
-            if not auth_header:
-                self.last_error = f"Ошибка авторизации: не удалось получить токен для {self.config.provider.value}"
+        headers = {'Authorization': auth_header}
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                if attempt == 1:
+                    logger.info(f"🤖 AI запрос к {self.config.provider.value}: модель={self.config.model}")
+                else:
+                    logger.info(f"🔄 AI retry {attempt}/{max_retries} к {self.config.provider.value}")
+                logger.info(f"📍 URL: {url}")
+                logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+
+                response = self._session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.config.timeout
+                )
+
+                # Логируем ответ для отладки
+                if response.status_code != 200:
+                    logger.error(f"❌ AI HTTP {response.status_code}: {response.text[:500]}")
+
+                # Retryable HTTP errors
+                if response.status_code in retryable_statuses:
+                    wait = 2 ** attempt  # 2s, 4s, 8s
+                    self.last_error = (
+                        f"HTTP {response.status_code} от {self.config.provider.value} "
+                        f"(попытка {attempt}/{max_retries})"
+                    )
+                    if response.status_code == 429:
+                        # Попробуем получить retry-after из заголовка
+                        retry_after = response.headers.get('Retry-After')
+                        if retry_after:
+                            try:
+                                wait = max(wait, int(retry_after))
+                            except (ValueError, TypeError):
+                                pass
+                        self.last_error = (
+                            f"Rate limit 429 от {self.config.provider.value} "
+                            f"(попытка {attempt}/{max_retries}, жду {wait}с)"
+                        )
+                    logger.warning(f"⏳ {self.last_error}")
+                    if attempt < max_retries:
+                        import time
+                        time.sleep(wait)
+                        continue
+                    # Последняя попытка — пусть raise_for_status выбросит ошибку
+                    response.raise_for_status()
+
+                response.raise_for_status()
+
+                data = response.json()
+                content = data.get('choices', [{}])[0].get('message', {}).get('content')
+
+                if content is None:
+                    self.last_error = (
+                        f"AI вернул пустой ответ (модель: {self.config.model}, "
+                        f"провайдер: {self.config.provider.value})"
+                    )
+                    logger.error(f"❌ {self.last_error}: {data}")
+                    return None
+
+                logger.info(f"✅ AI ответ получен ({len(content)} символов)")
+                logger.debug(f"Response: {content[:500]}...")
+
+                return content
+
+            except requests.exceptions.Timeout:
+                self.last_error = (
+                    f"Таймаут {self.config.timeout}с — AI не ответил вовремя "
+                    f"(провайдер: {self.config.provider.value}, модель: {self.config.model}, "
+                    f"попытка {attempt}/{max_retries})"
+                )
+                logger.error(f"⏱️ {self.last_error}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+            except requests.exceptions.ConnectionError as e:
+                self.last_error = (
+                    f"Нет соединения с AI API ({self.config.provider.value}): "
+                    f"{str(e)[:150]} (попытка {attempt}/{max_retries})"
+                )
+                logger.error(f"❌ {self.last_error}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code
+                body = e.response.text[:300]
+                if status == 401 or status == 403:
+                    self.last_error = (
+                        f"Ошибка авторизации AI (HTTP {status}): проверьте API-ключ "
+                        f"для {self.config.provider.value}"
+                    )
+                elif status == 429:
+                    self.last_error = (
+                        f"Превышен лимит запросов AI (HTTP 429) — "
+                        f"провайдер {self.config.provider.value} ограничил частоту "
+                        f"(все {max_retries} попыток исчерпаны)"
+                    )
+                elif status >= 500:
+                    self.last_error = (
+                        f"Сервер AI недоступен (HTTP {status}): "
+                        f"{self.config.provider.value} — {body[:100]}"
+                    )
+                else:
+                    self.last_error = (
+                        f"HTTP {status} от AI ({self.config.provider.value}): {body[:150]}"
+                    )
                 logger.error(f"❌ {self.last_error}")
                 return None
-
-            # Логируем полный запрос для отладки
-            logger.info(f"📤 Request: POST {url}")
-            logger.info(f"📤 Authorization: {auth_header[:30]}... (full length: {len(auth_header)})")
-
-            headers = {'Authorization': auth_header}
-
-            response = self._session.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=self.config.timeout
-            )
-
-            # Логируем ответ для отладки
-            if response.status_code != 200:
-                logger.error(f"❌ AI HTTP {response.status_code}: {response.text[:500]}")
-
-            response.raise_for_status()
-
-            data = response.json()
-            content = data.get('choices', [{}])[0].get('message', {}).get('content')
-
-            if content is None:
-                self.last_error = (
-                    f"AI вернул пустой ответ (модель: {self.config.model}, "
-                    f"провайдер: {self.config.provider.value})"
-                )
-                logger.error(f"❌ {self.last_error}: {data}")
+            except Exception as e:
+                self.last_error = f"Непредвиденная ошибка AI: {type(e).__name__}: {str(e)[:200]}"
+                logger.error(f"❌ {self.last_error}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return None
 
-            logger.info(f"✅ AI ответ получен ({len(content)} символов)")
-            logger.debug(f"Response: {content[:500]}...")
-
-            return content
-
-        except requests.exceptions.Timeout:
-            self.last_error = (
-                f"Таймаут {self.config.timeout}с — AI не ответил вовремя "
-                f"(провайдер: {self.config.provider.value}, модель: {self.config.model})"
-            )
-            logger.error(f"⏱️ {self.last_error}")
-            return None
-        except requests.exceptions.ConnectionError as e:
-            self.last_error = (
-                f"Нет соединения с AI API ({self.config.provider.value}): {str(e)[:150]}"
-            )
-            logger.error(f"❌ {self.last_error}")
-            return None
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code
-            body = e.response.text[:300]
-            if status == 401 or status == 403:
-                self.last_error = (
-                    f"Ошибка авторизации AI (HTTP {status}): проверьте API-ключ "
-                    f"для {self.config.provider.value}"
-                )
-            elif status == 429:
-                self.last_error = (
-                    f"Превышен лимит запросов AI (HTTP 429) — "
-                    f"провайдер {self.config.provider.value} ограничил частоту"
-                )
-            elif status >= 500:
-                self.last_error = (
-                    f"Сервер AI недоступен (HTTP {status}): "
-                    f"{self.config.provider.value} — {body[:100]}"
-                )
-            else:
-                self.last_error = (
-                    f"HTTP {status} от AI ({self.config.provider.value}): {body[:150]}"
-                )
-            logger.error(f"❌ {self.last_error}")
-            return None
-        except Exception as e:
-            self.last_error = f"Непредвиденная ошибка AI: {type(e).__name__}: {str(e)[:200]}"
-            logger.error(f"❌ {self.last_error}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
+        return None
 
     def close(self):
         """Закрывает сессию"""
