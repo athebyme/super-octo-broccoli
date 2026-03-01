@@ -71,25 +71,90 @@
 
     <!-- История задач (свёрнутая) -->
     {% if recent_jobs %}
-    <details class="mb-6">
+    <details class="mb-6" open>
         <summary class="text-sm text-gray-500 cursor-pointer hover:text-indigo-600">
             История задач (последние {{ recent_jobs|length }})
         </summary>
         <div class="mt-2 space-y-2">
             {% for j in recent_jobs %}
             {% if j.status in ('done', 'failed', 'cancelled') %}
-            <div class="bg-white rounded-lg border border-gray-200 px-4 py-3 flex justify-between items-center text-sm">
-                <div>
-                    <span
-                        class="font-medium {% if j.status == 'done' %}text-green-700{% elif j.status == 'failed' %}text-red-600{% else %}text-gray-500{% endif %}">
-                        {{ j.status|upper }}
-                    </span>
-                    <span class="text-gray-500 ml-2">{{ j.job_type }}</span>
-                    <span class="text-gray-400 ml-2">{{ j.succeeded }} ok / {{ j.failed }} fail / {{ j.total }}
-                        total</span>
+            <details class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <summary class="px-4 py-3 flex justify-between items-center text-sm cursor-pointer hover:bg-gray-50">
+                    <div class="flex items-center gap-3">
+                        <span
+                            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold
+                            {% if j.status == 'done' and j.failed == 0 %}bg-green-100 text-green-700
+                            {% elif j.status == 'done' %}bg-yellow-100 text-yellow-700
+                            {% elif j.status == 'failed' %}bg-red-100 text-red-700
+                            {% else %}bg-gray-100 text-gray-600{% endif %}">
+                            {{ j.status|upper }}
+                        </span>
+                        <span class="text-gray-500">{{ j.job_type }}</span>
+                        <span class="text-green-600 font-medium">{{ j.succeeded }} ok</span>
+                        {% if j.failed > 0 %}
+                        <span class="text-red-500 font-medium">{{ j.failed }} fail</span>
+                        {% endif %}
+                        <span class="text-gray-400">/ {{ j.total }} total</span>
+                    </div>
+                    <span class="text-xs text-gray-400">{{ j.created_at[:16] if j.created_at else '' }}</span>
+                </summary>
+                {% if j.results %}
+                <div class="border-t border-gray-100 px-4 py-3 max-h-80 overflow-y-auto">
+                    {% if j.error_message %}
+                    <div class="mb-3 p-2 bg-red-50 rounded text-xs text-red-700 border border-red-200">
+                        {{ j.error_message }}
+                    </div>
+                    {% endif %}
+                    <table class="w-full text-xs">
+                        <thead>
+                            <tr class="text-left text-gray-500 border-b border-gray-100">
+                                <th class="pb-1.5 pr-3 font-medium">Товар</th>
+                                <th class="pb-1.5 pr-3 font-medium w-20">Статус</th>
+                                <th class="pb-1.5 font-medium">Детали</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-50">
+                            {% for r in j.results %}
+                            <tr class="{% if r.status == 'error' %}bg-red-50/50{% endif %}">
+                                <td class="py-1.5 pr-3">
+                                    {% if r.product_id %}
+                                    <a href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=r.product_id) }}"
+                                        class="text-indigo-600 hover:underline">
+                                        {{ r.title or ('ID ' ~ r.product_id) }}
+                                    </a>
+                                    {% else %}
+                                    {{ r.title or '—' }}
+                                    {% endif %}
+                                </td>
+                                <td class="py-1.5 pr-3">
+                                    {% if r.status == 'success' %}
+                                    <span class="text-green-600 font-medium">OK {{ '%.0f'|format(r.fill_pct|default(0)) }}%</span>
+                                    {% elif r.status == 'error' %}
+                                    <span class="text-red-600 font-medium">FAIL</span>
+                                    {% else %}
+                                    <span class="text-gray-400">{{ r.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="py-1.5 text-gray-500 max-w-md">
+                                    {% if r.status == 'success' %}
+                                    <span class="text-green-600">Заполнено {{ '%.0f'|format(r.fill_pct|default(0)) }}% характеристик</span>
+                                    {% elif r.error %}
+                                    <span class="text-red-600">{{ r.error[:150] }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
-                <span class="text-xs text-gray-400">{{ j.created_at[:16] if j.created_at else '' }}</span>
-            </div>
+                {% elif j.error_message %}
+                <div class="border-t border-gray-100 px-4 py-3">
+                    <div class="p-2 bg-red-50 rounded text-xs text-red-700 border border-red-200">
+                        {{ j.error_message }}
+                    </div>
+                </div>
+                {% endif %}
+            </details>
             {% endif %}
             {% endfor %}
         </div>
@@ -107,22 +172,72 @@
         </ol>
     </div>
 
-    <!-- Фильтры -->
+    <!-- Фильтры и быстрый выбор -->
     <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
-        <div class="flex gap-3 items-end">
-            <div class="flex-1">
-                <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, ID, бренду..."
+        <div class="flex gap-3 items-end flex-wrap">
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-xs text-gray-500 mb-1">Поиск</label>
+                <input type="text" name="search" value="{{ search }}" placeholder="Название, ID, бренд..."
                     class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
             </div>
             <div>
+                <label class="block text-xs text-gray-500 mb-1">Наличие</label>
                 <select name="stock_status" class="rounded-lg border-gray-300 text-sm border px-3 py-2">
                     <option value="">Все</option>
                     <option value="in_stock" {{ 'selected' if stock_status=='in_stock' }}>В наличии</option>
                     <option value="out_of_stock" {{ 'selected' if stock_status=='out_of_stock' }}>Нет в наличии</option>
                 </select>
             </div>
-            <button type="submit"
-                class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Найти</button>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">AI парсинг</label>
+                <select name="parse_status" id="parseStatusFilter" class="rounded-lg border-gray-300 text-sm border px-3 py-2"
+                    onchange="document.getElementById('fillMaxGroup').style.display = this.value === 'fill_below' ? 'block' : 'none'">
+                    <option value="">Все</option>
+                    <option value="not_parsed" {{ 'selected' if parse_status=='not_parsed' }}>Не спарсены</option>
+                    <option value="parsed" {{ 'selected' if parse_status=='parsed' }}>Спарсены</option>
+                    <option value="fill_below" {{ 'selected' if parse_status=='fill_below' }}>Заполнено менее %</option>
+                </select>
+            </div>
+            <div id="fillMaxGroup" style="{% if parse_status != 'fill_below' %}display:none{% endif %}">
+                <label class="block text-xs text-gray-500 mb-1">Макс. %</label>
+                <input type="number" name="fill_max" value="{{ fill_max }}" placeholder="50" min="0" max="100" step="5"
+                    class="w-20 rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">На странице</label>
+                <select name="per_page" class="rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="50" {{ 'selected' if per_page==50 }}>50</option>
+                    <option value="100" {{ 'selected' if per_page==100 }}>100</option>
+                    <option value="200" {{ 'selected' if per_page==200 }}>200</option>
+                    <option value="500" {{ 'selected' if per_page==500 }}>500</option>
+                </select>
+            </div>
+            <div class="flex gap-2">
+                <button type="submit"
+                    class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Найти</button>
+                <button type="submit" name="auto_select" value="1"
+                    class="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-200">Найти и выбрать все</button>
+            </div>
+        </div>
+        <!-- Быстрые пресеты -->
+        <div class="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+            <span class="text-xs text-gray-400 py-1">Пресеты:</span>
+            <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, stock_status='in_stock', parse_status='not_parsed', per_page=50, auto_select=1) }}"
+                class="px-3 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100">
+                В наличии + не спарсены (50)
+            </a>
+            <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, stock_status='in_stock', parse_status='fill_below', fill_max='50', per_page=50, auto_select=1) }}"
+                class="px-3 py-1 text-xs rounded-full bg-yellow-50 text-yellow-700 border border-yellow-200 hover:bg-yellow-100">
+                В наличии + заполнено &lt;50% (50)
+            </a>
+            <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, parse_status='not_parsed', per_page=100, auto_select=1) }}"
+                class="px-3 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100">
+                Все не спарсены (100)
+            </a>
+            <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
+                class="px-3 py-1 text-xs rounded-full bg-gray-50 text-gray-500 border border-gray-200 hover:bg-gray-100">
+                Сбросить фильтры
+            </a>
         </div>
     </form>
 
@@ -185,6 +300,7 @@
                         <th class="px-4 py-3 text-left font-medium text-gray-500">Бренд</th>
                         <th class="px-4 py-3 text-left font-medium text-gray-500">Категория</th>
                         <th class="px-4 py-3 text-right font-medium text-gray-500">Цена</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">Наличие</th>
                         <th class="px-4 py-3 text-center font-medium text-gray-500">Описание</th>
                         <th class="px-4 py-3 text-center font-medium text-gray-500">AI парсинг</th>
                         <th class="px-4 py-3 text-center font-medium text-gray-500">Действия</th>
@@ -209,6 +325,15 @@
                             '—')[:30] }}</td>
                         <td class="px-4 py-3 text-right text-gray-900 font-medium">
                             {{ '%.0f'|format(product.supplier_price) if product.supplier_price else '—' }}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            {% if product.supplier_status == 'in_stock' %}
+                            <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">есть</span>
+                            {% elif product.supplier_status == 'out_of_stock' %}
+                            <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-600">нет</span>
+                            {% else %}
+                            <span class="text-[10px] text-gray-400">—</span>
+                            {% endif %}
                         </td>
                         <td class="px-4 py-3 text-center">
                             {% if product.description %}
@@ -262,7 +387,7 @@
             <nav class="flex gap-1">
                 {% for page_num in pagination.iter_pages(left_edge=2, left_current=2, right_current=3, right_edge=2) %}
                 {% if page_num %}
-                <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, page=page_num, search=search, stock_status=stock_status) }}"
+                <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, page=page_num, search=search, stock_status=stock_status, parse_status=parse_status, fill_max=fill_max, per_page=per_page) }}"
                     class="px-3 py-1 rounded text-sm {{ 'bg-indigo-600 text-white' if page_num == pagination.page else 'text-gray-600 hover:bg-gray-100' }}">
                     {{ page_num }}
                 </a>
@@ -417,6 +542,15 @@
 
     // Начать поллинг активных задач
     activeJobIds.forEach(id => pollJob(id));
+
+    // Авто-выбор всех товаров на странице (если передан auto_select=1)
+    {% if auto_select %}
+    document.addEventListener('DOMContentLoaded', function() {
+        getCheckboxes().forEach(cb => cb.checked = true);
+        if (selectAll) selectAll.checked = true;
+        updateSelection();
+    });
+    {% endif %}
 
     function cancelJob(jobId) {
         if (!confirm('Отменить задачу?')) return;

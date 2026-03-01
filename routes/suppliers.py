@@ -396,10 +396,13 @@ def register_supplier_routes(app):
             except Exception:
                 pass
 
+        completeness = _calc_product_completeness(product)
+
         return render_template('admin_supplier_product_detail.html',
                                supplier=supplier, product=product,
                                import_count=import_count,
-                               price_calc=price_calc)
+                               price_calc=price_calc,
+                               completeness=completeness)
 
     # -------------------------------------------------------------------
     # Массовые действия с товарами
@@ -795,6 +798,44 @@ def register_supplier_routes(app):
         ok = SupplierService.cancel_ai_parse_job(job_id)
         return jsonify({'cancelled': ok})
 
+    @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/refresh-data')
+    @login_required
+    @admin_required
+    def admin_supplier_product_refresh_data(supplier_id, product_id):
+        """API: свежие данные товара для динамического обновления карточки"""
+        product = SupplierService.get_product(product_id)
+        if not product or product.supplier_id != supplier_id:
+            return jsonify({'error': 'Товар не найден'}), 404
+
+        parsed = product.get_ai_parsed_data()
+        pm = parsed.get('parsing_meta', {})
+        mp_fields = product.get_marketplace_fields()
+
+        # Собираем статистику заполненности
+        completeness = _calc_product_completeness(product)
+
+        return jsonify({
+            'title': product.title or '',
+            'brand': product.brand or '',
+            'description': product.description or '',
+            'category': product.category or '',
+            'wb_category_name': product.wb_category_name or '',
+            'wb_subject_id': product.wb_subject_id or '',
+            'gender': product.gender or '',
+            'country': product.country or '',
+            'ai_seo_title': product.ai_seo_title or '',
+            'ai_description': product.ai_description or '',
+            'ai_keywords_json': product.ai_keywords_json or '',
+            'ai_parsed_data_json': product.ai_parsed_data_json or '',
+            'ai_model_used': product.ai_model_used or '',
+            'ai_parsed_at': product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') if product.ai_parsed_at else '',
+            'parsing_meta': pm,
+            'marketplace_fields': mp_fields,
+            'marketplace_validation_status': product.marketplace_validation_status or '',
+            'marketplace_fill_pct': product.marketplace_fill_pct or 0,
+            'completeness': completeness,
+        })
+
     @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/raw-json')
     @login_required
     @admin_required
@@ -927,6 +968,11 @@ def register_supplier_routes(app):
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         stock_status = request.args.get('stock_status', '').strip()
+        parse_status = request.args.get('parse_status', '').strip()
+        fill_max = request.args.get('fill_max', '', type=str).strip()
+        per_page = request.args.get('per_page', 50, type=int)
+        per_page = max(10, min(per_page, 500))
+        auto_select = request.args.get('auto_select', '').strip()
 
         query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         if search:
@@ -943,8 +989,26 @@ def register_supplier_routes(app):
         elif stock_status == 'out_of_stock':
             query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
 
+        # Фильтр по статусу AI парсинга
+        if parse_status == 'not_parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.is_(None))
+        elif parse_status == 'parsed':
+            query = query.filter(SupplierProduct.ai_parsed_data_json.isnot(None))
+        elif parse_status == 'fill_below' and fill_max:
+            try:
+                fill_threshold = float(fill_max)
+                # Товары, которые не спарсены ИЛИ у которых fill_pct < threshold
+                query = query.filter(
+                    db.or_(
+                        SupplierProduct.marketplace_fill_pct.is_(None),
+                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                    )
+                )
+            except (ValueError, TypeError):
+                pass
+
         pagination = query.order_by(SupplierProduct.title).paginate(
-            page=page, per_page=50, error_out=False
+            page=page, per_page=per_page, error_out=False
         )
 
         stats = SupplierService.get_product_stats(supplier_id)
@@ -965,6 +1029,10 @@ def register_supplier_routes(app):
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                stock_status=stock_status,
+                               parse_status=parse_status,
+                               fill_max=fill_max,
+                               per_page=per_page,
+                               auto_select=auto_select,
                                parsed_count=parsed_count,
                                active_jobs=active_jobs,
                                recent_jobs=recent_jobs,
@@ -1249,6 +1317,118 @@ def _extract_supplier_form_data(form) -> dict:
     data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
 
     return data
+
+
+def _calc_product_completeness(product) -> dict:
+    """Расчёт заполненности полей товара по группам"""
+    import json
+
+    def _has(val):
+        if val is None:
+            return False
+        if isinstance(val, str):
+            val = val.strip()
+            if not val or val in ('[]', '{}', '""'):
+                return False
+            # JSON arrays/objects — check for content
+            if val.startswith('[') or val.startswith('{'):
+                try:
+                    parsed = json.loads(val)
+                    return bool(parsed)
+                except Exception:
+                    pass
+            return True
+        if isinstance(val, (int, float)):
+            return True
+        return bool(val)
+
+    groups = {
+        'basic': {
+            'label': 'Основные',
+            'fields': {
+                'Название': _has(product.title),
+                'Описание': _has(product.description),
+                'Бренд': _has(product.brand),
+                'Категория': _has(product.category),
+                'Артикул': _has(product.vendor_code),
+                'Штрихкод': _has(product.barcode),
+            }
+        },
+        'price': {
+            'label': 'Цены и остатки',
+            'fields': {
+                'Цена поставщика': _has(product.supplier_price),
+                'Остаток': _has(product.supplier_quantity),
+                'РРЦ': _has(product.recommended_retail_price),
+                'Статус наличия': _has(product.supplier_status),
+            }
+        },
+        'characteristics': {
+            'label': 'Характеристики',
+            'fields': {
+                'Пол': _has(product.gender),
+                'Страна': _has(product.country),
+                'Сезон': _has(product.season),
+                'Возрастная группа': _has(product.age_group),
+                'Цвета': _has(product.colors_json),
+                'Материалы': _has(product.materials_json),
+                'Размеры': _has(product.sizes_json),
+                'Габариты': _has(product.dimensions_json),
+                'Характеристики': _has(product.characteristics_json),
+            }
+        },
+        'ai': {
+            'label': 'AI данные',
+            'fields': {
+                'SEO заголовок': _has(product.ai_seo_title),
+                'AI описание': _has(product.ai_description),
+                'Ключевые слова': _has(product.ai_keywords_json),
+                'Буллеты': _has(product.ai_bullets_json),
+                'AI парсинг': _has(product.ai_parsed_data_json),
+            }
+        },
+        'marketplace': {
+            'label': 'Маркетплейс',
+            'fields': {
+                'Категория WB': _has(product.wb_category_name),
+                'WB Subject ID': _has(product.wb_subject_id),
+                'Поля маркетплейса': _has(product.marketplace_fields_json),
+                'Валидация': product.marketplace_validation_status == 'valid',
+            }
+        },
+        'media': {
+            'label': 'Медиа',
+            'fields': {
+                'Фотографии': bool(product.get_photos()),
+                'Видео': _has(product.video_url),
+            }
+        },
+    }
+
+    # Считаем по каждой группе
+    total_filled = 0
+    total_fields = 0
+    for key, group in groups.items():
+        filled = sum(1 for v in group['fields'].values() if v)
+        count = len(group['fields'])
+        group['filled'] = filled
+        group['total'] = count
+        group['pct'] = round(filled / count * 100) if count else 0
+        total_filled += filled
+        total_fields += count
+
+    return {
+        'groups': {k: {
+            'label': g['label'],
+            'pct': g['pct'],
+            'filled': g['filled'],
+            'total': g['total'],
+            'fields': g['fields'],
+        } for k, g in groups.items()},
+        'total_pct': round(total_filled / total_fields * 100) if total_fields else 0,
+        'total_filled': total_filled,
+        'total_fields': total_fields,
+    }
 
 
 def _extract_product_form_data(form) -> dict:

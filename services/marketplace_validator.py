@@ -137,8 +137,17 @@ class MarketplaceValidator:
             }
         }
 
-        # Persist to product
-        product.marketplace_fields_json = json.dumps(result, ensure_ascii=False)
+        # Persist flat field-value map (displayable in admin form)
+        flat_fields = {}
+        for vr in validation_results:
+            val = vr.get('value')
+            if val is None:
+                continue
+            if isinstance(val, list):
+                flat_fields[vr['name']] = '; '.join(str(v) for v in val) if val else ''
+            else:
+                flat_fields[vr['name']] = val
+        product.marketplace_fields_json = json.dumps(flat_fields, ensure_ascii=False)
         product.marketplace_validation_status = status
         product.marketplace_fill_pct = fill_pct
 

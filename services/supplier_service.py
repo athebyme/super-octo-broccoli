@@ -34,6 +34,24 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
+    """Коммит с retry для SQLite (database is locked)."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            session.commit()
+            return
+        except Exception as e:
+            err_str = str(e).lower()
+            if 'locked' in err_str or 'busy' in err_str:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    logger.warning(f"SQLite locked, retry {attempt}/{max_retries} in {delay:.1f}s")
+                    time.sleep(delay)
+                    continue
+            session.rollback()
+            raise
+
+
 def _get_marketplace_categories_block(supplier_id: int) -> str:
     """
     Получить текстовый блок включённых категорий маркетплейса для AI промпта.
@@ -1806,7 +1824,7 @@ class SupplierService:
                     job_ref.failed = counters['failed']
                     job_ref.current_product_title = current_title
                     job_ref.results = json.dumps(results[-100:], ensure_ascii=False)
-                    db.session.commit()
+                    _commit_with_retry(db.session)
                 except Exception:
                     db.session.rollback()
 
@@ -1858,20 +1876,25 @@ class SupplierService:
                         )
 
                         if success and result:
-                            product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
-                            product.ai_parsed_at = datetime.utcnow()
-                            product.ai_model_used = worker_svc.config.model
+                            # no_autoflush предотвращает преждевременную запись
+                            # при запросах к БД внутри _run_marketplace_aware_parse
+                            with db.session.no_autoflush:
+                                product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
+                                product.ai_parsed_at = datetime.utcnow()
+                                product.ai_model_used = worker_svc.config.model
 
-                            marketplace_data = _build_marketplace_data(product, result)
-                            product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
+                                marketplace_data = _build_marketplace_data(product, result)
+                                product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
 
-                            _apply_parsed_data_to_product(product, result)
-                            
-                            # Интеграция с MarketplaceAwareParsingTask
-                            _run_marketplace_aware_parse(product, result, worker_svc)
-                            
-                            product.updated_at = datetime.utcnow()
-                            db.session.commit()
+                                _apply_parsed_data_to_product(product, result)
+
+                                # Интеграция с MarketplaceAwareParsingTask
+                                _run_marketplace_aware_parse(product, result, worker_svc)
+
+                                product.updated_at = datetime.utcnow()
+
+                            # Коммит с retry для SQLite (concurrent writes)
+                            _commit_with_retry(db.session)
 
                             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                             return {
@@ -1943,7 +1966,7 @@ class SupplierService:
                     job_final.current_product_title = None
                     job_final.results = json.dumps(results[-100:], ensure_ascii=False)
                     job_final.updated_at = datetime.utcnow()
-                    db.session.commit()
+                    _commit_with_retry(db.session)
             except Exception:
                 db.session.rollback()
 
@@ -1985,17 +2008,19 @@ class SupplierService:
             )
 
             if success and result:
-                product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
-                product.ai_parsed_at = datetime.utcnow()
-                product.ai_model_used = ai_svc.config.model
-                marketplace_data = _build_marketplace_data(product, result)
-                product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
-                _apply_parsed_data_to_product(product, result)
+                with db.session.no_autoflush:
+                    product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
+                    product.ai_parsed_at = datetime.utcnow()
+                    product.ai_model_used = ai_svc.config.model
+                    marketplace_data = _build_marketplace_data(product, result)
+                    product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
+                    _apply_parsed_data_to_product(product, result)
 
-                # Интеграция с MarketplaceAwareParsingTask
-                _run_marketplace_aware_parse(product, result, ai_svc)
+                    # Интеграция с MarketplaceAwareParsingTask
+                    _run_marketplace_aware_parse(product, result, ai_svc)
 
-                product.updated_at = datetime.utcnow()
+                    product.updated_at = datetime.utcnow()
+
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
                 job.status = 'done'
@@ -2019,6 +2044,7 @@ class SupplierService:
                 }], ensure_ascii=False)
         except Exception as e:
             logger.error(f"[AI Parse] Single parse error {product_id}: {e}")
+            db.session.rollback()
             job.status = 'done'
             job.processed = 1
             job.failed = 1
@@ -2030,7 +2056,7 @@ class SupplierService:
 
         job.current_product_title = None
         job.updated_at = datetime.utcnow()
-        db.session.commit()
+        _commit_with_retry(db.session)
 
     @staticmethod
     def start_description_sync_job(supplier_id: int, admin_user_id: int = None) -> dict:
@@ -2458,16 +2484,27 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     success, result, error = task.execute(product_info=product_info, original_data=parsed_data)
     
     if success and result:
-        # Сохраняем в marketplace_fields_json
-        product.marketplace_fields_json = json.dumps(result, ensure_ascii=False)
+        # Убираем метаданные из результата перед сохранением
+        clean_fields = {k: v for k, v in result.items() if k != '_meta'}
 
-        # Валидируем
+        # Сохраняем плоские поля для формы (массивы → строки через ";")
+        flat_fields = {}
+        for k, v in clean_fields.items():
+            if isinstance(v, list):
+                flat_fields[k] = '; '.join(str(x) for x in v) if v else ''
+            elif v is not None:
+                flat_fields[k] = v
+        product.marketplace_fields_json = json.dumps(flat_fields, ensure_ascii=False)
+
+        # Мержим AI-specific поля в ai_marketplace_json для валидатора
+        existing_mp = product.get_ai_marketplace_data()
+        existing_mp.update(clean_fields)
+        product.ai_marketplace_json = json.dumps(existing_mp, ensure_ascii=False)
+
+        # Валидируем (обновит marketplace_fields_json, validation_status, fill_pct)
         validation_result = MarketplaceValidator.validate_product_for_marketplace(product, wb_marketplace.id)
 
-        product.marketplace_validation_status = 'valid' if validation_result.get('valid') else 'invalid'
-        product.marketplace_fill_pct = validation_result.get('fill_pct', 0)
-
-        logger.info(f"Marketplace aware parse success for {product.id}, valid: {validation_result.get('valid')}")
+        logger.info(f"Marketplace aware parse success for {product.id}, status: {validation_result.get('validation_status')}")
     else:
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
 
