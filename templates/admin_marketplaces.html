@@ -43,14 +43,28 @@
                 <div class="space-y-3 mb-6">
                     <div class="flex justify-between items-center text-sm">
                         <span class="text-gray-500">Категории:</span>
-                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{
-                            mp.categories|length }}</span>
+                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{ mp.total_categories or 0 }}</span>
+                    </div>
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="text-gray-500">Характеристики:</span>
+                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{ mp.total_characteristics or 0 }}</span>
                     </div>
                     <div class="flex justify-between items-center text-sm">
                         <span class="text-gray-500">Справочники:</span>
-                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{
-                            mp.directories|length }}</span>
+                        <span class="font-medium text-gray-900 border-b border-dashed border-gray-300">{{ mp.directories.count() }}</span>
                     </div>
+                    {% if mp.categories_synced_at %}
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-gray-400">Синхр. категорий:</span>
+                        <span class="text-gray-500">{{ mp.categories_synced_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                    </div>
+                    {% endif %}
+                    {% if mp.directories_synced_at %}
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-gray-400">Синхр. справочников:</span>
+                        <span class="text-gray-500">{{ mp.directories_synced_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                    </div>
+                    {% endif %}
                 </div>
 
                 <div class="flex flex-col space-y-3">
