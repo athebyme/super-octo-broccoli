@@ -112,53 +112,52 @@
     function supplierMarketplaces() {
         return {
             connections: {
-            {% for mp in marketplaces %}
-        {% set conn = connections.get(mp.id) %}
-        "{{ mp.id }}": {
-            is_active: { { (conn and conn.is_active) | tojson } },
-            auto_map_categories: { { (conn and conn.auto_map_categories) | tojson } },
-            default_category_id: '{{ conn.default_category_id or "" if conn else "" }}',
+                {% for mp in marketplaces %}
+                {% set conn = connections.get(mp.id) %}
+                "{{ mp.id }}": {
+                    is_active: {{ 'true' if conn and conn.is_active else 'false' }},
+                    auto_map_categories: {{ 'true' if conn and conn.auto_map_categories else 'false' }},
+                    default_category_id: '{{ conn.default_category_id or "" if conn else "" }}',
+                },
+                {% endfor %}
             },
-        {% endfor %}
-    },
-    toast: { show: false, message: '' },
-        
-        async toggleConnection(mpId) {
-        const isActive = !this.connections[mpId].is_active;
-        this.connections[mpId].is_active = isActive;
+            toast: { show: false, message: '' },
 
-        await this.updateApi(mpId, { is_active: isActive });
-        this.showToast(isActive ? 'Интеграция подключена' : 'Интеграция отключена');
-    },
-        
-        async saveSettings(mpId) {
-        await this.updateApi(mpId, {
-            auto_map_categories: this.connections[mpId].auto_map_categories,
-            default_category_id: this.connections[mpId].default_category_id || null
-        });
-        this.showToast('Настройки обновлены');
-    },
-        
-        async updateApi(marketplaceId, payload) {
-        try {
-            const res = await fetch(`{{ url_for('admin_supplier_marketplaces_update', supplier_id=supplier.id) }}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ marketplace_id: marketplaceId, ...payload })
-            });
-            if (!res.ok) throw new Error('API Error');
-        } catch (err) {
-            console.error(err);
-            alert('Ошибка сохранения');
+            async toggleConnection(mpId) {
+                const isActive = !this.connections[mpId].is_active;
+                this.connections[mpId].is_active = isActive;
+                await this.updateApi(mpId, { is_active: isActive });
+                this.showToast(isActive ? 'Интеграция подключена' : 'Интеграция отключена');
+            },
+
+            async saveSettings(mpId) {
+                await this.updateApi(mpId, {
+                    auto_map_categories: this.connections[mpId].auto_map_categories,
+                    default_category_id: this.connections[mpId].default_category_id || null
+                });
+                this.showToast('Настройки обновлены');
+            },
+
+            async updateApi(marketplaceId, payload) {
+                try {
+                    const res = await fetch(`{{ url_for('admin_supplier_marketplaces_update', supplier_id=supplier.id) }}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ marketplace_id: marketplaceId, ...payload })
+                    });
+                    if (!res.ok) throw new Error('API Error');
+                } catch (err) {
+                    console.error(err);
+                    alert('Ошибка сохранения');
+                }
+            },
+
+            showToast(msg) {
+                this.toast.message = msg;
+                this.toast.show = true;
+                setTimeout(() => { this.toast.show = false; }, 3000);
+            }
         }
-    },
-
-    showToast(msg) {
-        this.toast.message = msg;
-        this.toast.show = true;
-        setTimeout(() => { this.toast.show = false; }, 3000);
     }
-    }
-}
 </script>
 {% endblock %}

@@ -3,7 +3,7 @@
 {% block title %}Категории {{ marketplace.name }} - WB Seller Platform{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="{ expandedGroups: {}, expandAll: false }">
     <!-- Header -->
     <div class="mb-8 flex justify-between items-center">
         <div>
@@ -19,6 +19,13 @@
                 </ol>
             </nav>
             <h1 class="text-3xl font-bold text-gray-900">Категории</h1>
+            <p class="mt-1 text-sm text-gray-500">{{ total_count }} категорий в {{ grouped_categories|length }} группах</p>
+        </div>
+        <div class="flex items-center space-x-3">
+            <button @click="expandAll = !expandAll; Object.keys(expandedGroups).forEach(k => expandedGroups[k] = expandAll)"
+                class="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                <span x-text="expandAll ? 'Свернуть все' : 'Развернуть все'"></span>
+            </button>
         </div>
     </div>
 
@@ -46,65 +53,86 @@
         </form>
     </div>
 
-    <!-- Categories List -->
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200">
-        {% if categories %}
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th scope="col"
-                            class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID
-                        </th>
-                        <th scope="col"
-                            class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Название</th>
-                        <th scope="col"
-                            class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Родительская</th>
-                        <th scope="col"
-                            class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Характеристики</th>
-                        <th scope="col"
-                            class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Синхронизация</th>
-                        <th scope="col" class="relative px-6 py-3"><span class="sr-only">Действия</span></th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white divide-y divide-gray-200">
-                    {% for cat in categories %}
-                    <tr class="hover:bg-gray-50">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ cat.subject_id }}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ cat.subject_name }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ cat.parent_name or '--' }}</td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {% if cat.characteristics_count > 0 %}
-                            <span
-                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                {{ cat.characteristics_count }}
-                            </span>
-                            {% else %}
-                            <span
-                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">0</span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {{ cat.last_sync_at.strftime('%d.%m.%Y %H:%M') if cat.last_sync_at else 'Никогда' }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <a href="{{ url_for('marketplaces.category_detail', category_id=cat.id) }}"
-                                class="text-indigo-600 hover:text-indigo-900">Настроить</a>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+    <!-- Categories Tree -->
+    {% if grouped_categories %}
+    <div class="space-y-3">
+        {% for parent_name, children in grouped_categories.items() %}
+        <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden"
+             x-data="{ open: expandAll || {{ 'true' if search else 'false' }} }"
+             x-effect="open = expandAll || {{ 'true' if search else 'false' }}">
+            <!-- Parent group header -->
+            <button @click="open = !open"
+                class="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50 transition-colors">
+                <div class="flex items-center space-x-3">
+                    <svg class="h-5 w-5 text-gray-400 transform transition-transform" :class="{ 'rotate-90': open }"
+                        fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd"
+                            d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                            clip-rule="evenodd" />
+                    </svg>
+                    <span class="text-sm font-semibold text-gray-900">{{ parent_name }}</span>
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                        {{ children|length }}
+                    </span>
+                </div>
+            </button>
+
+            <!-- Children categories table -->
+            <div x-show="open" x-collapse x-cloak>
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">ID</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Название</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Характеристики</th>
+                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Синхронизация</th>
+                            <th class="px-6 py-2 w-28"><span class="sr-only">Действия</span></th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-100">
+                        {% for cat in children %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 font-mono">{{ cat.subject_id }}</td>
+                            <td class="px-6 py-3 text-sm font-medium text-gray-900">
+                                {{ cat.subject_name }}
+                                {% if cat.is_enabled %}
+                                <span class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">вкл</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap">
+                                {% if cat.characteristics_count and cat.characteristics_count > 0 %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    {{ cat.characteristics_count }}
+                                    {% if cat.required_count %}<span class="ml-1 text-red-600">({{ cat.required_count }} обяз.)</span>{% endif %}
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">0</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap text-xs text-gray-500">
+                                {{ cat.characteristics_synced_at.strftime('%d.%m.%Y %H:%M') if cat.characteristics_synced_at else 'Никогда' }}
+                            </td>
+                            <td class="px-6 py-3 whitespace-nowrap text-right text-sm font-medium">
+                                <a href="{{ url_for('marketplaces.category_detail', category_id=cat.id) }}"
+                                    class="text-indigo-600 hover:text-indigo-900">Настроить</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-white shadow-sm rounded-lg border border-gray-200 px-6 py-12 text-center text-gray-500 text-sm">
+        {% if search %}
+        Ничего не найдено по запросу "{{ search }}".
+        <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}" class="text-indigo-600 hover:text-indigo-900 ml-1">Сбросить поиск</a>
         {% else %}
-        <div class="px-6 py-12 text-center text-gray-500 text-sm">Нет категорий. Запустите синхронизацию каталога.</div>
+        Нет категорий. Запустите синхронизацию каталога.
         {% endif %}
     </div>
-
+    {% endif %}
 </div>
 {% endblock %}

@@ -2461,6 +2461,26 @@ class SupplierProduct(db.Model):
         data['ai_description'] = self.ai_description or ''
         return data
 
+    def get_original_data(self) -> dict:
+        """Получить оригинальные данные товара (для AI парсинга)"""
+        if not self.original_data_json:
+            return {}
+        try:
+            import json
+            return json.loads(self.original_data_json)
+        except Exception:
+            return {}
+
+    def get_marketplace_fields(self) -> dict:
+        """Получить валидированные поля маркетплейса"""
+        if not self.marketplace_fields_json:
+            return {}
+        try:
+            import json
+            return json.loads(self.marketplace_fields_json)
+        except Exception:
+            return {}
+
 
 class SellerSupplier(db.Model):
     """Связь продавца с поставщиком (M2M)"""
@@ -2615,6 +2635,9 @@ class Marketplace(db.Model):
         except Exception:
             self._api_key_encrypted = value
 
+    def __repr__(self) -> str:
+        return f'<Marketplace {self.code} ({self.name})>'
+
 
 class MarketplaceCategory(db.Model):
     """Категория маркетплейса (subject / предмет)"""
@@ -2648,6 +2671,9 @@ class MarketplaceCategory(db.Model):
         db.Index('idx_mp_category_parent', 'marketplace_id', 'parent_id'),
         db.Index('idx_mp_category_enabled', 'marketplace_id', 'is_enabled'),
     )
+
+    def __repr__(self) -> str:
+        return f'<MarketplaceCategory {self.subject_id} ({self.subject_name})>'
 
 
 class MarketplaceCategoryCharacteristic(db.Model):
@@ -2689,6 +2715,24 @@ class MarketplaceCategoryCharacteristic(db.Model):
         db.Index('idx_mp_charc_required', 'category_id', 'required'),
     )
 
+    @property
+    def type_label(self) -> str:
+        """Human-readable type label"""
+        if self.charc_type == 4:
+            return 'Число'
+        elif self.charc_type == 1:
+            if self.max_count == 1:
+                return 'Строка'
+            return f'Строка[] (макс. {self.max_count})' if self.max_count > 0 else 'Строка[]'
+        elif self.charc_type == 0:
+            return 'Не используется'
+        return f'Тип {self.charc_type}'
+
+    def __repr__(self) -> str:
+        t = 'num' if self.charc_type == 4 else 'str'
+        r = '*' if self.required else ''
+        return f'<Charc {self.charc_id} "{self.name}" ({t}{r})>'
+
 
 class MarketplaceDirectory(db.Model):
     """Справочник маркетплейса (цвета, страны, пол, сезоны и т.д.)"""
@@ -2700,12 +2744,16 @@ class MarketplaceDirectory(db.Model):
     data_json = db.Column(db.Text, nullable=False)             # Cached response from API
     synced_at = db.Column(db.DateTime)
     items_count = db.Column(db.Integer, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     marketplace = db.relationship('Marketplace', backref=db.backref('directories', lazy='dynamic', cascade='all, delete-orphan'))
 
     __table_args__ = (
         db.UniqueConstraint('marketplace_id', 'directory_type', name='uq_mp_directory'),
     )
+
+    def __repr__(self) -> str:
+        return f'<MarketplaceDirectory {self.directory_type} ({self.items_count} items)>'
 
 
 class MarketplaceConnection(db.Model):
@@ -2740,6 +2788,10 @@ class MarketplaceConnection(db.Model):
         db.UniqueConstraint('supplier_id', 'marketplace_id', name='uq_supplier_marketplace'),
     )
 
+    def __repr__(self) -> str:
+        active = 'active' if self.is_active else 'inactive'
+        return f'<MarketplaceConnection supplier={self.supplier_id} mp={self.marketplace_id} ({active})>'
+
 
 class MarketplaceSyncJob(db.Model):
     """Background job for syncing marketplace data"""
@@ -2756,3 +2808,6 @@ class MarketplaceSyncJob(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     marketplace = db.relationship('Marketplace', backref=db.backref('sync_jobs', lazy='dynamic', cascade='all, delete-orphan'))
+
+    def __repr__(self) -> str:
+        return f'<MarketplaceSyncJob {self.id[:8]} {self.job_type} ({self.status})>'

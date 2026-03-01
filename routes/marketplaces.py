@@ -25,18 +25,20 @@ def admin_required(f):
 def index():
     """List of all marketplaces and their sync status."""
     marketplaces = Marketplace.query.all()
-    # If empty, create default WB
+    # Seed default WB marketplace if none exist (idempotent — only on first visit)
     if not marketplaces:
-        wb = Marketplace(
-            name="Wildberries",
-            code="wb",
-            api_base_url="https://content-api.wildberries.ru",
-            api_version="v2"
-        )
-        db.session.add(wb)
-        db.session.commit()
-        marketplaces = [wb]
-        
+        existing_wb = Marketplace.query.filter_by(code='wb').first()
+        if not existing_wb:
+            wb = Marketplace(
+                name="Wildberries",
+                code="wb",
+                api_base_url="https://content-api.wildberries.ru",
+                api_version="v2"
+            )
+            db.session.add(wb)
+            db.session.commit()
+            marketplaces = [wb]
+
     return render_template('admin_marketplaces.html', marketplaces=marketplaces)
 
 
@@ -44,17 +46,36 @@ def index():
 @login_required
 @admin_required
 def categories(marketplace_id):
-    """Browse categories for a marketplace."""
+    """Browse categories for a marketplace with hierarchy grouping."""
+    from collections import OrderedDict
     marketplace = Marketplace.query.get_or_404(marketplace_id)
     search = request.args.get('search', '')
-    
+
     query = MarketplaceCategory.query.filter_by(marketplace_id=marketplace_id)
     if search:
         query = query.filter(MarketplaceCategory.subject_name.ilike(f'%{search}%'))
-        
-    categories = query.order_by(MarketplaceCategory.subject_name).limit(500).all()
-    
-    return render_template('admin_marketplace_categories.html', marketplace=marketplace, categories=categories, search=search)
+
+    all_categories = query.order_by(
+        MarketplaceCategory.parent_name,
+        MarketplaceCategory.subject_name
+    ).limit(1000).all()
+
+    # Group by parent_name for tree-view
+    grouped = OrderedDict()
+    for cat in all_categories:
+        parent = cat.parent_name or 'Без родителя'
+        if parent not in grouped:
+            grouped[parent] = []
+        grouped[parent].append(cat)
+
+    return render_template(
+        'admin_marketplace_categories.html',
+        marketplace=marketplace,
+        grouped_categories=grouped,
+        categories=all_categories,
+        search=search,
+        total_count=len(all_categories)
+    )
 
 
 @marketplaces_bp.route('/categories/<int:category_id>')
@@ -141,59 +162,71 @@ def update_characteristic(charc_id):
 @login_required
 @admin_required
 def test_prompt():
-    """Generates a prompt for a category and tests it on a product."""
+    """Generates a prompt for a category and optionally tests it on a product via LLM."""
     data = request.json
     category_id = data.get('category_id')
     product_id = data.get('product_id')
-    
+    run_ai = data.get('run_ai', False)  # Only call LLM if explicitly requested
+
     if not category_id or not product_id:
         return jsonify({"success": False, "error": "category_id and product_id are required"})
-        
+
     category = MarketplaceCategory.query.get(category_id)
     product = SupplierProduct.query.get(product_id)
-    
+
     if not category or not product:
         return jsonify({"success": False, "error": "Selected item not found"})
-        
-    characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=category_id, is_enabled=True).all()
-    
+
+    characteristics = MarketplaceCategoryCharacteristic.query.filter_by(
+        category_id=category_id, is_enabled=True
+    ).all()
+
+    if not characteristics:
+        return jsonify({"success": False, "error": "No enabled characteristics for this category. Sync characteristics first."})
+
     try:
-        from seller_platform import app
-        # Import config to initialize AI Client
-        from services.ai_service import AIConfig
-        supplier = product.supplier
-        config = AIConfig(
-            provider=supplier.ai_provider,
-            model=supplier.ai_model,
-            api_key=supplier.ai_api_key,
-            base_url=supplier.ai_base_url,
-            client_id=supplier.ai_client_id,
-            client_secret=supplier.ai_client_secret
-        )
-        client = AIClient(config)
-        
-        task = MarketplaceAwareParsingTask(client=client, characteristics=characteristics)
-        
+        task = MarketplaceAwareParsingTask(client=None, characteristics=characteristics)
+
         sys_prompt = task.get_system_prompt()
         product_info = product.get_all_data_for_parsing()
-        user_prompt = task.build_user_prompt(product_info=product_info, original_data=product.get_original_data())
-        
-        # Test it by calling the LLM
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        raw_response = client.chat_completion(messages)
-        parsed_result = task.parse_response(raw_response) if raw_response else None
-        
-        return jsonify({
+        original_data = product.get_original_data()
+        user_prompt = task.build_user_prompt(product_info=product_info, original_data=original_data)
+
+        result = {
             "success": True,
             "sys_prompt": sys_prompt,
             "user_prompt": user_prompt,
-            "raw_response": raw_response,
-            "parsed_result": parsed_result
-        })
+            "characteristics_count": len(characteristics),
+        }
+
+        # Optionally run through AI
+        if run_ai:
+            from services.ai_service import AIConfig
+            supplier = product.supplier
+
+            if not supplier or not supplier.ai_enabled or not supplier.ai_api_key:
+                return jsonify({"success": False, "error": "AI not configured for this supplier"})
+
+            config = AIConfig.from_settings(supplier)
+            if not config:
+                return jsonify({"success": False, "error": "Failed to create AI config from supplier settings"})
+
+            client = AIClient(config)
+            task_with_client = MarketplaceAwareParsingTask(
+                client=client, characteristics=characteristics
+            )
+
+            messages = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            raw_response = client.chat_completion(messages)
+            parsed_result = task_with_client.parse_response(raw_response) if raw_response else None
+
+            result["raw_response"] = raw_response
+            result["parsed_result"] = parsed_result
+
+        return jsonify(result)
     except Exception as e:
         import traceback
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
