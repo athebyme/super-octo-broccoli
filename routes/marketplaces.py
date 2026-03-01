@@ -170,12 +170,29 @@ def sync_characteristics(category_id):
 @login_required
 @admin_required
 def toggle_category(category_id):
-    """Toggle is_enabled for a single category."""
+    """Toggle is_enabled for a single category. Auto-syncs characteristics if enabling and none exist."""
     category = MarketplaceCategory.query.get_or_404(category_id)
     data = request.json
-    category.is_enabled = bool(data.get('is_enabled', not category.is_enabled))
+    new_state = bool(data.get('is_enabled', not category.is_enabled))
+    category.is_enabled = new_state
     db.session.commit()
-    return jsonify({"success": True, "is_enabled": category.is_enabled})
+
+    synced = False
+    sync_error = None
+    if new_state and (not category.characteristics_count or category.characteristics_count == 0):
+        result = MarketplaceService.sync_category_characteristics(category_id)
+        if result.get('success'):
+            synced = True
+        else:
+            sync_error = result.get('error')
+
+    return jsonify({
+        "success": True,
+        "is_enabled": category.is_enabled,
+        "synced": synced,
+        "sync_error": sync_error,
+        "characteristics_count": category.characteristics_count or 0,
+    })
 
 
 @marketplaces_bp.route('/<int:marketplace_id>/categories/toggle_group', methods=['POST'])
@@ -199,6 +216,39 @@ def toggle_category_group(marketplace_id):
     count = query.update({MarketplaceCategory.is_enabled: is_enabled}, synchronize_session='fetch')
     db.session.commit()
     return jsonify({"success": True, "updated": count, "is_enabled": is_enabled})
+
+
+@marketplaces_bp.route('/<int:marketplace_id>/categories/sync_enabled', methods=['POST'])
+@login_required
+@admin_required
+def sync_enabled_categories(marketplace_id):
+    """Sync characteristics for all enabled categories that haven't been synced yet (or have 0 characteristics)."""
+    categories = MarketplaceCategory.query.filter_by(
+        marketplace_id=marketplace_id,
+        is_enabled=True,
+    ).all()
+
+    to_sync = [c for c in categories if not c.characteristics_count or c.characteristics_count == 0]
+
+    if not to_sync:
+        return jsonify({"success": True, "message": "Все включённые категории уже синхронизированы", "synced": 0, "total_enabled": len(categories)})
+
+    synced = 0
+    errors = []
+    for cat in to_sync:
+        result = MarketplaceService.sync_category_characteristics(cat.id)
+        if result.get('success'):
+            synced += 1
+        else:
+            errors.append(f"{cat.subject_name}: {result.get('error', '?')}")
+
+    return jsonify({
+        "success": True,
+        "synced": synced,
+        "failed": len(errors),
+        "errors": errors[:10],
+        "total_enabled": len(categories),
+    })
 
 
 @marketplaces_bp.route('/characteristics/<int:charc_id>/update', methods=['POST'])
