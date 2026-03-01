@@ -884,6 +884,18 @@ def register_auto_import_routes(app):
 
             db.session.commit()
 
+            # Обучение SmartCategoryMapper из исправления
+            try:
+                from services.smart_category_mapper import SmartCategoryMapper
+                SmartCategoryMapper.learn_from_correction(
+                    original_category=product.category,
+                    corrected_wb_subject_id=new_wb_subject_id,
+                    corrected_wb_subject_name=new_wb_subject_name,
+                    source_type=product.source_type,
+                )
+            except Exception as learn_err:
+                logger.debug(f"SmartCategoryMapper learn failed: {learn_err}")
+
             flash(f'Категория товара обновлена на "{new_wb_subject_name}"', 'success')
             return jsonify({
                 'success': True,

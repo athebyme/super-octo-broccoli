@@ -17,7 +17,19 @@ logger = logging.getLogger(__name__)
 def run_migration(db_path: str = None):
     """Запустить миграцию."""
     if db_path is None:
-        db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance', 'seller_platform.db')
+        # Проверяем несколько возможных путей к БД
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        candidates = [
+            os.path.join(base_dir, 'data', 'seller_platform.db'),       # Docker / Linux
+            os.path.join(base_dir, 'instance', 'seller_platform.db'),   # Flask default
+            os.environ.get('DATABASE_URL', '').replace('sqlite:////', '/').replace('sqlite:///', ''),  # Из env
+        ]
+        for path in candidates:
+            if path and os.path.exists(path):
+                db_path = path
+                break
+        if db_path is None:
+            db_path = candidates[0]  # Fallback
 
     if not os.path.exists(db_path):
         logger.warning(f"Database not found at {db_path}, skipping migration")

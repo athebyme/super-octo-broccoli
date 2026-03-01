@@ -1273,6 +1273,23 @@ def register_supplier_routes(app):
         return redirect(url_for('supplier_catalog'))
 
     # -------------------------------------------------------------------
+    # Дашборд качества парсинга (HTML)
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/parsing-quality/dashboard')
+    @login_required
+    @admin_required
+    def admin_supplier_parsing_quality_dashboard(supplier_id):
+        """HTML дашборд качества парсинга."""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            flash('Поставщик не найден', 'danger')
+            return redirect(url_for('admin_suppliers'))
+        return render_template(
+            'admin_supplier_parsing_quality.html',
+            supplier=supplier,
+        )
+
+    # -------------------------------------------------------------------
     # API: Качество парсинга
     # -------------------------------------------------------------------
     @app.route('/admin/suppliers/<int:supplier_id>/parsing-quality')
@@ -1325,6 +1342,45 @@ def register_supplier_routes(app):
             'field_fill_rates': field_fill,
             'recent_logs': logs_data,
             'total_products': supplier.total_products,
+        })
+
+    # -------------------------------------------------------------------
+    # API: Проверка фото URL
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/verify-photos', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_verify_photos(supplier_id):
+        """Проверка доступности URL фотографий товаров поставщика."""
+        from services.photo_url_verifier import PhotoURLVerifier
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        limit = request.json.get('limit', 100) if request.is_json else 100
+        result = PhotoURLVerifier.verify_supplier_photos(
+            supplier_id, limit=min(limit, 500)
+        )
+
+        broken_details = []
+        for detail in result.details[:50]:
+            broken_details.append({
+                'product_id': detail.product_id,
+                'total_urls': detail.total_urls,
+                'valid_urls': detail.valid_urls,
+                'broken_urls': detail.broken_urls[:5],
+                'errors': dict(list(detail.errors.items())[:5]),
+            })
+
+        return jsonify({
+            'total_products': result.total_products,
+            'products_checked': result.products_checked,
+            'products_with_broken_photos': result.products_with_broken_photos,
+            'total_urls_checked': result.total_urls_checked,
+            'total_broken_urls': result.total_broken_urls,
+            'duration_seconds': round(result.duration_seconds, 2),
+            'broken_details': broken_details,
         })
 
     # -------------------------------------------------------------------

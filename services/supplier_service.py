@@ -185,11 +185,30 @@ class SupplierCSVParser:
         """
         Парсит CSV и автоматически нормализует данные.
         Рекомендуемый метод для новых интеграций.
+
+        Pipeline: parse → normalize → enrich → auto-correct
         """
         from services.data_normalizer import DataNormalizer
 
         products = self.parse(csv_content)
-        return DataNormalizer.normalize_product_list(products)
+        normalized = DataNormalizer.normalize_product_list(products)
+
+        # Обогащение из описаний (заполняет пустые поля из текста описания)
+        try:
+            from services.description_enricher import DescriptionEnricher
+            normalized = DescriptionEnricher.enrich_product_list(normalized)
+        except Exception as e:
+            logger.debug(f"Description enrichment skipped: {e}")
+
+        # Автокоррекция (бренд из title, страна из бренда, очистка мусора)
+        try:
+            from services.auto_correction_rules import get_default_engine
+            engine = get_default_engine()
+            normalized = engine.apply_to_list(normalized)
+        except Exception as e:
+            logger.debug(f"Auto-correction skipped: {e}")
+
+        return normalized
 
     # ------------------------------------------------------------------
     # Конфигурируемый маппинг колонок
@@ -2984,6 +3003,26 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
     # Контент хеш для отслеживания изменений
     content_str = f"{sp.title}|{sp.brand}|{sp.category}|{sp.supplier_price}"
     sp.content_hash = hashlib.md5(content_str.encode()).hexdigest()
+
+    # WB категория: SmartCategoryMapper с контекстным анализом
+    try:
+        from services.smart_category_mapper import SmartCategoryMapper
+        all_cats = data.get('all_categories', [])
+        subj_id, subj_name, cat_conf = SmartCategoryMapper.map_category(
+            csv_category=data.get('category', ''),
+            product_title=data.get('title', ''),
+            brand=data.get('brand', ''),
+            description=data.get('description', ''),
+            all_categories=all_cats,
+            external_id=data.get('external_id', ''),
+            source_type='sexoptovik',
+        )
+        sp.wb_subject_id = subj_id
+        sp.wb_subject_name = subj_name
+        sp.wb_category_name = subj_name
+        sp.category_confidence = cat_conf
+    except Exception as e:
+        logger.debug(f"SmartCategoryMapper failed: {e}")
 
     # Расчёт confidence score
     try:
