@@ -3629,29 +3629,40 @@ def register_auto_import_routes(app):
 
                 result['extracted_values'] = wb_extracted
 
-                # === ВАЛИДАЦИЯ БРЕНДА ЧЕРЕЗ WB API ===
+                # === ВАЛИДАЦИЯ БРЕНДА ЧЕРЕЗ API МАРКЕТПЛЕЙСА ===
                 brand_validation = None
                 if product.brand:
                     try:
                         from services.brand_engine import get_brand_engine
-                        from services.wb_api_client import WildberriesAPIClient
                         engine = get_brand_engine()
+
+                        # Определяем marketplace_id для WB
+                        from models import Marketplace
+                        wb_marketplace = Marketplace.query.filter_by(code='wb').first()
+                        mp_id = wb_marketplace.id if wb_marketplace else None
+
+                        mp_client = None
+                        if seller.wb_api_key:
+                            from services.wb_api_client import WildberriesAPIClient
+                            mp_client = WildberriesAPIClient(seller.wb_api_key)
+
                         brand_result = engine.resolve(
                             product.brand,
-                            subject_id=product.wb_subject_id,
-                            wb_client=WildberriesAPIClient(seller.wb_api_key) if seller.wb_api_key else None
+                            marketplace_id=mp_id,
+                            category_id=product.wb_subject_id,
+                            marketplace_client=mp_client,
                         )
                         brand_validation = {
                             'original_brand': product.brand,
                             'status': brand_result.status,
                             'valid': brand_result.status in ('exact', 'confident'),
-                            'exact_match': {'id': brand_result.wb_brand_id, 'name': brand_result.canonical_name} if brand_result.canonical_name else None,
+                            'exact_match': {'id': brand_result.marketplace_brand_ext_id, 'name': brand_result.canonical_name} if brand_result.canonical_name else None,
                             'confidence': brand_result.confidence,
                             'suggestions': brand_result.suggestions[:5],
                             'category_valid': brand_result.category_valid,
                             'source': brand_result.source,
                         }
-                        # Если бренд найден - используем точное имя из WB
+                        # Если бренд найден — используем точное имя
                         if brand_result.status in ('exact', 'confident') and brand_result.canonical_name:
                             product.brand = brand_result.canonical_name
                             product.resolved_brand_id = brand_result.brand_id
@@ -4144,18 +4155,25 @@ def register_auto_import_routes(app):
             from services.brand_engine import get_brand_engine
             engine = get_brand_engine()
 
-            wb_client = None
+            # Определяем marketplace_id для WB
+            from models import Marketplace
+            wb_marketplace = Marketplace.query.filter_by(code='wb').first()
+            mp_id = wb_marketplace.id if wb_marketplace else None
+
+            mp_client = None
             if seller.wb_api_key:
                 from services.wb_api_client import WildberriesAPIClient
-                wb_client = WildberriesAPIClient(seller.wb_api_key)
+                mp_client = WildberriesAPIClient(seller.wb_api_key)
 
-            result = engine.resolve(brand_name, wb_client=wb_client)
+            category_id = data.get('category_id') or data.get('subject_id')
+            result = engine.resolve(brand_name, marketplace_id=mp_id,
+                                    category_id=category_id, marketplace_client=mp_client)
 
             return jsonify({
                 'success': True,
                 'valid': result.status in ('exact', 'confident'),
                 'status': result.status,
-                'exact_match': {'id': result.wb_brand_id, 'name': result.canonical_name} if result.canonical_name else None,
+                'exact_match': {'id': result.marketplace_brand_ext_id, 'name': result.canonical_name} if result.canonical_name else None,
                 'confidence': result.confidence,
                 'suggestions': result.suggestions,
                 'category_valid': result.category_valid,

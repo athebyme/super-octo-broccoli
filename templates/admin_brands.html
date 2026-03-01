@@ -9,7 +9,7 @@
         <div>
             <h1 class="text-3xl font-bold text-gray-900">Бренды</h1>
             <p class="mt-2 text-sm text-gray-600">
-                Реестр брендов с валидацией через WB API
+                Реестр брендов с валидацией через API маркетплейсов
             </p>
         </div>
         <div class="flex gap-3">
@@ -95,9 +95,9 @@
                 <tr>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Бренд</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">WB ID</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Маркетплейсы</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Алиасы</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Проверен</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Создан</th>
                     <th class="px-6 py-3"></th>
                 </tr>
             </thead>
@@ -121,17 +121,13 @@
                         {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {{ brand.wb_brand_id or '—' }}
+                        {{ brand.marketplace_brands.count() }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {{ brand.aliases.count() }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {% if brand.verified_at %}
-                        {{ brand.verified_at.strftime('%d.%m.%Y') }}
-                        {% else %}
-                        —
-                        {% endif %}
+                        {{ brand.created_at.strftime('%d.%m.%Y') }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
                         <a href="{{ url_for('brands.detail', brand_id=brand.id) }}" class="text-indigo-600 hover:text-indigo-900">Открыть</a>

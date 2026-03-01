@@ -16,7 +16,7 @@ from flask import (
 )
 from flask_login import login_required, current_user
 
-from models import db, Brand, BrandAlias, BrandCategoryLink, ImportedProduct, SupplierProduct
+from models import db, Brand, BrandAlias, BrandCategoryLink, MarketplaceBrand, ImportedProduct, SupplierProduct, Marketplace
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,15 @@ def detail(brand_id):
     brand = Brand.query.get_or_404(brand_id)
 
     aliases = BrandAlias.query.filter_by(brand_id=brand_id).order_by(BrandAlias.created_at.desc()).all()
-    category_links = BrandCategoryLink.query.filter_by(brand_id=brand_id).all()
+
+    # Маркетплейс-привязки бренда
+    marketplace_brands = MarketplaceBrand.query.filter_by(brand_id=brand_id).all()
+
+    # Category links через marketplace_brands
+    category_links = []
+    for mp_brand in marketplace_brands:
+        for link in BrandCategoryLink.query.filter_by(marketplace_brand_id=mp_brand.id).all():
+            category_links.append(link)
 
     imported_count = ImportedProduct.query.filter_by(resolved_brand_id=brand_id).count()
     supplier_count = SupplierProduct.query.filter_by(resolved_brand_id=brand_id).count()
@@ -108,6 +116,7 @@ def detail(brand_id):
     return render_template('admin_brand_detail.html',
                            brand=brand,
                            aliases=aliases,
+                           marketplace_brands=marketplace_brands,
                            category_links=category_links,
                            imported_count=imported_count,
                            supplier_count=supplier_count,
@@ -237,8 +246,6 @@ def api_update(brand_id):
 
     if 'status' in data:
         brand.status = data['status']
-        if data['status'] == 'verified':
-            brand.verified_at = datetime.utcnow()
 
     if 'country' in data:
         brand.country = data['country']
@@ -305,8 +312,19 @@ def api_delete_alias(alias_id):
 @login_required
 @admin_required
 def api_verify(brand_id):
-    """Проверить бренд через WB API."""
+    """Проверить бренд через API маркетплейса."""
     brand = Brand.query.get_or_404(brand_id)
+    data = request.get_json() or {}
+    marketplace_id = data.get('marketplace_id')
+
+    # Если маркетплейс не указан — берём WB по умолчанию
+    if not marketplace_id:
+        wb = Marketplace.query.filter_by(code='wb').first()
+        if wb:
+            marketplace_id = wb.id
+
+    if not marketplace_id:
+        return jsonify({'success': False, 'error': 'Маркетплейс не найден'}), 400
 
     # Находим продавца с WB API ключом
     from models import Seller
@@ -321,13 +339,23 @@ def api_verify(brand_id):
 
             if result.get('valid') and result.get('exact_match'):
                 match = result['exact_match']
-                brand.wb_brand_id = match.get('id')
-                brand.status = 'verified'
-                brand.verified_at = datetime.utcnow()
-                db.session.commit()
 
+                # Обновляем глобальный бренд
+                brand.status = 'verified'
+                brand.updated_at = datetime.utcnow()
+
+                # Создаём/обновляем MarketplaceBrand
                 from services.brand_engine import get_brand_engine
-                get_brand_engine().invalidate_cache()
+                engine = get_brand_engine()
+                engine.ensure_marketplace_brand(
+                    brand_id=brand.id,
+                    marketplace_id=marketplace_id,
+                    marketplace_name=match.get('name', brand.name),
+                    marketplace_ext_id=match.get('id'),
+                )
+
+                db.session.commit()
+                engine.invalidate_cache()
 
                 return jsonify({
                     'success': True,
@@ -396,11 +424,11 @@ def api_review_approve(brand_id):
         brand.name = target_name
         brand.name_normalized = normalize_for_comparison(target_name)
         brand.status = 'verified'
-        brand.verified_at = datetime.utcnow()
+        brand.updated_at = datetime.utcnow()
     else:
         # Просто подтверждаем текущее имя
         brand.status = 'verified'
-        brand.verified_at = datetime.utcnow()
+        brand.updated_at = datetime.utcnow()
 
     db.session.commit()
 
@@ -440,14 +468,21 @@ def api_resolve():
     """Резолв бренда (для inline-валидации в UI)."""
     data = request.get_json()
     brand_name = data.get('brand', '').strip()
-    subject_id = data.get('subject_id')
+    marketplace_id = data.get('marketplace_id')
+    category_id = data.get('category_id') or data.get('subject_id')
+
+    # Если маркетплейс не указан — берём WB по умолчанию
+    if not marketplace_id:
+        wb = Marketplace.query.filter_by(code='wb').first()
+        if wb:
+            marketplace_id = wb.id
 
     if not brand_name:
         return jsonify({'success': False, 'error': 'brand обязателен'}), 400
 
     from services.brand_engine import get_brand_engine
     engine = get_brand_engine()
-    result = engine.resolve(brand_name, subject_id=subject_id)
+    result = engine.resolve(brand_name, marketplace_id=marketplace_id, category_id=category_id)
 
     return jsonify({'success': True, 'resolution': result.to_dict()})
 
@@ -485,34 +520,40 @@ def api_stats():
 @login_required
 @admin_required
 def api_sync():
-    """Синхронизация брендов с WB API (запуск в фоне)."""
+    """Синхронизация брендов с API маркетплейса (запуск в фоне)."""
     from models import Seller
+
+    data = request.get_json() or {}
+    marketplace_id = data.get('marketplace_id')
+
+    # По умолчанию синхронизируем WB
+    if not marketplace_id:
+        wb = Marketplace.query.filter_by(code='wb').first()
+        if wb:
+            marketplace_id = wb.id
+
+    if not marketplace_id:
+        return jsonify({'success': False, 'error': 'Маркетплейс не найден'}), 400
 
     seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
     if not seller or not seller.wb_api_key:
         return jsonify({'success': False, 'error': 'Нет доступных WB API ключей'}), 400
 
     import threading
-
-    def sync_task():
-        try:
-            from services.wb_api_client import WildberriesAPIClient
-            from services.brand_engine import get_brand_engine
-            from flask import current_app
-
-            with current_app.app_context():
-                with WildberriesAPIClient(seller.wb_api_key) as wb_client:
-                    get_brand_engine().sync_wb_brands(wb_client)
-        except Exception as e:
-            logger.error(f"WB brand sync failed: {e}")
-
-    # Получаем app для контекста
     from flask import current_app
     app = current_app._get_current_object()
+    mp_id = marketplace_id
 
     def sync_with_context():
         with app.app_context():
-            sync_task()
+            try:
+                from services.wb_api_client import WildberriesAPIClient
+                from services.brand_engine import get_brand_engine
+
+                with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+                    get_brand_engine().sync_marketplace_brands(mp_id, wb_client)
+            except Exception as e:
+                logger.error(f"Brand sync failed: {e}")
 
     thread = threading.Thread(target=sync_with_context, daemon=True)
     thread.start()

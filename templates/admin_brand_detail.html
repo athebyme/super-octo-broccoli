@@ -27,11 +27,8 @@
                         <option value="needs_review" {% if brand.status == 'needs_review' %}selected{% endif %}>Needs Review</option>
                         <option value="rejected" {% if brand.status == 'rejected' %}selected{% endif %}>Rejected</option>
                     </select>
-                    {% if brand.wb_brand_id %}
-                    <span class="text-sm text-gray-500">WB ID: <strong>{{ brand.wb_brand_id }}</strong></span>
-                    {% endif %}
-                    {% if brand.verified_at %}
-                    <span class="text-sm text-gray-500">Проверен: {{ brand.verified_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                    {% if brand.updated_at %}
+                    <span class="text-sm text-gray-500">Обновлён: {{ brand.updated_at.strftime('%d.%m.%Y %H:%M') }}</span>
                     {% endif %}
                 </div>
             </div>
@@ -86,18 +83,60 @@
                 </div>
             </div>
 
-            <!-- Категории WB -->
+            <!-- Маркетплейсы -->
             <div class="bg-white shadow-sm rounded-lg border border-gray-200">
                 <div class="px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-lg font-medium text-gray-900">Допустимые категории WB</h2>
+                    <h2 class="text-lg font-medium text-gray-900">Маркетплейсы</h2>
+                </div>
+                {% if marketplace_brands %}
+                <div class="divide-y divide-gray-100">
+                    {% for mp_brand in marketplace_brands %}
+                    <div class="px-6 py-3">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <span class="text-sm font-medium text-gray-900">{{ mp_brand.marketplace.name if mp_brand.marketplace else 'Marketplace #' + mp_brand.marketplace_id|string }}</span>
+                                <span class="ml-2 text-sm text-gray-600">"{{ mp_brand.marketplace_brand_name }}"</span>
+                                {% if mp_brand.marketplace_brand_id %}
+                                <span class="ml-2 text-xs text-gray-400">ext_id: {{ mp_brand.marketplace_brand_id }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="flex items-center gap-2">
+                                {% if mp_brand.status == 'verified' %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">Verified</span>
+                                {% elif mp_brand.status == 'pending' %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-500">Pending</span>
+                                {% elif mp_brand.status == 'needs_review' %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">Needs Review</span>
+                                {% elif mp_brand.status == 'rejected' %}
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">Rejected</span>
+                                {% endif %}
+                                {% if mp_brand.verified_at %}
+                                <span class="text-xs text-gray-400">{{ mp_brand.verified_at.strftime('%d.%m.%Y') }}</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-6 py-8 text-center text-sm text-gray-500">
+                    Бренд не привязан к маркетплейсам
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Категории -->
+            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-lg font-medium text-gray-900">Допустимые категории</h2>
                 </div>
                 {% if category_links %}
                 <div class="divide-y divide-gray-100">
                     {% for link in category_links %}
                     <div class="px-6 py-3 flex items-center justify-between">
                         <div>
-                            <span class="text-sm text-gray-900">{{ link.wb_subject_name or 'Subject #' + link.wb_subject_id|string }}</span>
-                            <span class="ml-2 text-xs text-gray-400">ID: {{ link.wb_subject_id }}</span>
+                            <span class="text-sm text-gray-900">{{ link.category_name or 'Category #' + link.category_id|string }}</span>
+                            <span class="ml-2 text-xs text-gray-400">ID: {{ link.category_id }}</span>
                         </div>
                         <div>
                             {% if link.is_available %}

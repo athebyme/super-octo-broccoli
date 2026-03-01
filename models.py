@@ -2849,23 +2849,21 @@ class ParsingLog(db.Model):
 
 
 class Brand(db.Model):
-    """Централизованный реестр брендов с валидацией через WB API"""
+    """Централизованный реестр брендов (глобальный, без привязки к маркетплейсу)"""
     __tablename__ = 'brands'
 
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)  # Каноническое имя (как на WB)
+    name = db.Column(db.String(200), nullable=False)  # Каноническое имя бренда
     name_normalized = db.Column(db.String(200), nullable=False, index=True)  # lowercase без спецсимволов
-    wb_brand_id = db.Column(db.Integer, index=True)  # ID из справочника WB
     status = db.Column(db.String(20), nullable=False, default='pending', index=True)  # pending/verified/rejected/needs_review
     country = db.Column(db.String(100))
     notes = db.Column(db.Text)
-    verified_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Связи
     aliases = db.relationship('BrandAlias', backref='brand', lazy='dynamic', cascade='all, delete-orphan')
-    category_links = db.relationship('BrandCategoryLink', backref='brand', lazy='dynamic', cascade='all, delete-orphan')
+    marketplace_brands = db.relationship('MarketplaceBrand', backref='brand', lazy='dynamic', cascade='all, delete-orphan')
     imported_products = db.relationship('ImportedProduct', backref='resolved_brand', lazy='dynamic', foreign_keys='ImportedProduct.resolved_brand_id')
     supplier_products = db.relationship('SupplierProduct', backref='resolved_brand', lazy='dynamic', foreign_keys='SupplierProduct.resolved_brand_id')
 
@@ -2878,14 +2876,13 @@ class Brand(db.Model):
             'id': self.id,
             'name': self.name,
             'name_normalized': self.name_normalized,
-            'wb_brand_id': self.wb_brand_id,
             'status': self.status,
             'country': self.country,
             'notes': self.notes,
-            'verified_at': self.verified_at.isoformat() if self.verified_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'aliases_count': self.aliases.count() if self.aliases else 0,
+            'marketplaces_count': self.marketplace_brands.count() if self.marketplace_brands else 0,
         }
 
     def __repr__(self):
@@ -2927,30 +2924,72 @@ class BrandAlias(db.Model):
         return f'<BrandAlias "{self.alias}" -> Brand#{self.brand_id}>'
 
 
-class BrandCategoryLink(db.Model):
-    """Допустимость бренда в категории WB (subjectId)"""
-    __tablename__ = 'brand_category_links'
+class MarketplaceBrand(db.Model):
+    """Привязка бренда к маркетплейсу — имя, ID и статус на конкретной площадке"""
+    __tablename__ = 'marketplace_brands'
 
     id = db.Column(db.Integer, primary_key=True)
     brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=False, index=True)
-    wb_subject_id = db.Column(db.Integer, nullable=False, index=True)
-    wb_subject_name = db.Column(db.String(200))
-    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False, index=True)
+
+    marketplace_brand_name = db.Column(db.String(200), nullable=False)  # Имя бренда на площадке ("LELO", "Lelo")
+    marketplace_brand_id = db.Column(db.Integer)  # ID бренда в справочнике площадки (wb_brand_id, ozon_brand_id...)
+    status = db.Column(db.String(20), nullable=False, default='pending')  # pending/verified/rejected/needs_review
     verified_at = db.Column(db.DateTime)
+    notes = db.Column(db.Text)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    marketplace = db.relationship('Marketplace', backref=db.backref('marketplace_brands', lazy='dynamic'))
+    category_links = db.relationship('BrandCategoryLink', backref='marketplace_brand', lazy='dynamic', cascade='all, delete-orphan')
 
     __table_args__ = (
-        db.UniqueConstraint('brand_id', 'wb_subject_id', name='uq_brand_category'),
+        db.UniqueConstraint('brand_id', 'marketplace_id', name='uq_brand_marketplace'),
     )
 
     def to_dict(self):
         return {
             'id': self.id,
             'brand_id': self.brand_id,
-            'wb_subject_id': self.wb_subject_id,
-            'wb_subject_name': self.wb_subject_name,
+            'marketplace_id': self.marketplace_id,
+            'marketplace_brand_name': self.marketplace_brand_name,
+            'marketplace_brand_id': self.marketplace_brand_id,
+            'status': self.status,
+            'verified_at': self.verified_at.isoformat() if self.verified_at else None,
+            'marketplace_code': self.marketplace.code if self.marketplace else None,
+            'marketplace_name': self.marketplace.name if self.marketplace else None,
+        }
+
+    def __repr__(self):
+        return f'<MarketplaceBrand Brand#{self.brand_id} @ Marketplace#{self.marketplace_id} "{self.marketplace_brand_name}">'
+
+
+class BrandCategoryLink(db.Model):
+    """Допустимость бренда в категории маркетплейса"""
+    __tablename__ = 'brand_category_links'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_brand_id = db.Column(db.Integer, db.ForeignKey('marketplace_brands.id'), nullable=False, index=True)
+    category_id = db.Column(db.Integer, nullable=False, index=True)  # subject_id (WB), category_id (Ozon) и т.д.
+    category_name = db.Column(db.String(200))
+    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    verified_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.UniqueConstraint('marketplace_brand_id', 'category_id', name='uq_mp_brand_category'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'marketplace_brand_id': self.marketplace_brand_id,
+            'category_id': self.category_id,
+            'category_name': self.category_name,
             'is_available': self.is_available,
             'verified_at': self.verified_at.isoformat() if self.verified_at else None,
         }
 
     def __repr__(self):
-        return f'<BrandCategoryLink Brand#{self.brand_id} -> Subject#{self.wb_subject_id}>'
+        return f'<BrandCategoryLink MPBrand#{self.marketplace_brand_id} -> Cat#{self.category_id}>'

@@ -502,11 +502,17 @@ def get_scheduler_status():
 
 
 def sync_brands_background(flask_app):
-    """Фоновая синхронизация брендов из WB API."""
+    """Фоновая синхронизация брендов через API маркетплейсов."""
     with flask_app.app_context():
         try:
-            from models import Seller
+            from models import Seller, Marketplace
             from services.brand_engine import get_brand_engine
+
+            # Находим WB маркетплейс
+            wb = Marketplace.query.filter_by(code='wb').first()
+            if not wb:
+                logger.info("Brand sync skipped: WB marketplace not found")
+                return
 
             # Находим продавца с WB API ключом
             seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
@@ -517,7 +523,7 @@ def sync_brands_background(flask_app):
             from services.wb_api_client import WildberriesAPIClient
             with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                 engine = get_brand_engine(flask_app)
-                stats = engine.sync_wb_brands(wb_client)
+                stats = engine.sync_marketplace_brands(wb.id, wb_client)
                 logger.info(f"Brand sync completed: {stats}")
 
         except Exception as e:
@@ -528,8 +534,14 @@ def auto_resolve_pending_brands(flask_app):
     """Фоновый авто-резолв pending брендов."""
     with flask_app.app_context():
         try:
-            from models import Seller
+            from models import Seller, Marketplace
             from services.brand_engine import get_brand_engine
+
+            # Находим WB маркетплейс
+            wb = Marketplace.query.filter_by(code='wb').first()
+            if not wb:
+                logger.info("Brand auto-resolve skipped: WB marketplace not found")
+                return
 
             seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
             if not seller or not seller.wb_api_key:
@@ -539,7 +551,7 @@ def auto_resolve_pending_brands(flask_app):
             from services.wb_api_client import WildberriesAPIClient
             with WildberriesAPIClient(seller.wb_api_key) as wb_client:
                 engine = get_brand_engine(flask_app)
-                stats = engine.auto_resolve_pending(wb_client)
+                stats = engine.auto_resolve_pending(wb_client, marketplace_id=wb.id)
                 logger.info(f"Brand auto-resolve completed: {stats}")
 
         except Exception as e:
