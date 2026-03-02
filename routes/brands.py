@@ -625,6 +625,71 @@ def api_sync_progress():
     return jsonify({'success': True, 'progress': progress})
 
 
+@brands_bp.route('/api/test-wb-brands', methods=['GET'])
+@login_required
+@admin_required
+def api_test_wb_brands():
+    """
+    Диагностический эндпоинт: делает один запрос к WB API и возвращает raw ответ.
+
+    Параметры (query string):
+      pattern  — строка поиска (по умолчанию "Nike")
+      top      — макс результатов (по умолчанию 10)
+      locale   — язык (по умолчанию "ru")
+      endpoint — путь API (по умолчанию "/api/content/v1/brands")
+
+    Пример:
+      /admin/brands/api/test-wb-brands?pattern=Nike&top=10
+    """
+    import traceback
+    from models import Seller
+    from services.wb_api_client import WildberriesAPIClient
+
+    pattern = request.args.get('pattern', 'Nike')
+    top = request.args.get('top', 10, type=int)
+    locale = request.args.get('locale', 'ru')
+    endpoint = request.args.get('endpoint', '/api/content/v1/brands')
+
+    seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
+    if not seller or not seller.wb_api_key:
+        return jsonify({'success': False, 'error': 'Нет WB API ключей'}), 400
+
+    api_key = seller.wb_api_key
+    result = {
+        'api_key_prefix': api_key[:15] + '...' if len(api_key) > 15 else '(empty)',
+        'api_key_length': len(api_key),
+        'endpoint': endpoint,
+        'params': {'pattern': pattern, 'top': top, 'locale': locale},
+    }
+
+    try:
+        with WildberriesAPIClient(api_key) as client:
+            base_url = client._get_base_url('content')
+            from urllib.parse import urljoin
+            full_url = urljoin(base_url, endpoint)
+            result['base_url'] = base_url
+            result['full_url'] = full_url
+
+            params = {'pattern': pattern, 'top': top, 'locale': locale}
+            response = client._make_request('GET', 'content', endpoint, params=params)
+
+            result['status_code'] = response.status_code
+            result['response_url'] = response.url
+            result['response_body'] = response.text[:2000]
+            result['response_headers'] = dict(response.headers)
+
+            try:
+                result['json'] = response.json()
+            except Exception:
+                result['json'] = None
+
+    except Exception as e:
+        result['error'] = f'{type(e).__name__}: {str(e)}'
+        result['traceback'] = traceback.format_exc()
+
+    return jsonify(result)
+
+
 def register_brand_routes(app):
     """Регистрация blueprint в приложении."""
     app.register_blueprint(brands_bp)
