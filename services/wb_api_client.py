@@ -1743,14 +1743,20 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get TNVED codes: {str(e)}")
             raise
 
-    def get_brands_by_subject(self, subject_id: int) -> Dict[str, Any]:
+    def get_brands_by_subject(self, subject_id: int, top: int = 10000) -> Dict[str, Any]:
         """
         Получить бренды по ID предмета (категории) из WB API.
 
-        Корректный эндпоинт: GET /api/content/v1/brands?subjectId=...
+        Эндпоинт: GET /api/content/v1/brands
+        Параметры:
+            - top: макс. кол-во результатов (обязателен для получения данных)
+            - pattern: фильтр по имени (пустая строка = все бренды)
+            - subjectId: фильтр по категории
+            - locale: язык (ru)
 
         Args:
             subject_id: ID предмета (subjectID)
+            top: максимальное количество брендов
 
         Returns:
             Dict с данными о брендах:
@@ -1762,32 +1768,24 @@ class WildberriesAPIClient:
             }
         """
         endpoint = "/api/content/v1/brands"
-        params = {'subjectId': subject_id}
+        params = {
+            'top': top,
+            'pattern': '',
+            'locale': 'ru',
+        }
+        if subject_id:
+            params['subjectId'] = subject_id
 
-        logger.info(f"🔍 Getting brands for subjectId={subject_id}")
+        logger.info(f"Getting brands for subjectId={subject_id}, top={top}")
         try:
-            all_brands = []
-            page = 0
-            while True:
-                response = self._make_request('GET', 'content', endpoint, params=params)
-                result = response.json()
-                brands = result.get('data', [])
-                all_brands.extend(brands)
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            brands = result.get('data', [])
 
-                # Пагинация через параметр next
-                next_val = result.get('next')
-                if not next_val or not brands:
-                    break
-                params['next'] = next_val
-                page += 1
-                if page > 50:  # Safety limit
-                    break
-                time.sleep(0.1)
-
-            logger.info(f"✅ Found {len(all_brands)} brands for subjectId={subject_id}")
-            return {'data': all_brands}
+            logger.info(f"Found {len(brands)} brands for subjectId={subject_id}")
+            return {'data': brands}
         except Exception as e:
-            logger.error(f"❌ Failed to get brands for subjectId={subject_id}: {str(e)}")
+            logger.error(f"Failed to get brands for subjectId={subject_id}: {str(e)}")
             raise
 
     def search_brands(self, pattern: str, top: int = 50) -> Dict[str, Any]:

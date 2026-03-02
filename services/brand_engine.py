@@ -750,9 +750,9 @@ class BrandEngine:
                         + (f', ошибок: {stats["errors"]}' if stats['errors'] else ''),
             )
 
-            # Пауза между запросами чтобы не перегрузить API
+            # Пауза между запросами (WB лимит: 100 req/min для content API)
             if i + 1 < total_cats:
-                time.sleep(0.15)
+                time.sleep(0.6)
 
         stats['total_fetched'] = len(all_brands)
         logger.info(f"Fetched {len(all_brands)} brands from marketplace #{marketplace_id}")
