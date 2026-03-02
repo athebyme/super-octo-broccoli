@@ -1,52 +1,73 @@
 {% extends "base.html" %}
 
+{% block title %}Логи API - Seller Hub{% endblock %}
+
 {% block content %}
 <div class="container mx-auto px-4 py-8">
-    <div class="mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Логи API запросов</h1>
-        <p class="text-gray-600 dark:text-gray-400 mt-1">
-            История взаимодействия с API Wildberries
-        </p>
+    <!-- Hero header -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="20" y="20" width="160" height="25" rx="4" stroke="white" stroke-width="1"/>
+            <rect x="20" y="55" width="160" height="25" rx="4" stroke="white" stroke-width="1"/>
+            <rect x="20" y="90" width="160" height="25" rx="4" stroke="white" stroke-width="1"/>
+            <rect x="20" y="125" width="160" height="25" rx="4" stroke="white" stroke-width="1"/>
+            <rect x="20" y="160" width="160" height="25" rx="4" stroke="white" stroke-width="1"/>
+            <circle cx="35" cy="32" r="4" fill="white" opacity="0.3"/>
+            <circle cx="35" cy="67" r="4" fill="white" opacity="0.3"/>
+            <circle cx="35" cy="102" r="4" fill="white" opacity="0.3"/>
+            <rect x="50" y="29" width="40" height="6" rx="2" fill="white" opacity="0.2"/>
+            <rect x="50" y="64" width="55" height="6" rx="2" fill="white" opacity="0.2"/>
+            <rect x="50" y="99" width="35" height="6" rx="2" fill="white" opacity="0.2"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="absolute bottom-4 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">Логи API запросов</h1>
+            <p class="mt-2 text-sm text-slate-300">История взаимодействия с API маркетплейсов</p>
+        </div>
     </div>
 
     <!-- Статистика -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <div class="flex items-center justify-between">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div class="absolute -top-4 -right-4 w-20 h-20 bg-blue-100 rounded-full blur-2xl opacity-60"></div>
+            <div class="relative flex items-center justify-between">
                 <div>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Всего запросов</p>
-                    <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1">{{ total_requests }}</p>
+                    <p class="text-sm text-gray-500">Всего запросов</p>
+                    <p class="text-3xl font-bold text-gray-900 mt-1">{{ total_requests }}</p>
                 </div>
-                <div class="p-3 bg-blue-100 dark:bg-blue-900 rounded-full">
-                    <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/25">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
                     </svg>
                 </div>
             </div>
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <div class="flex items-center justify-between">
+        <div class="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div class="absolute -top-4 -right-4 w-20 h-20 bg-red-100 rounded-full blur-2xl opacity-60"></div>
+            <div class="relative flex items-center justify-between">
                 <div>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Ошибок</p>
-                    <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1">{{ failed_requests }}</p>
+                    <p class="text-sm text-gray-500">Ошибок</p>
+                    <p class="text-3xl font-bold text-gray-900 mt-1">{{ failed_requests }}</p>
                 </div>
-                <div class="p-3 bg-red-100 dark:bg-red-900 rounded-full">
-                    <svg class="w-8 h-8 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="w-12 h-12 bg-gradient-to-br from-red-500 to-rose-600 rounded-xl flex items-center justify-center shadow-lg shadow-red-500/25">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
                 </div>
             </div>
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <div class="flex items-center justify-between">
+        <div class="relative overflow-hidden bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div class="absolute -top-4 -right-4 w-20 h-20 bg-green-100 rounded-full blur-2xl opacity-60"></div>
+            <div class="relative flex items-center justify-between">
                 <div>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Успешность</p>
-                    <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1">{{ "%.1f"|format(success_rate) }}%</p>
+                    <p class="text-sm text-gray-500">Успешность</p>
+                    <p class="text-3xl font-bold text-gray-900 mt-1">{{ "%.1f"|format(success_rate) }}%</p>
                 </div>
-                <div class="p-3 bg-green-100 dark:bg-green-900 rounded-full">
-                    <svg class="w-8 h-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/25">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
                 </div>
@@ -56,63 +77,63 @@
 
     <!-- Таблица логов -->
     {% if logs %}
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead class="bg-gray-50 dark:bg-gray-900">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
                     <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                             Время
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                             Метод
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                             Эндпоинт
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                             Статус
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                             Время ответа
                         </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                             Результат
                         </th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                <tbody class="divide-y divide-gray-200">
                     {% for log in logs %}
-                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                             {{ log.created_at.strftime('%d.%m.%Y %H:%M:%S') }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <span class="px-2 py-1 text-xs font-mono font-semibold rounded
-                                {% if log.method == 'GET' %}bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200
-                                {% elif log.method == 'POST' %}bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200
-                                {% elif log.method == 'PUT' %}bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200
-                                {% elif log.method == 'DELETE' %}bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200
-                                {% else %}bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200
+                                {% if log.method == 'GET' %}bg-blue-100 text-blue-800
+                                {% elif log.method == 'POST' %}bg-green-100 text-green-800
+                                {% elif log.method == 'PUT' %}bg-yellow-100 text-yellow-800
+                                {% elif log.method == 'DELETE' %}bg-red-100 text-red-800
+                                {% else %}bg-gray-100 text-gray-800
                                 {% endif %}">
                                 {{ log.method }}
                             </span>
                         </td>
-                        <td class="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 font-mono max-w-md truncate"
+                        <td class="px-6 py-4 text-sm text-gray-600 font-mono max-w-md truncate"
                             title="{{ log.endpoint }}">
                             {{ log.endpoint }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <span class="px-2 py-1 text-xs font-mono font-semibold rounded
-                                {% if log.status_code < 300 %}bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200
-                                {% elif log.status_code < 400 %}bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200
-                                {% elif log.status_code < 500 %}bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200
-                                {% else %}bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200
+                                {% if log.status_code < 300 %}bg-green-100 text-green-800
+                                {% elif log.status_code < 400 %}bg-blue-100 text-blue-800
+                                {% elif log.status_code < 500 %}bg-yellow-100 text-yellow-800
+                                {% else %}bg-red-100 text-red-800
                                 {% endif %}">
                                 {{ log.status_code or '—' }}
                             </span>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                             {% if log.response_time %}
                                 {{ "%.2f"|format(log.response_time) }}s
                             {% else %}
@@ -121,14 +142,14 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% if log.success %}
-                                <span class="flex items-center text-green-600 dark:text-green-400">
+                                <span class="flex items-center text-green-600">
                                     <svg class="w-5 h-5 mr-1" fill="currentColor" viewBox="0 0 20 20">
                                         <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                                     </svg>
                                     Успех
                                 </span>
                             {% else %}
-                                <span class="flex items-center text-red-600 dark:text-red-400"
+                                <span class="flex items-center text-red-600"
                                       title="{{ log.error_message }}">
                                     <svg class="w-5 h-5 mr-1" fill="currentColor" viewBox="0 0 20 20">
                                         <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
@@ -139,9 +160,9 @@
                         </td>
                     </tr>
                     {% if log.error_message and not log.success %}
-                    <tr class="bg-red-50 dark:bg-red-900/20">
+                    <tr class="bg-red-50">
                         <td colspan="6" class="px-6 py-2">
-                            <div class="text-sm text-red-700 dark:text-red-400">
+                            <div class="text-sm text-red-700">
                                 <strong>Ошибка:</strong> {{ log.error_message }}
                             </div>
                         </td>
@@ -154,10 +175,10 @@
 
         <!-- Пагинация -->
         {% if pagination.pages > 1 %}
-        <div class="bg-white dark:bg-gray-800 px-4 py-3 border-t border-gray-200 dark:border-gray-700">
+        <div class="bg-white px-4 py-3 border-t border-gray-200">
             <div class="flex items-center justify-between">
                 <div>
-                    <p class="text-sm text-gray-700 dark:text-gray-300">
+                    <p class="text-sm text-gray-700">
                         Показано с
                         <span class="font-medium">{{ (pagination.page - 1) * pagination.per_page + 1 }}</span>
                         по
@@ -171,7 +192,7 @@
                     <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
                         {% if pagination.has_prev %}
                         <a href="{{ url_for('api_logs', page=pagination.prev_num) }}"
-                           class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
+                           class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                             ‹
                         </a>
                         {% endif %}
@@ -179,17 +200,17 @@
                         {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                             {% if page_num %}
                                 {% if page_num == pagination.page %}
-                                <span class="relative inline-flex items-center px-4 py-2 border border-blue-500 bg-blue-50 dark:bg-blue-900 text-sm font-medium text-blue-600 dark:text-blue-200">
+                                <span class="relative inline-flex items-center px-4 py-2 border border-blue-500 bg-blue-50 text-sm font-medium text-blue-600">
                                     {{ page_num }}
                                 </span>
                                 {% else %}
                                 <a href="{{ url_for('api_logs', page=page_num) }}"
-                                   class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600">
+                                   class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
                                     {{ page_num }}
                                 </a>
                                 {% endif %}
                             {% else %}
-                            <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300">
+                            <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">
                                 ...
                             </span>
                             {% endif %}
@@ -197,7 +218,7 @@
 
                         {% if pagination.has_next %}
                         <a href="{{ url_for('api_logs', page=pagination.next_num) }}"
-                           class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
+                           class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                             ›
                         </a>
                         {% endif %}
@@ -208,13 +229,20 @@
         {% endif %}
     </div>
     {% else %}
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
-        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-12 text-center">
+        <svg class="mx-auto h-24 w-24" viewBox="0 0 120 120" fill="none">
+            <rect x="15" y="20" width="90" height="80" rx="12" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="1.5"/>
+            <rect x="25" y="35" width="70" height="8" rx="3" fill="#C7D2FE"/>
+            <rect x="25" y="50" width="50" height="8" rx="3" fill="#E0E7FF"/>
+            <rect x="25" y="65" width="60" height="8" rx="3" fill="#E0E7FF"/>
+            <rect x="25" y="80" width="40" height="8" rx="3" fill="#E0E7FF"/>
+            <circle cx="90" cy="85" r="18" fill="#6366F1" opacity="0.15"/>
+            <path d="M85 85L90 80L95 85" stroke="#6366F1" stroke-width="2" stroke-linecap="round"/>
+            <path d="M90 80V92" stroke="#6366F1" stroke-width="2" stroke-linecap="round"/>
         </svg>
-        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">Нет логов</h3>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Логи API-запросов появятся после первой синхронизации с Wildberries
+        <h3 class="mt-4 text-base font-semibold text-gray-900">Нет логов</h3>
+        <p class="mt-2 text-sm text-gray-500">
+            Логи API-запросов появятся после первой синхронизации с маркетплейсами
         </p>
     </div>
     {% endif %}

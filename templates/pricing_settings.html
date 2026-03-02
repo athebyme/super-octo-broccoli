@@ -1,26 +1,35 @@
 {% extends "base.html" %}
 
-{% block title %}Ценообразование - WB Seller Platform{% endblock %}
+{% block title %}Ценообразование - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="pricingApp()">
     <!-- Заголовок -->
-    <div class="mb-6 flex items-center justify-between">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900">Ценообразование</h1>
-            <p class="mt-1 text-sm text-gray-600">
-                Расчёт розничных цен из закупочных по настраиваемой формуле
-            </p>
+    <div class="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="100" r="60" stroke="white" stroke-width="1.5"/>
+            <path d="M100 60v80M70 100h60" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="100" cy="100" r="20" stroke="white" stroke-width="1.5"/>
+            <text x="92" y="106" fill="white" font-size="16" font-weight="bold" opacity="0.4">&#8381;</text>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Ценообразование</h1>
+                <p class="mt-2 text-sm text-emerald-200">Расчёт розничных цен из закупочных по настраиваемой формуле</p>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <a href="{{ url_for('auto_import_dashboard') }}"
+                   class="px-4 py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 backdrop-blur-sm transition-colors font-medium flex items-center gap-2 text-sm">
+                    &larr; Назад к автоимпорту
+                </a>
+            </div>
         </div>
-        <a href="{{ url_for('auto_import_dashboard') }}"
-           class="text-sm text-indigo-600 hover:text-indigo-700">
-            &larr; Назад к автоимпорту
-        </a>
     </div>
 
     <form method="POST" action="{{ url_for('auto_import_pricing') }}">
         <!-- Основные настройки -->
-        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
             <h3 class="text-lg font-medium text-gray-900 mb-4">Основные настройки</h3>
 
             <div class="mb-4">
@@ -56,7 +65,7 @@
         </div>
 
         <!-- Параметры формулы -->
-        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
             <h3 class="text-lg font-medium text-gray-900 mb-4">Параметры формулы</h3>
             <p class="text-xs text-gray-500 mb-4">
                 Z = (P + Q + S + эквайринг + доп.) &times; 100 / (100 - комиссия) &times; налог. коэф.
@@ -229,7 +238,7 @@
         </div>
 
         <!-- Таблица наценок -->
-        <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
             <div class="flex items-center justify-between mb-4">
                 <h3 class="text-lg font-medium text-gray-900">Таблица наценок по диапазонам</h3>
                 <button type="button" @click="addRange()"
@@ -310,7 +319,7 @@
     </form>
 
     <!-- Действия -->
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
         <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
         <div class="flex flex-wrap gap-3">
             <button @click="syncPrices()" :disabled="syncing"
@@ -331,7 +340,7 @@
     </div>
 
     <!-- Калькулятор -->
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
         <h3 class="text-lg font-medium text-gray-900 mb-4">Калькулятор цены</h3>
         <p class="text-xs text-gray-500 mb-4">Введите закупочную цену для предпросмотра расчёта</p>
         <div class="flex items-end gap-4 mb-4">

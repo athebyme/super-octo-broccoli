@@ -1,43 +1,49 @@
 {% extends "base.html" %}
 
-{% block title %}{{ product.title }} - Автоимпорт - WB Seller Platform{% endblock %}
+{% block title %}{{ product.title }} - Автоимпорт - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Навигация -->
-    <div class="mb-4">
-        <a href="{{ url_for('auto_import_products') }}" class="text-indigo-600 hover:text-indigo-900 text-sm">
-            ← Назад к списку товаров
-        </a>
-    </div>
-
-    <!-- Заголовок -->
-    <div class="mb-8">
-        <div class="flex items-center justify-between">
-            <div>
-                <h1 class="text-3xl font-bold text-gray-900">{{ product.title }}</h1>
-                <p class="mt-2 text-sm text-gray-600">
-                    ID: {{ product.external_id }}
-                </p>
-            </div>
-            <div>
-                {% if product.import_status == 'imported' %}
-                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-green-100 text-green-800">
-                    ✓ Импортировано
-                </span>
-                {% elif product.import_status == 'validated' %}
-                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
-                    Готово к импорту
-                </span>
-                {% elif product.import_status == 'failed' %}
-                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-red-100 text-red-800">
-                    ✗ Ошибка
-                </span>
-                {% else %}
-                <span class="px-3 py-1 text-sm font-semibold rounded-full bg-gray-100 text-gray-800">
-                    {{ product.import_status }}
-                </span>
-                {% endif %}
+    <!-- Hero Banner -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-violet-600 via-purple-600 to-violet-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <path d="M60 140L100 60L140 140" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M80 110h40" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="30" y="150" width="140" height="30" rx="6" stroke="white" stroke-width="1.5"/>
+            <path d="M90 165h20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M100 40v-10M100 30l-5 5M100 30l5 5" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="mb-2">
+                        <a href="{{ url_for('auto_import_products') }}" class="text-violet-200 hover:text-white text-sm transition-colors">
+                            ← Назад к списку товаров
+                        </a>
+                    </div>
+                    <h1 class="text-3xl font-bold text-white">{{ product.title }}</h1>
+                    <p class="mt-2 text-sm text-violet-200">ID: {{ product.external_id }}</p>
+                </div>
+                <div>
+                    {% if product.import_status == 'imported' %}
+                    <span class="px-3 py-1.5 text-sm font-semibold rounded-xl bg-white/20 text-white backdrop-blur-sm">
+                        Импортировано
+                    </span>
+                    {% elif product.import_status == 'validated' %}
+                    <span class="px-3 py-1.5 text-sm font-semibold rounded-xl bg-white/20 text-white backdrop-blur-sm">
+                        Готово к импорту
+                    </span>
+                    {% elif product.import_status == 'failed' %}
+                    <span class="px-3 py-1.5 text-sm font-semibold rounded-xl bg-red-500/30 text-white backdrop-blur-sm">
+                        Ошибка
+                    </span>
+                    {% else %}
+                    <span class="px-3 py-1.5 text-sm font-semibold rounded-xl bg-white/20 text-white backdrop-blur-sm">
+                        {{ product.import_status }}
+                    </span>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </div>
@@ -46,10 +52,14 @@
     {% if seller_config %}
     <div class="mb-6 space-y-2">
         {% if not seller_config.ai_enabled or not seller_config.has_ai_key %}
-        <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start">
-            <svg class="w-5 h-5 text-amber-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-            </svg>
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start">
+            <div class="flex-shrink-0 mr-3 mt-0.5">
+                <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                </div>
+            </div>
             <div>
                 <h4 class="text-sm font-medium text-amber-800">AI не настроен</h4>
                 <p class="text-sm text-amber-700 mt-1">
@@ -61,10 +71,14 @@
         {% endif %}
 
         {% if not seller_config.sexoptovik_configured %}
-        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start">
-            <svg class="w-5 h-5 text-blue-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start">
+            <div class="flex-shrink-0 mr-3 mt-0.5">
+                <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+            </div>
             <div>
                 <h4 class="text-sm font-medium text-blue-800">Sexoptovik не настроен</h4>
                 <p class="text-sm text-blue-700 mt-1">
@@ -76,10 +90,14 @@
         {% endif %}
 
         {% if not seller_config.wb_api_configured %}
-        <div class="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start">
-            <svg class="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
+        <div class="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start">
+            <div class="flex-shrink-0 mr-3 mt-0.5">
+                <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-red-500 to-rose-600">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+            </div>
             <div>
                 <h4 class="text-sm font-medium text-red-800">WB API не настроен</h4>
                 <p class="text-sm text-red-700 mt-1">
@@ -96,7 +114,7 @@
         <!-- Основная информация -->
         <div class="lg:col-span-2 space-y-6">
             <!-- Базовые данные -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Основная информация</h3>
                 <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
@@ -209,7 +227,7 @@
             </div>
 
             <!-- Характеристики -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Характеристики</h3>
                 <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
@@ -306,7 +324,7 @@
             </div>
 
             <!-- Ценообразование -->
-            <div class="bg-white shadow-sm rounded-lg border {{ 'border-green-200' if product.supplier_price and product.supplier_price > 0 else 'border-gray-200' }} p-6">
+            <div class="bg-white shadow-sm rounded-xl border {{ 'border-green-200' if product.supplier_price and product.supplier_price > 0 else 'border-gray-200' }} p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-lg font-medium text-gray-900 flex items-center gap-2">
                         <svg class="w-5 h-5 {{ 'text-green-600' if product.supplier_price else 'text-gray-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -383,7 +401,7 @@
 
             <!-- Описание -->
             {% if product.description %}
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Описание</h3>
                 <div class="text-sm text-gray-700 whitespace-pre-line">{{ product.description }}</div>
             </div>
@@ -391,7 +409,7 @@
 
             <!-- Ошибки валидации -->
             {% if product.validation_errors_list %}
-            <div class="bg-red-50 border border-red-200 rounded-lg p-6">
+            <div class="bg-red-50 border border-red-200 rounded-xl p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-lg font-medium text-red-900">Ошибки валидации</h3>
                     <button type="button" id="showFixFormBtn" class="text-sm text-indigo-600 hover:text-indigo-900 font-medium">
@@ -482,7 +500,7 @@
         <div class="space-y-6">
             <!-- Фотографии -->
             {% if product.photo_urls_list %}
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="text-lg font-medium text-gray-900">Фотографии ({{ product.photo_urls_list|length }})</h3>
                     <div class="flex items-center gap-3">
@@ -524,7 +542,7 @@
 
             <!-- Баркоды -->
             {% if product.barcodes_list %}
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Баркоды</h3>
                 <ul class="space-y-2">
                     {% for barcode in product.barcodes_list %}
@@ -537,7 +555,7 @@
             {% endif %}
 
             <!-- Метаданные -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Информация об импорте</h3>
                 <dl class="space-y-3">
                     <div>
@@ -568,7 +586,7 @@
             </div>
 
             <!-- AI Оптимизация (Все функции) -->
-            <div class="bg-gradient-to-br from-purple-50 to-indigo-50 shadow-sm rounded-lg border border-purple-200 p-6">
+            <div class="bg-gradient-to-br from-purple-50 to-indigo-50 shadow-sm rounded-xl border border-purple-200 p-6">
                 <h3 class="text-lg font-medium text-purple-900 mb-4 flex items-center">
                     <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
@@ -674,7 +692,7 @@
 
             <!-- AI-контент -->
             {% if product.has_ai_data %}
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4 flex items-center">
                     <svg class="w-5 h-5 mr-2 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
@@ -802,7 +820,7 @@
                 </div>
             </div>
             {% else %}
-            <div class="bg-gray-50 shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-gray-50 shadow-sm rounded-xl border border-gray-200 p-6">
                 <div class="text-center">
                     <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
@@ -814,7 +832,7 @@
             {% endif %}
 
             <!-- Действия -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
+            <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
                 <h3 class="text-lg font-medium text-gray-900 mb-4">Действия</h3>
                 {% if product.import_status == 'validated' %}
                 <button id="importSingleBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed mb-3">

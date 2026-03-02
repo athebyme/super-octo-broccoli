@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ batch.name or 'Изменение цен' }} - WB Seller Platform{% endblock %}
+{% block title %}{{ batch.name or 'Изменение цен' }} - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="batchDetailApp()">
@@ -15,8 +15,23 @@
         </ol>
     </nav>
 
-    <!-- Заголовок и статус -->
-    <div class="bg-white shadow rounded-lg p-6 mb-6">
+    <!-- Герой -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="100" r="60" stroke="white" stroke-width="1.5"/>
+            <path d="M100 60v80M70 100h60" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="100" cy="100" r="20" stroke="white" stroke-width="1.5"/>
+            <text x="92" y="106" fill="white" font-size="16" font-weight="bold" opacity="0.4">&#8381;</text>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">{{ batch.name or 'Изменение цен' }}</h1>
+            <p class="mt-2 text-sm text-emerald-200">Батч #{{ batch.id }} - детали операции изменения цен</p>
+        </div>
+    </div>
+
+    <!-- Детали батча -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
         <div class="flex flex-col md:flex-row md:items-start md:justify-between">
             <div class="flex-1">
                 <div class="flex items-center">
@@ -163,7 +178,7 @@
 
     <!-- Ошибки применения -->
     {% if batch.apply_errors %}
-    <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+    <div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
         <h3 class="text-sm font-medium text-red-800 mb-2">Ошибки применения:</h3>
         <ul class="text-sm text-red-700 list-disc list-inside">
             {% for error in batch.apply_errors %}
@@ -174,7 +189,7 @@
     {% endif %}
 
     <!-- Список товаров -->
-    <div class="bg-white shadow rounded-lg overflow-hidden">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div class="px-6 py-4 border-b border-gray-200">
             <h2 class="text-lg font-medium text-gray-900">Товары ({{ items|length }})</h2>
         </div>

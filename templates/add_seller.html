@@ -1,19 +1,26 @@
 {% extends "base.html" %}
 
-{% block title %}Добавить продавца - WB Seller Platform{% endblock %}
+{% block title %}Добавить продавца - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Заголовок -->
-    <div class="mb-8">
-        <h1 class="text-3xl font-bold text-gray-900">Добавить продавца</h1>
-        <p class="mt-2 text-sm text-gray-600">
-            Создание нового аккаунта продавца
-        </p>
+    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="30" y="30" width="140" height="140" rx="16" stroke="white" stroke-width="1.5"/>
+            <circle cx="100" cy="80" r="25" stroke="white" stroke-width="1.5"/>
+            <path d="M75 140c0-14 11-25 25-25s25 11 25 25" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M100 55v10M95 80h10" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">Добавить продавца</h1>
+            <p class="mt-2 text-sm text-slate-300">Создание нового аккаунта продавца</p>
+        </div>
     </div>
 
     <!-- Форма -->
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
         <form method="POST" action="{{ url_for('add_seller') }}" class="p-6 space-y-6">
             <!-- Учетные данные -->
             <div>

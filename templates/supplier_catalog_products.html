@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Каталог — {{ supplier.name }}{% endblock %}
+{% block title %}Каталог — {{ supplier.name }} - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -10,20 +10,27 @@
         <span class="text-gray-900">{{ supplier.name }}</span>
     </nav>
 
-    <div class="mb-6 flex justify-between items-center">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-900">{{ supplier.name }}</h1>
-            <p class="text-sm text-gray-500 mt-1">
+    <div class="relative overflow-hidden bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 rounded-2xl p-6 sm:p-8 mb-6">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="40" y="50" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
+            <rect x="110" y="50" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
+            <rect x="40" y="110" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
+            <rect x="110" y="110" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">{{ supplier.name }}</h1>
+            <p class="mt-2 text-sm text-amber-100">
                 {{ stats.total }} товаров в каталоге
                 {% if price_stock_stats and price_stock_stats.in_stock > 0 %}
-                | <span class="text-green-600">{{ price_stock_stats.in_stock }} в наличии</span>
+                | {{ price_stock_stats.in_stock }} в наличии
                 {% endif %}
             </p>
         </div>
     </div>
 
     <!-- Поиск и фильтры -->
-    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end">
+    <form method="GET" class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6 flex flex-wrap gap-3 items-end">
         <div class="flex-1 min-w-[200px]">
             <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, ID, бренду..."
                    class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">

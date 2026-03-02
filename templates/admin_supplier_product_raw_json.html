@@ -14,13 +14,22 @@
         <span class="text-gray-900">Raw JSON</span>
     </nav>
 
-    <div class="mb-6 flex justify-between items-start">
-        <div>
-            <h1 class="text-xl font-bold text-gray-900">Raw JSON: {{ (product.title or 'Без названия')[:60] }}</h1>
-            <p class="text-sm text-gray-500 mt-1">
+    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 rounded-2xl p-6 sm:p-8 mb-6">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="30" y="30" width="140" height="140" rx="16" stroke="white" stroke-width="1.5"/>
+            <path d="M65 75l15 10-15 10M90 95h40" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M65 115h70M65 130h50" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-xl font-bold text-white">Raw JSON: {{ (product.title or 'Без названия')[:60] }}</h1>
+            <p class="text-sm text-slate-300 mt-1">
                 Полный дамп данных товара для анализа и отладки
             </p>
         </div>
+    </div>
+
+    <div class="mb-6 flex justify-end">
         <div class="flex gap-2">
             <button onclick="copyAll()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">
                 Копировать JSON
@@ -46,25 +55,25 @@
 
     <!-- Сводка -->
     <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
-        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-3 text-center">
             <p class="text-xs text-gray-500">Бренд</p>
             <p class="text-sm font-bold text-gray-900">{{ product.brand or '—' }}</p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-3 text-center">
             <p class="text-xs text-gray-500">Категория</p>
             <p class="text-sm font-bold text-gray-900">{{ (product.wb_category_name or product.category or '—')[:25] }}</p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-3 text-center">
             <p class="text-xs text-gray-500">Цена</p>
             <p class="text-sm font-bold text-gray-900">{{ '%.0f'|format(product.supplier_price) if product.supplier_price else '—' }}</p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-3 text-center">
             <p class="text-xs text-gray-500">AI парсинг</p>
             <p class="text-sm font-bold {{ 'text-green-600' if product.ai_parsed_at else 'text-gray-400' }}">
                 {{ product.ai_parsed_at.strftime('%d.%m %H:%M') if product.ai_parsed_at else 'Нет' }}
             </p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-3 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-3 text-center">
             <p class="text-xs text-gray-500">Описание</p>
             <p class="text-sm font-bold {{ 'text-green-600' if product.description else 'text-red-400' }}">
                 {{ product.description_source or ('есть' if product.description else 'нет') }}
@@ -73,7 +82,7 @@
     </div>
 
     <!-- JSON -->
-    <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div class="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
             <span class="text-sm font-medium text-gray-700" id="jsonLabel">Все данные</span>
             <span class="text-xs text-gray-400" id="jsonSize"></span>
