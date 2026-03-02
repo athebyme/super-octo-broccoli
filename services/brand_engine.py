@@ -710,11 +710,22 @@ class BrandEngine:
         for i, subject_id in enumerate(subject_ids):
             try:
                 result = marketplace_client.get_brands_by_subject(subject_id)
-                for brand_data in result.get('data', []):
-                    ext_id = brand_data.get('id')
-                    name = brand_data.get('name', '')
-                    if ext_id and name:
-                        all_brands[ext_id] = name
+                data = result.get('data', [])
+                if i == 0:
+                    # Логируем первый ответ для диагностики
+                    sample = data[:3] if isinstance(data, list) else data
+                    logger.info(f"Brand sync first response: type={type(data).__name__}, "
+                                f"len={len(data) if isinstance(data, list) else 'N/A'}, "
+                                f"sample={sample}")
+                if isinstance(data, list):
+                    for brand_data in data:
+                        ext_id = brand_data.get('id')
+                        name = brand_data.get('name', '')
+                        if ext_id and name:
+                            all_brands[ext_id] = name
+                else:
+                    logger.warning(f"Unexpected data type for subjectId={subject_id}: "
+                                   f"{type(data).__name__}: {str(data)[:200]}")
             except Exception as e:
                 logger.warning(f"Failed to fetch brands for subjectId={subject_id}: {e}")
                 stats['errors'] += 1
@@ -722,7 +733,9 @@ class BrandEngine:
             update_progress(
                 categories_done=i + 1,
                 brands_found=len(all_brands),
-                message=f'Категории: {i + 1}/{total_cats}, найдено брендов: {len(all_brands)}',
+                errors=stats['errors'],
+                message=f'Категории: {i + 1}/{total_cats}, найдено брендов: {len(all_brands)}'
+                        + (f', ошибок: {stats["errors"]}' if stats['errors'] else ''),
             )
 
             # Пауза между запросами чтобы не перегрузить API
