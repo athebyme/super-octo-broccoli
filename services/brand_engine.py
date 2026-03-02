@@ -614,31 +614,32 @@ class BrandEngine:
 
         Загружает бренды через API и создаёт Brand + MarketplaceBrand записи.
         """
-        from models import db, Brand, BrandAlias, MarketplaceBrand
+        from models import db, Brand, BrandAlias, MarketplaceBrand, MarketplaceCategory
 
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
         stats = {'created': 0, 'updated': 0, 'mp_created': 0, 'errors': 0, 'total_fetched': 0}
 
         all_brands = {}  # ext_id -> name
 
-        # WB API: бренды привязаны к категориям (subjects).
-        # Получаем список категорий и для каждой — бренды.
-        try:
-            subjects_result = marketplace_client.get_subjects_list(limit=1000)
-            subjects = subjects_result.get('data', [])
-            logger.info(f"Found {len(subjects)} subjects to fetch brands from")
-        except Exception as e:
-            logger.error(f"Failed to get subjects list: {e}")
-            stats['errors'] += 1
-            subjects = []
+        # Берём включённые категории из настроек маркетплейса
+        enabled_cats = MarketplaceCategory.query.filter_by(
+            marketplace_id=marketplace_id,
+            is_enabled=True,
+        ).all()
 
-        max_subjects = 30  # Ограничиваем чтобы не ждать слишком долго
-        for i, subj in enumerate(subjects[:max_subjects]):
-            subj_id = subj.get('subjectID')
-            if not subj_id:
+        if not enabled_cats:
+            logger.warning(f"No enabled categories for marketplace #{marketplace_id}")
+            stats['errors'] = 0
+            stats['total_fetched'] = 0
+            return stats
+
+        logger.info(f"Found {len(enabled_cats)} enabled categories for brand sync")
+
+        for i, cat in enumerate(enabled_cats):
+            if not cat.subject_id:
                 continue
             try:
-                result = marketplace_client.get_brands_by_subject(subj_id)
+                result = marketplace_client.get_brands_by_subject(cat.subject_id)
                 for brand_data in result.get('data', []):
                     ext_id = brand_data.get('id')
                     name = brand_data.get('name', '')
@@ -646,12 +647,12 @@ class BrandEngine:
                         all_brands[ext_id] = name
                 time.sleep(0.1)
             except Exception as e:
-                logger.warning(f"Failed to fetch brands for subjectId={subj_id}: {e}")
+                logger.warning(f"Failed to fetch brands for category '{cat.subject_name}' (subjectId={cat.subject_id}): {e}")
                 stats['errors'] += 1
                 continue
 
-            if (i + 1) % 50 == 0:
-                logger.info(f"Progress: {i + 1}/{min(len(subjects), max_subjects)} subjects, {len(all_brands)} unique brands")
+            if (i + 1) % 10 == 0:
+                logger.info(f"Progress: {i + 1}/{len(enabled_cats)} categories, {len(all_brands)} unique brands")
 
         stats['total_fetched'] = len(all_brands)
         logger.info(f"Fetched {len(all_brands)} brands from marketplace #{marketplace_id}")
