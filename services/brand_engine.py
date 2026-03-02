@@ -728,15 +728,25 @@ class BrandEngine:
             )
             data = result.get('data', [])
 
-            # Диагностика — записываем в progress
+            # Диагностика — записываем в progress (включая raw запрос/ответ)
             sample = []
             if isinstance(data, list) and data:
                 sample = [{'id': b.get('id'), 'name': b.get('name')} for b in data[:3]]
-            update_progress(_debug_first_response={
+            debug_info = {
                 'method': 'fetch_all_brands (alphabet iteration)',
                 'total_brands': len(data) if isinstance(data, list) else 'N/A',
                 'sample': sample,
-            })
+            }
+            # Добавляем raw HTTP диагностику первого запроса
+            if hasattr(marketplace_client, '_fetch_debug') and marketplace_client._fetch_debug:
+                raw = marketplace_client._fetch_debug
+                debug_info['first_request'] = {
+                    'url': raw.get('url', ''),
+                    'status': raw.get('status', ''),
+                    'response_body': raw.get('raw_body', '')[:300],
+                    'auth_header': raw.get('headers_sent', {}).get('Authorization', '')[:20] + '...',
+                }
+            update_progress(_debug_first_response=debug_info)
 
             if isinstance(data, list):
                 for brand_data in data:

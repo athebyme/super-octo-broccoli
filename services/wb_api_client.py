@@ -1819,6 +1819,7 @@ class WildberriesAPIClient:
         """
         endpoint = "/api/content/v1/brands"
         all_brands = {}  # id -> brand_data
+        self._fetch_debug = None  # Диагностика первого запроса
 
         patterns = list('абвгдежзиклмнопрстуфхцчшщэюя') + list('abcdefghijklmnopqrstuvwxyz') + list('0123456789')
         total = len(patterns)
@@ -1832,6 +1833,16 @@ class WildberriesAPIClient:
 
             try:
                 response = self._make_request('GET', 'content', endpoint, params=params)
+
+                # Сохраняем диагностику первого запроса
+                if i == 0:
+                    self._fetch_debug = {
+                        'url': response.url,
+                        'status': response.status_code,
+                        'raw_body': response.text[:500],
+                        'headers_sent': dict(response.request.headers),
+                    }
+
                 result = response.json()
                 brands = result.get('data', [])
                 for b in brands:
