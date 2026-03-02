@@ -2,22 +2,26 @@
 
 {% block content %}
 <div class="container mx-auto px-4 py-8">
-    <!-- Заголовок -->
-    <div class="mb-6 flex items-center justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-                <svg class="w-8 h-8 inline-block mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
-                </svg>
-                Умные рекомендации для объединения
-            </h1>
-            <p class="text-gray-600 dark:text-gray-400 mt-1">
-                Автоматический анализ карточек и рекомендации по объединению на основе схожести
-            </p>
-        </div>
-        <div class="flex gap-3">
+    <!-- Hero Banner -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-violet-600 via-purple-600 to-violet-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="70" cy="80" r="35" stroke="currentColor" stroke-width="5" fill="white"/>
+            <circle cx="130" cy="80" r="35" stroke="currentColor" stroke-width="5" fill="white"/>
+            <path d="M100 60 L100 100" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+            <path d="M80 140 L120 140" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+            <path d="M90 155 L110 155" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+            <path d="M95 170 L105 170" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Умные рекомендации для объединения</h1>
+                <p class="mt-2 text-sm text-purple-100">
+                    Автоматический анализ карточек и рекомендации по объединению на основе схожести
+                </p>
+            </div>
             <a href="{{ url_for('products_merge') }}"
-               class="inline-flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
+               class="inline-flex items-center px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition backdrop-blur-sm border border-white/20">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                 </svg>
@@ -27,27 +31,27 @@
     </div>
 
     <!-- Инфо-панель -->
-    <div class="bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/30 dark:to-indigo-900/30 border-l-4 border-purple-500 p-6 mb-6 rounded-r-lg">
+    <div class="bg-gradient-to-r from-purple-50 to-indigo-50 border-l-4 border-purple-500 p-6 mb-6 rounded-r-lg">
         <div class="flex items-start">
             <div class="flex-shrink-0">
-                <svg class="h-6 w-6 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+                <svg class="h-6 w-6 text-purple-600" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
                 </svg>
             </div>
             <div class="ml-4">
-                <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">
                     Как работают рекомендации?
                 </h3>
-                <p class="text-sm text-gray-700 dark:text-gray-200 mb-2">
+                <p class="text-sm text-gray-700 mb-2">
                     Алгоритм анализирует ваши карточки и находит похожие товары, которые стоит объединить под одним imtID. Учитываются:
                 </p>
-                <ul class="text-sm text-gray-700 dark:text-gray-200 space-y-1 ml-4">
+                <ul class="text-sm text-gray-700 space-y-1 ml-4">
                     <li>• <strong>Бренд</strong> - карточки одного бренда</li>
                     <li>• <strong>Название</strong> - похожие названия (игнорируя размеры и цвета)</li>
                     <li>• <strong>Артикулы</strong> - похожие или одинаковые базовые артикулы</li>
                     <li>• <strong>Категория</strong> - только одинаковые категории (обязательно)</li>
                 </ul>
-                <p class="text-sm text-gray-800 dark:text-gray-100 mt-3 font-medium">
+                <p class="text-sm text-gray-800 mt-3 font-medium">
                     💡 Чем выше оценка схожести (score), тем увереннее алгоритм в рекомендации!
                 </p>
             </div>
@@ -56,58 +60,58 @@
 
     <!-- Статистика -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
             <div class="flex items-center">
-                <div class="p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">
-                    <svg class="w-8 h-8 text-purple-600 dark:text-purple-400" fill="currentColor" viewBox="0 0 20 20">
+                <div class="p-3 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl">
+                    <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
                         <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"></path>
                     </svg>
                 </div>
                 <div class="ml-4">
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Рекомендаций найдено</p>
-                    <p class="text-2xl font-bold text-gray-900 dark:text-white">{{ total_recommendations }}</p>
+                    <p class="text-sm text-gray-600">Рекомендаций найдено</p>
+                    <p class="text-2xl font-bold text-gray-900">{{ total_recommendations }}</p>
                 </div>
             </div>
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
             <div class="flex items-center">
-                <div class="p-3 bg-indigo-100 dark:bg-indigo-900 rounded-lg">
-                    <svg class="w-8 h-8 text-indigo-600 dark:text-indigo-400" fill="currentColor" viewBox="0 0 20 20">
+                <div class="p-3 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl">
+                    <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"></path>
                     </svg>
                 </div>
                 <div class="ml-4">
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Карточек к объединению</p>
-                    <p class="text-2xl font-bold text-gray-900 dark:text-white">{{ total_cards }}</p>
+                    <p class="text-sm text-gray-600">Карточек к объединению</p>
+                    <p class="text-2xl font-bold text-gray-900">{{ total_cards }}</p>
                 </div>
             </div>
         </div>
 
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
             <div class="flex items-center">
-                <div class="p-3 bg-green-100 dark:bg-green-900 rounded-lg">
-                    <svg class="w-8 h-8 text-green-600 dark:text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                <div class="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-xl">
+                    <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                     </svg>
                 </div>
                 <div class="ml-4">
-                    <p class="text-sm text-gray-600 dark:text-gray-400">Минимальная оценка</p>
-                    <p class="text-2xl font-bold text-gray-900 dark:text-white">{{ (min_score * 100)|int }}%</p>
+                    <p class="text-sm text-gray-600">Минимальная оценка</p>
+                    <p class="text-2xl font-bold text-gray-900">{{ (min_score * 100)|int }}%</p>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Настройки фильтра -->
-    <div class="mb-6 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+    <div class="mb-6 bg-white rounded-xl border border-gray-200 shadow-sm p-4">
         <form method="GET" action="{{ url_for('products_merge_recommendations') }}" class="flex flex-wrap gap-4 items-end">
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label class="block text-sm font-medium text-gray-700 mb-2">
                     Минимальная оценка схожести
                 </label>
-                <select name="min_score" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white">
+                <select name="min_score" class="px-4 py-2 border border-gray-300 rounded-lg">
                     <option value="0.5" {% if min_score == 0.5 %}selected{% endif %}>50% - Показать все</option>
                     <option value="0.6" {% if min_score == 0.6 %}selected{% endif %}>60% - Рекомендуемый</option>
                     <option value="0.7" {% if min_score == 0.7 %}selected{% endif %}>70% - Высокая</option>
@@ -116,10 +120,10 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                <label class="block text-sm font-medium text-gray-700 mb-2">
                     Показать топ
                 </label>
-                <select name="show_top" class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white">
+                <select name="show_top" class="px-4 py-2 border border-gray-300 rounded-lg">
                     <option value="10" {% if show_top == 10 %}selected{% endif %}>10 рекомендаций</option>
                     <option value="20" {% if show_top == 20 %}selected{% endif %}>20 рекомендаций</option>
                     <option value="50" {% if show_top == 50 %}selected{% endif %}>50 рекомендаций</option>
@@ -135,40 +139,39 @@
     {% if recommendations %}
     <div class="space-y-6">
         {% for rec in recommendations %}
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden border-l-4
-                    {% if rec.score >= 0.9 %}border-green-500{% elif rec.score >= 0.7 %}border-blue-500{% else %}border-yellow-500{% endif %}">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden border-l-4
+                    {% if rec.score >= 0.9 %}border-l-green-500{% elif rec.score >= 0.7 %}border-l-blue-500{% else %}border-l-yellow-500{% endif %}">
             <div class="p-6">
                 <!-- Заголовок рекомендации -->
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center space-x-3">
-                        <div class="p-2 rounded-lg
-                                    {% if rec.score >= 0.9 %}bg-green-100 dark:bg-green-900{% elif rec.score >= 0.7 %}bg-blue-100 dark:bg-blue-900{% else %}bg-yellow-100 dark:bg-yellow-900{% endif %}">
-                            <svg class="w-6 h-6
-                                        {% if rec.score >= 0.9 %}text-green-600 dark:text-green-400{% elif rec.score >= 0.7 %}text-blue-600 dark:text-blue-400{% else %}text-yellow-600 dark:text-yellow-400{% endif %}"
+                        <div class="p-2 rounded-xl
+                                    {% if rec.score >= 0.9 %}bg-gradient-to-br from-green-500 to-green-600{% elif rec.score >= 0.7 %}bg-gradient-to-br from-blue-500 to-blue-600{% else %}bg-gradient-to-br from-yellow-500 to-yellow-600{% endif %}">
+                            <svg class="w-6 h-6 text-white"
                                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                             </svg>
                         </div>
                         <div>
-                            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+                            <h3 class="text-lg font-semibold text-gray-900">
                                 Рекомендация #{{ loop.index }}
                             </h3>
-                            <p class="text-sm text-gray-600 dark:text-gray-400">
+                            <p class="text-sm text-gray-600">
                                 {{ rec.reason }}
                             </p>
                         </div>
                     </div>
                     <div class="text-right">
                         <div class="text-3xl font-bold
-                                    {% if rec.score >= 0.9 %}text-green-600 dark:text-green-400{% elif rec.score >= 0.7 %}text-blue-600 dark:text-blue-400{% else %}text-yellow-600 dark:text-yellow-400{% endif %}">
+                                    {% if rec.score >= 0.9 %}text-green-600{% elif rec.score >= 0.7 %}text-blue-600{% else %}text-yellow-600{% endif %}">
                             {{ (rec.score * 100)|round|int }}%
                         </div>
-                        <div class="text-xs text-gray-500 dark:text-gray-400">оценка схожести</div>
+                        <div class="text-xs text-gray-500">оценка схожести</div>
                     </div>
                 </div>
 
                 <!-- Информация о группе -->
-                <div class="flex items-center gap-4 mb-4 text-sm text-gray-600 dark:text-gray-400">
+                <div class="flex items-center gap-4 mb-4 text-sm text-gray-600">
                     <span class="flex items-center">
                         <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
                             <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3zM3.31 9.397L5 10.12v4.102a8.969 8.969 0 00-1.05-.174 1 1 0 01-.89-.89 11.115 11.115 0 01.25-3.762zM9.3 16.573A9.026 9.026 0 007 14.935v-3.957l1.818.78a3 3 0 002.364 0l5.508-2.361a11.026 11.026 0 01.25 3.762 1 1 0 01-.89.89 8.968 8.968 0 00-5.35 2.524 1 1 0 01-1.4 0zM6 18a1 1 0 001-1v-2.065a8.935 8.935 0 00-2-.712V17a1 1 0 001 1z"></path>
@@ -190,8 +193,8 @@
                 </div>
 
                 <!-- Карточки для объединения -->
-                <div class="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 mb-4">
-                    <h4 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Карточки для объединения:</h4>
+                <div class="bg-gray-50 rounded-lg p-4 mb-4">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-3">Карточки для объединения:</h4>
                     <div class="space-y-2">
                         {% for card in rec.cards %}
                         <div class="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700
