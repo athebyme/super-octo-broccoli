@@ -619,39 +619,39 @@ class BrandEngine:
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
         stats = {'created': 0, 'updated': 0, 'mp_created': 0, 'errors': 0, 'total_fetched': 0}
 
-        # WB API requires at least 2 characters in name search.
-        # Use 2-char prefixes for broad coverage of brand names.
-        lat = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        ru = 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЭЮЯ'
-
-        patterns = []
-        # Latin: each letter + common second chars
-        for c in lat:
-            for c2 in 'aeiou':
-                patterns.append(c + c2)
-        # Cyrillic: each letter + common second chars
-        for c in ru:
-            for c2 in 'аеиоу':
-                patterns.append(c + c2)
-        # Digits: 2-digit combos
-        for d in '0123456789':
-            patterns.append(d + '0')
-
         all_brands = {}  # ext_id -> name
 
-        for pattern in patterns:
+        # WB API: бренды привязаны к категориям (subjects).
+        # Получаем список категорий и для каждой — бренды.
+        try:
+            subjects_result = marketplace_client.get_subjects_list(limit=1000)
+            subjects = subjects_result.get('data', [])
+            logger.info(f"Found {len(subjects)} subjects to fetch brands from")
+        except Exception as e:
+            logger.error(f"Failed to get subjects list: {e}")
+            stats['errors'] += 1
+            subjects = []
+
+        max_subjects = 200  # Ограничиваем количество запросов
+        for i, subj in enumerate(subjects[:max_subjects]):
+            subj_id = subj.get('subjectID')
+            if not subj_id:
+                continue
             try:
-                result = marketplace_client.search_brands(pattern, top=100)
+                result = marketplace_client.get_brands_by_subject(subj_id)
                 for brand_data in result.get('data', []):
                     ext_id = brand_data.get('id')
                     name = brand_data.get('name', '')
                     if ext_id and name:
                         all_brands[ext_id] = name
-                time.sleep(0.05)
+                time.sleep(0.1)
             except Exception as e:
-                logger.warning(f"Failed to fetch brands for pattern '{pattern}': {e}")
+                logger.warning(f"Failed to fetch brands for subjectId={subj_id}: {e}")
                 stats['errors'] += 1
                 continue
+
+            if (i + 1) % 50 == 0:
+                logger.info(f"Progress: {i + 1}/{min(len(subjects), max_subjects)} subjects, {len(all_brands)} unique brands")
 
         stats['total_fetched'] = len(all_brands)
         logger.info(f"Fetched {len(all_brands)} brands from marketplace #{marketplace_id}")
