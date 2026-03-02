@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+
+{% block title %}Финансы - Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="financesPage()">
+
+    <!-- Header -->
+    <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900">Финансы</h1>
+            <p class="mt-1 text-sm text-gray-500">Доходы, расходы и баланс по всем маркетплейсам</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <div class="inline-flex rounded-xl bg-gray-100 p-1">
+                <template x-for="p in periods" :key="p.value">
+                    <button @click="period = p.value"
+                        :class="period === p.value ? 'bg-white shadow-sm text-indigo-700 font-semibold' : 'text-gray-500 hover:text-gray-700'"
+                        class="px-3 py-1.5 text-sm rounded-lg transition-all" x-text="p.label"></button>
+                </template>
+            </div>
+            <button class="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Экспорт
+            </button>
+        </div>
+    </div>
+
+    <!-- Balance Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <!-- Total Balance -->
+        <div class="relative overflow-hidden rounded-2xl p-6 bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-700 text-white shadow-lg">
+            <div class="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+            <div class="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full translate-y-1/2 -translate-x-1/2"></div>
+            <p class="text-indigo-200 text-sm font-medium mb-2">Общий баланс</p>
+            <p class="text-3xl font-bold mb-3" x-text="formatMoney(balance.total)"></p>
+            <div class="flex items-center gap-2 text-sm">
+                <span class="inline-flex items-center gap-1 bg-white/20 backdrop-blur-sm rounded-full px-2 py-0.5">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                    +15.2%
+                </span>
+                <span class="text-indigo-200">vs прошлый период</span>
+            </div>
+        </div>
+
+        <!-- Income -->
+        <div class="relative overflow-hidden rounded-2xl p-6 bg-white border border-gray-100 shadow-sm">
+            <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-emerald-500/10 to-transparent rounded-bl-full"></div>
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-10 h-10 bg-gradient-to-br from-emerald-400 to-green-500 rounded-xl flex items-center justify-center">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/></svg>
+                </div>
+                <p class="text-sm text-gray-500 font-medium">Доход</p>
+            </div>
+            <p class="text-2xl font-bold text-gray-900 mb-2" x-text="formatMoney(balance.income)"></p>
+            <span class="inline-flex items-center gap-1 text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                +18.4% vs прошлый период
+            </span>
+        </div>
+
+        <!-- Expenses -->
+        <div class="relative overflow-hidden rounded-2xl p-6 bg-white border border-gray-100 shadow-sm">
+            <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-red-500/10 to-transparent rounded-bl-full"></div>
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-10 h-10 bg-gradient-to-br from-red-400 to-rose-500 rounded-xl flex items-center justify-center">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 13l-5 5m0 0l-5-5m5 5V6"/></svg>
+                </div>
+                <p class="text-sm text-gray-500 font-medium">Расходы</p>
+            </div>
+            <p class="text-2xl font-bold text-gray-900 mb-2" x-text="formatMoney(balance.expenses)"></p>
+            <span class="inline-flex items-center gap-1 text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                +5.7% vs прошлый период
+            </span>
+        </div>
+    </div>
+
+    <!-- Charts row -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <!-- Revenue/Expenses chart -->
+        <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-lg font-semibold text-gray-900">Доходы и расходы</h2>
+                <div class="flex items-center gap-4 text-xs">
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-emerald-400"></span> Доход</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-400"></span> Расход</span>
+                </div>
+            </div>
+            <div class="h-72">
+                <canvas x-ref="revenueChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Expense breakdown donut -->
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-6">Структура расходов</h2>
+            <div class="h-48 flex items-center justify-center">
+                <canvas x-ref="expenseDonut"></canvas>
+            </div>
+            <div class="mt-4 space-y-3">
+                <template x-for="item in expenseBreakdown" :key="item.name">
+                    <div class="flex items-center justify-between">
+                        <span class="flex items-center gap-2 text-sm">
+                            <span class="w-3 h-3 rounded-full" :style="'background:' + item.color"></span>
+                            <span class="text-gray-600" x-text="item.name"></span>
+                        </span>
+                        <div class="text-right">
+                            <span class="text-sm font-medium text-gray-900" x-text="formatMoney(item.amount)"></span>
+                            <span class="text-xs text-gray-400 ml-1" x-text="item.percent + '%'"></span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Marketplace Breakdown -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 mb-6">Доход по маркетплейсам</h2>
+        <div class="h-64">
+            <canvas x-ref="mpBarChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Transactions Table -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+            <h2 class="text-lg font-semibold text-gray-900">Последние транзакции</h2>
+            <div class="flex items-center gap-2">
+                <template x-for="f in filters" :key="f.value">
+                    <button @click="activeFilter = f.value"
+                        :class="activeFilter === f.value ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'"
+                        class="px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors" x-text="f.label"></button>
+                </template>
+            </div>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-gray-500 border-b border-gray-100">
+                        <th class="pb-3 font-medium">Описание</th>
+                        <th class="pb-3 font-medium">МП</th>
+                        <th class="pb-3 font-medium">Тип</th>
+                        <th class="pb-3 font-medium text-right">Сумма</th>
+                        <th class="pb-3 font-medium text-right">Дата</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-50">
+                    <template x-for="(tx, idx) in transactions" :key="idx">
+                        <tr class="hover:bg-gray-50/50">
+                            <td class="py-3.5">
+                                <p class="font-medium text-gray-800" x-text="tx.description"></p>
+                            </td>
+                            <td class="py-3.5">
+                                <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                                    :class="tx.mp === 'WB' ? 'bg-pink-50 text-pink-700' : tx.mp === 'Ozon' ? 'bg-blue-50 text-blue-700' : 'bg-yellow-50 text-yellow-700'"
+                                    x-text="tx.mp"></span>
+                            </td>
+                            <td class="py-3.5">
+                                <span class="text-xs px-2 py-0.5 rounded-full font-medium"
+                                    :class="tx.type === 'income' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'"
+                                    x-text="tx.type === 'income' ? 'Доход' : 'Расход'"></span>
+                            </td>
+                            <td class="py-3.5 text-right">
+                                <span class="font-medium" :class="tx.type === 'income' ? 'text-green-600' : 'text-red-600'"
+                                    x-text="(tx.type === 'income' ? '+' : '-') + formatMoney(tx.amount)"></span>
+                            </td>
+                            <td class="py-3.5 text-right text-gray-500" x-text="tx.date"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+function financesPage() {
+    return {
+        period: '30d',
+        activeFilter: 'all',
+        periods: [
+            { label: '7д', value: '7d' },
+            { label: '30д', value: '30d' },
+            { label: '90д', value: '90d' },
+            { label: 'Год', value: '1y' },
+        ],
+        filters: [
+            { label: 'Все', value: 'all' },
+            { label: 'Доходы', value: 'income' },
+            { label: 'Расходы', value: 'expense' },
+        ],
+        balance: {
+            total: 1847500,
+            income: 3250000,
+            expenses: 1402500,
+        },
+        expenseBreakdown: [
+            { name: 'Комиссия МП', amount: 520000, percent: 37, color: '#6366f1' },
+            { name: 'Логистика', amount: 380000, percent: 27, color: '#f59e0b' },
+            { name: 'Хранение', amount: 245000, percent: 17, color: '#10b981' },
+            { name: 'Реклама', amount: 167500, percent: 12, color: '#ef4444' },
+            { name: 'Штрафы / Прочее', amount: 90000, percent: 7, color: '#8b5cf6' },
+        ],
+        transactions: [
+            { description: 'Оплата реализации — неделя 8', mp: 'WB', type: 'income', amount: 485000, date: '02.03.2026' },
+            { description: 'Комиссия за продажи', mp: 'WB', type: 'expense', amount: 72750, date: '02.03.2026' },
+            { description: 'Оплата реализации', mp: 'Ozon', type: 'income', amount: 312000, date: '01.03.2026' },
+            { description: 'Логистика — доставка', mp: 'Ozon', type: 'expense', amount: 48600, date: '01.03.2026' },
+            { description: 'Оплата реализации', mp: 'YM', type: 'income', amount: 178000, date: '28.02.2026' },
+            { description: 'Услуги хранения', mp: 'WB', type: 'expense', amount: 35200, date: '28.02.2026' },
+            { description: 'Рекламная кампания', mp: 'Ozon', type: 'expense', amount: 25000, date: '27.02.2026' },
+            { description: 'Возврат товара покупателю', mp: 'WB', type: 'expense', amount: 4980, date: '27.02.2026' },
+        ],
+
+        formatMoney(val) {
+            return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
+        },
+
+        init() {
+            this.$nextTick(() => {
+                this.initRevenueChart();
+                this.initExpenseDonut();
+                this.initMpBarChart();
+            });
+        },
+
+        initRevenueChart() {
+            const labels = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+            new Chart(this.$refs.revenueChart, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Доход',
+                            data: [1800, 2200, 2100, 2500, 2800, 3100, 2900, 3300, 3500, 3250, 3600, 3900].map(v => v * 1000),
+                            borderColor: '#34d399',
+                            backgroundColor: 'rgba(52,211,153,0.1)',
+                            fill: true, tension: 0.4, borderWidth: 2.5,
+                            pointBackgroundColor: '#34d399', pointRadius: 0, pointHoverRadius: 6,
+                        },
+                        {
+                            label: 'Расход',
+                            data: [900, 1100, 1050, 1250, 1350, 1500, 1400, 1550, 1680, 1600, 1720, 1850].map(v => v * 1000),
+                            borderColor: '#fb7185',
+                            backgroundColor: 'rgba(251,113,133,0.08)',
+                            fill: true, tension: 0.4, borderWidth: 2.5,
+                            pointBackgroundColor: '#fb7185', pointRadius: 0, pointHoverRadius: 6,
+                        },
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#9ca3af' } },
+                        y: { grid: { color: '#f3f4f6' }, ticks: { color: '#9ca3af', callback: v => (v/1000000).toFixed(1) + 'M' } },
+                    }
+                }
+            });
+        },
+
+        initExpenseDonut() {
+            new Chart(this.$refs.expenseDonut, {
+                type: 'doughnut',
+                data: {
+                    labels: this.expenseBreakdown.map(e => e.name),
+                    datasets: [{
+                        data: this.expenseBreakdown.map(e => e.amount),
+                        backgroundColor: this.expenseBreakdown.map(e => e.color),
+                        borderWidth: 0, hoverOffset: 6,
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    cutout: '72%',
+                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 } }
+                }
+            });
+        },
+
+        initMpBarChart() {
+            new Chart(this.$refs.mpBarChart, {
+                type: 'bar',
+                data: {
+                    labels: ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн'],
+                    datasets: [
+                        { label: 'Wildberries', data: [850, 920, 980, 1100, 1250, 1380].map(v => v*1000), backgroundColor: '#CB11AB', borderRadius: 6 },
+                        { label: 'Ozon', data: [620, 680, 710, 800, 920, 1050].map(v => v*1000), backgroundColor: '#005BFF', borderRadius: 6 },
+                        { label: 'Яндекс Маркет', data: [280, 310, 340, 400, 450, 520].map(v => v*1000), backgroundColor: '#FFCC00', borderRadius: 6 },
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'circle', padding: 20 } },
+                        tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 },
+                    },
+                    scales: {
+                        x: { grid: { display: false }, stacked: true, ticks: { color: '#9ca3af' } },
+                        y: { grid: { color: '#f3f4f6' }, stacked: true, ticks: { color: '#9ca3af', callback: v => (v/1000000).toFixed(1) + 'M' } },
+                    }
+                }
+            });
+        },
+    };
+}
+</script>
+{% endblock %}

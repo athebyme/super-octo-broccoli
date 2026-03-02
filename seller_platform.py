@@ -5573,6 +5573,49 @@ def _run_startup_migrations():
                 db.session.rollback()
 
 
+# ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============
+
+@app.route('/analytics')
+@login_required
+def analytics_page():
+    """Страница аналитики продаж по всем маркетплейсам"""
+    return render_template('analytics.html')
+
+
+@app.route('/finances')
+@login_required
+def finances_page():
+    """Финансовый обзор: доходы, расходы, баланс"""
+    return render_template('finances.html')
+
+
+@app.route('/profile', methods=['GET', 'POST'])
+@login_required
+def profile_page():
+    """Профиль пользователя и настройки"""
+    products_count = 0
+    api_logs_count = 0
+    days_in_system = 0
+    if current_user.seller:
+        products_count = Product.query.filter_by(seller_id=current_user.seller.id).count()
+        api_logs_count = APILog.query.filter_by(seller_id=current_user.seller.id).count()
+    if current_user.created_at:
+        days_in_system = (datetime.utcnow() - current_user.created_at).days
+    return render_template(
+        'profile.html',
+        products_count=products_count,
+        api_logs_count=api_logs_count,
+        days_in_system=days_in_system,
+    )
+
+
+@app.route('/notifications')
+@login_required
+def notifications_page():
+    """Центр уведомлений"""
+    return render_template('notifications.html')
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
