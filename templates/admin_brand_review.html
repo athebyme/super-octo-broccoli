@@ -17,7 +17,13 @@
         <div class="absolute bottom-5 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
         <div class="relative">
             <nav class="text-sm text-amber-200 mb-3">
+                {% if current_marketplace %}
+                <a href="{{ url_for('marketplaces.index') }}" class="hover:text-white transition-colors">Маркетплейсы</a>
+                <span class="mx-2">/</span>
+                <a href="{{ url_for('brands.index', marketplace_id=marketplace_id) }}" class="hover:text-white transition-colors">Бренды {{ current_marketplace.name }}</a>
+                {% else %}
                 <a href="{{ url_for('brands.index') }}" class="hover:text-white transition-colors">Бренды</a>
+                {% endif %}
                 <span class="mx-2">/</span>
                 <span class="text-white">Очередь проверки</span>
             </nav>
@@ -28,7 +34,7 @@
                         Pending: <strong class="text-white">{{ stats.pending }}</strong> | Needs Review: <strong class="text-white">{{ stats.needs_review }}</strong>
                     </p>
                 </div>
-                <a href="{{ url_for('brands.index') }}"
+                <a href="{{ url_for('brands.index', marketplace_id=marketplace_id) }}"
                    class="inline-flex items-center px-5 py-2.5 rounded-xl shadow-sm text-sm font-medium text-amber-900 bg-white hover:bg-gray-50 transition-colors">
                     <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
@@ -75,7 +81,7 @@
                             {% endif %}
                         </p>
                     </div>
-                    <a href="{{ url_for('brands.detail', brand_id=item.brand.id) }}" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                    <a href="{{ url_for('brands.detail', brand_id=item.brand.id, marketplace_id=marketplace_id) }}" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                         Подробнее
                     </a>
                 </div>

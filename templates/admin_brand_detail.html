@@ -15,7 +15,13 @@
         <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
         <div class="relative">
             <nav class="text-sm text-indigo-300 mb-3">
+                {% if current_marketplace %}
+                <a href="{{ url_for('marketplaces.index') }}" class="hover:text-white transition-colors">Маркетплейсы</a>
+                <span class="mx-2">/</span>
+                <a href="{{ url_for('brands.index', marketplace_id=marketplace_id) }}" class="hover:text-white transition-colors">Бренды {{ current_marketplace.name }}</a>
+                {% else %}
                 <a href="{{ url_for('brands.index') }}" class="hover:text-white transition-colors">Бренды</a>
+                {% endif %}
                 <span class="mx-2">/</span>
                 <span class="text-white">{{ brand.name }}</span>
             </nav>

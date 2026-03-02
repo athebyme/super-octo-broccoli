@@ -44,13 +44,25 @@ def admin_required(f):
 @login_required
 @admin_required
 def index():
-    """Список брендов с фильтрами."""
+    """Список брендов с фильтрами. Поддерживает marketplace_id для контекста маркетплейса."""
     status_filter = request.args.get('status', '')
     search_query = request.args.get('q', '').strip()
+    marketplace_id = request.args.get('marketplace_id', type=int)
     page = request.args.get('page', 1, type=int)
     per_page = 50
 
-    query = Brand.query
+    # Получаем текущий маркетплейс для контекста
+    current_marketplace = None
+    if marketplace_id:
+        current_marketplace = Marketplace.query.get(marketplace_id)
+
+    if marketplace_id:
+        # Фильтруем бренды, привязанные к маркетплейсу
+        query = Brand.query.join(MarketplaceBrand).filter(
+            MarketplaceBrand.marketplace_id == marketplace_id
+        )
+    else:
+        query = Brand.query
 
     if status_filter:
         query = query.filter(Brand.status == status_filter)
@@ -71,16 +83,22 @@ def index():
 
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
-    # Статистика
+    # Статистика (marketplace-scoped если передан marketplace_id)
     from services.brand_engine import get_brand_engine
     stats = get_brand_engine().get_stats()
+
+    # Все маркетплейсы для селектора
+    marketplaces = Marketplace.query.order_by(Marketplace.name).all()
 
     return render_template('admin_brands.html',
                            brands=pagination.items,
                            pagination=pagination,
                            stats=stats,
                            status_filter=status_filter,
-                           search_query=search_query)
+                           search_query=search_query,
+                           marketplace_id=marketplace_id,
+                           current_marketplace=current_marketplace,
+                           marketplaces=marketplaces)
 
 
 @brands_bp.route('/<int:brand_id>')
@@ -89,6 +107,8 @@ def index():
 def detail(brand_id):
     """Карточка бренда."""
     brand = Brand.query.get_or_404(brand_id)
+    marketplace_id = request.args.get('marketplace_id', type=int)
+    current_marketplace = Marketplace.query.get(marketplace_id) if marketplace_id else None
 
     aliases = BrandAlias.query.filter_by(brand_id=brand_id).order_by(BrandAlias.created_at.desc()).all()
 
@@ -121,7 +141,9 @@ def detail(brand_id):
                            imported_count=imported_count,
                            supplier_count=supplier_count,
                            imported_by_name=imported_by_name,
-                           supplier_by_name=supplier_by_name)
+                           supplier_by_name=supplier_by_name,
+                           marketplace_id=marketplace_id,
+                           current_marketplace=current_marketplace)
 
 
 @brands_bp.route('/review')
@@ -129,9 +151,18 @@ def detail(brand_id):
 @admin_required
 def review():
     """Очередь проверки брендов."""
-    pending_brands = Brand.query.filter(
+    marketplace_id = request.args.get('marketplace_id', type=int)
+    current_marketplace = Marketplace.query.get(marketplace_id) if marketplace_id else None
+
+    query = Brand.query.filter(
         Brand.status.in_(['pending', 'needs_review'])
-    ).order_by(
+    )
+    if marketplace_id:
+        query = query.join(MarketplaceBrand).filter(
+            MarketplaceBrand.marketplace_id == marketplace_id
+        )
+
+    pending_brands = query.order_by(
         db.case(
             (Brand.status == 'needs_review', 0),
             (Brand.status == 'pending', 1),
@@ -170,7 +201,9 @@ def review():
 
     return render_template('admin_brand_review.html',
                            brand_data=brand_data,
-                           stats=stats)
+                           stats=stats,
+                           marketplace_id=marketplace_id,
+                           current_marketplace=current_marketplace)
 
 
 # ------------------------------------------------------------------

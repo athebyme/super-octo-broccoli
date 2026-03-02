@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Бренды - Seller Hub{% endblock %}
+{% block title %}{% if current_marketplace %}Бренды {{ current_marketplace.name }}{% else %}Бренды{% endif %} - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -14,14 +14,32 @@
         </svg>
         <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
         <div class="absolute bottom-5 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
-        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div class="relative">
+            {% if current_marketplace %}
+            <nav class="text-sm text-indigo-300 mb-3">
+                <a href="{{ url_for('marketplaces.index') }}" class="hover:text-white transition-colors">Маркетплейсы</a>
+                <span class="mx-2">/</span>
+                <span class="text-white">{{ current_marketplace.name }}</span>
+                <span class="mx-2">/</span>
+                <span class="text-white">Бренды</span>
+            </nav>
+            {% endif %}
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-                <h1 class="text-3xl font-bold text-white">Бренды</h1>
-                <p class="mt-2 text-sm text-indigo-200">Реестр брендов с валидацией через API маркетплейсов</p>
+                <h1 class="text-3xl font-bold text-white">
+                    {% if current_marketplace %}Бренды — {{ current_marketplace.name }}{% else %}Бренды{% endif %}
+                </h1>
+                <p class="mt-2 text-sm text-indigo-200">
+                    {% if current_marketplace %}
+                    Управление брендами на {{ current_marketplace.name }}
+                    {% else %}
+                    Реестр брендов по всем маркетплейсам
+                    {% endif %}
+                </p>
             </div>
             <div class="flex gap-3">
                 {% if stats.pending > 0 or stats.needs_review > 0 %}
-                <a href="{{ url_for('brands.review') }}"
+                <a href="{{ url_for('brands.review', marketplace_id=marketplace_id) }}"
                    class="inline-flex items-center px-4 py-2.5 border border-orange-400/50 rounded-xl text-sm font-medium text-orange-200 hover:bg-white/10 transition-colors">
                     <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
@@ -45,7 +63,24 @@
                 </button>
             </div>
         </div>
+        </div>
     </div>
+
+    <!-- Маркетплейс-селектор -->
+    {% if marketplaces and not current_marketplace %}
+    <div class="flex gap-2 mb-6 flex-wrap">
+        <a href="{{ url_for('brands.index') }}"
+           class="px-3 py-1.5 rounded-lg text-sm font-medium {{ 'bg-indigo-600 text-white' if not marketplace_id else 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50' }} transition-colors">
+            Все
+        </a>
+        {% for mp in marketplaces %}
+        <a href="{{ url_for('brands.index', marketplace_id=mp.id) }}"
+           class="px-3 py-1.5 rounded-lg text-sm font-medium {{ 'bg-indigo-600 text-white' if marketplace_id == mp.id else 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50' }} transition-colors">
+            {{ mp.name }}
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <!-- Статистика -->
     <div class="grid grid-cols-2 gap-5 sm:grid-cols-4 mb-8">
@@ -110,6 +145,9 @@
     <!-- Фильтры -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 mb-6 p-4">
         <form method="GET" class="flex gap-4 items-end">
+            {% if marketplace_id %}
+            <input type="hidden" name="marketplace_id" value="{{ marketplace_id }}">
+            {% endif %}
             <div class="flex-1">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Поиск</label>
                 <input type="text" name="q" value="{{ search_query }}" placeholder="Название бренда..."
@@ -129,7 +167,7 @@
                 Найти
             </button>
             {% if search_query or status_filter %}
-            <a href="{{ url_for('brands.index') }}" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium transition-colors">
+            <a href="{{ url_for('brands.index', marketplace_id=marketplace_id) }}" class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium transition-colors">
                 Сбросить
             </a>
             {% endif %}
@@ -153,7 +191,7 @@
                 {% for brand in brands %}
                 <tr class="hover:bg-gray-50 transition-colors">
                     <td class="px-6 py-4 whitespace-nowrap">
-                        <a href="{{ url_for('brands.detail', brand_id=brand.id) }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-900">
+                        <a href="{{ url_for('brands.detail', brand_id=brand.id, marketplace_id=marketplace_id) }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-900">
                             {{ brand.name }}
                         </a>
                     </td>
@@ -178,7 +216,7 @@
                         {{ brand.created_at.strftime('%d.%m.%Y') }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-right text-sm">
-                        <a href="{{ url_for('brands.detail', brand_id=brand.id) }}" class="text-indigo-600 hover:text-indigo-900">Открыть</a>
+                        <a href="{{ url_for('brands.detail', brand_id=brand.id, marketplace_id=marketplace_id) }}" class="text-indigo-600 hover:text-indigo-900">Открыть</a>
                     </td>
                 </tr>
                 {% endfor %}
@@ -198,12 +236,12 @@
     <div class="mt-6 flex justify-center">
         <nav class="inline-flex rounded-lg shadow-sm -space-x-px">
             {% if pagination.has_prev %}
-            <a href="{{ url_for('brands.index', page=pagination.prev_num, status=status_filter, q=search_query) }}"
+            <a href="{{ url_for('brands.index', page=pagination.prev_num, status=status_filter, q=search_query, marketplace_id=marketplace_id) }}"
                class="px-3 py-2 rounded-l-lg border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">&laquo;</a>
             {% endif %}
             {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if page_num %}
-                <a href="{{ url_for('brands.index', page=page_num, status=status_filter, q=search_query) }}"
+                <a href="{{ url_for('brands.index', page=page_num, status=status_filter, q=search_query, marketplace_id=marketplace_id) }}"
                    class="px-3 py-2 border border-gray-300 text-sm font-medium {{ 'bg-indigo-50 text-indigo-600' if page_num == pagination.page else 'bg-white text-gray-500 hover:bg-gray-50' }}">
                     {{ page_num }}
                 </a>
@@ -212,7 +250,7 @@
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
-            <a href="{{ url_for('brands.index', page=pagination.next_num, status=status_filter, q=search_query) }}"
+            <a href="{{ url_for('brands.index', page=pagination.next_num, status=status_filter, q=search_query, marketplace_id=marketplace_id) }}"
                class="px-3 py-2 rounded-r-lg border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>
