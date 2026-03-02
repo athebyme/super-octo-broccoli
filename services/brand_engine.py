@@ -711,12 +711,18 @@ class BrandEngine:
             try:
                 result = marketplace_client.get_brands_by_subject(subject_id)
                 data = result.get('data', [])
+
+                # Диагностика первого ответа — записываем в progress
                 if i == 0:
-                    # Логируем первый ответ для диагностики
-                    sample = data[:3] if isinstance(data, list) else data
-                    logger.info(f"Brand sync first response: type={type(data).__name__}, "
-                                f"len={len(data) if isinstance(data, list) else 'N/A'}, "
-                                f"sample={sample}")
+                    sample = data[:2] if isinstance(data, list) else str(data)[:300]
+                    update_progress(_debug_first_response={
+                        'type': type(data).__name__,
+                        'len': len(data) if isinstance(data, list) else 'N/A',
+                        'keys': list(result.keys()),
+                        'sample': sample,
+                        'subject_id': subject_id,
+                    })
+
                 if isinstance(data, list):
                     for brand_data in data:
                         ext_id = brand_data.get('id')
@@ -729,6 +735,12 @@ class BrandEngine:
             except Exception as e:
                 logger.warning(f"Failed to fetch brands for subjectId={subject_id}: {e}")
                 stats['errors'] += 1
+                if i == 0:
+                    update_progress(_debug_first_response={
+                        'error': str(e),
+                        'type': type(e).__name__,
+                        'subject_id': subject_id,
+                    })
 
             update_progress(
                 categories_done=i + 1,
