@@ -697,65 +697,63 @@ class BrandEngine:
             )
             return stats
 
-        subject_ids = [c.subject_id for c in enabled_cats if c.subject_id]
-        total_cats = len(subject_ids)
-        update_progress(categories_total=total_cats,
-                        message=f'Загрузка брендов из {total_cats} категорий...')
-        logger.info(f"Found {total_cats} enabled categories for brand sync")
+        # Количество категорий для информации (не используем для загрузки)
+        total_cats = len([c for c in enabled_cats if c.subject_id])
+        logger.info(f"Found {total_cats} enabled categories for marketplace #{marketplace_id}")
 
-        # --- Phase 2: Последовательная загрузка брендов ---
-        update_progress(phase='fetching')
+        # --- Phase 2: Загрузка ВСЕХ брендов через алфавитный перебор ---
+        # WB API /api/content/v1/brands — автокомплит-эндпоинт, требует pattern.
+        # Перебираем а-я, a-z, 0-9 чтобы собрать все бренды.
+        alphabet_len = 33 + 26 + 10  # а-я + a-z + 0-9
+        update_progress(
+            phase='fetching',
+            categories_total=alphabet_len,
+            message=f'Загрузка брендов (перебор алфавита, {alphabet_len} символов)...',
+        )
+
         all_brands = {}  # ext_id -> name
 
-        for i, subject_id in enumerate(subject_ids):
-            try:
-                result = marketplace_client.get_brands_by_subject(subject_id)
-                data = result.get('data', [])
-
-                # Диагностика первого ответа — записываем в progress
-                if i == 0:
-                    sample = data[:2] if isinstance(data, list) else str(data)[:300]
-                    update_progress(_debug_first_response={
-                        'type': type(data).__name__,
-                        'len': len(data) if isinstance(data, list) else 'N/A',
-                        'keys': list(result.keys()),
-                        'sample': sample,
-                        'subject_id': subject_id,
-                    })
-
-                if isinstance(data, list):
-                    for brand_data in data:
-                        ext_id = brand_data.get('id')
-                        name = brand_data.get('name', '')
-                        if ext_id and name:
-                            all_brands[ext_id] = name
-                else:
-                    logger.warning(f"Unexpected data type for subjectId={subject_id}: "
-                                   f"{type(data).__name__}: {str(data)[:200]}")
-            except Exception as e:
-                logger.warning(f"Failed to fetch brands for subjectId={subject_id}: {e}")
-                stats['errors'] += 1
-                if i == 0:
-                    update_progress(_debug_first_response={
-                        'error': str(e),
-                        'type': type(e).__name__,
-                        'subject_id': subject_id,
-                    })
-
+        def on_progress(done, total, brands_count):
             update_progress(
-                categories_done=i + 1,
-                brands_found=len(all_brands),
-                errors=stats['errors'],
-                message=f'Категории: {i + 1}/{total_cats}, найдено брендов: {len(all_brands)}'
-                        + (f', ошибок: {stats["errors"]}' if stats['errors'] else ''),
+                categories_done=done,
+                categories_total=total,
+                brands_found=brands_count,
+                message=f'Алфавит: {done}/{total}, найдено брендов: {brands_count}',
             )
 
-            # Пауза между запросами (WB лимит: 100 req/min для content API)
-            if i + 1 < total_cats:
-                time.sleep(0.6)
+        try:
+            result = marketplace_client.fetch_all_brands(
+                top=5000,
+                progress_callback=on_progress,
+            )
+            data = result.get('data', [])
+
+            # Диагностика — записываем в progress
+            sample = []
+            if isinstance(data, list) and data:
+                sample = [{'id': b.get('id'), 'name': b.get('name')} for b in data[:3]]
+            update_progress(_debug_first_response={
+                'method': 'fetch_all_brands (alphabet iteration)',
+                'total_brands': len(data) if isinstance(data, list) else 'N/A',
+                'sample': sample,
+            })
+
+            if isinstance(data, list):
+                for brand_data in data:
+                    ext_id = brand_data.get('id')
+                    name = brand_data.get('name', '')
+                    if ext_id and name:
+                        all_brands[ext_id] = name
+        except Exception as e:
+            logger.error(f"Failed to fetch all brands: {e}")
+            stats['errors'] += 1
+            update_progress(_debug_first_response={
+                'error': str(e),
+                'type': type(e).__name__,
+            })
 
         stats['total_fetched'] = len(all_brands)
-        logger.info(f"Fetched {len(all_brands)} brands from marketplace #{marketplace_id}")
+        logger.info(f"Fetched {len(all_brands)} unique brands from WB")
 
         # --- Phase 3: Сохранение в БД батчами ---
         update_progress(

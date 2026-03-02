@@ -1743,57 +1743,127 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get TNVED codes: {str(e)}")
             raise
 
-    def get_brands_by_subject(self, subject_id: int, top: int = 10000) -> Dict[str, Any]:
+    def get_brands_by_subject(self, subject_id: int, top: int = 5000) -> Dict[str, Any]:
         """
         Получить бренды по ID предмета (категории) из WB API.
 
         Эндпоинт: GET /api/content/v1/brands
-        Параметры:
-            - top: макс. кол-во результатов (обязателен для получения данных)
-            - pattern: фильтр по имени (пустая строка = все бренды)
-            - subjectId: фильтр по категории
-            - locale: язык (ru)
+        WB требует непустой pattern для возврата результатов.
+        Метод перебирает буквы алфавита для получения всех брендов.
 
         Args:
             subject_id: ID предмета (subjectID)
-            top: максимальное количество брендов
+            top: максимальное количество брендов на запрос
 
         Returns:
             Dict с данными о брендах:
-            {
-                "data": [
-                    {"id": 123, "name": "Brand Name"},
-                    ...
-                ]
-            }
+            {"data": [{"id": 123, "name": "Brand Name"}, ...]}
         """
         endpoint = "/api/content/v1/brands"
-        params = {
-            'top': top,
-            'pattern': '',
-            'locale': 'ru',
-        }
-        if subject_id:
-            params['subjectId'] = subject_id
+        all_brands = {}  # id -> brand_data
 
-        logger.info(f"Getting brands for subjectId={subject_id}, top={top}")
-        try:
-            response = self._make_request('GET', 'content', endpoint, params=params)
-            result = response.json()
-            brands = result.get('data', [])
+        # Перебираем буквы алфавита чтобы собрать все бренды
+        patterns = list('абвгдежзиклмнопрстуфхцчшщэюя') + list('abcdefghijklmnopqrstuvwxyz') + list('0123456789')
 
-            logger.info(f"Found {len(brands)} brands for subjectId={subject_id}")
-            return {'data': brands}
-        except Exception as e:
-            logger.error(f"Failed to get brands for subjectId={subject_id}: {str(e)}")
-            raise
+        for pattern in patterns:
+            params = {
+                'top': top,
+                'pattern': pattern,
+                'locale': 'ru',
+            }
+            if subject_id:
+                params['subjectId'] = subject_id
+
+            try:
+                response = self._make_request('GET', 'content', endpoint, params=params)
+                result = response.json()
+                brands = result.get('data', [])
+                for b in brands:
+                    bid = b.get('id')
+                    if bid and bid not in all_brands:
+                        all_brands[bid] = b
+                time.sleep(0.3)
+            except WBRateLimitException:
+                logger.warning(f"Rate limited on pattern='{pattern}', waiting 60s")
+                time.sleep(60)
+                # Retry once
+                try:
+                    response = self._make_request('GET', 'content', endpoint, params=params)
+                    result = response.json()
+                    for b in result.get('data', []):
+                        bid = b.get('id')
+                        if bid and bid not in all_brands:
+                            all_brands[bid] = b
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"Failed brands pattern='{pattern}': {e}")
+
+        brands_list = list(all_brands.values())
+        logger.info(f"Found {len(brands_list)} unique brands for subjectId={subject_id}")
+        return {'data': brands_list}
+
+    def fetch_all_brands(self, top: int = 5000, progress_callback=None) -> Dict[str, Any]:
+        """
+        Получить ВСЕ бренды из WB, перебирая буквы алфавита.
+
+        WB API /api/content/v1/brands — это автокомплит-эндпоинт,
+        требующий непустой pattern. Перебираем а-я, a-z, 0-9.
+
+        Args:
+            top: макс. результатов на один запрос
+            progress_callback: callable(done, total, brands_so_far) для обновления прогресса
+
+        Returns:
+            {"data": [{"id": 123, "name": "Brand Name"}, ...]}
+        """
+        endpoint = "/api/content/v1/brands"
+        all_brands = {}  # id -> brand_data
+
+        patterns = list('абвгдежзиклмнопрстуфхцчшщэюя') + list('abcdefghijklmnopqrstuvwxyz') + list('0123456789')
+        total = len(patterns)
+
+        for i, pattern in enumerate(patterns):
+            params = {
+                'top': top,
+                'pattern': pattern,
+                'locale': 'ru',
+            }
+
+            try:
+                response = self._make_request('GET', 'content', endpoint, params=params)
+                result = response.json()
+                brands = result.get('data', [])
+                for b in brands:
+                    bid = b.get('id')
+                    if bid and bid not in all_brands:
+                        all_brands[bid] = b
+                time.sleep(0.3)
+            except WBRateLimitException:
+                logger.warning(f"Rate limited on pattern='{pattern}', waiting 60s")
+                time.sleep(60)
+                try:
+                    response = self._make_request('GET', 'content', endpoint, params=params)
+                    result = response.json()
+                    for b in result.get('data', []):
+                        bid = b.get('id')
+                        if bid and bid not in all_brands:
+                            all_brands[bid] = b
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"Failed brands pattern='{pattern}': {e}")
+
+            if progress_callback:
+                progress_callback(i + 1, total, len(all_brands))
+
+        brands_list = list(all_brands.values())
+        logger.info(f"Fetched {len(brands_list)} unique brands total via alphabet iteration")
+        return {'data': brands_list}
 
     def search_brands(self, pattern: str, top: int = 50) -> Dict[str, Any]:
         """
-        Поиск брендов по названию.
-
-        WB API не поддерживает поиск брендов по имени напрямую.
-        Этот метод ищет по нескольким популярным категориям.
+        Поиск брендов по названию через WB API автокомплит.
 
         Args:
             pattern: Строка поиска (часть названия бренда)
@@ -1805,38 +1875,22 @@ class WildberriesAPIClient:
         if not pattern or not pattern.strip():
             return {'data': []}
 
-        logger.info(f"🔍 Searching brands with name: '{pattern}'")
+        logger.info(f"Searching brands with pattern: '{pattern}'")
+        endpoint = "/api/content/v1/brands"
+        params = {
+            'top': top,
+            'pattern': pattern.strip(),
+            'locale': 'ru',
+        }
+
         try:
-            # Получаем несколько предметов для поиска брендов
-            subjects_result = self.get_subjects_list(limit=50)
-            subjects = subjects_result.get('data', [])
-
-            all_brands = {}
-            pattern_lower = pattern.lower().strip()
-
-            for subj in subjects[:20]:  # Ограничиваем количество запросов
-                subj_id = subj.get('subjectID')
-                if not subj_id:
-                    continue
-                try:
-                    result = self.get_brands_by_subject(subj_id)
-                    for brand in result.get('data', []):
-                        brand_id = brand.get('id')
-                        brand_name = brand.get('name', '')
-                        if brand_id and brand_id not in all_brands:
-                            if pattern_lower in brand_name.lower():
-                                all_brands[brand_id] = brand
-                    time.sleep(0.1)
-                    if len(all_brands) >= top:
-                        break
-                except Exception:
-                    continue
-
-            brands_list = list(all_brands.values())[:top]
-            logger.info(f"✅ Found {len(brands_list)} brands matching '{pattern}'")
-            return {'data': brands_list}
+            response = self._make_request('GET', 'content', endpoint, params=params)
+            result = response.json()
+            brands = result.get('data', [])
+            logger.info(f"Found {len(brands)} brands matching '{pattern}'")
+            return {'data': brands}
         except Exception as e:
-            logger.error(f"❌ Failed to search brands: {str(e)}")
+            logger.error(f"Failed to search brands '{pattern}': {str(e)}")
             raise
 
     def validate_brand(self, brand_name: str, subject_id: int = None) -> Dict[str, Any]:
