@@ -560,7 +560,7 @@ def api_stats():
 @login_required
 @admin_required
 def api_sync():
-    """Синхронизация брендов с API маркетплейса (запуск в фоне)."""
+    """Синхронизация брендов с API маркетплейса (синхронно)."""
     from models import Seller
 
     data = request.get_json() or {}
@@ -579,26 +579,23 @@ def api_sync():
     if not seller or not seller.wb_api_key:
         return jsonify({'success': False, 'error': 'Нет доступных WB API ключей'}), 400
 
-    import threading
-    from flask import current_app
-    app = current_app._get_current_object()
-    mp_id = marketplace_id
+    try:
+        from services.wb_api_client import WildberriesAPIClient
+        from services.brand_engine import get_brand_engine
 
-    def sync_with_context():
-        with app.app_context():
-            try:
-                from services.wb_api_client import WildberriesAPIClient
-                from services.brand_engine import get_brand_engine
+        with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+            stats = get_brand_engine().sync_marketplace_brands(marketplace_id, wb_client)
 
-                with WildberriesAPIClient(seller.wb_api_key) as wb_client:
-                    get_brand_engine().sync_marketplace_brands(mp_id, wb_client)
-            except Exception as e:
-                logger.error(f"Brand sync failed: {e}")
-
-    thread = threading.Thread(target=sync_with_context, daemon=True)
-    thread.start()
-
-    return jsonify({'success': True, 'message': 'Синхронизация запущена'})
+        return jsonify({
+            'success': True,
+            'message': f'Синхронизация завершена: найдено {stats["total_fetched"]}, '
+                       f'создано {stats["created"]}, обновлено {stats["updated"]}, '
+                       f'ошибок {stats["errors"]}',
+            'stats': stats,
+        })
+    except Exception as e:
+        logger.error(f"Brand sync failed: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def register_brand_routes(app):

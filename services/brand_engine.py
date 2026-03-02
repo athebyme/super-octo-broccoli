@@ -632,7 +632,7 @@ class BrandEngine:
             stats['errors'] += 1
             subjects = []
 
-        max_subjects = 200  # Ограничиваем количество запросов
+        max_subjects = 30  # Ограничиваем чтобы не ждать слишком долго
         for i, subj in enumerate(subjects[:max_subjects]):
             subj_id = subj.get('subjectID')
             if not subj_id:
