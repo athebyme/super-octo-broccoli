@@ -370,6 +370,13 @@ def api_verify(brand_id):
         with WildberriesAPIClient(seller.wb_api_key) as wb_client:
             result = wb_client.validate_brand(brand.name)
 
+            # Если API вернул ошибку (например, WB pattern validation)
+            if result.get('error'):
+                return jsonify({
+                    'success': False,
+                    'error': f'Ошибка API маркетплейса: {result["error"]}',
+                }), 502
+
             if result.get('valid') and result.get('exact_match'):
                 match = result['exact_match']
 

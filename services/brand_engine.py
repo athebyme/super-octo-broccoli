@@ -619,11 +619,23 @@ class BrandEngine:
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
         stats = {'created': 0, 'updated': 0, 'mp_created': 0, 'errors': 0, 'total_fetched': 0}
 
-        patterns = (
-            list('ABCDEFGHIJKLMNOPQRSTUVWXYZ') +
-            list('АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЭЮЯ') +
-            list('0123456789')
-        )
+        # WB API requires at least 2 characters in name search.
+        # Use 2-char prefixes for broad coverage of brand names.
+        lat = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        ru = 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЭЮЯ'
+
+        patterns = []
+        # Latin: each letter + common second chars
+        for c in lat:
+            for c2 in 'aeiou':
+                patterns.append(c + c2)
+        # Cyrillic: each letter + common second chars
+        for c in ru:
+            for c2 in 'аеиоу':
+                patterns.append(c + c2)
+        # Digits: 2-digit combos
+        for d in '0123456789':
+            patterns.append(d + '0')
 
         all_brands = {}  # ext_id -> name
 

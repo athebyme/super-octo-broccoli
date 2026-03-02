@@ -1765,7 +1765,12 @@ class WildberriesAPIClient:
             {"data": [{"id": 1234, "name": "Nike"}]}
         """
         endpoint = "/content/v2/directory/brands"
-        # WB API использует 'name' для поиска, не 'pattern'
+
+        # WB API requires name to be at least 2 characters
+        if len(pattern.strip()) < 2:
+            logger.warning(f"⚠️ Search pattern '{pattern}' too short for WB API (min 2 chars), skipping")
+            return {'data': []}
+
         params = {
             'name': pattern,
             'top': top
