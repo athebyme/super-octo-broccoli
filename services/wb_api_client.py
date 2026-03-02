@@ -1840,7 +1840,8 @@ class WildberriesAPIClient:
                         'url': response.url,
                         'status': response.status_code,
                         'raw_body': response.text[:500],
-                        'headers_sent': dict(response.request.headers),
+                        'headers_sent': {k: (v[:20] + '...') if len(str(v)) > 20 else v
+                                         for k, v in response.request.headers.items()},
                     }
 
                 result = response.json()
@@ -1851,6 +1852,8 @@ class WildberriesAPIClient:
                         all_brands[bid] = b
                 time.sleep(0.3)
             except WBRateLimitException:
+                if not self._fetch_debug:
+                    self._fetch_debug = {'error': 'WBRateLimitException', 'pattern': pattern}
                 logger.warning(f"Rate limited on pattern='{pattern}', waiting 60s")
                 time.sleep(60)
                 try:
@@ -1863,6 +1866,12 @@ class WildberriesAPIClient:
                 except Exception:
                     pass
             except Exception as e:
+                # Обязательно захватываем ошибку первого запроса
+                if not self._fetch_debug:
+                    self._fetch_debug = {
+                        'error': f'{type(e).__name__}: {str(e)[:300]}',
+                        'pattern': pattern,
+                    }
                 logger.warning(f"Failed brands pattern='{pattern}': {e}")
 
             if progress_callback:
