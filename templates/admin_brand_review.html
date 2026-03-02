@@ -1,44 +1,64 @@
 {% extends "base.html" %}
 
-{% block title %}Очередь проверки брендов{% endblock %}
+{% block title %}Очередь проверки брендов - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Заголовок -->
-    <div class="mb-8">
-        <nav class="text-sm text-gray-500 mb-2">
-            <a href="{{ url_for('brands.index') }}" class="hover:text-indigo-600">Бренды</a>
-            <span class="mx-2">/</span>
-            <span class="text-gray-900">Очередь проверки</span>
-        </nav>
-        <div class="flex justify-between items-center">
-            <div>
-                <h1 class="text-3xl font-bold text-gray-900">Очередь проверки брендов</h1>
-                <p class="mt-2 text-sm text-gray-600">
-                    Pending: <strong>{{ stats.pending }}</strong> | Needs Review: <strong>{{ stats.needs_review }}</strong>
-                </p>
+    <!-- Hero Banner -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <path d="M100 30l20 40h-40l20-40z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+            <circle cx="100" cy="100" r="40" stroke="white" stroke-width="1.5"/>
+            <path d="M100 80v20M100 110v5" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M60 150h80" stroke="white" stroke-width="1" stroke-linecap="round"/>
+            <path d="M70 165h60" stroke="white" stroke-width="1" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="absolute bottom-5 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
+        <div class="relative">
+            <nav class="text-sm text-amber-200 mb-3">
+                <a href="{{ url_for('brands.index') }}" class="hover:text-white transition-colors">Бренды</a>
+                <span class="mx-2">/</span>
+                <span class="text-white">Очередь проверки</span>
+            </nav>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                    <h1 class="text-3xl font-bold text-white">Очередь проверки</h1>
+                    <p class="mt-2 text-sm text-amber-200">
+                        Pending: <strong class="text-white">{{ stats.pending }}</strong> | Needs Review: <strong class="text-white">{{ stats.needs_review }}</strong>
+                    </p>
+                </div>
+                <a href="{{ url_for('brands.index') }}"
+                   class="inline-flex items-center px-5 py-2.5 rounded-xl shadow-sm text-sm font-medium text-amber-900 bg-white hover:bg-gray-50 transition-colors">
+                    <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                    Все бренды
+                </a>
             </div>
         </div>
     </div>
 
     {% if not brand_data %}
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-12 text-center">
-        <svg class="mx-auto h-12 w-12 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-        </svg>
-        <h3 class="mt-4 text-lg font-medium text-gray-900">Все бренды проверены!</h3>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
+        <div class="w-16 h-16 bg-gradient-to-br from-emerald-500 to-green-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <svg class="h-8 w-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+        </div>
+        <h3 class="text-lg font-semibold text-gray-900">Все бренды проверены!</h3>
         <p class="mt-2 text-sm text-gray-500">Нет брендов, требующих проверки</p>
     </div>
     {% else %}
 
     <div class="space-y-4" id="reviewList">
         {% for item in brand_data %}
-        <div class="bg-white shadow-sm rounded-lg border border-gray-200 overflow-hidden" id="review-{{ item.brand.id }}">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow" id="review-{{ item.brand.id }}">
             <div class="px-6 py-4">
                 <div class="flex justify-between items-start">
                     <div>
                         <div class="flex items-center gap-3">
-                            <h3 class="text-lg font-medium text-gray-900">"{{ item.brand.name }}"</h3>
+                            <h3 class="text-lg font-semibold text-gray-900">"{{ item.brand.name }}"</h3>
                             {% if item.brand.status == 'needs_review' %}
                             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Needs Review</span>
                             {% else %}
@@ -55,17 +75,17 @@
                             {% endif %}
                         </p>
                     </div>
-                    <a href="{{ url_for('brands.detail', brand_id=item.brand.id) }}" class="text-sm text-indigo-600 hover:text-indigo-800">
+                    <a href="{{ url_for('brands.detail', brand_id=item.brand.id) }}" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                         Подробнее
                     </a>
                 </div>
 
-                <!-- Поиск через WB API -->
+                <!-- Поиск через API -->
                 <div class="mt-4">
                     <div class="flex items-center gap-2 mb-2">
                         <button onclick="searchWB({{ item.brand.id }}, '{{ item.brand.name|e }}')"
-                            class="text-sm text-indigo-600 hover:text-indigo-800 underline" id="searchBtn-{{ item.brand.id }}">
-                            Найти в WB
+                            class="text-sm text-indigo-600 hover:text-indigo-800 underline font-medium" id="searchBtn-{{ item.brand.id }}">
+                            Найти на маркетплейсе
                         </button>
                         <div id="searchSpinner-{{ item.brand.id }}" class="hidden">
                             <svg class="animate-spin h-4 w-4 text-indigo-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
@@ -75,20 +95,20 @@
                 </div>
 
                 <!-- Действия -->
-                <div class="mt-4 flex gap-2 items-center border-t border-gray-100 pt-4">
+                <div class="mt-4 flex flex-wrap gap-2 items-center border-t border-gray-100 pt-4">
                     <button onclick="approveBrand({{ item.brand.id }})"
-                        class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">
-                        Подтвердить как "{{ item.brand.name }}"
+                        class="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-lg text-sm hover:from-emerald-600 hover:to-green-700 transition-colors">
+                        Подтвердить "{{ item.brand.name }}"
                     </button>
                     <span class="text-gray-400 text-sm">или</span>
                     <input type="text" id="renameTo-{{ item.brand.id }}" placeholder="Правильное имя..."
                         class="rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500 w-48">
                     <button onclick="approveWithRename({{ item.brand.id }})"
-                        class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
+                        class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition-colors">
                         Подтвердить с именем
                     </button>
                     <button onclick="rejectBrand({{ item.brand.id }})"
-                        class="px-3 py-1.5 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 ml-auto">
+                        class="px-3 py-1.5 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm hover:bg-red-100 transition-colors ml-auto">
                         Отклонить
                     </button>
                 </div>
@@ -126,7 +146,7 @@ async function searchWB(brandId, brandName) {
                 const div = document.createElement('div');
                 div.className = 'flex items-center gap-2 text-sm';
                 div.innerHTML = `
-                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs ${res.status === 'exact' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${res.status}</span>
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${res.status === 'exact' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">${res.status}</span>
                     <strong>${res.canonical_name}</strong>
                     <span class="text-gray-400">(${Math.round(res.confidence * 100)}%)</span>
                     <button onclick="document.getElementById('renameTo-${brandId}').value='${res.canonical_name}'" class="text-indigo-600 hover:underline text-xs">Использовать</button>
@@ -148,7 +168,7 @@ async function searchWB(brandId, brandName) {
                 });
             }
             if (!res.canonical_name && (!res.suggestions || res.suggestions.length === 0)) {
-                container.innerHTML = '<p class="text-sm text-gray-500">Ничего не найдено в WB</p>';
+                container.innerHTML = '<p class="text-sm text-gray-500">Ничего не найдено</p>';
             }
         }
     } catch (e) {
@@ -159,32 +179,23 @@ async function searchWB(brandId, brandName) {
 
 async function approveBrand(brandId) {
     const data = await apiCall(`${API_BASE}/api/review/${brandId}/approve`);
-    if (data.success) {
-        document.getElementById('review-' + brandId).remove();
-    } else {
-        alert(data.error || 'Ошибка');
-    }
+    if (data.success) document.getElementById('review-' + brandId).remove();
+    else alert(data.error || 'Ошибка');
 }
 
 async function approveWithRename(brandId) {
     const newName = document.getElementById('renameTo-' + brandId).value.trim();
     if (!newName) return alert('Введите имя');
     const data = await apiCall(`${API_BASE}/api/review/${brandId}/approve`, 'POST', {target_name: newName});
-    if (data.success) {
-        document.getElementById('review-' + brandId).remove();
-    } else {
-        alert(data.error || 'Ошибка');
-    }
+    if (data.success) document.getElementById('review-' + brandId).remove();
+    else alert(data.error || 'Ошибка');
 }
 
 async function rejectBrand(brandId) {
     if (!confirm('Отклонить бренд?')) return;
     const data = await apiCall(`${API_BASE}/api/review/${brandId}/reject`);
-    if (data.success) {
-        document.getElementById('review-' + brandId).remove();
-    } else {
-        alert(data.error || 'Ошибка');
-    }
+    if (data.success) document.getElementById('review-' + brandId).remove();
+    else alert(data.error || 'Ошибка');
 }
 </script>
 {% endblock %}

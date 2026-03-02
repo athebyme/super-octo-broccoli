@@ -1,40 +1,50 @@
 {% extends "base.html" %}
 
-{% block title %}{{ brand.name }} - Бренды{% endblock %}
+{% block title %}{{ brand.name }} - Бренды - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Breadcrumb + заголовок -->
-    <div class="mb-6">
-        <nav class="text-sm text-gray-500 mb-2">
-            <a href="{{ url_for('brands.index') }}" class="hover:text-indigo-600">Бренды</a>
-            <span class="mx-2">/</span>
-            <span class="text-gray-900">{{ brand.name }}</span>
-        </nav>
-        <div class="flex justify-between items-start">
-            <div>
-                <h1 class="text-3xl font-bold text-gray-900" id="brandName">{{ brand.name }}</h1>
-                <div class="mt-2 flex items-center gap-3">
-                    <select id="statusSelect" onchange="updateStatus(this.value)"
-                        class="rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500
-                        {% if brand.status == 'verified' %}text-green-700 bg-green-50
-                        {% elif brand.status == 'pending' %}text-gray-700 bg-gray-50
-                        {% elif brand.status == 'needs_review' %}text-yellow-700 bg-yellow-50
-                        {% elif brand.status == 'rejected' %}text-red-700 bg-red-50
-                        {% endif %}">
-                        <option value="verified" {% if brand.status == 'verified' %}selected{% endif %}>Verified</option>
-                        <option value="pending" {% if brand.status == 'pending' %}selected{% endif %}>Pending</option>
-                        <option value="needs_review" {% if brand.status == 'needs_review' %}selected{% endif %}>Needs Review</option>
-                        <option value="rejected" {% if brand.status == 'rejected' %}selected{% endif %}>Rejected</option>
-                    </select>
-                    {% if brand.updated_at %}
-                    <span class="text-sm text-gray-500">Обновлён: {{ brand.updated_at.strftime('%d.%m.%Y %H:%M') }}</span>
-                    {% endif %}
+    <!-- Hero Banner -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-700 via-purple-700 to-indigo-800 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-[0.06]" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="80" r="50" stroke="white" stroke-width="1.5"/>
+            <circle cx="100" cy="80" r="30" stroke="white" stroke-width="1"/>
+            <rect x="50" y="130" width="100" height="30" rx="8" stroke="white" stroke-width="1"/>
+            <path d="M80 145h40" stroke="white" stroke-width="1" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <nav class="text-sm text-indigo-300 mb-3">
+                <a href="{{ url_for('brands.index') }}" class="hover:text-white transition-colors">Бренды</a>
+                <span class="mx-2">/</span>
+                <span class="text-white">{{ brand.name }}</span>
+            </nav>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                    <h1 class="text-3xl font-bold text-white" id="brandName">{{ brand.name }}</h1>
+                    <div class="mt-2 flex items-center gap-3">
+                        <select id="statusSelect" onchange="updateStatus(this.value)"
+                            class="rounded-lg border-white/20 bg-white/10 text-sm text-white focus:ring-indigo-300 focus:border-indigo-300
+                            {% if brand.status == 'verified' %}bg-green-500/20
+                            {% elif brand.status == 'pending' %}bg-white/10
+                            {% elif brand.status == 'needs_review' %}bg-yellow-500/20
+                            {% elif brand.status == 'rejected' %}bg-red-500/20
+                            {% endif %}">
+                            <option value="verified" {% if brand.status == 'verified' %}selected{% endif %}>Verified</option>
+                            <option value="pending" {% if brand.status == 'pending' %}selected{% endif %}>Pending</option>
+                            <option value="needs_review" {% if brand.status == 'needs_review' %}selected{% endif %}>Needs Review</option>
+                            <option value="rejected" {% if brand.status == 'rejected' %}selected{% endif %}>Rejected</option>
+                        </select>
+                        {% if brand.updated_at %}
+                        <span class="text-sm text-indigo-300">{{ brand.updated_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        {% endif %}
+                    </div>
                 </div>
-            </div>
-            <div class="flex gap-2">
-                <button onclick="verifyBrand()" class="px-3 py-2 border border-green-300 rounded-lg text-sm text-green-700 hover:bg-green-50">
-                    Проверить через WB
+                <button onclick="verifyBrand()" class="inline-flex items-center px-4 py-2.5 border border-green-400/50 rounded-xl text-sm font-medium text-green-200 hover:bg-white/10 transition-colors">
+                    <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    Проверить через API
                 </button>
             </div>
         </div>
@@ -44,14 +54,14 @@
         <!-- Основная информация -->
         <div class="lg:col-span-2 space-y-6">
             <!-- Алиасы -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                    <h2 class="text-lg font-medium text-gray-900">Алиасы (варианты написания)</h2>
-                    <button onclick="showAddAlias()" class="text-sm text-indigo-600 hover:text-indigo-800">+ Добавить</button>
+                    <h2 class="text-lg font-semibold text-gray-900">Алиасы (варианты написания)</h2>
+                    <button onclick="showAddAlias()" class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">+ Добавить</button>
                 </div>
                 <div class="divide-y divide-gray-100" id="aliasesList">
                     {% for alias in aliases %}
-                    <div class="px-6 py-3 flex items-center justify-between hover:bg-gray-50" id="alias-{{ alias.id }}">
+                    <div class="px-6 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors" id="alias-{{ alias.id }}">
                         <div>
                             <span class="text-sm font-medium text-gray-900">"{{ alias.alias }}"</span>
                             <span class="ml-2 text-xs text-gray-500">{{ alias.source }}</span>
@@ -61,54 +71,58 @@
                         </div>
                         <div class="flex items-center gap-2">
                             {% if alias.is_active %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">active</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">active</span>
                             {% else %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-500">inactive</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">inactive</span>
                             {% endif %}
-                            <button onclick="deleteAlias({{ alias.id }})" class="text-gray-400 hover:text-red-500" title="Удалить">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            <button onclick="deleteAlias({{ alias.id }})" class="text-gray-400 hover:text-red-500 transition-colors" title="Удалить">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                             </button>
                         </div>
                     </div>
                     {% endfor %}
                 </div>
-                <!-- Форма добавления alias (скрыта по умолчанию) -->
                 <div id="addAliasForm" class="hidden px-6 py-3 border-t border-gray-200 bg-gray-50">
                     <div class="flex gap-2">
                         <input type="text" id="newAliasInput" placeholder="Вариант написания бренда..."
                             class="flex-1 rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
-                        <button onclick="addAlias()" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">Добавить</button>
-                        <button onclick="hideAddAlias()" class="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300">Отмена</button>
+                        <button onclick="addAlias()" class="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition-colors">Добавить</button>
+                        <button onclick="hideAddAlias()" class="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition-colors">Отмена</button>
                     </div>
                 </div>
             </div>
 
             <!-- Маркетплейсы -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div class="px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-lg font-medium text-gray-900">Маркетплейсы</h2>
+                    <h2 class="text-lg font-semibold text-gray-900">Маркетплейсы</h2>
                 </div>
                 {% if marketplace_brands %}
                 <div class="divide-y divide-gray-100">
                     {% for mp_brand in marketplace_brands %}
-                    <div class="px-6 py-3">
+                    <div class="px-6 py-3 hover:bg-gray-50 transition-colors">
                         <div class="flex items-center justify-between">
-                            <div>
-                                <span class="text-sm font-medium text-gray-900">{{ mp_brand.marketplace.name if mp_brand.marketplace else 'Marketplace #' + mp_brand.marketplace_id|string }}</span>
-                                <span class="ml-2 text-sm text-gray-600">"{{ mp_brand.marketplace_brand_name }}"</span>
-                                {% if mp_brand.marketplace_brand_id %}
-                                <span class="ml-2 text-xs text-gray-400">ext_id: {{ mp_brand.marketplace_brand_id }}</span>
-                                {% endif %}
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
+                                    <span class="text-white text-xs font-bold">{{ (mp_brand.marketplace.name if mp_brand.marketplace else '?')[0] }}</span>
+                                </div>
+                                <div>
+                                    <span class="text-sm font-medium text-gray-900">{{ mp_brand.marketplace.name if mp_brand.marketplace else 'Marketplace #' + mp_brand.marketplace_id|string }}</span>
+                                    <span class="ml-2 text-sm text-gray-500">"{{ mp_brand.marketplace_brand_name }}"</span>
+                                    {% if mp_brand.marketplace_brand_id %}
+                                    <span class="ml-2 text-xs text-gray-400">ID: {{ mp_brand.marketplace_brand_id }}</span>
+                                    {% endif %}
+                                </div>
                             </div>
                             <div class="flex items-center gap-2">
                                 {% if mp_brand.status == 'verified' %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">Verified</span>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">Verified</span>
                                 {% elif mp_brand.status == 'pending' %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-500">Pending</span>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">Pending</span>
                                 {% elif mp_brand.status == 'needs_review' %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-yellow-100 text-yellow-700">Needs Review</span>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">Needs Review</span>
                                 {% elif mp_brand.status == 'rejected' %}
-                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">Rejected</span>
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Rejected</span>
                                 {% endif %}
                                 {% if mp_brand.verified_at %}
                                 <span class="text-xs text-gray-400">{{ mp_brand.verified_at.strftime('%d.%m.%Y') }}</span>
@@ -126,26 +140,26 @@
             </div>
 
             <!-- Категории -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div class="px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-lg font-medium text-gray-900">Допустимые категории</h2>
+                    <h2 class="text-lg font-semibold text-gray-900">Допустимые категории</h2>
                 </div>
                 {% if category_links %}
                 <div class="divide-y divide-gray-100">
                     {% for link in category_links %}
-                    <div class="px-6 py-3 flex items-center justify-between">
+                    <div class="px-6 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors">
                         <div>
                             <span class="text-sm text-gray-900">{{ link.category_name or 'Category #' + link.category_id|string }}</span>
                             <span class="ml-2 text-xs text-gray-400">ID: {{ link.category_id }}</span>
                         </div>
-                        <div>
+                        <div class="flex items-center gap-2">
                             {% if link.is_available %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-green-100 text-green-700">Доступен</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">Доступен</span>
                             {% else %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-red-100 text-red-700">Недоступен</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Недоступен</span>
                             {% endif %}
                             {% if link.verified_at %}
-                            <span class="ml-2 text-xs text-gray-400">{{ link.verified_at.strftime('%d.%m.%Y') }}</span>
+                            <span class="text-xs text-gray-400">{{ link.verified_at.strftime('%d.%m.%Y') }}</span>
                             {% endif %}
                         </div>
                     </div>
@@ -159,14 +173,14 @@
             </div>
 
             <!-- Заметки -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div class="px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-lg font-medium text-gray-900">Заметки</h2>
+                    <h2 class="text-lg font-semibold text-gray-900">Заметки</h2>
                 </div>
                 <div class="px-6 py-4">
                     <textarea id="notesField" rows="3" class="w-full rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                         placeholder="Заметки администратора...">{{ brand.notes or '' }}</textarea>
-                    <button onclick="saveNotes()" class="mt-2 px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300">Сохранить</button>
+                    <button onclick="saveNotes()" class="mt-2 px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 transition-colors">Сохранить</button>
                 </div>
             </div>
         </div>
@@ -174,55 +188,56 @@
         <!-- Боковая панель -->
         <div class="space-y-6">
             <!-- Статистика товаров -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-                <h3 class="text-sm font-medium text-gray-500 uppercase mb-4">Товары</h3>
+            <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                <div class="absolute top-0 right-0 w-16 h-16 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full"></div>
+                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Товары</h3>
                 <dl class="space-y-3">
                     <div class="flex justify-between">
-                        <dt class="text-sm text-gray-600">ImportedProducts (по FK)</dt>
-                        <dd class="text-sm font-medium text-gray-900">{{ imported_count }}</dd>
+                        <dt class="text-sm text-gray-600">ImportedProducts (FK)</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ imported_count }}</dd>
                     </div>
                     <div class="flex justify-between">
-                        <dt class="text-sm text-gray-600">ImportedProducts (по имени)</dt>
-                        <dd class="text-sm font-medium text-gray-900">{{ imported_by_name }}</dd>
+                        <dt class="text-sm text-gray-600">ImportedProducts (имя)</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ imported_by_name }}</dd>
                     </div>
                     <div class="flex justify-between">
-                        <dt class="text-sm text-gray-600">SupplierProducts (по FK)</dt>
-                        <dd class="text-sm font-medium text-gray-900">{{ supplier_count }}</dd>
+                        <dt class="text-sm text-gray-600">SupplierProducts (FK)</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ supplier_count }}</dd>
                     </div>
                     <div class="flex justify-between">
-                        <dt class="text-sm text-gray-600">SupplierProducts (по имени)</dt>
-                        <dd class="text-sm font-medium text-gray-900">{{ supplier_by_name }}</dd>
+                        <dt class="text-sm text-gray-600">SupplierProducts (имя)</dt>
+                        <dd class="text-sm font-semibold text-gray-900">{{ supplier_by_name }}</dd>
                     </div>
                 </dl>
             </div>
 
             <!-- Мерж -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-                <h3 class="text-sm font-medium text-gray-500 uppercase mb-4">Объединение</h3>
-                <p class="text-xs text-gray-500 mb-3">Объединить этот бренд с другим (все aliases и товары будут перенесены)</p>
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Объединение</h3>
+                <p class="text-xs text-gray-500 mb-3">Объединить этот бренд с другим (aliases и товары будут перенесены)</p>
                 <div class="flex gap-2">
                     <input type="number" id="mergeTargetId" placeholder="ID бренда"
                         class="flex-1 rounded-lg border-gray-300 text-sm shadow-sm focus:ring-indigo-500">
-                    <button onclick="mergeBrand()" class="px-3 py-2 bg-orange-500 text-white rounded-lg text-sm hover:bg-orange-600">Объединить</button>
+                    <button onclick="mergeBrand()" class="px-3 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-lg text-sm hover:from-orange-600 hover:to-red-600 transition-colors">Объединить</button>
                 </div>
             </div>
 
             <!-- Информация -->
-            <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-                <h3 class="text-sm font-medium text-gray-500 uppercase mb-4">Информация</h3>
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Информация</h3>
                 <dl class="space-y-2 text-sm">
                     <div class="flex justify-between">
                         <dt class="text-gray-500">ID</dt>
-                        <dd class="text-gray-900">{{ brand.id }}</dd>
+                        <dd class="font-medium text-gray-900">{{ brand.id }}</dd>
                     </div>
                     <div class="flex justify-between">
                         <dt class="text-gray-500">Создан</dt>
-                        <dd class="text-gray-900">{{ brand.created_at.strftime('%d.%m.%Y %H:%M') }}</dd>
+                        <dd class="font-medium text-gray-900">{{ brand.created_at.strftime('%d.%m.%Y %H:%M') }}</dd>
                     </div>
                     {% if brand.country %}
                     <div class="flex justify-between">
                         <dt class="text-gray-500">Страна</dt>
-                        <dd class="text-gray-900">{{ brand.country }}</dd>
+                        <dd class="font-medium text-gray-900">{{ brand.country }}</dd>
                     </div>
                     {% endif %}
                 </dl>
@@ -252,11 +267,11 @@ async function verifyBrand() {
     const data = await apiCall(`${API_BASE}/api/${BRAND_ID}/verify`);
     if (data.success) {
         if (data.verified) {
-            alert('Бренд подтверждён в WB! ID: ' + (data.wb_brand?.id || ''));
+            alert('Бренд подтверждён! ID: ' + (data.wb_brand?.id || ''));
             location.reload();
         } else {
             const suggestions = (data.suggestions || []).map(s => s.name).join(', ');
-            alert('Бренд не найден в WB.' + (suggestions ? '\nПохожие: ' + suggestions : ''));
+            alert('Бренд не найден на маркетплейсе.' + (suggestions ? '\nПохожие: ' + suggestions : ''));
         }
     } else {
         alert(data.error || 'Ошибка');
