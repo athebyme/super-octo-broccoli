@@ -5,46 +5,71 @@
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     {% set has_summary = summary is not none %}
-    <!-- Заголовок -->
-    <div class="mb-8">
-        <h1 class="text-3xl font-bold text-gray-900">
-            Добро пожаловать, {{ current_user.username }}!
-        </h1>
-        <p class="mt-2 text-sm text-gray-600">
-            {% if current_user.seller %}
-                {{ current_user.seller.company_name }}
-            {% else %}
-                Администратор системы
-            {% endif %}
-        </p>
-        <div class="mt-4 flex items-center gap-4">
-            <a href="{{ url_for('reports') }}"
-               class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                Перейти к отчётам
-            </a>
-            {% if latest_filename %}
-            <p class="text-xs text-gray-500">
-                Последний файл: <span class="font-medium">{{ latest_filename }}</span>
+
+    <!-- Hero Banner -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <!-- SVG decoration -->
+        <svg class="absolute right-0 top-0 h-full w-1/2 opacity-10" viewBox="0 0 400 250" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="320" cy="60" r="100" stroke="white" stroke-width="1.5"/>
+            <circle cx="320" cy="60" r="60" stroke="white" stroke-width="1"/>
+            <path d="M160 200L200 140L240 165L280 100L320 130L360 80" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <rect x="170" y="150" width="14" height="50" rx="3" fill="white" opacity="0.2"/>
+            <rect x="200" y="120" width="14" height="80" rx="3" fill="white" opacity="0.2"/>
+            <rect x="230" y="135" width="14" height="65" rx="3" fill="white" opacity="0.2"/>
+            <rect x="260" y="100" width="14" height="100" rx="3" fill="white" opacity="0.2"/>
+            <rect x="290" y="110" width="14" height="90" rx="3" fill="white" opacity="0.2"/>
+            <rect x="320" y="80" width="14" height="120" rx="3" fill="white" opacity="0.2"/>
+        </svg>
+        <div class="absolute top-4 right-10 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="absolute top-12 right-24 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.5s"></div>
+        <div class="absolute bottom-6 right-36 w-2.5 h-2.5 rounded-full bg-white/25 animate-pulse" style="animation-delay:1s"></div>
+
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">
+                Добро пожаловать, {{ current_user.username }}!
+            </h1>
+            <p class="mt-2 text-sm text-indigo-200">
+                {% if current_user.seller %}
+                    {{ current_user.seller.company_name }} &middot; Seller Hub
+                {% else %}
+                    Администратор системы &middot; Seller Hub
+                {% endif %}
             </p>
-            {% endif %}
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+                <a href="{{ url_for('reports') }}"
+                   class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-indigo-700 bg-white hover:bg-indigo-50 transition-colors shadow-sm">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Отчёты
+                </a>
+                <a href="{{ url_for('analytics_page') }}"
+                   class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-white bg-white/20 hover:bg-white/30 backdrop-blur-sm transition-colors border border-white/20">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4"/></svg>
+                    Аналитика
+                </a>
+                {% if latest_filename %}
+                <p class="text-xs text-indigo-200">
+                    Последний файл: <span class="font-medium text-white">{{ latest_filename }}</span>
+                </p>
+                {% endif %}
+            </div>
         </div>
     </div>
 
-    <!-- Статус API -->
+    <!-- API Warning -->
     {% if current_user.seller %}
     {% if not current_user.seller.has_valid_api_key() %}
-    <div class="mb-6 bg-yellow-50 border-l-4 border-yellow-400 p-4">
-        <div class="flex">
-            <div class="flex-shrink-0">
-                <svg class="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+    <div class="mb-6 bg-amber-50 border border-amber-200 rounded-2xl p-4">
+        <div class="flex items-start gap-3">
+            <div class="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                 </svg>
             </div>
-            <div class="ml-3">
-                <p class="text-sm text-yellow-700">
-                    <strong>API ключ не настроен.</strong> Настройте API ключ для автоматической синхронизации данных с Wildberries.
-                    <a href="{{ url_for('api_settings') }}" class="font-medium underline hover:text-yellow-600">
-                        Настроить сейчас →
+            <div>
+                <p class="text-sm text-amber-800">
+                    <strong>API ключ не настроен.</strong> Настройте API для синхронизации с маркетплейсами.
+                    <a href="{{ url_for('api_settings') }}" class="font-semibold underline decoration-amber-400 hover:text-amber-900 ml-1">
+                        Настроить &rarr;
                     </a>
                 </p>
             </div>
@@ -52,211 +77,183 @@
     </div>
     {% endif %}
 
-    <!-- Статистика отчетов -->
-    <div class="mb-4">
-        <h2 class="text-xl font-semibold text-gray-900">Отчеты и прибыль</h2>
+    <!-- KPI Stats -->
+    <div class="mb-4 flex items-center gap-3">
+        <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <h2 class="text-lg font-semibold text-gray-900">Отчёты и прибыль</h2>
     </div>
-    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mb-8">
-        <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
-            <div class="p-6">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0 bg-indigo-500 rounded-md p-3">
-                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                    </div>
-                    <div class="ml-5 w-0 flex-1">
-                        <dl>
-                            <dt class="text-sm font-medium text-gray-500 truncate">
-                                Начислено ВБ
-                            </dt>
-                            <dd class="text-lg font-semibold text-gray-900">
-                                {{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '-' }}
-                            </dd>
-                        </dl>
-                    </div>
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-8">
+        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500">Начислено</p>
+                    <p class="text-xl font-bold text-gray-900">
+                        {{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}
+                    </p>
                 </div>
             </div>
         </div>
 
-        <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
-            <div class="p-6">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0 bg-green-500 rounded-md p-3">
-                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
-                        </svg>
-                    </div>
-                    <div class="ml-5 w-0 flex-1">
-                        <dl>
-                            <dt class="text-sm font-medium text-gray-500 truncate">
-                                Прибыль
-                            </dt>
-                            <dd class="text-lg font-semibold text-gray-900">
-                                {{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '-' }}
-                            </dd>
-                        </dl>
-                    </div>
+        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-emerald-500/10 to-transparent rounded-bl-full"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br from-emerald-500 to-green-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500">Прибыль</p>
+                    <p class="text-xl font-bold text-gray-900">
+                        {{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}
+                    </p>
                 </div>
             </div>
         </div>
 
-        <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
-            <div class="p-6">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0 bg-blue-500 rounded-md p-3">
-                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"></path>
-                        </svg>
-                    </div>
-                    <div class="ml-5 w-0 flex-1">
-                        <dl>
-                            <dt class="text-sm font-medium text-gray-500 truncate">
-                                Маржа
-                            </dt>
-                            <dd class="text-lg font-semibold text-gray-900">
-                                {{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '-' }}
-                            </dd>
-                        </dl>
-                    </div>
+        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
+            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-blue-500/10 to-transparent rounded-bl-full"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500">Маржа</p>
+                    <p class="text-xl font-bold text-gray-900">
+                        {{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '—' }}
+                    </p>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Статистика API -->
-    <div class="mb-4">
-        <h2 class="text-xl font-semibold text-gray-900">API Wildberries</h2>
+    <!-- API Stats -->
+    <div class="mb-4 flex items-center gap-3">
+        <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        </div>
+        <h2 class="text-lg font-semibold text-gray-900">Маркетплейсы</h2>
     </div>
-    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mb-8">
-        <a href="{{ url_for('products_list') }}" class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-            <div class="p-6">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0 bg-indigo-500 rounded-md p-3">
-                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
-                        </svg>
-                    </div>
-                    <div class="ml-5 w-0 flex-1">
-                        <dl>
-                            <dt class="text-sm font-medium text-gray-500 truncate">
-                                Карточки товаров
-                            </dt>
-                            <dd class="text-lg font-semibold text-gray-900">
-                                {{ products_count }}
-                            </dd>
-                        </dl>
-                    </div>
+    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-8">
+        <a href="{{ url_for('products_list') }}" class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all group">
+            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500">Карточки товаров</p>
+                    <p class="text-xl font-bold text-gray-900">{{ products_count }}</p>
                 </div>
             </div>
         </a>
 
-        <a href="{{ url_for('api_logs') }}" class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-            <div class="p-6">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0 bg-green-500 rounded-md p-3">
-                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
-                        </svg>
-                    </div>
-                    <div class="ml-5 w-0 flex-1">
-                        <dl>
-                            <dt class="text-sm font-medium text-gray-500 truncate">
-                                API запросов
-                            </dt>
-                            <dd class="text-lg font-semibold text-gray-900">
-                                {{ api_logs_count }}
-                            </dd>
-                        </dl>
-                    </div>
+        <a href="{{ url_for('api_logs') }}" class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all group">
+            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-green-500/10 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500">API запросов</p>
+                    <p class="text-xl font-bold text-gray-900">{{ api_logs_count }}</p>
                 </div>
             </div>
         </a>
 
-        <a href="{{ url_for('api_settings') }}" class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
-            <div class="p-6">
-                <div class="flex items-center">
-                    <div class="flex-shrink-0 {% if current_user.seller.has_valid_api_key() %}bg-blue-500{% else %}bg-yellow-500{% endif %} rounded-md p-3">
-                        <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                        </svg>
-                    </div>
-                    <div class="ml-5 w-0 flex-1">
-                        <dl>
-                            <dt class="text-sm font-medium text-gray-500 truncate">
-                                Статус API
-                            </dt>
-                            <dd class="text-lg font-semibold text-gray-900">
-                                {% if current_user.seller.has_valid_api_key() %}
-                                    <span class="text-green-600">Настроен</span>
-                                {% else %}
-                                    <span class="text-yellow-600">Не настроен</span>
-                                {% endif %}
-                            </dd>
-                        </dl>
-                    </div>
+        <a href="{{ url_for('api_settings') }}" class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all group">
+            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-blue-500/10 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br {% if current_user.seller.has_valid_api_key() %}from-blue-500 to-indigo-600{% else %}from-amber-400 to-orange-500{% endif %} rounded-xl flex items-center justify-center flex-shrink-0">
+                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500">Статус API</p>
+                    <p class="text-xl font-bold {% if current_user.seller.has_valid_api_key() %}text-green-600{% else %}text-amber-600{% endif %}">
+                        {% if current_user.seller.has_valid_api_key() %}Настроен{% else %}Не настроен{% endif %}
+                    </p>
                 </div>
             </div>
         </a>
     </div>
     {% endif %}
 
-    <!-- Быстрые действия -->
+    <!-- Quick Actions -->
     {% if current_user.seller %}
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6 mb-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">
-            Быстрые действия
-        </h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6 relative overflow-hidden">
+        <svg class="absolute -right-4 -top-4 w-24 h-24 opacity-[0.03]" viewBox="0 0 100 100" fill="none"><path d="M50 10L60 40H90L66 58L76 88L50 70L24 88L34 58L10 40H40Z" fill="currentColor"/></svg>
+        <div class="flex items-center gap-3 mb-5">
+            <div class="w-8 h-8 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </div>
+            <h2 class="text-lg font-semibold text-gray-900">Быстрые действия</h2>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             <a href="{{ url_for('products_list') }}"
-               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <div class="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                    <svg class="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-indigo-50/50 hover:border-indigo-200 transition-all group">
+                <div class="flex-shrink-0 w-10 h-10 bg-indigo-100 group-hover:bg-indigo-200 rounded-xl flex items-center justify-center transition-colors">
+                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
                     </svg>
                 </div>
-                <div class="ml-4">
+                <div class="ml-3">
                     <p class="text-sm font-medium text-gray-900">Карточки товаров</p>
                     <p class="text-xs text-gray-500">Просмотр и управление</p>
                 </div>
             </a>
 
             <a href="{{ url_for('api_settings') }}"
-               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <div class="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                    <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-blue-50/50 hover:border-blue-200 transition-all group">
+                <div class="flex-shrink-0 w-10 h-10 bg-blue-100 group-hover:bg-blue-200 rounded-xl flex items-center justify-center transition-colors">
+                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                     </svg>
                 </div>
-                <div class="ml-4">
+                <div class="ml-3">
                     <p class="text-sm font-medium text-gray-900">Настройки API</p>
-                    <p class="text-xs text-gray-500">Wildberries API ключ</p>
+                    <p class="text-xs text-gray-500">Ключи маркетплейсов</p>
                 </div>
             </a>
 
             <a href="{{ url_for('api_logs') }}"
-               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <div class="flex-shrink-0 w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                    <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-green-50/50 hover:border-green-200 transition-all group">
+                <div class="flex-shrink-0 w-10 h-10 bg-green-100 group-hover:bg-green-200 rounded-xl flex items-center justify-center transition-colors">
+                    <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
                     </svg>
                 </div>
-                <div class="ml-4">
+                <div class="ml-3">
                     <p class="text-sm font-medium text-gray-900">Логи API</p>
                     <p class="text-xs text-gray-500">История запросов</p>
                 </div>
             </a>
 
             <a href="{{ url_for('bulk_edit_history') }}"
-               class="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <div class="flex-shrink-0 w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-                    <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-purple-50/50 hover:border-purple-200 transition-all group">
+                <div class="flex-shrink-0 w-10 h-10 bg-purple-100 group-hover:bg-purple-200 rounded-xl flex items-center justify-center transition-colors">
+                    <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                     </svg>
                 </div>
-                <div class="ml-4">
+                <div class="ml-3">
                     <p class="text-sm font-medium text-gray-900">История операций</p>
                     <p class="text-xs text-gray-500">Массовые изменения</p>
                 </div>
@@ -264,43 +261,46 @@
         </div>
     </div>
 
-    <!-- Информация о компании -->
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">
-            Информация о компании
-        </h2>
+    <!-- Company Info -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+        <svg class="absolute -right-2 -top-2 w-20 h-20 opacity-[0.04]" viewBox="0 0 80 80" fill="none"><rect x="10" y="10" width="60" height="60" rx="12" stroke="currentColor" stroke-width="3"/><circle cx="40" cy="35" r="10" stroke="currentColor" stroke-width="2.5"/><path d="M22 65c0-10 8-18 18-18s18 8 18 18" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        <div class="flex items-center gap-3 mb-5">
+            <div class="w-8 h-8 bg-gradient-to-br from-gray-600 to-gray-800 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+            </div>
+            <h2 class="text-lg font-semibold text-gray-900">Информация о компании</h2>
+        </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-                <h3 class="text-sm font-medium text-gray-500 mb-2">Основные данные</h3>
-                <div class="space-y-2 text-sm">
-                    <p><span class="font-medium text-gray-700">Компания:</span> {{ current_user.seller.company_name }}</p>
+                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Основные данные</h3>
+                <div class="space-y-2.5 text-sm">
+                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Компания:</span> <span class="text-gray-600">{{ current_user.seller.company_name }}</span></p>
                     {% if current_user.seller.wb_seller_id %}
-                    <p><span class="font-medium text-gray-700">WB ID:</span> {{ current_user.seller.wb_seller_id }}</p>
+                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">WB ID:</span> <span class="text-gray-600">{{ current_user.seller.wb_seller_id }}</span></p>
                     {% endif %}
                     {% if current_user.seller.contact_phone %}
-                    <p><span class="font-medium text-gray-700">Телефон:</span> {{ current_user.seller.contact_phone }}</p>
+                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Телефон:</span> <span class="text-gray-600">{{ current_user.seller.contact_phone }}</span></p>
                     {% endif %}
-                    <p><span class="font-medium text-gray-700">Email:</span> {{ current_user.email }}</p>
+                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Email:</span> <span class="text-gray-600">{{ current_user.email }}</span></p>
                 </div>
             </div>
             <div>
-                <h3 class="text-sm font-medium text-gray-500 mb-2">Синхронизация</h3>
-                <div class="space-y-2 text-sm">
+                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Синхронизация</h3>
+                <div class="space-y-2.5 text-sm">
                     {% if current_user.seller.api_last_sync %}
-                    <p><span class="font-medium text-gray-700">Последняя синхронизация:</span>
-                       {{ current_user.seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}</p>
+                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Последняя:</span> <span class="text-gray-600">{{ current_user.seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}</span></p>
                     {% else %}
-                    <p class="text-gray-500">Синхронизация еще не выполнялась</p>
+                    <p class="text-gray-400">Синхронизация ещё не выполнялась</p>
                     {% endif %}
-
                     {% if current_user.seller.api_sync_status %}
-                    <p><span class="font-medium text-gray-700">Статус:</span>
+                    <p class="flex items-center gap-2">
+                        <span class="font-medium text-gray-700">Статус:</span>
                         {% if current_user.seller.api_sync_status == 'success' %}
-                            <span class="text-green-600">✓ Успешно</span>
+                            <span class="inline-flex items-center gap-1 text-green-600"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span> Успешно</span>
                         {% elif current_user.seller.api_sync_status == 'syncing' %}
-                            <span class="text-blue-600">⟳ Выполняется...</span>
+                            <span class="inline-flex items-center gap-1 text-blue-600"><span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Выполняется...</span>
                         {% elif current_user.seller.api_sync_status == 'error' %}
-                            <span class="text-red-600">✗ Ошибка</span>
+                            <span class="inline-flex items-center gap-1 text-red-600"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Ошибка</span>
                         {% else %}
                             <span class="text-gray-500">{{ current_user.seller.api_sync_status }}</span>
                         {% endif %}
@@ -311,17 +311,22 @@
         </div>
     </div>
     {% else %}
-    <!-- Для администраторов -->
-    <div class="bg-white shadow-sm rounded-lg border border-gray-200 p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">
-            Административная панель
-        </h2>
-        <p class="text-gray-600 mb-4">
-            Вы вошли как администратор. Используйте админ-панель для управления продавцами.
-        </p>
+    <!-- Admin section -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+        <svg class="absolute -right-4 -top-4 w-28 h-28 opacity-[0.04]" viewBox="0 0 100 100" fill="none"><path d="M50 10c22 0 40 18 40 40s-18 40-40 40S10 72 10 50 28 10 50 10z" stroke="currentColor" stroke-width="3"/><path d="M50 30v20l15 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+            </div>
+            <div>
+                <h2 class="text-lg font-semibold text-gray-900">Административная панель</h2>
+                <p class="text-sm text-gray-500">Вы вошли как администратор</p>
+            </div>
+        </div>
         <a href="{{ url_for('admin_panel') }}"
-           class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700">
+           class="inline-flex items-center px-5 py-2.5 text-sm font-medium rounded-xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 transition-all shadow-sm">
             Перейти в админ-панель
+            <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
         </a>
     </div>
     {% endif %}
