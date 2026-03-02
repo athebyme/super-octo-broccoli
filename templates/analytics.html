@@ -6,19 +6,40 @@
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="analyticsPage()">
 
     <!-- Header -->
-    <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900">Аналитика продаж</h1>
-            <p class="mt-1 text-sm text-gray-500">Сводные данные по всем маркетплейсам</p>
-        </div>
-        <div class="flex items-center gap-3">
-            <!-- Period selector -->
-            <div class="inline-flex rounded-xl bg-gray-100 p-1">
-                <template x-for="p in periods" :key="p.value">
-                    <button @click="period = p.value"
-                        :class="period === p.value ? 'bg-white shadow-sm text-indigo-700 font-semibold' : 'text-gray-500 hover:text-gray-700'"
-                        class="px-3 py-1.5 text-sm rounded-lg transition-all" x-text="p.label"></button>
-                </template>
+    <div class="mb-8 relative overflow-hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-2xl p-6 sm:p-8">
+        <!-- Decorative SVG background -->
+        <svg class="absolute right-0 top-0 h-full w-1/2 opacity-10" viewBox="0 0 400 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="300" cy="80" r="120" stroke="white" stroke-width="1.5"/>
+            <circle cx="300" cy="80" r="80" stroke="white" stroke-width="1"/>
+            <circle cx="300" cy="80" r="40" stroke="white" stroke-width="0.8"/>
+            <path d="M180 250L220 180L260 210L300 140L340 170L380 100" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M180 250L220 200L260 230L300 160L340 190L380 120" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+            <rect x="190" y="180" width="12" height="70" rx="3" fill="white" opacity="0.15"/>
+            <rect x="215" y="150" width="12" height="100" rx="3" fill="white" opacity="0.15"/>
+            <rect x="240" y="160" width="12" height="90" rx="3" fill="white" opacity="0.15"/>
+            <rect x="265" y="120" width="12" height="130" rx="3" fill="white" opacity="0.15"/>
+            <rect x="290" y="140" width="12" height="110" rx="3" fill="white" opacity="0.15"/>
+            <rect x="315" y="100" width="12" height="150" rx="3" fill="white" opacity="0.15"/>
+        </svg>
+        <!-- Floating dots -->
+        <div class="absolute top-4 right-8 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="absolute top-12 right-20 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay: 0.5s"></div>
+        <div class="absolute bottom-6 right-32 w-2.5 h-2.5 rounded-full bg-white/25 animate-pulse" style="animation-delay: 1s"></div>
+
+        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Аналитика продаж</h1>
+                <p class="mt-1 text-sm text-indigo-200">Сводные данные по всем маркетплейсам</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <!-- Period selector -->
+                <div class="inline-flex rounded-xl bg-white/10 backdrop-blur-sm p-1 border border-white/20">
+                    <template x-for="p in periods" :key="p.value">
+                        <button @click="period = p.value"
+                            :class="period === p.value ? 'bg-white shadow-sm text-indigo-700 font-semibold' : 'text-white/80 hover:text-white hover:bg-white/10'"
+                            class="px-3 py-1.5 text-sm rounded-lg transition-all" x-text="p.label"></button>
+                    </template>
+                </div>
             </div>
         </div>
     </div>
@@ -127,7 +148,9 @@
     <!-- Charts row -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         <!-- Sales chart (2 cols) -->
-        <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+            <!-- Subtle chart decoration -->
+            <svg class="absolute top-0 right-0 w-32 h-32 opacity-[0.03]" viewBox="0 0 120 120" fill="none"><path d="M10 100L30 60L55 75L80 30L110 50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="30" cy="60" r="5" fill="currentColor"/><circle cx="55" cy="75" r="5" fill="currentColor"/><circle cx="80" cy="30" r="5" fill="currentColor"/><circle cx="110" cy="50" r="5" fill="currentColor"/></svg>
             <div class="flex items-center justify-between mb-6">
                 <h2 class="text-lg font-semibold text-gray-900">Динамика продаж</h2>
                 <div class="flex items-center gap-4 text-xs">
@@ -163,8 +186,14 @@
     <!-- Bottom row -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Top Products -->
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Топ товаров по выручке</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+            <svg class="absolute -right-4 -top-4 w-24 h-24 opacity-[0.04]" viewBox="0 0 100 100" fill="none"><path d="M50 5L60 35H95L67 55L77 85L50 67L23 85L33 55L5 35H40Z" fill="currentColor"/></svg>
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+                </div>
+                <h2 class="text-lg font-semibold text-gray-900">Топ товаров по выручке</h2>
+            </div>
             <div class="space-y-4">
                 <template x-for="(product, idx) in topProducts" :key="idx">
                     <div>
@@ -190,8 +219,14 @@
         </div>
 
         <!-- Recent Orders -->
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Последние заказы</h2>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+            <svg class="absolute -right-2 -top-2 w-20 h-20 opacity-[0.04]" viewBox="0 0 80 80" fill="none"><rect x="10" y="10" width="60" height="60" rx="8" stroke="currentColor" stroke-width="3"/><path d="M25 35h30M25 45h20M25 55h25" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg>
+                </div>
+                <h2 class="text-lg font-semibold text-gray-900">Последние заказы</h2>
+            </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>

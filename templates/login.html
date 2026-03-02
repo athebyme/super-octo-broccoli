@@ -3,60 +3,197 @@
 {% block title %}Вход в систему - Seller Hub{% endblock %}
 
 {% block login_content %}
-<div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-indigo-100 via-purple-50 to-pink-100">
-    <div class="max-w-md w-full space-y-8">
-        <div class="bg-white rounded-2xl shadow-xl p-8">
-            <div>
-                <h2 class="mt-2 text-center text-3xl font-extrabold text-gray-900">
-                    Seller Hub
-                </h2>
-                <p class="mt-2 text-center text-sm text-gray-600">
-                    Войдите в свой аккаунт
-                </p>
-            </div>
-
-            <form class="mt-8 space-y-6" method="POST" action="{{ url_for('login') }}">
-                <div class="rounded-md shadow-sm space-y-4">
-                    <div>
-                        <label for="username" class="block text-sm font-medium text-gray-700 mb-1">
-                            Имя пользователя
-                        </label>
-                        <input id="username" name="username" type="text" required
-                               class="appearance-none rounded-lg relative block w-full px-3 py-2.5 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent sm:text-sm"
-                               placeholder="username">
-                    </div>
-                    <div>
-                        <label for="password" class="block text-sm font-medium text-gray-700 mb-1">
-                            Пароль
-                        </label>
-                        <input id="password" name="password" type="password" required
-                               class="appearance-none rounded-lg relative block w-full px-3 py-2.5 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent sm:text-sm"
-                               placeholder="••••••••">
-                    </div>
-                </div>
-
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center">
-                        <input id="remember" name="remember" type="checkbox"
-                               class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
-                        <label for="remember" class="ml-2 block text-sm text-gray-900">
-                            Запомнить меня
-                        </label>
-                    </div>
-                </div>
-
-                <div>
-                    <button type="submit"
-                            class="group relative w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                        Войти
-                    </button>
-                </div>
-            </form>
+<div class="min-h-screen flex bg-gradient-to-br from-indigo-100 via-purple-50 to-pink-100">
+    <!-- Left side: Illustration -->
+    <div class="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-indigo-600 via-purple-600 to-indigo-800 items-center justify-center p-12">
+        <!-- Decorative background pattern -->
+        <div class="absolute inset-0 opacity-10">
+            <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                        <circle cx="20" cy="20" r="1" fill="white"/>
+                    </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)"/>
+            </svg>
         </div>
 
-        <p class="text-center text-xs text-gray-600">
-            © 2026 Seller Hub. Все права защищены.
-        </p>
+        <!-- Main illustration -->
+        <div class="relative z-10 max-w-lg">
+            <svg viewBox="0 0 500 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Dashboard frame -->
+                <rect x="60" y="40" width="380" height="260" rx="20" fill="white" fill-opacity="0.12" stroke="white" stroke-opacity="0.25" stroke-width="1.5"/>
+
+                <!-- Browser dots -->
+                <circle cx="85" cy="60" r="5" fill="#EF4444" opacity="0.6"/>
+                <circle cx="100" cy="60" r="5" fill="#F59E0B" opacity="0.6"/>
+                <circle cx="115" cy="60" r="5" fill="#10B981" opacity="0.6"/>
+
+                <!-- Chart area -->
+                <path d="M100 220L150 180L200 195L250 150L300 170L350 120L400 135" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+                <path d="M100 220L150 180L200 195L250 150L300 170L350 120L400 135L400 250L100 250Z" fill="url(#chartGrad)" opacity="0.15"/>
+
+                <!-- Bar charts -->
+                <rect x="110" y="195" width="22" height="55" rx="4" fill="#CB11AB" opacity="0.5"/>
+                <rect x="145" y="170" width="22" height="80" rx="4" fill="#CB11AB" opacity="0.6"/>
+                <rect x="180" y="180" width="22" height="70" rx="4" fill="#005BFF" opacity="0.5"/>
+                <rect x="215" y="155" width="22" height="95" rx="4" fill="#005BFF" opacity="0.6"/>
+                <rect x="250" y="140" width="22" height="110" rx="4" fill="#FFCC00" opacity="0.4"/>
+                <rect x="285" y="160" width="22" height="90" rx="4" fill="#FFCC00" opacity="0.5"/>
+                <rect x="320" y="125" width="22" height="125" rx="4" fill="white" opacity="0.2"/>
+                <rect x="355" y="145" width="22" height="105" rx="4" fill="white" opacity="0.15"/>
+
+                <!-- KPI cards row -->
+                <rect x="90" y="80" width="85" height="50" rx="10" fill="white" fill-opacity="0.15" stroke="white" stroke-opacity="0.2"/>
+                <rect x="185" y="80" width="85" height="50" rx="10" fill="white" fill-opacity="0.15" stroke="white" stroke-opacity="0.2"/>
+                <rect x="280" y="80" width="85" height="50" rx="10" fill="white" fill-opacity="0.15" stroke="white" stroke-opacity="0.2"/>
+                <rect x="375" y="80" width="50" height="50" rx="10" fill="white" fill-opacity="0.1" stroke="white" stroke-opacity="0.15"/>
+
+                <!-- Text lines in KPI -->
+                <rect x="100" y="92" width="40" height="4" rx="2" fill="white" opacity="0.3"/>
+                <rect x="100" y="104" width="55" height="8" rx="3" fill="white" opacity="0.5"/>
+                <rect x="195" y="92" width="35" height="4" rx="2" fill="white" opacity="0.3"/>
+                <rect x="195" y="104" width="50" height="8" rx="3" fill="white" opacity="0.5"/>
+                <rect x="290" y="92" width="45" height="4" rx="2" fill="white" opacity="0.3"/>
+                <rect x="290" y="104" width="48" height="8" rx="3" fill="white" opacity="0.5"/>
+
+                <!-- Marketplace logos floating -->
+                <g opacity="0.9">
+                    <circle cx="80" cy="340" r="24" fill="white" fill-opacity="0.15"/>
+                    <text x="80" y="346" text-anchor="middle" fill="white" font-size="12" font-weight="bold" opacity="0.8">WB</text>
+                </g>
+                <g opacity="0.9">
+                    <circle cx="250" cy="350" r="28" fill="white" fill-opacity="0.15"/>
+                    <text x="250" y="356" text-anchor="middle" fill="white" font-size="13" font-weight="bold" opacity="0.8">Ozon</text>
+                </g>
+                <g opacity="0.9">
+                    <circle cx="420" cy="335" r="22" fill="white" fill-opacity="0.15"/>
+                    <text x="420" y="341" text-anchor="middle" fill="white" font-size="11" font-weight="bold" opacity="0.8">YM</text>
+                </g>
+
+                <!-- Connection lines -->
+                <line x1="104" y1="340" x2="222" y2="350" stroke="white" stroke-width="1" opacity="0.15" stroke-dasharray="4 4"/>
+                <line x1="278" y1="350" x2="398" y2="335" stroke="white" stroke-width="1" opacity="0.15" stroke-dasharray="4 4"/>
+
+                <!-- Floating sparkles -->
+                <circle cx="30" cy="100" r="3" fill="white" opacity="0.3">
+                    <animate attributeName="opacity" values="0.3;0.6;0.3" dur="3s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="470" cy="200" r="2.5" fill="white" opacity="0.25">
+                    <animate attributeName="opacity" values="0.25;0.5;0.25" dur="2.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle cx="50" cy="280" r="2" fill="white" opacity="0.2">
+                    <animate attributeName="opacity" values="0.2;0.5;0.2" dur="4s" repeatCount="indefinite"/>
+                </circle>
+                <path d="M460 80L462 74L464 80L462 86Z" fill="white" opacity="0.3">
+                    <animate attributeName="opacity" values="0.3;0.6;0.3" dur="2s" repeatCount="indefinite"/>
+                </path>
+                <path d="M35 200L37 195L39 200L37 205Z" fill="white" opacity="0.25">
+                    <animate attributeName="opacity" values="0.25;0.5;0.25" dur="3s" repeatCount="indefinite"/>
+                </path>
+
+                <defs>
+                    <linearGradient id="chartGrad" x1="250" y1="120" x2="250" y2="250" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="white"/>
+                        <stop offset="1" stop-color="white" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+            </svg>
+
+            <div class="text-center mt-8">
+                <h2 class="text-2xl font-bold text-white mb-3">Управляйте продажами на всех маркетплейсах</h2>
+                <p class="text-indigo-200 text-sm leading-relaxed">
+                    Wildberries, Ozon, Яндекс Маркет — единая панель аналитики, товаров, цен и финансов
+                </p>
+            </div>
+        </div>
+
+        <!-- Corner decorations -->
+        <div class="absolute top-0 left-0 w-64 h-64 bg-gradient-to-br from-white/10 to-transparent rounded-full -translate-x-1/2 -translate-y-1/2"></div>
+        <div class="absolute bottom-0 right-0 w-80 h-80 bg-gradient-to-tl from-purple-500/20 to-transparent rounded-full translate-x-1/3 translate-y-1/3"></div>
+    </div>
+
+    <!-- Right side: Login form -->
+    <div class="w-full lg:w-1/2 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+        <div class="max-w-md w-full space-y-8">
+            <div class="bg-white rounded-2xl shadow-xl p-8">
+                <!-- Logo -->
+                <div class="flex justify-center mb-2">
+                    <div class="w-14 h-14 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                        <span class="text-white font-bold text-2xl">S</span>
+                    </div>
+                </div>
+                <div>
+                    <h2 class="mt-2 text-center text-3xl font-extrabold text-gray-900">
+                        Seller Hub
+                    </h2>
+                    <p class="mt-2 text-center text-sm text-gray-600">
+                        Войдите в свой аккаунт
+                    </p>
+                </div>
+
+                <form class="mt-8 space-y-6" method="POST" action="{{ url_for('login') }}">
+                    <div class="rounded-md shadow-sm space-y-4">
+                        <div>
+                            <label for="username" class="block text-sm font-medium text-gray-700 mb-1">
+                                Имя пользователя
+                            </label>
+                            <input id="username" name="username" type="text" required
+                                   class="appearance-none rounded-xl relative block w-full px-4 py-3 border border-gray-200 placeholder-gray-400 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 sm:text-sm transition-colors"
+                                   placeholder="username">
+                        </div>
+                        <div>
+                            <label for="password" class="block text-sm font-medium text-gray-700 mb-1">
+                                Пароль
+                            </label>
+                            <input id="password" name="password" type="password" required
+                                   class="appearance-none rounded-xl relative block w-full px-4 py-3 border border-gray-200 placeholder-gray-400 text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 sm:text-sm transition-colors"
+                                   placeholder="••••••••">
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <input id="remember" name="remember" type="checkbox"
+                                   class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                            <label for="remember" class="ml-2 block text-sm text-gray-700">
+                                Запомнить меня
+                            </label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <button type="submit"
+                                class="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-semibold rounded-xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40">
+                            Войти
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Marketplace badges -->
+                <div class="mt-6 pt-6 border-t border-gray-100">
+                    <p class="text-xs text-gray-400 text-center mb-3">Поддерживаемые маркетплейсы</p>
+                    <div class="flex items-center justify-center gap-3">
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pink-50 border border-pink-100">
+                            <span class="w-2 h-2 rounded-full" style="background:#CB11AB"></span>
+                            <span class="text-xs font-medium text-pink-700">Wildberries</span>
+                        </span>
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-100">
+                            <span class="w-2 h-2 rounded-full" style="background:#005BFF"></span>
+                            <span class="text-xs font-medium text-blue-700">Ozon</span>
+                        </span>
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-yellow-50 border border-yellow-100">
+                            <span class="w-2 h-2 rounded-full" style="background:#FFCC00"></span>
+                            <span class="text-xs font-medium text-yellow-700">Яндекс</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <p class="text-center text-xs text-gray-500">
+                &copy; 2026 Seller Hub. Все права защищены.
+            </p>
+        </div>
     </div>
 </div>
 {% endblock %}

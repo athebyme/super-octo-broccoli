@@ -7,9 +7,14 @@
 
     <!-- Header -->
     <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900">Финансы</h1>
-            <p class="mt-1 text-sm text-gray-500">Доходы, расходы и баланс по всем маркетплейсам</p>
+        <div class="flex items-center gap-4">
+            <div class="hidden sm:flex w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-2xl items-center justify-center shadow-lg shadow-emerald-500/20 flex-shrink-0">
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+            </div>
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Финансы</h1>
+                <p class="mt-1 text-sm text-gray-500">Доходы, расходы и баланс по всем маркетплейсам</p>
+            </div>
         </div>
         <div class="flex items-center gap-3">
             <div class="inline-flex rounded-xl bg-gray-100 p-1">
@@ -32,6 +37,12 @@
         <div class="relative overflow-hidden rounded-2xl p-6 bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-700 text-white shadow-lg">
             <div class="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full -translate-y-1/2 translate-x-1/2"></div>
             <div class="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full translate-y-1/2 -translate-x-1/2"></div>
+            <!-- Decorative coin SVG -->
+            <svg class="absolute right-4 bottom-4 w-20 h-20 opacity-10" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="40" cy="40" r="36" stroke="white" stroke-width="3"/>
+                <circle cx="40" cy="40" r="28" stroke="white" stroke-width="1.5"/>
+                <text x="40" y="48" text-anchor="middle" fill="white" font-size="28" font-weight="bold">₽</text>
+            </svg>
             <p class="text-indigo-200 text-sm font-medium mb-2">Общий баланс</p>
             <p class="text-3xl font-bold mb-3" x-text="formatMoney(balance.total)"></p>
             <div class="flex items-center gap-2 text-sm">
@@ -116,8 +127,14 @@
     </div>
 
     <!-- Marketplace Breakdown -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8">
-        <h2 class="text-lg font-semibold text-gray-900 mb-6">Доход по маркетплейсам</h2>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8 relative overflow-hidden">
+        <svg class="absolute -right-4 -top-4 w-28 h-28 opacity-[0.04]" viewBox="0 0 100 100" fill="none"><rect x="10" y="50" width="16" height="40" rx="3" fill="currentColor"/><rect x="32" y="30" width="16" height="60" rx="3" fill="currentColor"/><rect x="54" y="40" width="16" height="50" rx="3" fill="currentColor"/><rect x="76" y="15" width="16" height="75" rx="3" fill="currentColor"/></svg>
+        <div class="flex items-center gap-3 mb-6">
+            <div class="w-8 h-8 bg-gradient-to-br from-violet-400 to-purple-500 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+            </div>
+            <h2 class="text-lg font-semibold text-gray-900">Доход по маркетплейсам</h2>
+        </div>
         <div class="h-64">
             <canvas x-ref="mpBarChart"></canvas>
         </div>
@@ -126,7 +143,12 @@
     <!-- Transactions Table -->
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <h2 class="text-lg font-semibold text-gray-900">Последние транзакции</h2>
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-gradient-to-br from-indigo-400 to-blue-500 rounded-lg flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+                </div>
+                <h2 class="text-lg font-semibold text-gray-900">Последние транзакции</h2>
+            </div>
             <div class="flex items-center gap-2">
                 <template x-for="f in filters" :key="f.value">
                     <button @click="activeFilter = f.value"
