@@ -3,151 +3,162 @@
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Заголовок -->
-    <div class="flex flex-col lg:flex-row lg:justify-between lg:items-start gap-6 mb-8">
-        <div class="flex items-start space-x-4">
-            <div class="p-3 bg-indigo-100 rounded-xl">
-                <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
-                </svg>
-            </div>
+    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="10" y="20" width="50" height="60" rx="8" stroke="white" stroke-width="1.5"/>
+            <rect x="70" y="10" width="50" height="70" rx="8" stroke="white" stroke-width="1.5"/>
+            <rect x="130" y="30" width="50" height="50" rx="8" stroke="white" stroke-width="1.5"/>
+            <path d="M35 50L35 65" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M95 40L95 60" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M155 50L155 65" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="35" cy="42" r="8" stroke="white" stroke-width="1.5"/>
+            <circle cx="95" cy="32" r="8" stroke="white" stroke-width="1.5"/>
+            <circle cx="155" cy="42" r="8" stroke="white" stroke-width="1.5"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="absolute bottom-4 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
+        <div class="relative flex flex-col lg:flex-row lg:justify-between lg:items-start gap-4">
             <div>
-                <h1 class="text-2xl font-bold text-gray-900">Карточки товаров</h1>
-                <div class="mt-2 flex flex-wrap items-center gap-2">
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                <h1 class="text-3xl font-bold text-white">Карточки товаров</h1>
+                <p class="mt-2 text-sm text-indigo-200">Управление каталогом товаров на маркетплейсах</p>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/15 text-white/90 text-xs backdrop-blur-sm">
+                        <span class="w-1.5 h-1.5 rounded-full bg-white/60"></span>
                         Всего: {{ total_products }}
                     </span>
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/15 text-white/90 text-xs backdrop-blur-sm">
+                        <span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
                         Активных: {{ active_products }}
                     </span>
                 </div>
             </div>
-        </div>
-        <div class="flex flex-wrap gap-3">
-            {% if seller.has_valid_api_key() %}
-            <a href="{{ url_for('product_create') }}"
-               class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                </svg>
-                <span class="hidden sm:inline">Создать карточку</span>
-            </a>
-            <form action="{{ url_for('sync_products') }}" method="POST">
-                <button type="submit"
-                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                        {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
-                    {% if seller.api_sync_status == 'syncing' %}
-                        <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span class="hidden sm:inline">Синхронизация...</span>
-                    {% else %}
+            <div class="flex flex-wrap gap-3">
+                {% if seller.has_valid_api_key() %}
+                <a href="{{ url_for('product_create') }}"
+                   class="px-4 py-2 bg-white text-indigo-700 rounded-lg hover:bg-indigo-50 transition-colors flex items-center gap-2 font-medium shadow-sm">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                    <span class="hidden sm:inline">Создать карточку</span>
+                </a>
+                <form action="{{ url_for('sync_products') }}" method="POST">
+                    <button type="submit"
+                            class="px-4 py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 backdrop-blur-sm transition-colors flex items-center gap-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                            {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
+                        {% if seller.api_sync_status == 'syncing' %}
+                            <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span class="hidden sm:inline">Синхронизация...</span>
+                        {% else %}
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            <span class="hidden sm:inline">Синхронизировать</span>
+                        {% endif %}
+                    </button>
+                </form>
+                <form action="{{ url_for('sync_warehouse_stocks') }}" method="POST">
+                    <button type="submit"
+                            class="px-4 py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 backdrop-blur-sm transition-colors flex items-center gap-2 font-medium">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
                         </svg>
-                        <span class="hidden sm:inline">Синхронизировать</span>
-                    {% endif %}
-                </button>
-            </form>
-            <form action="{{ url_for('sync_warehouse_stocks') }}" method="POST">
-                <button type="submit"
-                        class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
-                    </svg>
-                    <span class="hidden sm:inline">Остатки</span>
-                </button>
-            </form>
-            <!-- Экспорт -->
-            <div x-data="productsExport()" class="relative">
-                <button @click="open = !open"
-                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 font-medium shadow-sm hover:shadow-md">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                    </svg>
-                    <span class="hidden sm:inline">Экспорт</span>
-                </button>
-                <div x-show="open" @click.away="open = false" x-cloak x-transition
-                     class="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-200 z-50 p-4">
-                    <h3 class="text-sm font-semibold text-gray-900 mb-3">Экспорт карточек</h3>
-                    <form action="{{ url_for('export_products') }}" method="GET">
-                        <!-- Передаём текущие фильтры -->
-                        {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
-                        {% if filter_brand %}<input type="hidden" name="brand" value="{{ filter_brand }}">{% endif %}
-                        {% if active_only %}<input type="hidden" name="active_only" value="1">{% endif %}
-                        <div class="mb-3">
-                            <label class="block text-xs font-medium text-gray-600 mb-1.5">Формат</label>
-                            <div class="flex gap-2">
-                                <label class="flex items-center gap-1.5 cursor-pointer">
-                                    <input type="radio" name="format" value="csv" checked @change="fmt = 'csv'" class="text-indigo-600 focus:ring-indigo-500">
-                                    <span class="text-sm text-gray-700">CSV</span>
-                                </label>
-                                <label class="flex items-center gap-1.5 cursor-pointer">
-                                    <input type="radio" name="format" value="xlsx" @change="fmt = 'xlsx'" class="text-indigo-600 focus:ring-indigo-500">
-                                    <span class="text-sm text-gray-700">Excel</span>
-                                </label>
-                                <label class="flex items-center gap-1.5 cursor-pointer">
-                                    <input type="radio" name="format" value="text" @change="fmt = 'text'" class="text-indigo-600 focus:ring-indigo-500">
-                                    <span class="text-sm text-gray-700">Текст</span>
-                                </label>
+                        <span class="hidden sm:inline">Остатки</span>
+                    </button>
+                </form>
+                <!-- Экспорт -->
+                <div x-data="productsExport()" class="relative">
+                    <button @click="open = !open"
+                            class="px-4 py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 backdrop-blur-sm transition-colors flex items-center gap-2 font-medium">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                        <span class="hidden sm:inline">Экспорт</span>
+                    </button>
+                    <div x-show="open" @click.away="open = false" x-cloak x-transition
+                         class="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-gray-200 z-50 p-4">
+                        <h3 class="text-sm font-semibold text-gray-900 mb-3">Экспорт карточек</h3>
+                        <form action="{{ url_for('export_products') }}" method="GET">
+                            <!-- Передаём текущие фильтры -->
+                            {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
+                            {% if filter_brand %}<input type="hidden" name="brand" value="{{ filter_brand }}">{% endif %}
+                            {% if active_only %}<input type="hidden" name="active_only" value="1">{% endif %}
+                            <div class="mb-3">
+                                <label class="block text-xs font-medium text-gray-600 mb-1.5">Формат</label>
+                                <div class="flex gap-2">
+                                    <label class="flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio" name="format" value="csv" checked @change="fmt = 'csv'" class="text-indigo-600 focus:ring-indigo-500">
+                                        <span class="text-sm text-gray-700">CSV</span>
+                                    </label>
+                                    <label class="flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio" name="format" value="xlsx" @change="fmt = 'xlsx'" class="text-indigo-600 focus:ring-indigo-500">
+                                        <span class="text-sm text-gray-700">Excel</span>
+                                    </label>
+                                    <label class="flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio" name="format" value="text" @change="fmt = 'text'" class="text-indigo-600 focus:ring-indigo-500">
+                                        <span class="text-sm text-gray-700">Текст</span>
+                                    </label>
+                                </div>
                             </div>
-                        </div>
-                        <div x-show="fmt !== 'text'" class="mb-3">
-                            <label class="block text-xs font-medium text-gray-600 mb-1.5">Колонки</label>
-                            <div class="space-y-1.5 max-h-40 overflow-y-auto">
-                                {% set pcols = {'nm_id': 'Артикул WB', 'vendor_code': 'Артикул продавца', 'title': 'Наименование', 'brand': 'Бренд', 'category': 'Категория', 'price': 'Цена', 'barcode': 'Баркод'} %}
-                                {% for key, label in pcols.items() %}
-                                <label class="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" name="columns" value="{{ key }}" checked class="rounded text-indigo-600 focus:ring-indigo-500">
-                                    <span class="text-sm text-gray-700">{{ label }}</span>
-                                </label>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        <div x-show="fmt === 'text'" class="mb-3 space-y-2">
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600 mb-1">Колонка</label>
-                                <select name="text_column" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                            <div x-show="fmt !== 'text'" class="mb-3">
+                                <label class="block text-xs font-medium text-gray-600 mb-1.5">Колонки</label>
+                                <div class="space-y-1.5 max-h-40 overflow-y-auto">
+                                    {% set pcols = {'nm_id': 'Артикул WB', 'vendor_code': 'Артикул продавца', 'title': 'Наименование', 'brand': 'Бренд', 'category': 'Категория', 'price': 'Цена', 'barcode': 'Баркод'} %}
                                     {% for key, label in pcols.items() %}
-                                    <option value="{{ key }}" {% if key == 'vendor_code' %}selected{% endif %}>{{ label }}</option>
+                                    <label class="flex items-center gap-2 cursor-pointer">
+                                        <input type="checkbox" name="columns" value="{{ key }}" checked class="rounded text-indigo-600 focus:ring-indigo-500">
+                                        <span class="text-sm text-gray-700">{{ label }}</span>
+                                    </label>
                                     {% endfor %}
-                                </select>
+                                </div>
                             </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-600 mb-1">Разделитель</label>
-                                <select name="separator" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
-                                    <option value=", ">Запятая (,)</option>
-                                    <option value="; ">Точка с запятой (;)</option>
-                                    <option value="&#10;">Каждый с новой строки</option>
-                                    <option value=" ">Пробел</option>
-                                </select>
+                            <div x-show="fmt === 'text'" class="mb-3 space-y-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Колонка</label>
+                                    <select name="text_column" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                                        {% for key, label in pcols.items() %}
+                                        <option value="{{ key }}" {% if key == 'vendor_code' %}selected{% endif %}>{{ label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Разделитель</label>
+                                    <select name="separator" class="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500">
+                                        <option value=", ">Запятая (,)</option>
+                                        <option value="; ">Точка с запятой (;)</option>
+                                        <option value="&#10;">Каждый с новой строки</option>
+                                        <option value=" ">Пробел</option>
+                                    </select>
+                                </div>
                             </div>
-                        </div>
-                        <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium">
-                            Скачать
-                        </button>
-                    </form>
+                            <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium">
+                                Скачать
+                            </button>
+                        </form>
+                    </div>
                 </div>
+                {% else %}
+                <a href="{{ url_for('api_settings') }}"
+                   class="px-6 py-2.5 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                    </svg>
+                    Настроить API
+                </a>
+                {% endif %}
             </div>
-            {% else %}
-            <a href="{{ url_for('api_settings') }}"
-               class="px-6 py-2.5 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors flex items-center gap-2">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-                </svg>
-                Настроить API
-            </a>
-            {% endif %}
         </div>
     </div>
 
     <!-- Статус последней синхронизации -->
     {% if seller.api_last_sync %}
-    <a href="{{ url_for('product_sync_status_page') }}" class="mb-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg flex items-center gap-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors cursor-pointer block">
-        <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <a href="{{ url_for('product_sync_status_page') }}" class="mb-6 p-4 bg-gray-50 rounded-lg flex items-center gap-3 hover:bg-gray-100 transition-colors cursor-pointer block">
+        <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
         </svg>
-        <span class="text-sm text-gray-700 dark:text-gray-300">
+        <span class="text-sm text-gray-700">
             Последняя синхронизация: {{ seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}
         </span>
         <svg class="w-4 h-4 text-gray-400 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -190,7 +201,7 @@
 
             <!-- Расширенные фильтры -->
             <details class="group" {% if filter_brand or filter_category or filter_has_stock or filter_block_status or sort_by != 'updated_at' %}open{% endif %}>
-                <summary class="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                <summary class="cursor-pointer text-sm font-medium text-gray-700 flex items-center gap-2">
                     <svg class="w-5 h-5 transform group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                     </svg>
@@ -199,11 +210,11 @@
                 <div class="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <!-- Фильтр по бренду -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
                             Бренд
                         </label>
                         <select name="brand"
-                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                             <option value="">Все бренды</option>
                             {% for brand in brands %}
                             <option value="{{ brand }}" {% if filter_brand == brand %}selected{% endif %}>
@@ -215,11 +226,11 @@
 
                     <!-- Фильтр по категории -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
                             Категория
                         </label>
                         <select name="category"
-                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                             <option value="">Все категории</option>
                             {% for category in categories %}
                             <option value="{{ category }}" {% if filter_category == category %}selected{% endif %}>
@@ -231,11 +242,11 @@
 
                     <!-- Фильтр по наличию -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
                             Наличие
                         </label>
                         <select name="has_stock"
-                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                             <option value="">Все товары</option>
                             <option value="yes" {% if filter_has_stock == 'yes' %}selected{% endif %}>В наличии</option>
                             <option value="no" {% if filter_has_stock == 'no' %}selected{% endif %}>Нет в наличии</option>
@@ -244,11 +255,11 @@
 
                     <!-- Фильтр по статусу блокировки -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
                             Статус
                         </label>
                         <select name="block_status"
-                                class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                             <option value="">Все статусы</option>
                             <option value="blocked" {% if filter_block_status == 'blocked' %}selected{% endif %}>Заблокированные</option>
                             <option value="shadowed" {% if filter_block_status == 'shadowed' %}selected{% endif %}>Скрытые из каталога</option>
@@ -258,12 +269,12 @@
 
                     <!-- Сортировка -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
                             Сортировка
                         </label>
                         <div class="flex gap-2">
                             <select name="sort"
-                                    class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                                 <option value="updated_at" {% if sort_by == 'updated_at' %}selected{% endif %}>Дата обновления</option>
                                 <option value="created_at" {% if sort_by == 'created_at' %}selected{% endif %}>Дата создания</option>
                                 <option value="vendor_code" {% if sort_by == 'vendor_code' %}selected{% endif %}>Артикул</option>
@@ -275,7 +286,7 @@
                                 <option value="supplier_price" {% if sort_by == 'supplier_price' %}selected{% endif %}>Цена поставщика</option>
                             </select>
                             <select name="order"
-                                    class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white">
+                                    class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
                                 <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>↓</option>
                                 <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>↑</option>
                             </select>
@@ -290,7 +301,7 @@
                                value="1"
                                {% if active_only %}checked{% endif %}
                                class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
-                        <label for="active_only" class="text-sm text-gray-700 dark:text-gray-300">
+                        <label for="active_only" class="text-sm text-gray-700">
                             Только активные
                         </label>
                     </div>
@@ -301,17 +312,17 @@
 
     <!-- Панель массового редактирования по фильтру -->
     {% if (filter_brand or filter_category) and total_products > 0 %}
-    <div class="mb-4 bg-indigo-50 dark:bg-indigo-900 p-4 rounded-lg shadow border border-indigo-200">
+    <div class="mb-4 bg-indigo-50 p-4 rounded-lg shadow border border-indigo-200">
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
-                <svg class="w-5 h-5 text-indigo-600 dark:text-indigo-400" fill="currentColor" viewBox="0 0 20 20">
+                <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.293.707l-2 2A1 1 0 018 17v-5.586L3.293 6.707A1 1 0 013 6V3z" clip-rule="evenodd"/>
                 </svg>
                 <div>
-                    <p class="text-sm font-medium text-indigo-900 dark:text-indigo-200">
+                    <p class="text-sm font-medium text-indigo-900">
                         Массовое редактирование по фильтру
                     </p>
-                    <p class="text-xs text-indigo-700 dark:text-indigo-300 mt-1">
+                    <p class="text-xs text-indigo-700 mt-1">
                         {% if filter_brand and filter_category %}
                             Применить изменения ко всем {{ total_products }} товарам бренда "{{ filter_brand }}" и категории "{{ filter_category }}"
                         {% elif filter_brand %}
@@ -526,7 +537,7 @@
 
         <!-- Пагинация -->
         {% if pagination.pages > 1 %}
-        <div class="bg-white dark:bg-gray-800 px-4 py-3 border-t border-gray-200 dark:border-gray-700 sm:px-6">
+        <div class="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
             <div class="flex items-center justify-between">
                 <div class="flex-1 flex justify-between sm:hidden">
                     {% if pagination.has_prev %}
@@ -544,7 +555,7 @@
                 </div>
                 <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                     <div>
-                        <p class="text-sm text-gray-700 dark:text-gray-300">
+                        <p class="text-sm text-gray-700">
                             Показано с
                             <span class="font-medium">{{ (pagination.page - 1) * pagination.per_page + 1 }}</span>
                             по
@@ -558,7 +569,7 @@
                         <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                             {% if pagination.has_prev %}
                             <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
-                               class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
+                               class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                                 ‹
                             </a>
                             {% endif %}
@@ -566,17 +577,17 @@
                             {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                                 {% if page_num %}
                                     {% if page_num == pagination.page %}
-                                    <span class="relative inline-flex items-center px-4 py-2 border border-blue-500 bg-blue-50 dark:bg-blue-900 text-sm font-medium text-blue-600 dark:text-blue-200">
+                                    <span class="relative inline-flex items-center px-4 py-2 border border-blue-500 bg-blue-50 text-sm font-medium text-blue-600">
                                         {{ page_num }}
                                     </span>
                                     {% else %}
                                     <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
-                                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600">
+                                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
                                         {{ page_num }}
                                     </a>
                                     {% endif %}
                                 {% else %}
-                                <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300">
+                                <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">
                                     ...
                                 </span>
                                 {% endif %}
@@ -584,7 +595,7 @@
 
                             {% if pagination.has_next %}
                             <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
-                               class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-600">
+                               class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                                 ›
                             </a>
                             {% endif %}
@@ -596,12 +607,12 @@
         {% endif %}
     </div>
     {% else %}
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
+    <div class="bg-white rounded-lg shadow p-12 text-center">
         <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
         </svg>
-        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">Нет товаров</h3>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
+        <p class="mt-1 text-sm text-gray-500">
             {% if search %}
                 По вашему запросу ничего не найдено. Попробуйте изменить параметры поиска.
             {% else %}

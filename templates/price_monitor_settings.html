@@ -1,22 +1,25 @@
 {% extends "base.html" %}
 
-{% block title %}Настройки мониторинга цен - WB Seller Platform{% endblock %}
+{% block title %}Настройки мониторинга цен - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="md:flex md:items-center md:justify-between mb-6">
-        <div class="flex-1 min-w-0">
-            <h1 class="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
-                Мониторинг цен и остатков
-            </h1>
-            <p class="mt-2 text-sm text-gray-500">
-                Настройте автоматический мониторинг изменений цен и остатков ваших товаров
-            </p>
+    <div class="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="100" r="60" stroke="white" stroke-width="1.5"/>
+            <path d="M100 60v80M70 100h60" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="100" cy="100" r="20" stroke="white" stroke-width="1.5"/>
+            <text x="92" y="106" fill="white" font-size="16" font-weight="bold" opacity="0.4">&#8381;</text>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">Мониторинг цен и остатков</h1>
+            <p class="mt-2 text-sm text-emerald-200">Настройте автоматический мониторинг изменений цен и остатков ваших товаров</p>
         </div>
     </div>
 
     {% if settings.last_sync_at %}
-    <a href="{{ url_for('product_sync_status_page') }}" class="block mb-6 bg-white shadow overflow-hidden sm:rounded-lg hover:shadow-md transition-shadow cursor-pointer">
+    <a href="{{ url_for('product_sync_status_page') }}" class="block mb-6 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow cursor-pointer">
         <div class="px-4 py-5 sm:px-6">
             <div class="flex items-center justify-between">
                 <div>
@@ -55,7 +58,7 @@
     </a>
     {% endif %}
 
-    <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <form method="POST" action="{{ url_for('price_monitor_settings') }}">
             <div class="px-4 py-5 sm:p-6 space-y-6">
                 <!-- Включить/выключить мониторинг -->

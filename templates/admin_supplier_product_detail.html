@@ -17,10 +17,14 @@
         <!-- Основной контент -->
         <div class="flex-1">
             <form method="POST">
-                <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                    <div class="p-6 border-b border-gray-200">
-                        <div class="flex items-start justify-between">
-                            <h1 class="text-xl font-bold text-gray-900">{{ product.title or 'Без названия' }}</h1>
+                <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 p-6">
+                        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+                            <rect x="30" y="30" width="140" height="140" rx="16" stroke="white" stroke-width="1.5"/>
+                            <path d="M70 85h60M70 105h40M70 125h50" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+                        </svg>
+                        <div class="relative flex items-start justify-between">
+                            <h1 class="text-xl font-bold text-white">{{ product.title or 'Без названия' }}</h1>
                             {% set status_colors = {'draft': 'bg-gray-100 text-gray-700', 'validated': 'bg-blue-100
                             text-blue-700', 'ready': 'bg-green-100 text-green-700', 'archived': 'bg-yellow-100
                             text-yellow-700'} %}
@@ -29,7 +33,7 @@
                                 {{ product.status }}
                             </span>
                         </div>
-                        <p class="text-sm text-gray-500 mt-1">ID: {{ product.external_id }} | Артикул: {{
+                        <p class="text-sm text-slate-300 mt-1">ID: {{ product.external_id }} | Артикул: {{
                             product.vendor_code or '—' }}
                             {% if product.additional_vendor_code %} | Доп: {{ product.additional_vendor_code }}{% endif
                             %}
@@ -398,7 +402,7 @@
 
         <!-- Сайдбар -->
         <div class="w-64 flex-shrink-0">
-            <div class="bg-white rounded-lg border border-gray-200 p-5 sticky top-8">
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sticky top-8">
                 <h3 class="text-sm font-semibold text-gray-900 mb-4">Информация</h3>
                 <dl class="space-y-3 text-sm">
                     <div>
@@ -462,7 +466,7 @@
 
             <!-- AI действия -->
             {% if supplier.ai_enabled %}
-            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4">
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mt-4">
                 <h3 class="text-sm font-semibold text-gray-900 mb-3">AI действия</h3>
                 <div class="space-y-2">
                     <form method="POST" action="{{ url_for('admin_supplier_ai_seo', supplier_id=supplier.id) }}">
@@ -529,7 +533,7 @@
 
             <!-- Заполненность карточки -->
             {% if completeness %}
-            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4">
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mt-4">
                 <h3 class="text-sm font-semibold text-gray-900 mb-3">Заполненность карточки</h3>
                 <div class="mb-3">
                     <div class="flex justify-between text-xs mb-1">
@@ -567,7 +571,7 @@
             {% endif %}
 
             <!-- Raw JSON -->
-            <div class="bg-white rounded-lg border border-gray-200 p-5 mt-4">
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mt-4">
                 <h3 class="text-sm font-semibold text-gray-900 mb-3">Аналитика</h3>
                 <div class="space-y-2">
                     <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"

@@ -1,72 +1,101 @@
 {% extends "base.html" %}
 
+{% block title %}Настройки API - Seller Hub{% endblock %}
+
 {% block content %}
-<div class="container mx-auto px-4 py-8 max-w-2xl">
-    <div class="mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Настройки API Wildberries</h1>
-        <p class="text-gray-600 dark:text-gray-400 mt-2">
-            Настройте API ключ для автоматической синхронизации данных с Wildberries
-        </p>
+<div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <!-- Hero header -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-2xl p-6 sm:p-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="40" y="40" width="120" height="120" rx="16" stroke="white" stroke-width="1.5"/>
+            <circle cx="100" cy="100" r="30" stroke="white" stroke-width="1.5"/>
+            <path d="M100 80v40M80 100h40" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="60" cy="60" r="6" stroke="white" stroke-width="1"/>
+            <circle cx="140" cy="60" r="6" stroke="white" stroke-width="1"/>
+            <circle cx="60" cy="140" r="6" stroke="white" stroke-width="1"/>
+            <circle cx="140" cy="140" r="6" stroke="white" stroke-width="1"/>
+            <line x1="66" y1="60" x2="94" y2="74" stroke="white" stroke-width="0.8" opacity="0.5"/>
+            <line x1="134" y1="60" x2="106" y2="74" stroke="white" stroke-width="0.8" opacity="0.5"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="absolute bottom-4 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">Настройки API</h1>
+            <p class="mt-2 text-sm text-indigo-200">
+                Настройте API ключи для синхронизации данных с маркетплейсами
+            </p>
+        </div>
     </div>
 
     <!-- Статус API -->
     {% if seller.wb_api_key %}
-    <div class="mb-6 p-4 bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-lg">
+    <div class="p-4 bg-green-50 border border-green-200 rounded-xl">
         <div class="flex items-center gap-3">
-            <svg class="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
+            <div class="w-10 h-10 bg-gradient-to-br from-green-400 to-emerald-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
             <div>
-                <h3 class="font-semibold text-green-900 dark:text-green-100">API ключ настроен</h3>
-                <p class="text-sm text-green-700 dark:text-green-300">
-                    Вы можете синхронизировать данные с Wildberries
-                </p>
+                <h3 class="font-semibold text-green-900">API ключ настроен</h3>
+                <p class="text-sm text-green-700">Вы можете синхронизировать данные с Wildberries</p>
             </div>
         </div>
     </div>
     {% else %}
-    <div class="mb-6 p-4 bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-lg">
+    <div class="p-4 bg-amber-50 border border-amber-200 rounded-xl">
         <div class="flex items-center gap-3">
-            <svg class="w-6 h-6 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-            </svg>
+            <div class="w-10 h-10 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+            </div>
             <div>
-                <h3 class="font-semibold text-yellow-900 dark:text-yellow-100">API ключ не настроен</h3>
-                <p class="text-sm text-yellow-700 dark:text-yellow-300">
-                    Добавьте API ключ для работы с платформой
-                </p>
+                <h3 class="font-semibold text-amber-900">API ключ не настроен</h3>
+                <p class="text-sm text-amber-700">Добавьте API ключ для работы с платформой</p>
             </div>
         </div>
     </div>
     {% endif %}
 
     <!-- Инструкция -->
-    <div class="mb-6 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
-        <h3 class="font-semibold text-blue-900 dark:text-blue-100 mb-2">Как получить API ключ?</h3>
-        <ol class="list-decimal list-inside space-y-2 text-sm text-blue-800 dark:text-blue-200">
-            <li>Зайдите в личный кабинет Wildberries</li>
-            <li>Перейдите в <strong>Профиль → Настройки → Доступ к API</strong></li>
-            <li>Выберите тип токена <strong>"Content"</strong> для работы с карточками товаров</li>
-            <li>Нажмите "Создать токен"</li>
-            <li>Скопируйте токен (он показывается только один раз!)</li>
-            <li>Вставьте токен в форму ниже</li>
-        </ol>
-        <div class="mt-3">
-            <a href="https://dev.wildberries.ru/" target="_blank" rel="noopener"
-               class="text-blue-600 dark:text-blue-400 hover:underline text-sm flex items-center gap-1">
-                Подробнее в документации API
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                </svg>
-            </a>
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div class="px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-100">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-gray-900">Как получить API ключ?</h3>
+            </div>
+        </div>
+        <div class="p-6">
+            <ol class="list-decimal list-inside space-y-2 text-sm text-gray-700">
+                <li>Зайдите в личный кабинет Wildberries</li>
+                <li>Перейдите в <strong>Профиль → Настройки → Доступ к API</strong></li>
+                <li>Выберите тип токена <strong>"Content"</strong> для работы с карточками товаров</li>
+                <li>Нажмите "Создать токен"</li>
+                <li>Скопируйте токен (он показывается только один раз!)</li>
+                <li>Вставьте токен в форму ниже</li>
+            </ol>
+            <div class="mt-4">
+                <a href="https://dev.wildberries.ru/" target="_blank" rel="noopener"
+                   class="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 text-sm font-medium transition-colors">
+                    Подробнее в документации API
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                    </svg>
+                </a>
+            </div>
         </div>
     </div>
 
     <!-- Форма настройки -->
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
         <form method="POST" action="{{ url_for('api_settings') }}">
-            <div class="mb-4">
-                <label for="wb_api_key" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <div class="mb-5">
+                <label for="wb_api_key" class="block text-sm font-medium text-gray-700 mb-2">
                     API ключ Wildberries
                     <span class="text-red-500">*</span>
                 </label>
@@ -76,29 +105,23 @@
                        value="{{ seller.wb_api_key if seller.wb_api_key else '' }}"
                        required
                        placeholder="Вставьте ваш API ключ..."
-                       class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white">
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                       class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-sm">
+                <p class="mt-1.5 text-xs text-gray-500">
                     Ключ хранится в зашифрованном виде и используется только для работы с API Wildberries
                 </p>
             </div>
 
-            <!-- Показать/скрыть пароль -->
-            <div class="mb-4">
+            <div class="mb-5">
                 <label class="inline-flex items-center">
-                    <input type="checkbox"
-                           onclick="toggleApiKey()"
-                           class="rounded text-blue-600 focus:ring-blue-500">
-                    <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">Показать API ключ</span>
+                    <input type="checkbox" onclick="toggleApiKey()" class="rounded text-indigo-600 focus:ring-indigo-500">
+                    <span class="ml-2 text-sm text-gray-700">Показать API ключ</span>
                 </label>
             </div>
 
-            <!-- Принудительное сохранение -->
             <div class="mb-6">
                 <label class="inline-flex items-center">
-                    <input type="checkbox"
-                           name="force_save"
-                           class="rounded text-orange-600 focus:ring-orange-500">
-                    <span class="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                    <input type="checkbox" name="force_save" class="rounded text-orange-600 focus:ring-orange-500">
+                    <span class="ml-2 text-sm text-gray-700">
                         Сохранить без проверки соединения
                         <span class="text-xs text-gray-500 block">
                             (используйте, если есть проблемы с сетью)
@@ -107,28 +130,29 @@
                 </label>
             </div>
 
-            <!-- Кнопки -->
             <div class="flex gap-3">
                 <button type="submit"
-                        class="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
+                        class="flex-1 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all font-medium shadow-lg shadow-indigo-500/25">
                     Сохранить и проверить
                 </button>
                 <a href="{{ url_for('dashboard') }}"
-                   class="px-6 py-3 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors font-medium text-center">
+                   class="px-6 py-3 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors font-medium text-center">
                     Отмена
                 </a>
             </div>
         </form>
     </div>
 
-    <!-- Информация о безопасности -->
-    <div class="mt-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+    <!-- Безопасность -->
+    <div class="bg-gray-50 rounded-xl border border-gray-200 p-4">
         <div class="flex items-start gap-3">
-            <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
-            </svg>
-            <div class="text-sm text-gray-600 dark:text-gray-400">
-                <strong class="text-gray-900 dark:text-white">Безопасность:</strong>
+            <div class="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                </svg>
+            </div>
+            <div class="text-sm text-gray-600">
+                <strong class="text-gray-900">Безопасность:</strong>
                 Ваш API ключ хранится в зашифрованном виде в базе данных. Мы используем шифрование Fernet (AES-128) для защиты ваших данных.
                 Ключ используется только для выполнения запросов к API Wildberries от вашего имени.
             </div>
@@ -137,28 +161,33 @@
 
     <!-- Последняя синхронизация -->
     {% if seller.api_last_sync %}
-    <div class="mt-6 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-        <h3 class="font-semibold text-gray-900 dark:text-white mb-2">Статус синхронизации</h3>
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+            </div>
+            <h3 class="font-semibold text-gray-900">Статус синхронизации</h3>
+        </div>
         <div class="grid grid-cols-2 gap-4 text-sm">
             <div>
-                <span class="text-gray-600 dark:text-gray-400">Последняя синхронизация:</span>
-                <p class="font-medium text-gray-900 dark:text-white">
-                    {{ seller.api_last_sync.strftime('%d.%m.%Y %H:%M:%S') }}
-                </p>
+                <span class="text-gray-500">Последняя синхронизация:</span>
+                <p class="font-medium text-gray-900">{{ seller.api_last_sync.strftime('%d.%m.%Y %H:%M:%S') }}</p>
             </div>
             <div>
-                <span class="text-gray-600 dark:text-gray-400">Статус:</span>
+                <span class="text-gray-500">Статус:</span>
                 <p class="font-medium">
                     {% if seller.api_sync_status == 'success' %}
-                        <span class="text-green-600 dark:text-green-400">✓ Успешно</span>
+                        <span class="inline-flex items-center gap-1.5 text-green-600"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span> Успешно</span>
                     {% elif seller.api_sync_status == 'syncing' %}
-                        <span class="text-blue-600 dark:text-blue-400">⟳ Синхронизация...</span>
+                        <span class="inline-flex items-center gap-1.5 text-blue-600"><span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Синхронизация...</span>
                     {% elif seller.api_sync_status == 'auth_error' %}
-                        <span class="text-red-600 dark:text-red-400">✗ Ошибка авторизации</span>
+                        <span class="inline-flex items-center gap-1.5 text-red-600"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Ошибка авторизации</span>
                     {% elif seller.api_sync_status == 'error' %}
-                        <span class="text-red-600 dark:text-red-400">✗ Ошибка</span>
+                        <span class="inline-flex items-center gap-1.5 text-red-600"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Ошибка</span>
                     {% else %}
-                        <span class="text-gray-600 dark:text-gray-400">—</span>
+                        <span class="text-gray-400">—</span>
                     {% endif %}
                 </p>
             </div>

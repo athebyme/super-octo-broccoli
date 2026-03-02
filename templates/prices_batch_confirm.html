@@ -1,22 +1,36 @@
 {% extends "base.html" %}
 
-{% block title %}Подтверждение изменений - WB Seller Platform{% endblock %}
+{% block title %}Подтверждение изменений - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Предупреждающий баннер -->
-    <div class="bg-red-50 border-l-4 border-red-400 p-4 mb-8">
+    <div class="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="100" r="60" stroke="white" stroke-width="1.5"/>
+            <path d="M100 60v80M70 100h60" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="100" cy="100" r="20" stroke="white" stroke-width="1.5"/>
+            <text x="92" y="106" fill="white" font-size="16" font-weight="bold" opacity="0.4">&#8381;</text>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white">Подтверждение изменений</h1>
+            <p class="mt-2 text-sm text-emerald-200">Требуется подтверждение опасных изменений цен</p>
+        </div>
+    </div>
+
+    <!-- Предупреждение -->
+    <div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
         <div class="flex">
             <div class="flex-shrink-0">
-                <svg class="h-6 w-6 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                </svg>
+                <div class="w-10 h-10 bg-gradient-to-br from-red-500 to-rose-600 rounded-lg flex items-center justify-center">
+                    <svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                    </svg>
+                </div>
             </div>
-            <div class="ml-3">
-                <h3 class="text-lg font-medium text-red-800">
-                    Требуется подтверждение опасных изменений
-                </h3>
-                <p class="mt-2 text-sm text-red-700">
+            <div class="ml-3 flex items-center">
+                <p class="text-sm text-red-700">
                     Обнаружено <strong>{{ dangerous_items|length }}</strong> товаров с изменением цены более чем на
                     <strong>{{ settings.warning_threshold_percent }}%</strong>.
                     Пожалуйста, внимательно проверьте изменения перед подтверждением.
@@ -26,7 +40,7 @@
     </div>
 
     <!-- Заголовок батча -->
-    <div class="bg-white shadow rounded-lg p-6 mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
         <div class="flex items-start justify-between">
             <div>
                 <h1 class="text-2xl font-bold text-gray-900">{{ batch.name or 'Изменение цен' }}</h1>
@@ -74,7 +88,7 @@
 
     <!-- Опасные изменения -->
     {% if dangerous_items %}
-    <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
         <div class="px-6 py-4 border-b border-red-200 bg-red-50">
             <h2 class="text-lg font-medium text-red-800 flex items-center">
                 <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
@@ -124,7 +138,7 @@
 
     <!-- Предупреждения -->
     {% if warning_items %}
-    <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
         <div class="px-6 py-4 border-b border-yellow-200 bg-yellow-50">
             <h2 class="text-lg font-medium text-yellow-800 flex items-center">
                 <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
@@ -166,7 +180,7 @@
 
     <!-- Безопасные изменения (свернуты) -->
     {% if safe_items %}
-    <div class="bg-white shadow rounded-lg overflow-hidden mb-6" x-data="{ open: false }">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6" x-data="{ open: false }">
         <button @click="open = !open" type="button"
                 class="w-full px-6 py-4 border-b border-green-200 bg-green-50 flex items-center justify-between">
             <h2 class="text-lg font-medium text-green-800 flex items-center">
@@ -212,7 +226,7 @@
 
     <!-- Форма подтверждения -->
     <form method="POST" action="{{ url_for('prices.batch_confirm', batch_id=batch.id) }}"
-          class="bg-white shadow rounded-lg p-6">
+          class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
         <h2 class="text-lg font-medium text-gray-900 mb-4">Принять решение</h2>
 
         {% if settings.require_comment_for_dangerous %}

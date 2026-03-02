@@ -5,7 +5,7 @@
     <!-- Навигация -->
     <div class="mb-6">
         <a href="{{ url_for('bulk_edit_history') }}"
-           class="inline-flex items-center text-blue-600 hover:text-blue-700 dark:text-blue-400">
+           class="inline-flex items-center text-blue-600 hover:text-blue-700">
             <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
             </svg>
@@ -13,53 +13,63 @@
         </a>
     </div>
 
-    <!-- Заголовок -->
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6 {% if bulk_operation.reverted %}opacity-75{% endif %}">
-        <div class="flex items-start justify-between mb-4">
-            <div class="flex-1">
-                <div class="flex items-center space-x-3 mb-2">
-                    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-                        {{ bulk_operation.description or 'Массовая операция #' + bulk_operation.id|string }}
-                    </h1>
+    <!-- Hero Banner -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 rounded-2xl p-6 sm:p-8 mb-8 {% if bulk_operation.reverted %}opacity-75{% endif %}">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="30" y="30" width="140" height="180" rx="12" stroke="currentColor" stroke-width="6" fill="white"/>
+            <line x1="60" y1="70" x2="140" y2="70" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+            <line x1="60" y1="100" x2="130" y2="100" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+            <line x1="60" y1="130" x2="120" y2="130" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+            <line x1="60" y1="160" x2="110" y2="160" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <div class="flex items-center space-x-3 mb-2">
+                <h1 class="text-3xl font-bold text-white">
+                    {{ bulk_operation.description or 'Массовая операция #' + bulk_operation.id|string }}
+                </h1>
 
-                    <!-- Статус -->
-                    {% if bulk_operation.reverted %}
-                    <span class="px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full">
-                        Откачено
-                    </span>
-                    {% elif bulk_operation.status == 'completed' %}
-                    <span class="px-3 py-1 text-sm bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded-full">
-                        Завершено
-                    </span>
-                    {% elif bulk_operation.status == 'in_progress' %}
-                    <span class="px-3 py-1 text-sm bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded-full">
-                        Выполняется
-                    </span>
-                    {% elif bulk_operation.status == 'failed' %}
-                    <span class="px-3 py-1 text-sm bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 rounded-full">
-                        Ошибка
-                    </span>
-                    {% endif %}
-                </div>
-
-                <p class="text-sm text-gray-600 dark:text-gray-400">
-                    Создано: {{ bulk_operation.created_at.strftime('%d.%m.%Y %H:%M:%S') }}
-                    {% if bulk_operation.completed_at %}
-                        | Завершено: {{ bulk_operation.completed_at.strftime('%d.%m.%Y %H:%M:%S') }}
-                    {% endif %}
-                    {% if bulk_operation.duration_seconds %}
-                        | Длительность: {{ "%.1f"|format(bulk_operation.duration_seconds) }} сек
-                    {% endif %}
-                </p>
-
-                {% if bulk_operation.reverted_at %}
-                <p class="text-sm text-orange-600 dark:text-orange-400 mt-2">
-                    ⚠️ Откачено: {{ bulk_operation.reverted_at.strftime('%d.%m.%Y %H:%M:%S') }}
-                </p>
+                <!-- Статус -->
+                {% if bulk_operation.reverted %}
+                <span class="px-3 py-1 text-sm bg-white/20 text-white rounded-full">
+                    Откачено
+                </span>
+                {% elif bulk_operation.status == 'completed' %}
+                <span class="px-3 py-1 text-sm bg-green-400/20 text-green-100 rounded-full">
+                    Завершено
+                </span>
+                {% elif bulk_operation.status == 'in_progress' %}
+                <span class="px-3 py-1 text-sm bg-blue-400/20 text-blue-100 rounded-full">
+                    Выполняется
+                </span>
+                {% elif bulk_operation.status == 'failed' %}
+                <span class="px-3 py-1 text-sm bg-red-400/20 text-red-100 rounded-full">
+                    Ошибка
+                </span>
                 {% endif %}
             </div>
 
-            <div class="flex items-center gap-3">
+            <p class="text-sm text-blue-100">
+                Создано: {{ bulk_operation.created_at.strftime('%d.%m.%Y %H:%M:%S') }}
+                {% if bulk_operation.completed_at %}
+                    | Завершено: {{ bulk_operation.completed_at.strftime('%d.%m.%Y %H:%M:%S') }}
+                {% endif %}
+                {% if bulk_operation.duration_seconds %}
+                    | Длительность: {{ "%.1f"|format(bulk_operation.duration_seconds) }} сек
+                {% endif %}
+            </p>
+
+            {% if bulk_operation.reverted_at %}
+            <p class="text-sm text-orange-200 mt-2">
+                Откачено: {{ bulk_operation.reverted_at.strftime('%d.%m.%Y %H:%M:%S') }}
+            </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Actions & Stats -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
+        <div class="flex items-center justify-end gap-3 mb-4">
                 <!-- Экспорт -->
                 <div x-data="bulkExport()" class="relative">
                     <button @click="open = !open"
@@ -145,21 +155,21 @@
 
         <!-- Статистика -->
         <div class="grid grid-cols-4 gap-4">
-            <div class="bg-gray-50 dark:bg-gray-700 p-4 rounded">
-                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Всего товаров</p>
-                <p class="text-3xl font-bold text-gray-900 dark:text-white">{{ bulk_operation.total_products }}</p>
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <p class="text-xs text-gray-600 mb-1">Всего товаров</p>
+                <p class="text-3xl font-bold text-gray-900">{{ bulk_operation.total_products }}</p>
             </div>
-            <div class="bg-green-50 dark:bg-green-900/20 p-4 rounded">
-                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Успешно</p>
-                <p class="text-3xl font-bold text-green-700 dark:text-green-300">{{ bulk_operation.success_count }}</p>
+            <div class="bg-green-50 p-4 rounded-lg">
+                <p class="text-xs text-gray-600 mb-1">Успешно</p>
+                <p class="text-3xl font-bold text-green-700">{{ bulk_operation.success_count }}</p>
             </div>
-            <div class="bg-red-50 dark:bg-red-900/20 p-4 rounded">
-                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Ошибок</p>
-                <p class="text-3xl font-bold text-red-700 dark:text-red-300">{{ bulk_operation.error_count }}</p>
+            <div class="bg-red-50 p-4 rounded-lg">
+                <p class="text-xs text-gray-600 mb-1">Ошибок</p>
+                <p class="text-3xl font-bold text-red-700">{{ bulk_operation.error_count }}</p>
             </div>
-            <div class="bg-blue-50 dark:bg-blue-900/20 p-4 rounded">
-                <p class="text-xs text-gray-600 dark:text-gray-400 mb-1">Успешность</p>
-                <p class="text-3xl font-bold text-blue-700 dark:text-blue-300">
+            <div class="bg-blue-50 p-4 rounded-lg">
+                <p class="text-xs text-gray-600 mb-1">Успешность</p>
+                <p class="text-3xl font-bold text-blue-700">
                     {% if bulk_operation.total_products > 0 %}
                         {{ "%.0f"|format((bulk_operation.success_count / bulk_operation.total_products) * 100) }}%
                     {% else %}
@@ -171,22 +181,22 @@
 
         <!-- Параметры операции -->
         {% if bulk_operation.operation_params %}
-        <div class="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded">
-            <h3 class="font-semibold text-gray-900 dark:text-white mb-2">Параметры операции:</h3>
-            <pre class="text-sm text-gray-700 dark:text-gray-300">{{ bulk_operation.operation_params | tojson(indent=2) }}</pre>
+        <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+            <h3 class="font-semibold text-gray-900 mb-2">Параметры операции:</h3>
+            <pre class="text-sm text-gray-700">{{ bulk_operation.operation_params | tojson(indent=2) }}</pre>
         </div>
         {% endif %}
 
         <!-- Ошибки -->
         {% if bulk_operation.errors_details %}
         <details class="mt-4" open>
-            <summary class="cursor-pointer text-sm font-semibold text-red-700 dark:text-red-400 hover:text-red-800">
+            <summary class="cursor-pointer text-sm font-semibold text-red-700 hover:text-red-800">
                 Причины ошибок ({{ bulk_operation.errors_details | length }})
             </summary>
             <div class="mt-2 space-y-2">
                 {% for error in bulk_operation.errors_details %}
-                <div class="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm">
-                    <span class="font-mono text-red-800 dark:text-red-200">{{ error }}</span>
+                <div class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
+                    <span class="font-mono text-red-800">{{ error }}</span>
                 </div>
                 {% endfor %}
             </div>
@@ -195,34 +205,34 @@
     </div>
 
     <!-- Список изменений товаров -->
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-        <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h2 class="text-xl font-bold text-gray-900 mb-4">
             Изменённые товары ({{ product_changes|length }})
         </h2>
 
         {% if product_changes %}
         <div class="space-y-3">
             {% for change in product_changes %}
-            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}">
+            <div class="border border-gray-200 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}">
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
                         <div class="flex items-center space-x-2 mb-1">
-                            <h4 class="font-semibold text-gray-900 dark:text-white">
+                            <h4 class="font-semibold text-gray-900">
                                 {{ change.product.title if change.product else 'Товар #' + change.product_id|string }}
                             </h4>
                             {% if change.reverted %}
-                            <span class="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded">
+                            <span class="px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded">
                                 Откачено
                             </span>
                             {% endif %}
                             {% if change.wb_synced %}
-                            <span class="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded">
+                            <span class="px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded">
                                 Синхронизировано
                             </span>
                             {% endif %}
                         </div>
 
-                        <p class="text-sm text-gray-600 dark:text-gray-400">
+                        <p class="text-sm text-gray-600">
                             {% if change.product %}
                                 Артикул: {{ change.product.vendor_code }} | NM ID: {{ change.product.nm_id }}
                             {% endif %}
@@ -232,7 +242,7 @@
                         {% if change.changed_fields %}
                         <div class="mt-2 flex flex-wrap gap-2">
                             {% for field in change.changed_fields %}
-                            <span class="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded">
+                            <span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
                                 {% if field == 'vendor_code' %}Артикул
                                 {% elif field == 'title' %}Название
                                 {% elif field == 'description' %}Описание
@@ -249,7 +259,7 @@
                     <div class="flex items-center space-x-2">
                         {% if change.product %}
                         <a href="{{ url_for('product_edit_history', product_id=change.product_id) }}"
-                           class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 text-sm">
+                           class="text-indigo-600 hover:text-indigo-700 text-sm">
                             История →
                         </a>
                         {% endif %}
@@ -259,7 +269,7 @@
             {% endfor %}
         </div>
         {% else %}
-        <p class="text-gray-600 dark:text-gray-400 text-center py-8">
+        <p class="text-gray-600 text-center py-8">
             Нет информации об изменённых товарах
         </p>
         {% endif %}

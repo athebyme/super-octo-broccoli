@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Настройки безопасности цен - WB Seller Platform{% endblock %}
+{% block title %}Настройки безопасности цен - Seller Hub{% endblock %}
 
 {% block content %}
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -14,21 +14,28 @@
     </nav>
 
     <!-- Заголовок -->
-    <div class="mb-8">
-        <h1 class="text-2xl font-bold text-gray-900 flex items-center">
-            <svg class="w-8 h-8 mr-3 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
-            </svg>
-            Настройки безопасности
-        </h1>
-        <p class="mt-2 text-sm text-gray-500">
-            Настройте пороги и режим защиты от случайных изменений цен
-        </p>
+    <div class="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="100" r="60" stroke="white" stroke-width="1.5"/>
+            <path d="M100 60v80M70 100h60" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="100" cy="100" r="20" stroke="white" stroke-width="1.5"/>
+            <text x="92" y="106" fill="white" font-size="16" font-weight="bold" opacity="0.4">&#8381;</text>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative">
+            <h1 class="text-3xl font-bold text-white flex items-center">
+                <svg class="w-8 h-8 mr-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                </svg>
+                Настройки безопасности
+            </h1>
+            <p class="mt-2 text-sm text-emerald-200">Настройте пороги и режим защиты от случайных изменений цен</p>
+        </div>
     </div>
 
     <form method="POST" action="{{ url_for('prices.prices_settings') }}" x-data="settingsForm()">
         <!-- Основные настройки -->
-        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
                 <h2 class="text-lg font-medium text-gray-900">Основные настройки</h2>
             </div>
@@ -92,7 +99,7 @@
         </div>
 
         <!-- Пороги изменений -->
-        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
                 <h2 class="text-lg font-medium text-gray-900">Пороги изменений</h2>
             </div>
@@ -154,7 +161,7 @@
         </div>
 
         <!-- Дополнительные настройки -->
-        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
                 <h2 class="text-lg font-medium text-gray-900">Дополнительные настройки</h2>
             </div>
@@ -210,7 +217,7 @@
         </div>
 
         <!-- Уведомления -->
-        <div class="bg-white shadow rounded-lg overflow-hidden mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
             <div class="px-6 py-4 border-b border-gray-200 bg-gray-50">
                 <h2 class="text-lg font-medium text-gray-900">Уведомления</h2>
             </div>

@@ -13,11 +13,18 @@
         <span class="text-gray-900">AI Парсер</span>
     </nav>
 
-    <div class="mb-6">
-        <div class="flex justify-between items-start">
+    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 rounded-2xl p-6 sm:p-8 mb-6">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <rect x="30" y="30" width="140" height="140" rx="16" stroke="white" stroke-width="1.5"/>
+            <circle cx="100" cy="75" r="20" stroke="white" stroke-width="1.5"/>
+            <path d="M90 75h20M100 65v20" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M70 115h60M70 130h40M70 145h50" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative flex justify-between items-start">
             <div>
-                <h1 class="text-2xl font-bold text-gray-900">AI Парсер данных</h1>
-                <p class="text-sm text-gray-500 mt-1">Извлечение характеристик товаров для маркетплейсов</p>
+                <h1 class="text-2xl font-bold text-white">AI Парсер данных</h1>
+                <p class="text-sm text-slate-300 mt-1">Извлечение характеристик товаров для маркетплейсов</p>
             </div>
             <div class="flex gap-2">
                 {% if supplier.description_file_url %}
@@ -27,7 +34,7 @@
                 </button>
                 {% endif %}
                 <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
-                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50">
+                    class="px-4 py-2 border border-white/20 text-white rounded-lg text-sm font-medium hover:bg-white/10 transition-colors">
                     Назад к товарам
                 </a>
             </div>
@@ -36,19 +43,19 @@
 
     <!-- Статистика -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
             <p class="text-xs text-gray-500">Всего товаров</p>
             <p class="text-2xl font-bold text-gray-900">{{ stats.total }}</p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
             <p class="text-xs text-gray-500">AI спарсено</p>
             <p class="text-2xl font-bold text-indigo-600" id="statParsed">{{ parsed_count }}</p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
             <p class="text-xs text-gray-500">Не спарсено</p>
             <p class="text-2xl font-bold text-orange-500">{{ stats.total - parsed_count }}</p>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4 text-center">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
             <p class="text-xs text-gray-500">AI покрытие</p>
             <p class="text-2xl font-bold text-green-600">{{ '%.0f'|format(parsed_count / stats.total * 100) if
                 stats.total > 0 else 0 }}%</p>
@@ -78,7 +85,7 @@
         <div class="mt-2 space-y-2">
             {% for j in recent_jobs %}
             {% if j.status in ('done', 'failed', 'cancelled') %}
-            <details class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <details class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                 <summary class="px-4 py-3 flex justify-between items-center text-sm cursor-pointer hover:bg-gray-50">
                     <div class="flex items-center gap-3">
                         <span
@@ -173,7 +180,7 @@
     </div>
 
     <!-- Фильтры и быстрый выбор -->
-    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+    <form method="GET" class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6">
         <div class="flex gap-3 items-end flex-wrap">
             <div class="flex-1 min-w-[200px]">
                 <label class="block text-xs text-gray-500 mb-1">Поиск</label>
@@ -242,7 +249,7 @@
     </form>
 
     <!-- Таблица товаров -->
-    <div class="bg-white rounded-lg border border-gray-200 mb-6">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
         <div class="p-4 border-b border-gray-200 flex justify-between items-center">
             <div class="flex items-center gap-3">
                 <label class="flex items-center gap-2 cursor-pointer">

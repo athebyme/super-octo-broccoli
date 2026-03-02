@@ -4,25 +4,32 @@
 
 {% block content %}
 <div class="container mx-auto px-4 py-8" x-data="syncStatusApp()">
-    <!-- Заголовок -->
-    <div class="flex justify-between items-center mb-6">
-        <div>
-            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Синхронизация товаров</h1>
-            <p class="text-gray-600 dark:text-gray-400 mt-1">
-                Управление синхронизацией карточек товаров с WB
-            </p>
+    <!-- Hero header -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 rounded-2xl p-6 sm:p-8 mb-8">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <circle cx="100" cy="100" r="50" stroke="white" stroke-width="1.5"/>
+            <path d="M75 100a25 25 0 0150 0" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M125 100l-8-5v10z" fill="white" opacity="0.5"/>
+            <path d="M125 100a25 25 0 01-50 0" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            <path d="M75 100l8 5v-10z" fill="white" opacity="0.5"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Синхронизация товаров</h1>
+                <p class="mt-2 text-sm text-blue-200">Управление синхронизацией карточек товаров с маркетплейсами</p>
+            </div>
+            <a href="{{ url_for('products_list') }}" class="px-4 py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 backdrop-blur-sm transition-colors font-medium text-sm">
+                ← К списку товаров
+            </a>
         </div>
-        <a href="{{ url_for('products_list') }}"
-           class="px-6 py-2.5 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors">
-            ← К списку товаров
-        </a>
     </div>
 
     <!-- Статус синхронизации -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <!-- Текущий статус -->
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Текущий статус</h2>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-4">Текущий статус</h2>
 
             <!-- Статус-индикатор -->
             <div class="flex items-center gap-3 mb-4">
@@ -33,26 +40,26 @@
                     'bg-red-500': !status.is_syncing && (status.last_sync_status === 'error' || status.last_sync_status === 'auth_error'),
                     'bg-gray-400': !status.is_syncing && !status.last_sync_status
                 }"></div>
-                <span class="text-lg font-medium text-gray-900 dark:text-white" x-text="status.status_message"></span>
+                <span class="text-lg font-medium text-gray-900" x-text="status.status_message"></span>
             </div>
 
             <!-- Информация о последней синхронизации -->
             <div class="space-y-2 text-sm">
                 <div class="flex justify-between">
-                    <span class="text-gray-600 dark:text-gray-400">Последняя синхронизация:</span>
-                    <span class="font-medium text-gray-900 dark:text-white" x-text="formatDateTime(status.last_sync_at)"></span>
+                    <span class="text-gray-600">Последняя синхронизация:</span>
+                    <span class="font-medium text-gray-900" x-text="formatDateTime(status.last_sync_at)"></span>
                 </div>
                 <div class="flex justify-between" x-show="status.last_sync_duration">
-                    <span class="text-gray-600 dark:text-gray-400">Длительность:</span>
-                    <span class="font-medium text-gray-900 dark:text-white" x-text="formatDuration(status.last_sync_duration)"></span>
+                    <span class="text-gray-600">Длительность:</span>
+                    <span class="font-medium text-gray-900" x-text="formatDuration(status.last_sync_duration)"></span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-gray-600 dark:text-gray-400">Всего товаров:</span>
-                    <span class="font-medium text-gray-900 dark:text-white" x-text="status.total_products || 0"></span>
+                    <span class="text-gray-600">Всего товаров:</span>
+                    <span class="font-medium text-gray-900" x-text="status.total_products || 0"></span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-gray-600 dark:text-gray-400">Активных:</span>
-                    <span class="font-medium text-gray-900 dark:text-white" x-text="status.active_products || 0"></span>
+                    <span class="text-gray-600">Активных:</span>
+                    <span class="font-medium text-gray-900" x-text="status.active_products || 0"></span>
                 </div>
             </div>
 
@@ -81,36 +88,36 @@
         </div>
 
         <!-- Статистика последней синхронизации -->
-        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Статистика последней синхронизации</h2>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <h2 class="text-lg font-semibold text-gray-900 mb-4">Статистика последней синхронизации</h2>
 
             <div class="grid grid-cols-3 gap-4">
                 <div class="text-center">
                     <div class="text-3xl font-bold text-blue-600" x-text="status.products_synced || 0"></div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Получено</div>
+                    <div class="text-sm text-gray-600 mt-1">Получено</div>
                 </div>
                 <div class="text-center">
                     <div class="text-3xl font-bold text-green-600" x-text="status.products_added || 0"></div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Добавлено</div>
+                    <div class="text-sm text-gray-600 mt-1">Добавлено</div>
                 </div>
                 <div class="text-center">
                     <div class="text-3xl font-bold text-yellow-600" x-text="status.products_updated || 0"></div>
-                    <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">Обновлено</div>
+                    <div class="text-sm text-gray-600 mt-1">Обновлено</div>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Настройки автосинхронизации -->
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Автоматическая синхронизация</h2>
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Автоматическая синхронизация</h2>
 
         <div class="space-y-4">
             <!-- Включить/выключить автосинхронизацию -->
-            <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                 <div>
-                    <h3 class="font-medium text-gray-900 dark:text-white">Включить автосинхронизацию</h3>
-                    <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    <h3 class="font-medium text-gray-900">Включить автосинхронизацию</h3>
+                    <p class="text-sm text-gray-600 mt-1">
                         Автоматическая синхронизация по расписанию
                     </p>
                 </div>
@@ -119,13 +126,13 @@
                            x-model="settings.is_enabled"
                            @change="updateSettings()"
                            class="sr-only peer">
-                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                 </label>
             </div>
 
             <!-- Интервал синхронизации -->
-            <div x-show="settings.is_enabled" class="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <label class="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+            <div x-show="settings.is_enabled" class="p-4 bg-gray-50 rounded-lg">
+                <label class="block text-sm font-medium text-gray-900 mb-2">
                     Интервал синхронизации (минуты)
                 </label>
                 <div class="flex items-center gap-4">
@@ -135,11 +142,11 @@
                            min="5"
                            max="1440"
                            step="5"
-                           class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-600">
-                    <span class="text-lg font-semibold text-gray-900 dark:text-white w-20 text-right"
+                           class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                    <span class="text-lg font-semibold text-gray-900 w-20 text-right"
                           x-text="formatInterval(settings.sync_interval_minutes)"></span>
                 </div>
-                <div class="flex justify-between text-xs text-gray-600 dark:text-gray-400 mt-1">
+                <div class="flex justify-between text-xs text-gray-600 mt-1">
                     <span>5 мин</span>
                     <span>1 час</span>
                     <span>4 часа</span>
@@ -149,12 +156,12 @@
             </div>
 
             <!-- Время следующей синхронизации -->
-            <div x-show="settings.is_enabled && status.next_sync_at" class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+            <div x-show="settings.is_enabled && status.next_sync_at" class="p-4 bg-blue-50 rounded-lg border border-blue-200">
                 <div class="flex items-center gap-2">
-                    <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
-                    <span class="text-sm text-blue-800 dark:text-blue-200">
+                    <span class="text-sm text-blue-800">
                         Следующая синхронизация: <strong x-text="formatDateTime(status.next_sync_at)"></strong>
                     </span>
                 </div>
