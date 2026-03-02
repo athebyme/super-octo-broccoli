@@ -587,7 +587,11 @@ def api_sync():
     if not seller or not seller.wb_api_key:
         return jsonify({'success': False, 'error': 'Нет доступных WB API ключей'}), 400
 
-    started = engine.sync_marketplace_brands_async(marketplace_id, seller.wb_api_key)
+    from flask import current_app
+    started = engine.sync_marketplace_brands_async(
+        marketplace_id, seller.wb_api_key,
+        app=current_app._get_current_object(),
+    )
     if not started:
         return jsonify({'success': False, 'error': 'Синхронизация уже запущена'}), 400
 

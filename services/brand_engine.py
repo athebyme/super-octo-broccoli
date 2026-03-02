@@ -14,7 +14,6 @@ import logging
 import threading
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -615,14 +614,21 @@ class BrandEngine:
         """Получить текущий прогресс синхронизации брендов."""
         return self._sync_progress.get(marketplace_id)
 
-    def sync_marketplace_brands_async(self, marketplace_id: int, api_key: str):
+    def sync_marketplace_brands_async(self, marketplace_id: int, api_key: str, app=None):
         """
         Запуск синхронизации брендов в фоновом потоке.
 
         Сразу возвращает управление, прогресс можно отслеживать через get_sync_progress().
+        app — Flask-приложение (передаётся из роута для гарантированного app_context).
         """
         if marketplace_id in self._sync_progress and self._sync_progress[marketplace_id].get('status') == 'running':
             logger.warning(f"Brand sync already running for marketplace #{marketplace_id}")
+            return False
+
+        if not app:
+            app = self._get_app()
+        if not app:
+            logger.error("Brand sync: no Flask app available")
             return False
 
         self._sync_progress[marketplace_id] = {
@@ -639,52 +645,38 @@ class BrandEngine:
         }
 
         def run_sync():
-            app = self._get_app()
-            with app.app_context():
-                from services.wb_api_client import WildberriesAPIClient
-                try:
+            try:
+                with app.app_context():
+                    from services.wb_api_client import WildberriesAPIClient
                     with WildberriesAPIClient(api_key) as wb_client:
                         self.sync_marketplace_brands(marketplace_id, wb_client)
-                except Exception as e:
-                    logger.error(f"Brand sync background task failed: {e}")
-                    self._sync_progress[marketplace_id].update({
-                        'status': 'error',
-                        'message': f'Ошибка: {e}',
-                    })
+            except Exception as e:
+                logger.error(f"Brand sync background task failed: {e}", exc_info=True)
+                self._sync_progress[marketplace_id].update({
+                    'status': 'error',
+                    'message': f'Ошибка: {e}',
+                })
 
         thread = threading.Thread(target=run_sync, daemon=True)
         thread.start()
         return True
 
-    def _fetch_brands_for_subject(self, marketplace_client, subject_id: int) -> list:
-        """Загрузить бренды для одной категории (thread-safe, без DB)."""
-        try:
-            result = marketplace_client.get_brands_by_subject(subject_id)
-            brands = []
-            for brand_data in result.get('data', []):
-                ext_id = brand_data.get('id')
-                name = brand_data.get('name', '')
-                if ext_id and name:
-                    brands.append((ext_id, name))
-            return brands
-        except Exception as e:
-            logger.warning(f"Failed to fetch brands for subjectId={subject_id}: {e}")
-            return []
-
     def sync_marketplace_brands(self, marketplace_id: int, marketplace_client) -> dict:
         """
         Синхронизация справочника брендов маркетплейса в БД.
 
-        Загружает бренды параллельно батчами через ThreadPoolExecutor,
+        Загружает бренды последовательно по включённым категориям,
         сохраняет в БД батчами по 200 штук.
         """
         from models import db, Brand, BrandAlias, MarketplaceBrand, MarketplaceCategory
 
-        progress = self._sync_progress.get(marketplace_id, {})
+        progress = self._sync_progress.get(marketplace_id)
+        if not progress:
+            progress = {'status': 'running'}
+            self._sync_progress[marketplace_id] = progress
 
         def update_progress(**kwargs):
             progress.update(kwargs)
-            self._sync_progress[marketplace_id] = progress
 
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
         stats = {'created': 0, 'updated': 0, 'mp_created': 0, 'errors': 0, 'total_fetched': 0}
@@ -711,40 +703,31 @@ class BrandEngine:
                         message=f'Загрузка брендов из {total_cats} категорий...')
         logger.info(f"Found {total_cats} enabled categories for brand sync")
 
-        # --- Phase 2: Параллельная загрузка брендов батчами ---
+        # --- Phase 2: Последовательная загрузка брендов ---
         update_progress(phase='fetching')
         all_brands = {}  # ext_id -> name
-        cats_done = 0
-        batch_size = 5  # параллельных запросов за раз
 
-        for batch_start in range(0, total_cats, batch_size):
-            batch = subject_ids[batch_start:batch_start + batch_size]
+        for i, subject_id in enumerate(subject_ids):
+            try:
+                result = marketplace_client.get_brands_by_subject(subject_id)
+                for brand_data in result.get('data', []):
+                    ext_id = brand_data.get('id')
+                    name = brand_data.get('name', '')
+                    if ext_id and name:
+                        all_brands[ext_id] = name
+            except Exception as e:
+                logger.warning(f"Failed to fetch brands for subjectId={subject_id}: {e}")
+                stats['errors'] += 1
 
-            with ThreadPoolExecutor(max_workers=batch_size) as executor:
-                futures = {
-                    executor.submit(self._fetch_brands_for_subject, marketplace_client, sid): sid
-                    for sid in batch
-                }
-                for future in as_completed(futures):
-                    sid = futures[future]
-                    try:
-                        brands_list = future.result()
-                        for ext_id, name in brands_list:
-                            all_brands[ext_id] = name
-                    except Exception as e:
-                        logger.warning(f"Batch fetch error for subjectId={sid}: {e}")
-                        stats['errors'] += 1
-
-            cats_done += len(batch)
             update_progress(
-                categories_done=cats_done,
+                categories_done=i + 1,
                 brands_found=len(all_brands),
-                message=f'Категории: {cats_done}/{total_cats}, найдено брендов: {len(all_brands)}',
+                message=f'Категории: {i + 1}/{total_cats}, найдено брендов: {len(all_brands)}',
             )
 
-            # Небольшая пауза между батчами чтобы не перегрузить API
-            if batch_start + batch_size < total_cats:
-                time.sleep(0.2)
+            # Пауза между запросами чтобы не перегрузить API
+            if i + 1 < total_cats:
+                time.sleep(0.15)
 
         stats['total_fetched'] = len(all_brands)
         logger.info(f"Fetched {len(all_brands)} brands from marketplace #{marketplace_id}")

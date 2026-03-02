@@ -407,5 +407,34 @@ function resetSyncBtn() {
     bar.style.width = '0%';
     bar.className = 'bg-indigo-500 h-2 rounded-full transition-all duration-300';
 }
+
+function getSyncMarketplaceId() {
+    {% if marketplace_id %}return {{ marketplace_id }};{% else %}return null;{% endif %}
+}
+
+// При загрузке страницы проверяем, не идёт ли уже синхронизация
+async function initSyncState() {
+    const mpId = getSyncMarketplaceId();
+    if (!mpId) return;
+    try {
+        const resp = await fetch(`{{ url_for("brands.api_sync_progress") }}?marketplace_id=${mpId}`);
+        const data = await resp.json();
+        if (data.success && data.progress && data.progress.status === 'running') {
+            const btn = document.getElementById('syncBtn');
+            const progressEl = document.getElementById('syncProgress');
+            const icon = document.getElementById('syncIcon');
+
+            btn.disabled = true;
+            icon.classList.add('animate-spin');
+            document.getElementById('syncBtnText').textContent = 'Синхронизация...';
+            progressEl.classList.remove('hidden');
+            startSyncPolling(mpId);
+        }
+    } catch (e) {
+        console.error('Init sync state error:', e);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', initSyncState);
 </script>
 {% endblock %}
