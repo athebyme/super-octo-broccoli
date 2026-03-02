@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -87,6 +88,8 @@ class BrandEngine:
         self._cache_lock = threading.Lock()
         self._last_cache_load: float = 0
         self._cache_ttl: int = 300  # 5 минут
+        # Progress tracking for async sync
+        self._sync_progress: Dict[int, dict] = {}  # marketplace_id -> progress info
 
     def init_app(self, app):
         self._app = app
@@ -608,20 +611,87 @@ class BrandEngine:
     # Sync (marketplace-aware)
     # ------------------------------------------------------------------
 
+    def get_sync_progress(self, marketplace_id: int) -> Optional[dict]:
+        """Получить текущий прогресс синхронизации брендов."""
+        return self._sync_progress.get(marketplace_id)
+
+    def sync_marketplace_brands_async(self, marketplace_id: int, api_key: str):
+        """
+        Запуск синхронизации брендов в фоновом потоке.
+
+        Сразу возвращает управление, прогресс можно отслеживать через get_sync_progress().
+        """
+        if marketplace_id in self._sync_progress and self._sync_progress[marketplace_id].get('status') == 'running':
+            logger.warning(f"Brand sync already running for marketplace #{marketplace_id}")
+            return False
+
+        self._sync_progress[marketplace_id] = {
+            'status': 'running',
+            'phase': 'starting',
+            'categories_done': 0,
+            'categories_total': 0,
+            'brands_found': 0,
+            'brands_saved': 0,
+            'brands_total': 0,
+            'errors': 0,
+            'started_at': datetime.utcnow().isoformat(),
+            'message': 'Запуск синхронизации...',
+        }
+
+        def run_sync():
+            app = self._get_app()
+            with app.app_context():
+                from services.wb_api_client import WildberriesAPIClient
+                try:
+                    with WildberriesAPIClient(api_key) as wb_client:
+                        self.sync_marketplace_brands(marketplace_id, wb_client)
+                except Exception as e:
+                    logger.error(f"Brand sync background task failed: {e}")
+                    self._sync_progress[marketplace_id].update({
+                        'status': 'error',
+                        'message': f'Ошибка: {e}',
+                    })
+
+        thread = threading.Thread(target=run_sync, daemon=True)
+        thread.start()
+        return True
+
+    def _fetch_brands_for_subject(self, marketplace_client, subject_id: int) -> list:
+        """Загрузить бренды для одной категории (thread-safe, без DB)."""
+        try:
+            result = marketplace_client.get_brands_by_subject(subject_id)
+            brands = []
+            for brand_data in result.get('data', []):
+                ext_id = brand_data.get('id')
+                name = brand_data.get('name', '')
+                if ext_id and name:
+                    brands.append((ext_id, name))
+            return brands
+        except Exception as e:
+            logger.warning(f"Failed to fetch brands for subjectId={subject_id}: {e}")
+            return []
+
     def sync_marketplace_brands(self, marketplace_id: int, marketplace_client) -> dict:
         """
         Синхронизация справочника брендов маркетплейса в БД.
 
-        Загружает бренды через API и создаёт Brand + MarketplaceBrand записи.
+        Загружает бренды параллельно батчами через ThreadPoolExecutor,
+        сохраняет в БД батчами по 200 штук.
         """
         from models import db, Brand, BrandAlias, MarketplaceBrand, MarketplaceCategory
+
+        progress = self._sync_progress.get(marketplace_id, {})
+
+        def update_progress(**kwargs):
+            progress.update(kwargs)
+            self._sync_progress[marketplace_id] = progress
 
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
         stats = {'created': 0, 'updated': 0, 'mp_created': 0, 'errors': 0, 'total_fetched': 0}
 
-        all_brands = {}  # ext_id -> name
+        # --- Phase 1: Получаем включённые категории ---
+        update_progress(phase='categories', message='Загрузка списка категорий...')
 
-        # Берём включённые категории из настроек маркетплейса
         enabled_cats = MarketplaceCategory.query.filter_by(
             marketplace_id=marketplace_id,
             is_enabled=True,
@@ -629,104 +699,157 @@ class BrandEngine:
 
         if not enabled_cats:
             logger.warning(f"No enabled categories for marketplace #{marketplace_id}")
-            stats['errors'] = 0
-            stats['total_fetched'] = 0
+            update_progress(
+                status='done', phase='done',
+                message='Нет включённых категорий для синхронизации.',
+            )
             return stats
 
-        logger.info(f"Found {len(enabled_cats)} enabled categories for brand sync")
+        subject_ids = [c.subject_id for c in enabled_cats if c.subject_id]
+        total_cats = len(subject_ids)
+        update_progress(categories_total=total_cats,
+                        message=f'Загрузка брендов из {total_cats} категорий...')
+        logger.info(f"Found {total_cats} enabled categories for brand sync")
 
-        for i, cat in enumerate(enabled_cats):
-            if not cat.subject_id:
-                continue
-            try:
-                result = marketplace_client.get_brands_by_subject(cat.subject_id)
-                for brand_data in result.get('data', []):
-                    ext_id = brand_data.get('id')
-                    name = brand_data.get('name', '')
-                    if ext_id and name:
-                        all_brands[ext_id] = name
-                time.sleep(0.1)
-            except Exception as e:
-                logger.warning(f"Failed to fetch brands for category '{cat.subject_name}' (subjectId={cat.subject_id}): {e}")
-                stats['errors'] += 1
-                continue
+        # --- Phase 2: Параллельная загрузка брендов батчами ---
+        update_progress(phase='fetching')
+        all_brands = {}  # ext_id -> name
+        cats_done = 0
+        batch_size = 5  # параллельных запросов за раз
 
-            if (i + 1) % 10 == 0:
-                logger.info(f"Progress: {i + 1}/{len(enabled_cats)} categories, {len(all_brands)} unique brands")
+        for batch_start in range(0, total_cats, batch_size):
+            batch = subject_ids[batch_start:batch_start + batch_size]
+
+            with ThreadPoolExecutor(max_workers=batch_size) as executor:
+                futures = {
+                    executor.submit(self._fetch_brands_for_subject, marketplace_client, sid): sid
+                    for sid in batch
+                }
+                for future in as_completed(futures):
+                    sid = futures[future]
+                    try:
+                        brands_list = future.result()
+                        for ext_id, name in brands_list:
+                            all_brands[ext_id] = name
+                    except Exception as e:
+                        logger.warning(f"Batch fetch error for subjectId={sid}: {e}")
+                        stats['errors'] += 1
+
+            cats_done += len(batch)
+            update_progress(
+                categories_done=cats_done,
+                brands_found=len(all_brands),
+                message=f'Категории: {cats_done}/{total_cats}, найдено брендов: {len(all_brands)}',
+            )
+
+            # Небольшая пауза между батчами чтобы не перегрузить API
+            if batch_start + batch_size < total_cats:
+                time.sleep(0.2)
 
         stats['total_fetched'] = len(all_brands)
         logger.info(f"Fetched {len(all_brands)} brands from marketplace #{marketplace_id}")
 
-        for ext_id, name in all_brands.items():
-            try:
-                name_norm = normalize_for_comparison(name)
+        # --- Phase 3: Сохранение в БД батчами ---
+        update_progress(
+            phase='saving',
+            brands_total=len(all_brands),
+            brands_saved=0,
+            message=f'Сохранение {len(all_brands)} брендов...',
+        )
 
-                # Глобальный бренд
-                brand = Brand.query.filter_by(name_normalized=name_norm).first()
-                if brand:
-                    if brand.status == 'pending':
-                        brand.status = 'verified'
-                    brand.updated_at = datetime.utcnow()
-                    stats['updated'] += 1
-                else:
-                    brand = Brand(
-                        name=name,
-                        name_normalized=name_norm,
-                        status='verified',
-                    )
-                    db.session.add(brand)
-                    db.session.flush()
+        brand_items = list(all_brands.items())
+        save_batch_size = 200
+        saved = 0
 
-                    existing = BrandAlias.query.filter_by(alias_normalized=name_norm).first()
-                    if not existing:
-                        alias = BrandAlias(
-                            brand_id=brand.id,
-                            alias=name,
-                            alias_normalized=name_norm,
-                            source='marketplace_sync',
-                            confidence=1.0,
+        for batch_start in range(0, len(brand_items), save_batch_size):
+            batch = brand_items[batch_start:batch_start + save_batch_size]
+
+            for ext_id, name in batch:
+                try:
+                    name_norm = normalize_for_comparison(name)
+
+                    # Глобальный бренд
+                    brand = Brand.query.filter_by(name_normalized=name_norm).first()
+                    if brand:
+                        if brand.status == 'pending':
+                            brand.status = 'verified'
+                        brand.updated_at = datetime.utcnow()
+                        stats['updated'] += 1
+                    else:
+                        brand = Brand(
+                            name=name,
+                            name_normalized=name_norm,
+                            status='verified',
                         )
-                        db.session.add(alias)
+                        db.session.add(brand)
+                        db.session.flush()
 
-                    stats['created'] += 1
+                        existing = BrandAlias.query.filter_by(alias_normalized=name_norm).first()
+                        if not existing:
+                            alias = BrandAlias(
+                                brand_id=brand.id,
+                                alias=name,
+                                alias_normalized=name_norm,
+                                source='marketplace_sync',
+                                confidence=1.0,
+                            )
+                            db.session.add(alias)
 
-                # Привязка к маркетплейсу
-                mp_brand = MarketplaceBrand.query.filter_by(
-                    brand_id=brand.id,
-                    marketplace_id=marketplace_id,
-                ).first()
+                        stats['created'] += 1
 
-                if not mp_brand:
-                    mp_brand = MarketplaceBrand(
+                    # Привязка к маркетплейсу
+                    mp_brand = MarketplaceBrand.query.filter_by(
                         brand_id=brand.id,
                         marketplace_id=marketplace_id,
-                        marketplace_brand_name=name,
-                        marketplace_brand_id=ext_id,
-                        status='verified',
-                        verified_at=datetime.utcnow(),
-                    )
-                    db.session.add(mp_brand)
-                    stats['mp_created'] += 1
-                else:
-                    if not mp_brand.marketplace_brand_id:
-                        mp_brand.marketplace_brand_id = ext_id
-                    mp_brand.marketplace_brand_name = name
-                    if mp_brand.status == 'pending':
-                        mp_brand.status = 'verified'
-                        mp_brand.verified_at = datetime.utcnow()
+                    ).first()
 
+                    if not mp_brand:
+                        mp_brand = MarketplaceBrand(
+                            brand_id=brand.id,
+                            marketplace_id=marketplace_id,
+                            marketplace_brand_name=name,
+                            marketplace_brand_id=ext_id,
+                            status='verified',
+                            verified_at=datetime.utcnow(),
+                        )
+                        db.session.add(mp_brand)
+                        stats['mp_created'] += 1
+                    else:
+                        if not mp_brand.marketplace_brand_id:
+                            mp_brand.marketplace_brand_id = ext_id
+                        mp_brand.marketplace_brand_name = name
+                        if mp_brand.status == 'pending':
+                            mp_brand.status = 'verified'
+                            mp_brand.verified_at = datetime.utcnow()
+
+                except Exception as e:
+                    logger.warning(f"Failed to save brand '{name}': {e}")
+                    stats['errors'] += 1
+
+            # Коммитим батч
+            try:
+                db.session.commit()
             except Exception as e:
-                logger.warning(f"Failed to save brand '{name}': {e}")
-                stats['errors'] += 1
+                db.session.rollback()
+                logger.error(f"Failed to commit brand batch: {e}")
+                stats['errors'] += len(batch)
 
-        try:
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            logger.error(f"Failed to commit brand sync: {e}")
-            raise
+            saved += len(batch)
+            update_progress(
+                brands_saved=saved,
+                message=f'Сохранено: {saved}/{len(all_brands)} брендов...',
+            )
 
         self.invalidate_cache()
+
+        update_progress(
+            status='done',
+            phase='done',
+            message=f'Готово: найдено {stats["total_fetched"]}, '
+                    f'создано {stats["created"]}, обновлено {stats["updated"]}, '
+                    f'ошибок {stats["errors"]}',
+            stats=stats,
+        )
         logger.info(f"Brand sync for marketplace #{marketplace_id} complete: {stats}")
         return stats
 

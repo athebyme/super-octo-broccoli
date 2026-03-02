@@ -49,11 +49,23 @@
                 {% endif %}
                 <button onclick="syncBrands()" id="syncBtn"
                    class="inline-flex items-center px-4 py-2.5 border border-indigo-400/50 rounded-xl text-sm font-medium text-indigo-200 hover:bg-white/10 transition-colors">
-                    <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg id="syncIcon" class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                     </svg>
-                    Синхронизация
+                    <span id="syncBtnText">Синхронизация</span>
                 </button>
+                <!-- Progress bar for brand sync -->
+                <div id="syncProgress" class="hidden ml-4 flex items-center gap-3 min-w-[300px]">
+                    <div class="flex-1">
+                        <div class="flex justify-between text-xs text-gray-400 mb-1">
+                            <span id="syncPhaseText">Загрузка...</span>
+                            <span id="syncPercent">0%</span>
+                        </div>
+                        <div class="w-full bg-white/10 rounded-full h-2">
+                            <div id="syncBar" class="bg-indigo-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
                 <button onclick="showCreateModal()"
                    class="inline-flex items-center px-5 py-2.5 rounded-xl shadow-sm text-sm font-medium text-indigo-900 bg-white hover:bg-gray-50 transition-colors">
                     <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -298,10 +310,18 @@ async function createBrand() {
     } catch (e) { alert('Ошибка: ' + e.message); }
 }
 
+let syncPollInterval = null;
+
 async function syncBrands() {
     const btn = document.getElementById('syncBtn');
+    const progressEl = document.getElementById('syncProgress');
+    const icon = document.getElementById('syncIcon');
+
     btn.disabled = true;
-    btn.innerHTML = '<svg class="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Синхронизация...';
+    icon.classList.add('animate-spin');
+    document.getElementById('syncBtnText').textContent = 'Запуск...';
+    progressEl.classList.remove('hidden');
+
     try {
         const body = {};
         {% if marketplace_id %}body.marketplace_id = {{ marketplace_id }};{% endif %}
@@ -312,14 +332,80 @@ async function syncBrands() {
         });
         const data = await resp.json();
         if (data.success) {
-            alert(data.message || 'Синхронизация завершена');
-            window.location.reload();
+            document.getElementById('syncBtnText').textContent = 'Синхронизация...';
+            startSyncPolling(data.marketplace_id);
         } else {
             alert(data.error || 'Ошибка');
+            resetSyncBtn();
         }
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+        resetSyncBtn();
+    }
+}
+
+function startSyncPolling(marketplaceId) {
+    if (syncPollInterval) clearInterval(syncPollInterval);
+    syncPollInterval = setInterval(() => pollSyncProgress(marketplaceId), 1500);
+}
+
+async function pollSyncProgress(marketplaceId) {
+    try {
+        const resp = await fetch(`{{ url_for("brands.api_sync_progress") }}?marketplace_id=${marketplaceId}`);
+        const data = await resp.json();
+        if (!data.success || !data.progress) return;
+
+        const p = data.progress;
+        const phaseText = document.getElementById('syncPhaseText');
+        const percentText = document.getElementById('syncPercent');
+        const bar = document.getElementById('syncBar');
+
+        phaseText.textContent = p.message || 'Загрузка...';
+
+        // Вычисляем процент
+        let pct = 0;
+        if (p.phase === 'fetching' && p.categories_total > 0) {
+            pct = Math.round((p.categories_done / p.categories_total) * 70);
+        } else if (p.phase === 'saving' && p.brands_total > 0) {
+            pct = 70 + Math.round((p.brands_saved / p.brands_total) * 30);
+        } else if (p.phase === 'done') {
+            pct = 100;
+        }
+
+        percentText.textContent = pct + '%';
+        bar.style.width = pct + '%';
+
+        if (p.status === 'done' || p.status === 'error') {
+            clearInterval(syncPollInterval);
+            syncPollInterval = null;
+
+            if (p.status === 'error') {
+                bar.classList.replace('bg-indigo-500', 'bg-red-500');
+                alert(p.message || 'Ошибка синхронизации');
+                setTimeout(resetSyncBtn, 2000);
+            } else {
+                bar.classList.replace('bg-indigo-500', 'bg-green-500');
+                document.getElementById('syncBtnText').textContent = 'Готово!';
+                setTimeout(() => window.location.reload(), 1500);
+            }
+        }
+    } catch (e) {
+        console.error('Poll error:', e);
+    }
+}
+
+function resetSyncBtn() {
+    const btn = document.getElementById('syncBtn');
+    const progressEl = document.getElementById('syncProgress');
+    const icon = document.getElementById('syncIcon');
+    const bar = document.getElementById('syncBar');
+
     btn.disabled = false;
-    btn.innerHTML = '<svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>Синхронизация';
+    icon.classList.remove('animate-spin');
+    document.getElementById('syncBtnText').textContent = 'Синхронизация';
+    progressEl.classList.add('hidden');
+    bar.style.width = '0%';
+    bar.className = 'bg-indigo-500 h-2 rounded-full transition-all duration-300';
 }
 </script>
 {% endblock %}

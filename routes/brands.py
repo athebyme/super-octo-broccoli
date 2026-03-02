@@ -560,8 +560,9 @@ def api_stats():
 @login_required
 @admin_required
 def api_sync():
-    """Синхронизация брендов с API маркетплейса (синхронно)."""
+    """Запуск синхронизации брендов в фоновом потоке."""
     from models import Seller
+    from services.brand_engine import get_brand_engine
 
     data = request.get_json() or {}
     marketplace_id = data.get('marketplace_id')
@@ -575,27 +576,49 @@ def api_sync():
     if not marketplace_id:
         return jsonify({'success': False, 'error': 'Маркетплейс не найден'}), 400
 
+    engine = get_brand_engine()
+
+    # Проверяем, не запущена ли уже синхронизация
+    progress = engine.get_sync_progress(marketplace_id)
+    if progress and progress.get('status') == 'running':
+        return jsonify({'success': False, 'error': 'Синхронизация уже запущена'}), 400
+
     seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
     if not seller or not seller.wb_api_key:
         return jsonify({'success': False, 'error': 'Нет доступных WB API ключей'}), 400
 
-    try:
-        from services.wb_api_client import WildberriesAPIClient
-        from services.brand_engine import get_brand_engine
+    started = engine.sync_marketplace_brands_async(marketplace_id, seller.wb_api_key)
+    if not started:
+        return jsonify({'success': False, 'error': 'Синхронизация уже запущена'}), 400
 
-        with WildberriesAPIClient(seller.wb_api_key) as wb_client:
-            stats = get_brand_engine().sync_marketplace_brands(marketplace_id, wb_client)
+    return jsonify({
+        'success': True,
+        'message': 'Синхронизация запущена в фоне',
+        'marketplace_id': marketplace_id,
+    })
 
-        return jsonify({
-            'success': True,
-            'message': f'Синхронизация завершена: найдено {stats["total_fetched"]}, '
-                       f'создано {stats["created"]}, обновлено {stats["updated"]}, '
-                       f'ошибок {stats["errors"]}',
-            'stats': stats,
-        })
-    except Exception as e:
-        logger.error(f"Brand sync failed: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+
+@brands_bp.route('/api/sync/progress', methods=['GET'])
+@login_required
+@admin_required
+def api_sync_progress():
+    """Получить прогресс синхронизации брендов."""
+    from services.brand_engine import get_brand_engine
+
+    marketplace_id = request.args.get('marketplace_id', type=int)
+    if not marketplace_id:
+        wb = Marketplace.query.filter_by(code='wb').first()
+        if wb:
+            marketplace_id = wb.id
+
+    if not marketplace_id:
+        return jsonify({'success': False, 'error': 'Маркетплейс не найден'}), 400
+
+    progress = get_brand_engine().get_sync_progress(marketplace_id)
+    if not progress:
+        return jsonify({'success': True, 'progress': None})
+
+    return jsonify({'success': True, 'progress': progress})
 
 
 def register_brand_routes(app):
