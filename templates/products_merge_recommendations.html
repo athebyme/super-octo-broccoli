@@ -197,21 +197,21 @@
                     <h4 class="text-sm font-semibold text-gray-700 mb-3">Карточки для объединения:</h4>
                     <div class="space-y-2">
                         {% for card in rec.cards %}
-                        <div class="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700
+                        <div class="flex items-center justify-between p-3 bg-white rounded border border-gray-200
                                     {% if loop.first %}ring-2 ring-purple-500{% endif %}">
                             <div class="flex-1">
                                 <div class="flex items-center gap-2 mb-1">
                                     {% if loop.first %}
-                                    <span class="px-2 py-0.5 text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 rounded font-semibold">
+                                    <span class="px-2 py-0.5 text-xs bg-purple-100 text-purple-800 rounded font-semibold">
                                         Рекомендуемая главная
                                     </span>
                                     {% endif %}
-                                    <span class="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded">
+                                    <span class="text-xs px-2 py-0.5 bg-gray-100 rounded">
                                         nmID: {{ card.nm_id }}
                                     </span>
                                 </div>
-                                <div class="font-medium text-gray-900 dark:text-white">{{ card.vendor_code }}</div>
-                                <div class="text-sm text-gray-600 dark:text-gray-400 truncate">{{ card.title }}</div>
+                                <div class="font-medium text-gray-900">{{ card.vendor_code }}</div>
+                                <div class="text-sm text-gray-600 truncate">{{ card.title }}</div>
                             </div>
                         </div>
                         {% endfor %}
@@ -235,12 +235,12 @@
         {% endfor %}
     </div>
     {% else %}
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-12 text-center">
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-12 text-center">
         <svg class="mx-auto h-16 w-16 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
         </svg>
-        <h3 class="mt-2 text-lg font-medium text-gray-900 dark:text-white">Рекомендаций не найдено</h3>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <h3 class="mt-2 text-lg font-medium text-gray-900">Рекомендаций не найдено</h3>
+        <p class="mt-1 text-sm text-gray-500">
             Попробуйте снизить минимальную оценку схожести или синхронизируйте больше товаров с WB API
         </p>
     </div>
