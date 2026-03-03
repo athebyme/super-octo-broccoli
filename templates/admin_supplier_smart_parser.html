@@ -89,7 +89,7 @@
                 Определение брендов, маппинг категорий WB, извлечение размеров, материалов, цветов из названий.
             </p>
             <div class="space-y-2">
-                <select x-model="parseScope" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2">
+                <select x-model="parseScope" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2" :disabled="parseRunning">
                     <option value="unparsed">Только необработанные</option>
                     <option value="draft">Черновики</option>
                     <option value="all">Все товары</option>
@@ -102,6 +102,16 @@
                         Обработка...
                     </span>
                 </button>
+                <!-- Background job progress -->
+                <div x-show="jobId && parseRunning" x-cloak class="space-y-1">
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div class="bg-emerald-600 h-2.5 rounded-full transition-all duration-500" :style="`width: ${jobProgress}%`"></div>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <p class="text-xs text-gray-500" x-text="jobStatus"></p>
+                        <button @click="cancelJob()" class="text-xs text-red-500 hover:text-red-700">Отмена</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -354,6 +364,11 @@ function smartParser() {
         brandResult: null,
         brandApplyResult: null,
         charResult: null,
+        // Background job state
+        jobId: null,
+        jobProgress: 0,
+        jobStatus: '',
+        _pollTimer: null,
 
         async _fetchJson(url, body) {
             const resp = await fetch(url, {
@@ -378,15 +393,73 @@ function smartParser() {
         async runSmartParse() {
             this.parseRunning = true;
             this.parseResult = null;
+            this.jobId = null;
+            this.jobProgress = 0;
+            this.jobStatus = '';
             try {
-                this.parseResult = await this._fetchJson(
+                const data = await this._fetchJson(
                     '{{ url_for("admin_supplier_smart_parse", supplier_id=supplier.id) }}',
-                    {scope: this.parseScope, limit: 1000}
+                    {scope: this.parseScope}
                 );
+                // Если запущена фоновая задача
+                if (data.background) {
+                    this.jobId = data.job_id;
+                    this.jobStatus = `Запущена фоновая обработка ${data.total} товаров...`;
+                    this._startPolling();
+                    return;
+                }
+                // Синхронный результат
+                this.parseResult = data;
+                this.parseRunning = false;
             } catch (e) {
                 alert('Ошибка Smart Parse: ' + e.message);
+                this.parseRunning = false;
             }
-            this.parseRunning = false;
+        },
+
+        _startPolling() {
+            if (this._pollTimer) clearInterval(this._pollTimer);
+            this._pollTimer = setInterval(() => this._pollJobStatus(), 2000);
+        },
+
+        async _pollJobStatus() {
+            if (!this.jobId) return;
+            try {
+                const resp = await fetch(`/admin/suppliers/{{ supplier.id }}/smart-parse-job/${this.jobId}/status`);
+                const data = await resp.json();
+                this.jobProgress = data.progress_pct || 0;
+                this.jobStatus = `Обработано ${data.processed}/${data.total} (${this.jobProgress.toFixed(0)}%)`;
+
+                if (data.status === 'done') {
+                    clearInterval(this._pollTimer);
+                    this._pollTimer = null;
+                    this.parseResult = {
+                        processed: data.succeeded,
+                        brand_resolved_count: data.results?.brand_resolved_count || 0,
+                        category_mapped_count: data.results?.category_mapped_count || 0,
+                        avg_readiness_score: data.results?.avg_readiness_score || 0,
+                        duration_seconds: 0,
+                        errors: data.failed,
+                    };
+                    this.jobStatus = 'Готово!';
+                    this.parseRunning = false;
+                } else if (data.status === 'failed' || data.status === 'cancelled') {
+                    clearInterval(this._pollTimer);
+                    this._pollTimer = null;
+                    this.jobStatus = data.status === 'cancelled' ? 'Отменено' : `Ошибка: ${data.error || 'unknown'}`;
+                    this.parseRunning = false;
+                }
+            } catch (e) {
+                console.error('Poll error:', e);
+            }
+        },
+
+        async cancelJob() {
+            if (!this.jobId) return;
+            try {
+                await fetch(`/admin/suppliers/{{ supplier.id }}/smart-parse-job/${this.jobId}/cancel`, {method: 'POST'});
+                this.jobStatus = 'Отмена...';
+            } catch (_) {}
         },
 
         async runBrandValidation() {
@@ -424,7 +497,7 @@ function smartParser() {
             try {
                 this.charResult = await this._fetchJson(
                     '{{ url_for("admin_supplier_validate_characteristics", supplier_id=supplier.id) }}',
-                    {auto_correct: this.autoCorrect, limit: 1000}
+                    {auto_correct: this.autoCorrect}
                 );
             } catch (e) {
                 alert('Ошибка валидации характеристик: ' + e.message);

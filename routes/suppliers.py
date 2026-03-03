@@ -1815,7 +1815,7 @@ def register_supplier_routes(app):
     def admin_supplier_smart_parse(supplier_id):
         """
         Запуск умного парсинга для выбранных товаров.
-        Выполняет brand resolution, category mapping, extraction характеристик.
+        Для больших наборов (>2000) запускает фоновую задачу.
         """
         try:
             from services.smart_product_parser import SmartProductParser
@@ -1842,12 +1842,28 @@ def register_supplier_routes(app):
                 elif scope == 'draft':
                     query = query.filter_by(status='draft')
 
-                limit = min(data.get('limit', 500), 5000)
-                product_ids = [p.id for p in query.limit(limit).all()]
+                product_ids = [p.id for p in query.all()]
 
             if not product_ids:
                 return jsonify({'error': 'Нет товаров для парсинга'}), 400
 
+            # Для больших наборов — фоновая задача
+            if len(product_ids) > 2000:
+                result = SmartProductParser.start_background_job(
+                    supplier_id=supplier_id,
+                    product_ids=product_ids,
+                    admin_user_id=current_user.id,
+                    marketplace_id=data.get('marketplace_id'),
+                    scope=data.get('scope', 'all'),
+                )
+                log_admin_action(
+                    admin_user_id=current_user.id,
+                    action='smart_parse_job_start',
+                    details=f'supplier={supplier.code}, products={len(product_ids)}, job={result["job_id"][:8]}'
+                )
+                return jsonify({'background': True, **result})
+
+            # Для небольших — синхронно
             parser = SmartProductParser(
                 supplier_id=supplier_id,
                 marketplace_id=data.get('marketplace_id'),
@@ -1888,6 +1904,29 @@ def register_supplier_routes(app):
             return jsonify({'error': f'Ошибка: {str(e)}'}), 500
 
     # -------------------------------------------------------------------
+    # API: Smart Parse — статус и отмена фоновой задачи
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/smart-parse-job/<job_id>/status')
+    @login_required
+    @admin_required
+    def admin_supplier_smart_parse_job_status(supplier_id, job_id):
+        """Статус фоновой задачи Smart Parse (поллинг)."""
+        from services.smart_product_parser import SmartProductParser
+        data = SmartProductParser.get_job_status(job_id)
+        if not data:
+            return jsonify({'error': 'Задача не найдена'}), 404
+        return jsonify(data)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/smart-parse-job/<job_id>/cancel', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_smart_parse_job_cancel(supplier_id, job_id):
+        """Отмена фоновой задачи Smart Parse."""
+        from services.smart_product_parser import SmartProductParser
+        ok = SmartProductParser.cancel_job(job_id)
+        return jsonify({'cancelled': ok})
+
+    # -------------------------------------------------------------------
     # API: Валидация характеристик
     # -------------------------------------------------------------------
     @app.route('/admin/suppliers/<int:supplier_id>/validate-characteristics', methods=['POST'])
@@ -1915,8 +1954,7 @@ def register_supplier_routes(app):
                     SupplierProduct.supplier_id == supplier_id,
                     SupplierProduct.ai_marketplace_json.isnot(None),
                 )
-                limit = min(data.get('limit', 500), 5000)
-                product_ids = [p.id for p in query.limit(limit).all()]
+                product_ids = [p.id for p in query.all()]
 
             if not product_ids:
                 return jsonify({'error': 'Нет товаров для валидации'}), 400

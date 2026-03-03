@@ -450,6 +450,180 @@ class SmartProductParser:
 
         return bulk_result
 
+    # ------------------------------------------------------------------
+    # Background job support
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def start_background_job(supplier_id: int, product_ids: List[int],
+                             admin_user_id: int, marketplace_id: int = None,
+                             scope: str = 'all') -> dict:
+        """
+        Запуск Smart Parse как фоновой задачи.
+        Использует AIParseJob с job_type='smart_parse'.
+        """
+        import threading
+        import uuid
+        from flask import current_app
+        from models import db, AIParseJob
+
+        job_id = str(uuid.uuid4())
+
+        job = AIParseJob(
+            id=job_id,
+            supplier_id=supplier_id,
+            admin_user_id=admin_user_id,
+            job_type='smart_parse',
+            status='pending',
+            total=len(product_ids),
+            model_used='algorithmic',
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        flask_app = current_app._get_current_object()
+
+        thread = threading.Thread(
+            target=SmartProductParser._run_background_job,
+            args=(flask_app, job_id, supplier_id, product_ids, marketplace_id),
+            daemon=True,
+            name=f'SmartParse-{job_id[:8]}',
+        )
+        thread.start()
+
+        return {'job_id': job_id, 'total': len(product_ids), 'status': 'pending'}
+
+    @staticmethod
+    def _run_background_job(flask_app, job_id: str, supplier_id: int,
+                            product_ids: List[int],
+                            marketplace_id: int = None):
+        """Фоновый воркер Smart Parse."""
+        with flask_app.app_context():
+            from models import db, AIParseJob, SupplierProduct
+
+            job = AIParseJob.query.get(job_id)
+            if not job:
+                return
+
+            job.status = 'running'
+            db.session.commit()
+
+            parser = SmartProductParser(
+                supplier_id=supplier_id,
+                marketplace_id=marketplace_id,
+            )
+
+            readiness_sum = 0.0
+            brand_count = 0
+            cat_count = 0
+            batch_size = 200
+            errors = 0
+
+            try:
+                for i, pid in enumerate(product_ids):
+                    # Check cancellation
+                    if i % 100 == 0 and i > 0:
+                        db.session.refresh(job)
+                        if job.status == 'cancelled':
+                            logger.info(f"SmartParse job {job_id[:8]} cancelled at {i}/{len(product_ids)}")
+                            return
+
+                    try:
+                        product = SupplierProduct.query.get(pid)
+                        if not product:
+                            errors += 1
+                            continue
+
+                        product_data = product.get_all_data_for_parsing()
+                        result = parser.parse_product(product_data, existing_product=product)
+                        parser.apply_to_supplier_product(product, result)
+                        product.updated_at = datetime.utcnow()
+
+                        readiness_sum += result.readiness_score
+                        if result.brand_resolved:
+                            brand_count += 1
+                        if result.category_mapped:
+                            cat_count += 1
+
+                    except Exception as e:
+                        errors += 1
+                        logger.debug(f"SmartParse bg error pid={pid}: {e}")
+
+                    # Batch commit + progress update
+                    if (i + 1) % batch_size == 0:
+                        processed = i + 1
+                        job.processed = processed
+                        job.succeeded = processed - errors
+                        job.failed = errors
+                        job.current_product_title = f'{processed}/{len(product_ids)}'
+                        db.session.commit()
+
+                # Final commit
+                db.session.commit()
+
+                processed = len(product_ids)
+                avg_readiness = readiness_sum / max(processed - errors, 1)
+
+                job.status = 'done'
+                job.processed = processed
+                job.succeeded = processed - errors
+                job.failed = errors
+                job.results = json.dumps({
+                    'brand_resolved_count': brand_count,
+                    'category_mapped_count': cat_count,
+                    'avg_readiness_score': round(avg_readiness, 1),
+                }, ensure_ascii=False)
+                db.session.commit()
+
+                logger.info(
+                    f"SmartParse job {job_id[:8]} done: {processed - errors}/{processed} "
+                    f"(brands={brand_count}, cats={cat_count}, score={avg_readiness:.1f})"
+                )
+
+            except Exception as e:
+                logger.exception(f"SmartParse job {job_id[:8]} failed: {e}")
+                job.status = 'failed'
+                job.error_message = str(e)[:500]
+                db.session.commit()
+
+    @staticmethod
+    def get_job_status(job_id: str) -> Optional[dict]:
+        """Получить статус фоновой задачи Smart Parse."""
+        from models import AIParseJob
+        job = AIParseJob.query.get(job_id)
+        if not job:
+            return None
+
+        data = {
+            'job_id': job.id,
+            'status': job.status,
+            'total': job.total,
+            'processed': job.processed,
+            'succeeded': job.succeeded,
+            'failed': job.failed,
+            'progress_pct': round(job.processed / max(job.total, 1) * 100, 1),
+            'current': job.current_product_title or '',
+        }
+        if job.status == 'done' and job.results:
+            try:
+                data['results'] = json.loads(job.results)
+            except Exception:
+                pass
+        if job.error_message:
+            data['error'] = job.error_message
+        return data
+
+    @staticmethod
+    def cancel_job(job_id: str) -> bool:
+        """Отменить фоновую задачу Smart Parse."""
+        from models import db, AIParseJob
+        job = AIParseJob.query.get(job_id)
+        if not job or job.status not in ('pending', 'running'):
+            return False
+        job.status = 'cancelled'
+        db.session.commit()
+        return True
+
     def smart_import_to_seller(self, seller_id: int,
                                supplier_product_ids: List[int]) -> dict:
         """
@@ -1007,35 +1181,39 @@ class SmartProductParser:
         """
         Оценка готовности товара к импорту на WB.
 
-        Шкала 0-100:
-        - Title (обязательно) — 15
-        - Brand (обязательно) — 15
+        Обязательные для WB (65 баллов):
+        - Title (обязательно) — 20
+        - Brand (обязательно) — 20
         - Category WB (обязательно) — 15
         - Photos (обязательно) — 10
-        - Price (обязательно) — 10
+
+        Важные дополнительные (35 баллов):
+        - Price — 10
         - Color — 5
         - Materials — 5
         - Gender — 5
         - Description — 5
-        - Dimensions — 5
-        - Barcode — 5
-        - Sizes — 5
+        - Barcode — 3
+        - Dimensions — 2
+
+        Бонусы (сверх 100, clamp):
+        - Sizes — +5 если есть
         """
         score = 0.0
         missing = []
 
-        # Title — 15 points
+        # Title — 20 points
         title = product_data.get('title', '')
         if title and len(title) >= 5:
-            score += 15
+            score += 20
         else:
             missing.append('title')
 
-        # Brand — 15 points
+        # Brand — 20 points
         if result.brand_resolved:
-            score += 15
+            score += 20
         elif result.brand_canonical:
-            score += 8  # Есть бренд, но не в реестре
+            score += 12  # Есть бренд, но не в реестре WB
         else:
             missing.append('brand')
 
@@ -1046,14 +1224,17 @@ class SmartProductParser:
             missing.append('wb_category')
 
         # Photos — 10 points
-        photos = product_data.get('photo_urls', [])
-        if isinstance(photos, str):
-            try:
-                photos = json.loads(photos)
-            except Exception:
-                photos = []
-        if photos:
-            score += min(10, len(photos) * 2.5)
+        photos_count = product_data.get('photos_count', 0)
+        if not photos_count:
+            photos = product_data.get('photo_urls', [])
+            if isinstance(photos, str):
+                try:
+                    photos = json.loads(photos)
+                except Exception:
+                    photos = []
+            photos_count = len(photos) if photos else 0
+        if photos_count > 0:
+            score += min(10, photos_count * 2.5)
         else:
             missing.append('photos')
 
@@ -1085,33 +1266,24 @@ class SmartProductParser:
         else:
             missing.append('gender')
 
-        # Description — 5 points
+        # Description — 5 points (бонус, часто отсутствует)
         description = product_data.get('description', '')
         if description and len(description) >= 20:
             score += 5
-        else:
-            missing.append('description')
 
-        # Dimensions — 5 points
-        if result.extracted_dimensions:
-            score += 5
-        else:
-            missing.append('dimensions')
-
-        # Barcode — 5 points
+        # Barcode — 3 points
         barcodes = product_data.get('barcodes', [])
         barcode = product_data.get('barcode', '')
         if barcodes or barcode:
-            score += 5
-        else:
-            missing.append('barcode')
+            score += 3
 
-        # Sizes — extra 5 points if applicable
-        # (не все товары имеют размеры, потому бонусные)
+        # Dimensions — 2 points
+        if result.extracted_dimensions:
+            score += 2
+
+        # Sizes — бонус +5
         if result.extracted_sizes:
-            # Не штрафуем за отсутствие, но бонусим за наличие
-            # (Добавляем поверх 100 — потом clamp)
-            pass
+            score += 5
 
         result.readiness_score = min(score, 100.0)
         result.missing_fields = missing
