@@ -670,13 +670,13 @@ def api_test_wb_brands():
             result['base_url'] = base_url
             result['full_url'] = full_url
 
+            # Делаем RAW запрос через session напрямую (без raise на ошибках)
             params = {'pattern': pattern, 'top': top, 'locale': locale}
-            response = client._make_request('GET', 'content', endpoint, params=params)
+            response = client.session.get(full_url, params=params, timeout=30)
 
             result['status_code'] = response.status_code
             result['response_url'] = response.url
             result['response_body'] = response.text[:2000]
-            result['response_headers'] = dict(response.headers)
 
             try:
                 result['json'] = response.json()
