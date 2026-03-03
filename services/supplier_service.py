@@ -747,6 +747,30 @@ class SupplierService:
 
             db.session.commit()
 
+            # --- Smart Product Parser: brand resolution + characteristics ---
+            try:
+                from services.smart_product_parser import SmartProductParser
+                smart_parser = SmartProductParser(supplier_id=supplier_id)
+                # Собираем ID товаров, которые нужно обогатить
+                sp_ids_to_parse = []
+                for pd in parsed_products:
+                    ext_id = pd['external_id']
+                    sp_obj = SupplierProduct.query.filter_by(
+                        supplier_id=supplier_id, external_id=ext_id
+                    ).first()
+                    if sp_obj:
+                        sp_ids_to_parse.append(sp_obj.id)
+                if sp_ids_to_parse:
+                    smart_result = smart_parser.parse_and_apply_bulk(sp_ids_to_parse)
+                    logger.info(
+                        f"SmartParse {supplier.code}: "
+                        f"brands={smart_result.brand_resolved_count}, "
+                        f"cats={smart_result.category_mapped_count}, "
+                        f"avg_score={smart_result.avg_readiness_score:.1f}"
+                    )
+            except Exception as e:
+                logger.warning(f"SmartProductParser skipped: {e}")
+
             # Обновляем статистику поставщика
             supplier.total_products = SupplierProduct.query.filter_by(supplier_id=supplier_id).count()
             supplier.last_sync_at = datetime.utcnow()
@@ -1968,11 +1992,23 @@ class SupplierService:
 
             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
+            # Валидация и автокоррекция AI-характеристик
+            validation_result = {}
+            try:
+                from services.smart_product_parser import CharacteristicsValidator
+                val = CharacteristicsValidator.validate_product(
+                    product_id, auto_correct=True
+                )
+                validation_result = val.to_dict()
+            except Exception as ve:
+                logger.debug(f"Characteristics validation skipped: {ve}")
+
             return {
                 'success': True,
                 'parsed_data': result,
                 'marketplace_data': marketplace_data,
                 'fill_percentage': fill_pct,
+                'validation': validation_result,
             }
 
         return {'success': False, 'error': error or 'Ошибка AI парсинга'}
@@ -2183,10 +2219,26 @@ class SupplierService:
                             # Коммит с retry для SQLite (concurrent writes)
                             _commit_with_retry(db.session)
 
+                            # Валидация и автокоррекция AI-характеристик
+                            validation_info = {}
+                            try:
+                                from services.smart_product_parser import CharacteristicsValidator
+                                val_result = CharacteristicsValidator.validate_product(
+                                    pid, auto_correct=True
+                                )
+                                validation_info = {
+                                    'chars_valid': val_result.is_valid,
+                                    'chars_corrected': val_result.corrected_count,
+                                    'chars_invalid': val_result.invalid_count,
+                                }
+                            except Exception as ve:
+                                logger.debug(f"Characteristics validation skipped: {ve}")
+
                             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                             return {
                                 'product_id': pid, 'title': title,
                                 'status': 'success', 'fill_pct': fill_pct,
+                                **validation_info,
                             }
                         else:
                             return {

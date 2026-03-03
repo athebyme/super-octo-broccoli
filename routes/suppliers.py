@@ -1568,6 +1568,180 @@ def register_supplier_routes(app):
             'field_fill_rates': pre_result.field_fill_rates,
         })
 
+    # -------------------------------------------------------------------
+    # API: Smart Product Parser — умный парсинг товаров
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/smart-parse', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_smart_parse(supplier_id):
+        """
+        Запуск умного парсинга для выбранных товаров.
+        Выполняет brand resolution, category mapping, extraction характеристик.
+        """
+        from services.smart_product_parser import SmartProductParser
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        data = request.get_json(silent=True) or {}
+        product_ids = data.get('product_ids', [])
+
+        # Если не указаны конкретные — берём все товары поставщика
+        if not product_ids:
+            scope = data.get('scope', 'all')  # all, unparsed, draft
+            query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+            if scope == 'unparsed':
+                query = query.filter(
+                    db.or_(
+                        SupplierProduct.resolved_brand_id.is_(None),
+                        SupplierProduct.parsing_confidence.is_(None),
+                        SupplierProduct.parsing_confidence < 0.5,
+                    )
+                )
+            elif scope == 'draft':
+                query = query.filter_by(status='draft')
+
+            limit = min(data.get('limit', 500), 5000)
+            product_ids = [p.id for p in query.limit(limit).all()]
+
+        if not product_ids:
+            return jsonify({'error': 'Нет товаров для парсинга'}), 400
+
+        parser = SmartProductParser(
+            supplier_id=supplier_id,
+            marketplace_id=data.get('marketplace_id'),
+        )
+        result = parser.parse_and_apply_bulk(product_ids)
+
+        log_admin_action(
+            action='smart_parse',
+            details=f'supplier={supplier.code}, products={len(product_ids)}, '
+                    f'brands={result.brand_resolved_count}, '
+                    f'cats={result.category_mapped_count}'
+        )
+
+        return jsonify(result.to_dict())
+
+    @app.route('/admin/suppliers/<int:supplier_id>/smart-parse/<int:product_id>', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_smart_parse_single(supplier_id, product_id):
+        """Умный парсинг одного товара."""
+        from services.smart_product_parser import SmartProductParser
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        parser = SmartProductParser(supplier_id=supplier_id)
+        result = parser.parse_and_apply_single(product_id)
+
+        return jsonify(result)
+
+    # -------------------------------------------------------------------
+    # API: Валидация характеристик
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/validate-characteristics', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_validate_characteristics(supplier_id):
+        """
+        Валидация и автокоррекция AI-извлечённых характеристик.
+        Проверяет по справочнику WB, исправляет fuzzy-совпадения.
+        """
+        from services.smart_product_parser import CharacteristicsValidator
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        data = request.get_json(silent=True) or {}
+        product_ids = data.get('product_ids', [])
+        auto_correct = data.get('auto_correct', True)
+
+        # Если не указаны — берём все с AI-данными
+        if not product_ids:
+            query = SupplierProduct.query.filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.ai_marketplace_json.isnot(None),
+            )
+            limit = min(data.get('limit', 500), 5000)
+            product_ids = [p.id for p in query.limit(limit).all()]
+
+        if not product_ids:
+            return jsonify({'error': 'Нет товаров для валидации'}), 400
+
+        result = CharacteristicsValidator.validate_bulk(
+            product_ids, auto_correct=auto_correct
+        )
+
+        log_admin_action(
+            action='validate_characteristics',
+            details=f'supplier={supplier.code}, products={len(product_ids)}, '
+                    f'valid={result["valid"]}, errors={result["with_errors"]}, '
+                    f'corrections={result["corrections_applied"]}'
+        )
+
+        return jsonify(result)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/validate-characteristics/<int:product_id>')
+    @login_required
+    @admin_required
+    def admin_supplier_validate_single(supplier_id, product_id):
+        """Валидация характеристик одного товара (GET для просмотра)."""
+        from services.smart_product_parser import CharacteristicsValidator
+
+        result = CharacteristicsValidator.validate_product(
+            product_id, auto_correct=False
+        )
+        return jsonify(result.to_dict())
+
+    # -------------------------------------------------------------------
+    # API: Smart Import к продавцу (обогащение + импорт)
+    # -------------------------------------------------------------------
+    @app.route('/supplier-catalog/smart-import', methods=['POST'])
+    @login_required
+    @seller_required
+    def supplier_catalog_smart_import():
+        """
+        Умный импорт: SmartParse + импорт к продавцу.
+        Обогащает данные перед копированием в ImportedProduct.
+        """
+        from services.smart_product_parser import SmartProductParser
+
+        seller = current_user.seller
+        supplier_id = request.form.get('supplier_id', type=int)
+        product_ids_raw = request.form.getlist('product_ids')
+        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+
+        if not product_ids:
+            flash('Не выбраны товары для импорта', 'warning')
+            return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+
+        parser = SmartProductParser(supplier_id=supplier_id)
+        result = parser.smart_import_to_seller(seller.id, product_ids)
+
+        if result['success']:
+            imp = result['import_result']
+            parse = result['parse_result']
+            flash(
+                f'Импортировано: {imp["imported"]}, '
+                f'пропущено: {imp["skipped"]}, '
+                f'бренды определены: {parse["brand_resolved_count"]}, '
+                f'категории: {parse["category_mapped_count"]}, '
+                f'готовность: {parse["avg_readiness_score"]:.0f}%',
+                'success'
+            )
+        else:
+            flash(
+                f'Ошибка импорта: {"; ".join(result.get("import_result", {}).get("error_messages", [])[:3])}',
+                'danger'
+            )
+
+        return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+
 
 # ============================================================================
 # HELPERS
