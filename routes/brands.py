@@ -633,33 +633,49 @@ def api_test_wb_brands():
     Диагностический эндпоинт: делает один запрос к WB API и возвращает raw ответ.
 
     Параметры (query string):
-      pattern  — строка поиска (по умолчанию "Nike")
-      top      — макс результатов (по умолчанию 10)
-      locale   — язык (по умолчанию "ru")
-      endpoint — путь API (по умолчанию "/api/content/v1/brands")
+      pattern    — строка поиска (по умолчанию "Nike")
+      top        — макс результатов (по умолчанию 10)
+      locale     — язык (по умолчанию "ru")
+      subject_id — ID предмета/категории (по умолчанию первый из включённых)
+      endpoint   — путь API (по умолчанию "/api/content/v1/brands")
 
     Пример:
       /admin/brands/api/test-wb-brands?pattern=Nike&top=10
     """
     import traceback
-    from models import Seller
+    from models import Seller, MarketplaceCategory
     from services.wb_api_client import WildberriesAPIClient
 
     pattern = request.args.get('pattern', 'Nike')
     top = request.args.get('top', 10, type=int)
     locale = request.args.get('locale', 'ru')
     endpoint = request.args.get('endpoint', '/api/content/v1/brands')
+    subject_id = request.args.get('subject_id', type=int)
+
+    # Если subject_id не передан, берём первый из включённых категорий
+    if not subject_id:
+        wb = Marketplace.query.filter_by(code='wb').first()
+        if wb:
+            cat = MarketplaceCategory.query.filter_by(
+                marketplace_id=wb.id, is_enabled=True
+            ).first()
+            if cat:
+                subject_id = cat.subject_id
 
     seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
     if not seller or not seller.wb_api_key:
         return jsonify({'success': False, 'error': 'Нет WB API ключей'}), 400
 
     api_key = seller.wb_api_key
+    params = {'pattern': pattern, 'top': top, 'locale': locale}
+    if subject_id:
+        params['subjectId'] = subject_id
+
     result = {
         'api_key_prefix': api_key[:15] + '...' if len(api_key) > 15 else '(empty)',
         'api_key_length': len(api_key),
         'endpoint': endpoint,
-        'params': {'pattern': pattern, 'top': top, 'locale': locale},
+        'params': params,
     }
 
     try:
@@ -670,8 +686,7 @@ def api_test_wb_brands():
             result['base_url'] = base_url
             result['full_url'] = full_url
 
-            # Делаем RAW запрос через session напрямую (без raise на ошибках)
-            params = {'pattern': pattern, 'top': top, 'locale': locale}
+            # RAW запрос через session (без raise на ошибках)
             response = client.session.get(full_url, params=params, timeout=30)
 
             result['status_code'] = response.status_code

@@ -697,18 +697,17 @@ class BrandEngine:
             )
             return stats
 
-        # Количество категорий для информации (не используем для загрузки)
-        total_cats = len([c for c in enabled_cats if c.subject_id])
-        logger.info(f"Found {total_cats} enabled categories for marketplace #{marketplace_id}")
+        subject_ids = [c.subject_id for c in enabled_cats if c.subject_id]
+        total_cats = len(subject_ids)
+        logger.info(f"Found {total_cats} enabled categories for brand sync")
 
-        # --- Phase 2: Загрузка ВСЕХ брендов через алфавитный перебор ---
-        # WB API /api/content/v1/brands — автокомплит-эндпоинт, требует pattern.
-        # Перебираем а-я, a-z, 0-9 чтобы собрать все бренды.
-        alphabet_len = 33 + 26 + 10  # а-я + a-z + 0-9
+        # --- Phase 2: Загрузка брендов по категориям ---
+        # WB API: GET /api/content/v1/brands требует subjectId (обязателен) + pattern + top
+        # Перебираем категории, для каждой делаем запросы с ключевыми буквами алфавита.
         update_progress(
             phase='fetching',
-            categories_total=alphabet_len,
-            message=f'Загрузка брендов (перебор алфавита, {alphabet_len} символов)...',
+            categories_total=total_cats,
+            message=f'Загрузка брендов из {total_cats} категорий...',
         )
 
         all_brands = {}  # ext_id -> name
@@ -718,34 +717,28 @@ class BrandEngine:
                 categories_done=done,
                 categories_total=total,
                 brands_found=brands_count,
-                message=f'Алфавит: {done}/{total}, найдено брендов: {brands_count}',
+                message=f'Категории: {done}/{total}, найдено брендов: {brands_count}',
             )
 
         try:
             result = marketplace_client.fetch_all_brands(
+                subject_ids=subject_ids,
                 top=5000,
                 progress_callback=on_progress,
             )
             data = result.get('data', [])
 
-            # Диагностика — записываем в progress (включая raw запрос/ответ)
+            # Диагностика
             sample = []
             if isinstance(data, list) and data:
                 sample = [{'id': b.get('id'), 'name': b.get('name')} for b in data[:3]]
             debug_info = {
-                'method': 'fetch_all_brands (alphabet iteration)',
+                'method': 'fetch_all_brands (per-category + key patterns)',
                 'total_brands': len(data) if isinstance(data, list) else 'N/A',
                 'sample': sample,
             }
-            # Добавляем raw HTTP диагностику первого запроса
             if hasattr(marketplace_client, '_fetch_debug') and marketplace_client._fetch_debug:
-                raw = marketplace_client._fetch_debug
-                debug_info['first_request'] = {
-                    'url': raw.get('url', ''),
-                    'status': raw.get('status', ''),
-                    'response_body': raw.get('raw_body', '')[:300],
-                    'auth_header': raw.get('headers_sent', {}).get('Authorization', '')[:20] + '...',
-                }
+                debug_info['first_request'] = marketplace_client._fetch_debug
             update_progress(_debug_first_response=debug_info)
 
             if isinstance(data, list):
@@ -755,7 +748,7 @@ class BrandEngine:
                     if ext_id and name:
                         all_brands[ext_id] = name
         except Exception as e:
-            logger.error(f"Failed to fetch all brands: {e}")
+            logger.error(f"Failed to fetch brands: {e}", exc_info=True)
             stats['errors'] += 1
             update_progress(_debug_first_response={
                 'error': str(e),
@@ -763,7 +756,7 @@ class BrandEngine:
             })
 
         stats['total_fetched'] = len(all_brands)
-        logger.info(f"Fetched {len(all_brands)} unique brands from WB")
+        logger.info(f"Fetched {len(all_brands)} unique brands from {total_cats} categories")
 
         # --- Phase 3: Сохранение в БД батчами ---
         update_progress(
