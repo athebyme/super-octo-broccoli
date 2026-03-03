@@ -5545,6 +5545,10 @@ register_docs_routes(app)
 from routes.marketplaces import register_marketplaces_routes
 register_marketplaces_routes(app)
 
+# ============= РОУТЫ БРЕНДОВ =============
+from routes.brands import register_brand_routes
+register_brand_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5557,6 +5561,10 @@ def _run_startup_migrations():
     migrations = [
         # (таблица, колонка, тип)
         ('ai_parse_jobs', 'model_used', 'VARCHAR(100)'),
+        # Brand registry columns
+        ('imported_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
+        ('imported_products', 'brand_status', 'VARCHAR(20)'),
+        ('supplier_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
     ]
 
     for table, column, col_type in migrations:
@@ -5571,6 +5579,20 @@ def _run_startup_migrations():
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+
+    # Create indexes for brand registry columns
+    indexes = [
+        ('idx_ip_resolved_brand', 'imported_products', 'resolved_brand_id'),
+        ('idx_sp_resolved_brand', 'supplier_products', 'resolved_brand_id'),
+    ]
+    for idx_name, table, column in indexes:
+        try:
+            db.session.execute(db.text(
+                f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})'
+            ))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============

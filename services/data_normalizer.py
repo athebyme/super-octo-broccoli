@@ -253,13 +253,23 @@ class DataNormalizer:
         """Нормализация бренда к каноническому написанию."""
         if not brand:
             return ''
-
         brand = brand.strip()
+
+        # Пробуем через BrandEngine (новая логика с БД)
+        try:
+            from services.brand_engine import get_brand_engine
+            engine = get_brand_engine()
+            result = engine.resolve(brand)
+            if result.status in ('exact', 'confident') and result.canonical_name:
+                return result.canonical_name
+        except Exception:
+            pass
+
+        # Fallback на старый словарь
         canonical = BRAND_CANONICAL.get(brand.lower())
         if canonical:
             return canonical
 
-        # Если не нашли в словаре — оставляем как есть, но чистим
         return brand
 
     # ------------------------------------------------------------------

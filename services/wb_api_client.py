@@ -1743,51 +1743,205 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get TNVED codes: {str(e)}")
             raise
 
+    def get_brands_by_subject(self, subject_id: int, top: int = 5000) -> Dict[str, Any]:
+        """
+        Получить бренды по ID предмета (категории) из WB API.
+
+        Эндпоинт: GET /api/content/v1/brands
+        Обязательные параметры: subjectId, pattern, top.
+
+        Перебирает буквы алфавита (а-я, a-z, 0-9) как pattern,
+        чтобы собрать максимум брендов для данной категории.
+
+        Args:
+            subject_id: ID предмета (subjectID) — обязателен
+            top: максимальное количество брендов на запрос
+
+        Returns:
+            {"data": [{"id": 123, "name": "Brand Name"}, ...]}
+        """
+        endpoint = "/api/content/v1/brands"
+        all_brands = {}  # id -> brand_data
+
+        # Перебираем буквы алфавита для полноты покрытия
+        patterns = list('абвгдежзиклмнопрстуфхцчшщэюя') + list('abcdefghijklmnopqrstuvwxyz') + list('0123456789')
+
+        for pattern in patterns:
+            params = {
+                'subjectId': subject_id,
+                'top': top,
+                'pattern': pattern,
+                'locale': 'ru',
+            }
+
+            try:
+                response = self._make_request('GET', 'content', endpoint, params=params)
+                result = response.json()
+                brands = result.get('brands', [])
+                for b in brands:
+                    bid = b.get('id')
+                    if bid and bid not in all_brands:
+                        all_brands[bid] = b
+                time.sleep(0.3)
+            except WBRateLimitException:
+                logger.warning(f"Rate limited on brands subjectId={subject_id} pattern='{pattern}', waiting 60s")
+                time.sleep(60)
+                try:
+                    response = self._make_request('GET', 'content', endpoint, params=params)
+                    for b in response.json().get('brands', []):
+                        bid = b.get('id')
+                        if bid and bid not in all_brands:
+                            all_brands[bid] = b
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"Failed brands subjectId={subject_id} pattern='{pattern}': {e}")
+
+        brands_list = list(all_brands.values())
+        logger.info(f"Found {len(brands_list)} unique brands for subjectId={subject_id}")
+        return {'data': brands_list}
+
+    def get_brands_by_subject_quick(self, subject_id: int, pattern: str = 'а',
+                                     top: int = 5000) -> Dict[str, Any]:
+        """
+        Быстрый запрос брендов для одной категории (один запрос).
+
+        Args:
+            subject_id: ID предмета (обязателен)
+            pattern: строка поиска
+            top: макс. результатов
+        """
+        endpoint = "/api/content/v1/brands"
+        params = {
+            'subjectId': subject_id,
+            'top': top,
+            'pattern': pattern,
+            'locale': 'ru',
+        }
+        response = self._make_request('GET', 'content', endpoint, params=params)
+        return response.json()
+
+    def fetch_all_brands(self, subject_ids: list, top: int = 5000,
+                         progress_callback=None) -> Dict[str, Any]:
+        """
+        Получить бренды из WB по списку категорий.
+
+        Для каждой категории перебирает несколько ключевых букв алфавита
+        (а, е, к, о, с, a, e, o, s, 1) как pattern для покрытия.
+
+        Args:
+            subject_ids: список ID предметов (subjectID)
+            top: макс. результатов на один запрос
+            progress_callback: callable(done, total, brands_so_far)
+        """
+        endpoint = "/api/content/v1/brands"
+        all_brands = {}  # id -> brand_data
+        self._fetch_debug = None
+
+        # Ключевые буквы для покрытия (гласные + частые согласные + цифра)
+        key_patterns = list('аеиокстнрabcdemost1')
+        total = len(subject_ids)
+
+        for i, subject_id in enumerate(subject_ids):
+            for pattern in key_patterns:
+                params = {
+                    'subjectId': subject_id,
+                    'top': top,
+                    'pattern': pattern,
+                    'locale': 'ru',
+                }
+
+                try:
+                    response = self._make_request('GET', 'content', endpoint, params=params)
+
+                    # Диагностика первого успешного запроса
+                    if not self._fetch_debug:
+                        self._fetch_debug = {
+                            'url': response.url,
+                            'status': response.status_code,
+                            'raw_body': response.text[:500],
+                        }
+
+                    result = response.json()
+                    brands = result.get('brands', [])
+                    for b in brands:
+                        bid = b.get('id')
+                        if bid and bid not in all_brands:
+                            all_brands[bid] = b
+                    time.sleep(0.3)
+                except WBRateLimitException:
+                    if not self._fetch_debug:
+                        self._fetch_debug = {'error': 'WBRateLimitException', 'pattern': pattern, 'subjectId': subject_id}
+                    logger.warning(f"Rate limited on brands, waiting 60s")
+                    time.sleep(60)
+                    try:
+                        response = self._make_request('GET', 'content', endpoint, params=params)
+                        for b in response.json().get('brands', []):
+                            bid = b.get('id')
+                            if bid and bid not in all_brands:
+                                all_brands[bid] = b
+                    except Exception:
+                        pass
+                except Exception as e:
+                    if not self._fetch_debug:
+                        self._fetch_debug = {'error': f'{type(e).__name__}: {str(e)[:300]}', 'pattern': pattern, 'subjectId': subject_id}
+                    logger.warning(f"Failed brands subjectId={subject_id} pattern='{pattern}': {e}")
+
+            if progress_callback:
+                progress_callback(i + 1, total, len(all_brands))
+
+        brands_list = list(all_brands.values())
+        logger.info(f"Fetched {len(brands_list)} unique brands from {total} categories")
+        return {'data': brands_list}
+
     def search_brands(self, pattern: str, top: int = 50) -> Dict[str, Any]:
         """
-        Поиск брендов по названию в справочнике WB
+        Поиск брендов по названию через WB API автокомплит.
 
         Args:
             pattern: Строка поиска (часть названия бренда)
-            top: Максимальное количество результатов (по умолчанию 50)
+            top: Максимальное количество результатов
 
         Returns:
-            Dict с данными о брендах:
-            {
-                "data": [
-                    {"id": 123, "name": "Brand Name"},
-                    ...
-                ]
-            }
-
-        Example:
-            >>> client.search_brands("Nike")
-            {"data": [{"id": 1234, "name": "Nike"}]}
+            Dict с данными о брендах: {"data": [...]}
         """
-        endpoint = "/content/v2/directory/brands"
-        # WB API использует 'name' для поиска, не 'pattern'
+        if not pattern or not pattern.strip():
+            return {'data': []}
+
+        logger.info(f"Searching brands with pattern: '{pattern}'")
+        endpoint = "/api/content/v1/brands"
+
+        # subjectId обязателен — берём распространённый subject для широкого поиска
+        # Используем переданный subject_id или дефолтный (Футболки = 1)
+        search_subject = getattr(self, '_default_subject_id', None) or 1
+
         params = {
-            'name': pattern,
-            'top': top
+            'subjectId': search_subject,
+            'top': top,
+            'pattern': pattern.strip(),
+            'locale': 'ru',
         }
 
-        logger.info(f"🔍 Searching brands with name: '{pattern}'")
         try:
             response = self._make_request('GET', 'content', endpoint, params=params)
             result = response.json()
-            brands_count = len(result.get('data', []))
-            logger.info(f"✅ Found {brands_count} brands matching '{pattern}'")
-            return result
+            brands = result.get('brands', [])
+            logger.info(f"Found {len(brands)} brands matching '{pattern}'")
+            return {'data': brands}
         except Exception as e:
-            logger.error(f"❌ Failed to search brands: {str(e)}")
+            logger.error(f"Failed to search brands '{pattern}': {str(e)}")
             raise
 
-    def validate_brand(self, brand_name: str) -> Dict[str, Any]:
+    def validate_brand(self, brand_name: str, subject_id: int = None) -> Dict[str, Any]:
         """
-        Проверить существует ли бренд в справочнике WB
+        Проверить существует ли бренд в справочнике WB.
+
+        Использует GET /api/content/v1/brands с subjectId.
+        Если subject_id не указан, проверяет по нескольким категориям.
 
         Args:
             brand_name: Название бренда для проверки
+            subject_id: Опциональный ID предмета для проверки
 
         Returns:
             Dict с результатом:
@@ -1796,84 +1950,54 @@ class WildberriesAPIClient:
                 "exact_match": {"id": int, "name": str} или None,
                 "suggestions": [{"id": int, "name": str}, ...]
             }
-
-        Example:
-            >>> client.validate_brand("Nike")
-            {"valid": True, "exact_match": {"id": 1234, "name": "Nike"}, "suggestions": []}
         """
-        logger.info(f"🔍 Validating brand: '{brand_name}'")
+        logger.info(f"🔍 Validating brand: '{brand_name}'" + (f" (subjectId={subject_id})" if subject_id else ""))
 
         try:
             all_brands = []
             seen_ids = set()
 
-            # Попробуем несколько вариантов поиска для лучшего покрытия
-            # ВАЖНО: WB API чувствителен к регистру, поэтому пробуем разные варианты
-            search_variants = [
-                brand_name,  # Оригинальный запрос
-                brand_name.lower(),  # Нижний регистр
-                brand_name.upper(),  # Верхний регистр
-                brand_name.capitalize(),  # С заглавной буквы
-                brand_name.title(),  # Каждое слово с заглавной
-            ]
+            if subject_id:
+                # Проверяем конкретную категорию
+                subject_ids = [subject_id]
+            else:
+                # Берём несколько популярных категорий для поиска
+                subjects_result = self.get_subjects_list(limit=100)
+                subjects = subjects_result.get('data', [])
+                subject_ids = [s.get('subjectID') for s in subjects[:30] if s.get('subjectID')]
 
-            # CamelCase вариант (JoyHyper из JOYHYPER)
-            # Для брендов типа JOYHYPER -> JoyHyper
-            if brand_name.isupper() and len(brand_name) > 3:
-                # Попробуем разбить на части и сделать CamelCase
-                # Ищем паттерны типа JOY+HYPER
-                import re
-                # Попытка разбить по известным словам
-                camel = brand_name.capitalize()  # Joyhyper
-                search_variants.append(camel)
-
-            # Если бренд содержит несколько слов, попробуем первое слово
-            words = brand_name.split()
-            if len(words) > 1:
-                search_variants.append(words[0])
-                search_variants.append(words[0].capitalize())
-
-            # Если бренд длинный, попробуем разные длины
-            if len(brand_name) > 5:
-                search_variants.append(brand_name[:5])
-                search_variants.append(brand_name[:5].capitalize())
-                search_variants.append(brand_name[:3])  # Короткий префикс для широкого поиска
-
-            # Удаляем дубликаты, сохраняя порядок
-            unique_variants = []
-            seen_variants = set()
-            for v in search_variants:
-                v_lower = v.lower()
-                if v_lower not in seen_variants:
-                    seen_variants.add(v_lower)
-                    unique_variants.append(v)
-
-            for variant in unique_variants:
+            for sid in subject_ids:
                 try:
-                    result = self.search_brands(variant, top=30)
-                    brands = result.get('data', [])
-                    logger.info(f"   Search '{variant}': found {len(brands)} brands")
-
-                    for brand in brands:
+                    result = self.get_brands_by_subject(sid)
+                    for brand in result.get('brands', result.get('data', [])):
                         brand_id = brand.get('id')
                         if brand_id and brand_id not in seen_ids:
                             seen_ids.add(brand_id)
                             all_brands.append(brand)
-
-                    # Если нашли достаточно - выходим
-                    if len(all_brands) >= 20:
-                        break
+                    time.sleep(0.1)
                 except Exception as e:
-                    logger.warning(f"   Search '{variant}' failed: {e}")
+                    logger.warning(f"   Brands for subjectId={sid} failed: {e}")
                     continue
 
-            # Ищем точное совпадение (регистронезависимо)
+                # Проверяем, нашли ли уже точное совпадение (для ранней остановки)
+                brand_lower = brand_name.lower().strip()
+                brand_normalized = ''.join(c.lower() for c in brand_name if c.isalnum())
+                for b in all_brands:
+                    b_name = b.get('name', '')
+                    if b_name.lower().strip() == brand_lower:
+                        logger.info(f"✅ Brand '{brand_name}' found: exact match '{b_name}'")
+                        return {
+                            'valid': True,
+                            'exact_match': b,
+                            'suggestions': [],
+                        }
+
+            # Полный поиск по собранным брендам
             brand_lower = brand_name.lower().strip()
-            # Нормализуем - убираем пробелы и спецсимволы для сравнения
             brand_normalized = ''.join(c.lower() for c in brand_name if c.isalnum())
 
             exact_match = None
-            close_match = None  # Для почти точных совпадений
+            close_match = None
             suggestions = []
 
             for brand in all_brands:
@@ -1881,25 +2005,21 @@ class WildberriesAPIClient:
                 wb_name_lower = brand_wb_name.lower().strip()
                 wb_name_normalized = ''.join(c.lower() for c in brand_wb_name if c.isalnum())
 
-                # Точное совпадение по lowercase
                 if wb_name_lower == brand_lower:
                     exact_match = brand
                     continue
 
-                # Совпадение без учёта регистра и спецсимволов (JOYHYPER == JoyHyper)
                 if wb_name_normalized == brand_normalized and not exact_match:
                     exact_match = brand
                     logger.info(f"   Found normalized match: '{brand_wb_name}' for '{brand_name}'")
                     continue
 
-                # Частичное совпадение - один содержит другой
                 if brand_normalized in wb_name_normalized or wb_name_normalized in brand_normalized:
                     if not close_match:
                         close_match = brand
 
                 suggestions.append(brand)
 
-            # Если точное не найдено, но есть близкое - используем его
             if not exact_match and close_match:
                 exact_match = close_match
                 logger.info(f"   Using close match: '{close_match.get('name')}' for '{brand_name}'")
@@ -1911,7 +2031,7 @@ class WildberriesAPIClient:
             return {
                 'valid': is_valid,
                 'exact_match': exact_match,
-                'suggestions': suggestions[:15]  # Максимум 15 предложений
+                'suggestions': suggestions[:15]
             }
         except Exception as e:
             logger.error(f"❌ Failed to validate brand: {str(e)}")

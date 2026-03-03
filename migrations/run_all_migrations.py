@@ -178,11 +178,40 @@ def migrate(db_path):
             ("ai_country", "VARCHAR(100)"),
             # Оригинальные данные поставщика
             ("original_data", "TEXT"),
+            # Brand registry
+            ("resolved_brand_id", "INTEGER REFERENCES brands(id)"),
+            ("brand_status", "VARCHAR(20)"),
         ]
 
         for col_name, col_type in products_columns:
             if add_column_if_missing(cursor, 'imported_products', col_name, col_type, existing):
                 total_added += 1
+
+        # Индексы для brand registry
+        try:
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_ip_resolved_brand ON imported_products(resolved_brand_id)')
+        except sqlite3.OperationalError:
+            pass
+
+        # ============================================================
+        # Миграция supplier_products (brand registry)
+        # ============================================================
+        print("\n📋 Таблица: supplier_products (brand registry)")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='supplier_products'")
+        if cursor.fetchone():
+            existing_sp = get_existing_columns(cursor, 'supplier_products')
+            sp_columns = [
+                ("resolved_brand_id", "INTEGER REFERENCES brands(id)"),
+            ]
+            for col_name, col_type in sp_columns:
+                if add_column_if_missing(cursor, 'supplier_products', col_name, col_type, existing_sp):
+                    total_added += 1
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_sp_resolved_brand ON supplier_products(resolved_brand_id)')
+            except sqlite3.OperationalError:
+                pass
 
         # ============================================================
         # Миграция ai_history
