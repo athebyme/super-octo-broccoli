@@ -1569,6 +1569,64 @@ def register_supplier_routes(app):
         })
 
     # -------------------------------------------------------------------
+    # Страница Smart Parser — дашборд умного парсинга
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/smart-parser')
+    @login_required
+    @admin_required
+    def admin_supplier_smart_parser(supplier_id):
+        """Дашборд умного парсинга товаров поставщика."""
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            abort(404)
+
+        # Статистика
+        total = SupplierProduct.query.filter_by(supplier_id=supplier_id).count()
+        brand_resolved = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.resolved_brand_id.isnot(None),
+        ).count()
+        brand_unresolved = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.brand.isnot(None),
+            SupplierProduct.brand != '',
+            SupplierProduct.resolved_brand_id.is_(None),
+        ).count()
+        category_mapped = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.wb_subject_id.isnot(None),
+        ).count()
+        in_stock = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.supplier_quantity.isnot(None),
+            SupplierProduct.supplier_quantity > 0,
+        ).count()
+
+        # Средняя готовность
+        avg_q = db.session.query(
+            db.func.avg(SupplierProduct.parsing_confidence)
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.parsing_confidence.isnot(None),
+        ).scalar()
+        avg_readiness = round((avg_q or 0) * 100)
+
+        stats = {
+            'total': total,
+            'brand_resolved': brand_resolved,
+            'brand_unresolved': brand_unresolved,
+            'category_mapped': category_mapped,
+            'avg_readiness': avg_readiness,
+            'in_stock': in_stock,
+        }
+
+        return render_template(
+            'admin_supplier_smart_parser.html',
+            supplier=supplier,
+            stats=stats,
+        )
+
+    # -------------------------------------------------------------------
     # API: Smart Product Parser — умный парсинг товаров
     # -------------------------------------------------------------------
     @app.route('/admin/suppliers/<int:supplier_id>/smart-parse', methods=['POST'])
