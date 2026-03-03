@@ -3125,6 +3125,13 @@ def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedPr
         original_data=sp.original_data_json,
     )
 
+    # Копируем resolved brand
+    if sp.resolved_brand_id:
+        imp.resolved_brand_id = sp.resolved_brand_id
+        imp.brand_status = 'exact'
+    elif sp.brand:
+        imp.brand_status = 'unresolved'
+
     # Копируем AI данные если есть
     if sp.ai_seo_title:
         imp.ai_seo_title = sp.ai_seo_title
@@ -3145,6 +3152,9 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
     """Обновить ImportedProduct из SupplierProduct (sync)"""
     imp.title = sp.title or imp.title
     imp.brand = sp.brand or imp.brand
+    if sp.resolved_brand_id and not imp.resolved_brand_id:
+        imp.resolved_brand_id = sp.resolved_brand_id
+        imp.brand_status = 'exact'
     imp.category = sp.category or imp.category
     imp.all_categories = sp.all_categories or imp.all_categories
     imp.mapped_wb_category = sp.wb_category_name or imp.mapped_wb_category

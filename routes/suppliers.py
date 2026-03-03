@@ -1847,6 +1847,49 @@ def register_supplier_routes(app):
             return jsonify({'error': f'Ошибка валидации брендов: {str(e)}'}), 500
 
     # -------------------------------------------------------------------
+    # API: Применить результаты валидации брендов
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/apply-brands', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_apply_brands(supplier_id):
+        """
+        Применить валидацию брендов: обновить resolved_brand_id у товаров,
+        создать MarketplaceBrand записи для найденных совпадений.
+        """
+        try:
+            from services.smart_product_parser import SmartProductParser
+
+            supplier = SupplierService.get_supplier(supplier_id)
+            if not supplier:
+                return jsonify({'error': 'Supplier not found'}), 404
+
+            data = request.get_json(silent=True) or {}
+            marketplace_id = data.get('marketplace_id')
+
+            parser = SmartProductParser(
+                supplier_id=supplier_id,
+                marketplace_id=marketplace_id,
+            )
+            result = parser.apply_brand_validation(
+                supplier_id=supplier_id,
+                marketplace_id=marketplace_id,
+            )
+
+            log_admin_action(
+                action='apply_brand_validation',
+                details=f'supplier={supplier.code}, brands={result["total_brands"]}, '
+                        f'resolved={result["resolved"]}, '
+                        f'marketplace={result["marketplace_matched"]}, '
+                        f'products_updated={result["products_updated"]}'
+            )
+
+            return jsonify(result)
+        except Exception as e:
+            logger.exception(f"Apply brand validation error for supplier {supplier_id}")
+            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
+
+    # -------------------------------------------------------------------
     # API: Smart Import к продавцу (обогащение + импорт)
     # -------------------------------------------------------------------
     @app.route('/supplier-catalog/smart-import', methods=['POST'])

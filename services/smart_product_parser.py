@@ -747,6 +747,111 @@ class SmartProductParser:
             logger.debug(f"Fuzzy marketplace brand match error: {e}")
 
     # ------------------------------------------------------------------
+    # Brand validation — apply results to DB
+    # ------------------------------------------------------------------
+
+    def apply_brand_validation(self, supplier_id: int,
+                                marketplace_id: int = None) -> dict:
+        """
+        Массовая валидация и ПРИМЕНЕНИЕ результатов к товарам.
+
+        Для каждого уникального бренда поставщика:
+        1. Resolve через BrandEngine → resolved_brand_id
+        2. Validate на маркетплейсе → marketplace_brand_name
+        3. Обновить все SupplierProduct с этим брендом
+
+        Returns:
+            dict с итогами
+        """
+        from models import db, SupplierProduct, Brand, MarketplaceBrand
+
+        # Получаем уникальные бренды
+        brand_rows = db.session.query(
+            SupplierProduct.brand,
+            db.func.group_concat(SupplierProduct.id).label('ids')
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.brand.isnot(None),
+            SupplierProduct.brand != '',
+        ).group_by(SupplierProduct.brand).all()
+
+        stats = {
+            'total_brands': len(brand_rows),
+            'resolved': 0,
+            'marketplace_matched': 0,
+            'products_updated': 0,
+            'brands': [],
+        }
+
+        for brand_name, ids_str in brand_rows:
+            product_ids = [int(x) for x in ids_str.split(',')]
+            result = SmartParseResult()
+            self._resolve_brand(result, brand_name, '')
+            self._validate_brand_on_marketplace(result)
+
+            updated = 0
+
+            if result.brand_resolved and result.brand_id:
+                stats['resolved'] += 1
+                # Обновить resolved_brand_id на всех товарах с этим брендом
+                SupplierProduct.query.filter(
+                    SupplierProduct.id.in_(product_ids)
+                ).update(
+                    {
+                        SupplierProduct.resolved_brand_id: result.brand_id,
+                        SupplierProduct.brand: result.brand_canonical or brand_name,
+                    },
+                    synchronize_session=False,
+                )
+                updated = len(product_ids)
+
+            if result.brand_marketplace_valid and result.brand_id:
+                stats['marketplace_matched'] += 1
+
+                # Создать/обновить MarketplaceBrand если marketplace_id указан
+                mp_id = marketplace_id or self._marketplace_id
+                if mp_id and result.brand_marketplace_name:
+                    existing = MarketplaceBrand.query.filter_by(
+                        brand_id=result.brand_id,
+                        marketplace_id=mp_id,
+                    ).first()
+                    if not existing:
+                        mp_brand = MarketplaceBrand(
+                            brand_id=result.brand_id,
+                            marketplace_id=mp_id,
+                            marketplace_brand_name=result.brand_marketplace_name,
+                            marketplace_brand_id=result.brand_marketplace_id,
+                            status='verified',
+                        )
+                        db.session.add(mp_brand)
+                    elif existing.status != 'verified':
+                        existing.status = 'verified'
+                        existing.marketplace_brand_name = result.brand_marketplace_name
+                        if result.brand_marketplace_id:
+                            existing.marketplace_brand_id = result.brand_marketplace_id
+
+            stats['products_updated'] += updated
+            stats['brands'].append({
+                'supplier_brand': brand_name,
+                'products_count': len(product_ids),
+                'resolved': result.brand_resolved,
+                'canonical': result.brand_canonical,
+                'marketplace_valid': result.brand_marketplace_valid,
+                'marketplace_name': result.brand_marketplace_name,
+            })
+
+        db.session.commit()
+
+        logger.info(
+            f"Brand validation applied: supplier={supplier_id}, "
+            f"brands={stats['total_brands']}, resolved={stats['resolved']}, "
+            f"marketplace={stats['marketplace_matched']}, "
+            f"products_updated={stats['products_updated']}"
+        )
+
+        return stats
+
+    # ------------------------------------------------------------------
     # Step 2: Extract characteristics
     # ------------------------------------------------------------------
 
