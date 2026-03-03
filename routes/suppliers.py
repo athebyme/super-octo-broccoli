@@ -1342,6 +1342,186 @@ def register_supplier_routes(app):
         return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
 
     # -------------------------------------------------------------------
+    # Мои импортированные товары — просмотр и управление
+    # -------------------------------------------------------------------
+    @app.route('/my-products')
+    @login_required
+    @seller_required
+    def seller_my_products():
+        """Список импортированных товаров продавца с WB-статусами."""
+        seller = current_user.seller
+        page = request.args.get('page', 1, type=int)
+        status = request.args.get('status', '').strip()
+        search = request.args.get('search', '').strip()
+
+        query = ImportedProduct.query.filter_by(seller_id=seller.id)
+        if status:
+            query = query.filter_by(import_status=status)
+        if search:
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.title.ilike(f'%{search}%'),
+                    ImportedProduct.brand.ilike(f'%{search}%'),
+                    ImportedProduct.external_id.ilike(f'%{search}%'),
+                )
+            )
+
+        query = query.order_by(ImportedProduct.created_at.desc())
+        pagination = query.paginate(page=page, per_page=40, error_out=False)
+
+        # Статистика
+        base_q = ImportedProduct.query.filter_by(seller_id=seller.id)
+        stats = {
+            'total': base_q.count(),
+            'pending': base_q.filter_by(import_status='pending').count(),
+            'validated': base_q.filter_by(import_status='validated').count(),
+            'imported': base_q.filter_by(import_status='imported').count(),
+            'failed': base_q.filter_by(import_status='failed').count(),
+        }
+
+        return render_template(
+            'seller_my_products.html',
+            pagination=pagination,
+            stats=stats,
+            status=status,
+            search=search,
+            has_wb_key=seller.has_valid_api_key(),
+        )
+
+    # -------------------------------------------------------------------
+    # WB Card Preview — превью карточки в формате WB
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/wb-preview')
+    @login_required
+    @seller_required
+    def seller_product_wb_preview(product_id):
+        """Превью карточки товара в формате WB."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        from services.wb_product_importer import WBProductImporter
+        importer = WBProductImporter(seller)
+        preview = importer.build_wb_card_preview(product)
+
+        return render_template(
+            'seller_wb_card_preview.html',
+            product=product,
+            preview=preview,
+            has_wb_key=seller.has_valid_api_key(),
+        )
+
+    # -------------------------------------------------------------------
+    # WB Card Preview API (JSON)
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/wb-preview.json')
+    @login_required
+    @seller_required
+    def seller_product_wb_preview_json(product_id):
+        """JSON превью карточки WB (для AJAX)."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+        if not product:
+            return jsonify({'error': 'Товар не найден'}), 404
+
+        try:
+            from services.wb_product_importer import WBProductImporter
+            importer = WBProductImporter(seller)
+            preview = importer.build_wb_card_preview(product)
+            return jsonify(preview)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # -------------------------------------------------------------------
+    # Push to WB — единичный импорт товара на WB
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/push-to-wb', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_push_to_wb(product_id):
+        """Импорт одного товара в магазин WB продавца."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        if not seller.has_valid_api_key():
+            flash('API ключ WB не настроен', 'danger')
+            return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+        from services.wb_product_importer import WBProductImporter
+        importer = WBProductImporter(seller)
+        success, error, created = importer.import_product_to_wb(product)
+
+        if success:
+            flash(f'Товар "{product.title}" отправлен на WB', 'success')
+        else:
+            flash(f'Ошибка: {error}', 'danger')
+
+        return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+    # -------------------------------------------------------------------
+    # Push to WB — массовый импорт товаров на WB
+    # -------------------------------------------------------------------
+    @app.route('/my-products/push-to-wb-bulk', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_push_to_wb_bulk():
+        """Массовый импорт товаров в магазин WB."""
+        seller = current_user.seller
+
+        if not seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 400
+
+        data = request.get_json(silent=True) or {}
+        product_ids = data.get('product_ids', [])
+
+        if not product_ids:
+            return jsonify({'error': 'Не выбраны товары'}), 400
+
+        try:
+            from services.wb_product_importer import WBProductImporter
+            importer = WBProductImporter(seller)
+            result = importer.import_multiple_products(product_ids)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # -------------------------------------------------------------------
+    # Validate product for WB — пометить как валидированный
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/validate', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_validate_product(product_id):
+        """Пометить товар как validated (готов к пушу на WB)."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        # Проверяем минимальные требования
+        issues = []
+        if not product.title:
+            issues.append('Нет названия')
+        if not product.brand:
+            issues.append('Нет бренда')
+        if not product.wb_subject_id:
+            issues.append('Нет категории WB')
+
+        if issues:
+            flash(f'Невозможно валидировать: {", ".join(issues)}', 'danger')
+        else:
+            product.import_status = 'validated'
+            db.session.commit()
+            flash('Товар готов к импорту на WB', 'success')
+
+        return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+    # -------------------------------------------------------------------
     # Обновление существующих товаров из базы поставщика
     # -------------------------------------------------------------------
     @app.route('/supplier-catalog/update', methods=['POST'])

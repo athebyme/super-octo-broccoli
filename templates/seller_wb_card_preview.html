@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+
+{% block title %}WB карточка — {{ product.title[:40] }}{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('seller_my_products') }}" class="hover:text-indigo-600">Мои товары</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">WB карточка</span>
+    </nav>
+
+    <!-- Header with status -->
+    <div class="relative overflow-hidden bg-gradient-to-r {{ 'from-green-600 via-emerald-700 to-teal-800' if preview.is_ready else 'from-amber-500 via-orange-600 to-red-600' }} rounded-2xl p-6 mb-6">
+        <div class="relative flex justify-between items-start">
+            <div>
+                <h1 class="text-xl font-bold text-white">{{ product.title or 'Без названия' }}</h1>
+                <p class="text-sm text-white/70 mt-1">
+                    {% if preview.is_ready %}
+                    Карточка готова к отправке на WB
+                    {% else %}
+                    {{ preview.errors_count }} ошибок, {{ preview.warnings_count }} предупреждений
+                    {% endif %}
+                </p>
+            </div>
+            <div class="flex gap-2">
+                {% if preview.is_ready and has_wb_key %}
+                    {% if product.import_status == 'imported' %}
+                    <span class="px-4 py-2 bg-white/20 text-white rounded-lg text-sm font-medium">
+                        Уже на WB
+                    </span>
+                    {% elif product.import_status == 'validated' %}
+                    <form method="POST" action="{{ url_for('seller_push_to_wb', product_id=product.id) }}">
+                        <button type="submit" onclick="return confirm('Отправить товар на Wildberries?')"
+                                class="px-4 py-2 bg-white text-green-700 rounded-lg text-sm font-bold hover:bg-green-50 shadow-lg">
+                            Отправить на WB
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="POST" action="{{ url_for('seller_validate_product', product_id=product.id) }}">
+                        <button type="submit"
+                                class="px-4 py-2 bg-white text-blue-700 rounded-lg text-sm font-bold hover:bg-blue-50 shadow-lg">
+                            Подтвердить готовность
+                        </button>
+                    </form>
+                    {% endif %}
+                {% elif not has_wb_key %}
+                <span class="px-4 py-2 bg-white/20 text-white rounded-lg text-sm">
+                    Настройте API ключ WB
+                </span>
+                {% endif %}
+                <a href="{{ url_for('seller_my_products') }}"
+                   class="px-4 py-2 border border-white/20 text-white rounded-lg text-sm font-medium hover:bg-white/10">
+                    Назад
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Issues -->
+    {% if preview.issues %}
+    <div class="mb-6 space-y-2">
+        {% for issue in preview.issues %}
+        <div class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm {{ 'bg-red-50 text-red-700 border border-red-200' if issue.level == 'error' else 'bg-yellow-50 text-yellow-700 border border-yellow-200' }}">
+            {% if issue.level == 'error' %}
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            {% else %}
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+            {% endif %}
+            <span><b>{{ issue.field }}:</b> {{ issue.message }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Left column: Photos -->
+        <div class="lg:col-span-1">
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                <div class="p-3 border-b border-gray-100 bg-gray-50">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase">Фотографии ({{ preview.card.photos_count }})</h3>
+                </div>
+                {% if preview.card.photos %}
+                <div class="grid grid-cols-2 gap-1 p-1">
+                    {% for photo in preview.card.photos[:8] %}
+                    <img src="{{ photo }}" class="w-full aspect-square object-cover rounded" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect fill=%22%23f3f4f6%22 width=%22100%22 height=%22100%22/><text x=%2250%22 y=%2255%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2212%22>no img</text></svg>'" alt="">
+                    {% endfor %}
+                </div>
+                {% if preview.card.photos_count > 8 %}
+                <p class="text-center text-xs text-gray-400 py-2">+{{ preview.card.photos_count - 8 }} ещё</p>
+                {% endif %}
+                {% else %}
+                <div class="p-8 text-center text-gray-400 text-sm">Нет фотографий</div>
+                {% endif %}
+            </div>
+
+            <!-- Pricing -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-4 p-4">
+                <h3 class="text-xs font-medium text-gray-500 uppercase mb-3">Цены</h3>
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Закупочная</span>
+                        <span class="font-medium">{{ '%.0f' | format(preview.pricing.supplier_price) if preview.pricing.supplier_price else '—' }} &#8381;</span>
+                    </div>
+                    {% if preview.pricing.calculated_price %}
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Расчётная</span>
+                        <span class="font-bold text-green-600">{{ '%.0f' | format(preview.pricing.calculated_price) }} &#8381;</span>
+                    </div>
+                    {% endif %}
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Остаток</span>
+                        <span class="font-medium {{ 'text-green-600' if preview.pricing.supplier_quantity and preview.pricing.supplier_quantity > 0 else 'text-red-500' }}">
+                            {{ preview.pricing.supplier_quantity if preview.pricing.supplier_quantity is not none else '—' }} шт
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column: Card data -->
+        <div class="lg:col-span-2 space-y-4">
+            <!-- Main card fields -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+                <div class="p-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase">Карточка WB</h3>
+                    <span class="text-xs px-2 py-0.5 rounded-full font-medium {{ 'bg-green-100 text-green-700' if preview.is_ready else 'bg-red-100 text-red-600' }}">
+                        {{ 'Готова' if preview.is_ready else 'Не готова' }}
+                    </span>
+                </div>
+                <div class="p-4 space-y-4">
+                    <!-- Title -->
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Название (title)</label>
+                        <p class="mt-1 text-sm font-medium text-gray-900 bg-gray-50 rounded-lg px-3 py-2">
+                            {{ preview.card.title or '—' }}
+                            <span class="text-xs text-gray-400 ml-2">{{ preview.card.title | length }}/60</span>
+                        </p>
+                    </div>
+
+                    <!-- Brand -->
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Бренд</label>
+                        <p class="mt-1 text-sm bg-gray-50 rounded-lg px-3 py-2">
+                            <span class="font-medium">{{ preview.card.brand or '—' }}</span>
+                            {% if preview.card.brand_resolved %}
+                            <span class="ml-2 text-xs text-green-600">Подтверждён</span>
+                            {% else %}
+                            <span class="ml-2 text-xs text-yellow-600">Не подтверждён</span>
+                            {% endif %}
+                        </p>
+                    </div>
+
+                    <!-- Category -->
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Категория WB</label>
+                        <p class="mt-1 text-sm bg-gray-50 rounded-lg px-3 py-2">
+                            {% if preview.card.subjectID %}
+                            <span class="font-medium">{{ preview.card.subjectName }}</span>
+                            <span class="text-xs text-gray-400 ml-2">ID: {{ preview.card.subjectID }}</span>
+                            {% else %}
+                            <span class="text-red-500">Не определена</span>
+                            {% endif %}
+                        </p>
+                    </div>
+
+                    <!-- Vendor Code -->
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Артикул продавца (vendorCode)</label>
+                        <p class="mt-1 text-sm font-mono bg-gray-50 rounded-lg px-3 py-2">{{ preview.card.vendorCode }}</p>
+                    </div>
+
+                    <!-- Description -->
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Описание</label>
+                        <p class="mt-1 text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2 max-h-32 overflow-y-auto">
+                            {{ preview.card.description[:500] or '—' }}
+                            {% if preview.card.description | length > 500 %}...{% endif %}
+                        </p>
+                    </div>
+
+                    <!-- Basic info grid -->
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase font-medium">Пол</label>
+                            <p class="mt-1 text-sm bg-gray-50 rounded-lg px-3 py-2">{{ preview.card.gender or '—' }}</p>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase font-medium">Страна</label>
+                            <p class="mt-1 text-sm bg-gray-50 rounded-lg px-3 py-2">{{ preview.card.country or '—' }}</p>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500 uppercase font-medium">Размеры</label>
+                            <p class="mt-1 text-sm bg-gray-50 rounded-lg px-3 py-2">
+                                {% if preview.card.has_real_sizes %}
+                                {{ preview.card.sizes | length }} размеров
+                                {% else %}
+                                Без размеров
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Colors & Materials -->
+                    {% if preview.card.colors %}
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Цвета</label>
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            {% for color in preview.card.colors %}
+                            <span class="px-2 py-0.5 bg-gray-100 rounded text-xs text-gray-700">{{ color }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if preview.card.materials %}
+                    <div>
+                        <label class="text-xs text-gray-500 uppercase font-medium">Материалы</label>
+                        <div class="mt-1 flex flex-wrap gap-1">
+                            {% for mat in preview.card.materials %}
+                            <span class="px-2 py-0.5 bg-gray-100 rounded text-xs text-gray-700">{{ mat }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Characteristics -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+                <div class="p-3 border-b border-gray-100 bg-gray-50">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase">Характеристики WB ({{ preview.card.characteristics_count }})</h3>
+                </div>
+                {% if preview.card.characteristics %}
+                <div class="divide-y divide-gray-100">
+                    {% for name, value in preview.card.characteristics.items() %}
+                    <div class="px-4 py-2 flex justify-between text-sm">
+                        <span class="text-gray-500">{{ name }}</span>
+                        <span class="font-medium text-gray-900 text-right max-w-xs truncate">
+                            {% if value is iterable and value is not string %}
+                            {{ value | join(', ') }}
+                            {% else %}
+                            {{ value }}
+                            {% endif %}
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="p-4 text-center text-sm text-gray-400">
+                    Характеристики не заполнены. Запустите AI парсер для автозаполнения.
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Sizes / Barcodes -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+                <div class="p-3 border-b border-gray-100 bg-gray-50">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase">Размеры и баркоды ({{ preview.card.sizes | length }})</h3>
+                </div>
+                <div class="p-4">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-xs text-gray-500 uppercase">
+                                {% if preview.card.has_real_sizes %}
+                                <th class="text-left py-1">techSize</th>
+                                <th class="text-left py-1">wbSize</th>
+                                {% endif %}
+                                <th class="text-left py-1">Баркод (SKU)</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            {% for size in preview.card.sizes %}
+                            <tr>
+                                {% if preview.card.has_real_sizes %}
+                                <td class="py-1.5 font-medium">{{ size.techSize | default('—') }}</td>
+                                <td class="py-1.5">{{ size.wbSize | default('—') }}</td>
+                                {% endif %}
+                                <td class="py-1.5 font-mono text-xs text-gray-500">{{ size.skus | join(', ') if size.skus else 'Будет сгенерирован WB' }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Dimensions -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+                <h3 class="text-xs font-medium text-gray-500 uppercase mb-3">Габариты упаковки</h3>
+                <div class="grid grid-cols-4 gap-3 text-center">
+                    <div>
+                        <p class="text-xs text-gray-400">Длина</p>
+                        <p class="text-sm font-medium">{{ preview.card.dimensions.length }} см</p>
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400">Ширина</p>
+                        <p class="text-sm font-medium">{{ preview.card.dimensions.width }} см</p>
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400">Высота</p>
+                        <p class="text-sm font-medium">{{ preview.card.dimensions.height }} см</p>
+                    </div>
+                    <div>
+                        <p class="text-xs text-gray-400">Вес брутто</p>
+                        <p class="text-sm font-medium">{{ preview.card.dimensions.weightBrutto }} кг</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

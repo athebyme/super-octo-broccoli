@@ -167,6 +167,60 @@ def register_photo_routes(app):
         return _generate_placeholder_image()
 
     # ==========================================================================
+    # Прокси для фото ImportedProduct (через связь с SupplierProduct)
+    # ==========================================================================
+
+    @app.route('/api/photos/imported-product/<int:product_id>/<int:photo_idx>')
+    @login_required
+    def serve_imported_product_photo(product_id, photo_idx):
+        """
+        Прокси для фото импортированных товаров продавца.
+        Если есть связь с SupplierProduct — переиспользуем его фото.
+        Иначе пытаемся отдать из photo_urls самого ImportedProduct.
+        """
+        from flask import redirect, url_for as _url_for
+        from models import ImportedProduct
+
+        product = ImportedProduct.query.get_or_404(product_id)
+
+        # Если есть связь с SupplierProduct — делегируем
+        if product.supplier_product_id:
+            return redirect(
+                _url_for('serve_supplier_product_photo',
+                         supplier_product_id=product.supplier_product_id,
+                         photo_idx=photo_idx)
+            )
+
+        # Иначе пробуем photo_urls самого ImportedProduct
+        if not product.photo_urls:
+            abort(404)
+
+        try:
+            photos = json.loads(product.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            abort(404)
+
+        if photo_idx < 0 or photo_idx >= len(photos):
+            abort(404)
+
+        url = photos[photo_idx] if isinstance(photos[photo_idx], str) else None
+        if not url:
+            abort(404)
+
+        # Прямой прокси для URL
+        import requests as _requests
+        try:
+            resp = _requests.get(url, timeout=15, allow_redirects=True,
+                                 headers={'User-Agent': 'Mozilla/5.0'})
+            resp.raise_for_status()
+            response = Response(resp.content, mimetype=resp.headers.get('Content-Type', 'image/jpeg'))
+            response.cache_control.max_age = 86400
+            response.cache_control.private = True
+            return response
+        except Exception:
+            return _generate_placeholder_image()
+
+    # ==========================================================================
     # API управления скачиванием фото
     # ==========================================================================
 
