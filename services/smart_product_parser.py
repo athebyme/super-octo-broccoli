@@ -354,9 +354,71 @@ class SmartProductParser:
                 existing_sizes['simple_sizes'] = result.extracted_sizes
                 product.sizes_json = json.dumps(existing_sizes, ensure_ascii=False)
 
+        # Characteristics — собираем словарь из извлечённых данных
+        self._build_characteristics_json(product, result)
+
         # Parsing confidence — обновляем readiness score
         product.parsing_confidence = result.readiness_score / 100.0
         product.normalization_applied = True
+
+    def _build_characteristics_json(self, product, result: SmartParseResult) -> None:
+        """
+        Собрать словарь характеристик из извлечённых данных SmartParse.
+        Формат: {"Цвет": "красный", "Состав": "силикон", "Пол": "Женский", ...}
+        Этот словарь используется WB-импортером для маппинга на API характеристики.
+        """
+        existing = {}
+        if product.characteristics_json:
+            try:
+                existing = json.loads(product.characteristics_json)
+                if isinstance(existing, list):
+                    # Конвертируем [{name, value}] → {name: value}
+                    existing = {
+                        item.get('name', ''): item.get('value', '')
+                        for item in existing if isinstance(item, dict) and item.get('name')
+                    }
+            except Exception:
+                existing = {}
+
+        updated = False
+
+        # Цвет
+        colors = result.extracted_colors
+        if colors and 'Цвет' not in existing:
+            existing['Цвет'] = colors[0] if len(colors) == 1 else colors
+            updated = True
+
+        # Состав / Материал
+        materials = result.extracted_materials
+        if materials and 'Состав' not in existing and 'Материал' not in existing:
+            existing['Состав'] = '; '.join(materials) if len(materials) > 1 else materials[0]
+            updated = True
+
+        # Пол
+        gender = result.extracted_gender
+        if gender and 'Пол' not in existing:
+            gender_map = {
+                'male': 'Мужской', 'female': 'Женский', 'unisex': 'Унисекс',
+                'м': 'Мужской', 'ж': 'Женский',
+                'мужской': 'Мужской', 'женский': 'Женский', 'унисекс': 'Унисекс',
+            }
+            existing['Пол'] = gender_map.get(gender.lower(), gender)
+            updated = True
+
+        # Страна производства (из product data, не из parse result)
+        country = product.country
+        if country and 'Страна производства' not in existing:
+            existing['Страна производства'] = country
+            updated = True
+
+        # Бренд
+        brand = result.brand_canonical or product.brand
+        if brand and 'Бренд' not in existing:
+            existing['Бренд'] = brand
+            updated = True
+
+        if updated:
+            product.characteristics_json = json.dumps(existing, ensure_ascii=False)
 
     def parse_and_apply_single(self, product_id: int) -> dict:
         """
