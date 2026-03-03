@@ -1777,7 +1777,7 @@ class WildberriesAPIClient:
             try:
                 response = self._make_request('GET', 'content', endpoint, params=params)
                 result = response.json()
-                brands = result.get('data', [])
+                brands = result.get('brands', [])
                 for b in brands:
                     bid = b.get('id')
                     if bid and bid not in all_brands:
@@ -1788,7 +1788,7 @@ class WildberriesAPIClient:
                 time.sleep(60)
                 try:
                     response = self._make_request('GET', 'content', endpoint, params=params)
-                    for b in response.json().get('data', []):
+                    for b in response.json().get('brands', []):
                         bid = b.get('id')
                         if bid and bid not in all_brands:
                             all_brands[bid] = b
@@ -1863,7 +1863,7 @@ class WildberriesAPIClient:
                         }
 
                     result = response.json()
-                    brands = result.get('data', [])
+                    brands = result.get('brands', [])
                     for b in brands:
                         bid = b.get('id')
                         if bid and bid not in all_brands:
@@ -1876,7 +1876,7 @@ class WildberriesAPIClient:
                     time.sleep(60)
                     try:
                         response = self._make_request('GET', 'content', endpoint, params=params)
-                        for b in response.json().get('data', []):
+                        for b in response.json().get('brands', []):
                             bid = b.get('id')
                             if bid and bid not in all_brands:
                                 all_brands[bid] = b
@@ -1910,7 +1910,13 @@ class WildberriesAPIClient:
 
         logger.info(f"Searching brands with pattern: '{pattern}'")
         endpoint = "/api/content/v1/brands"
+
+        # subjectId обязателен — берём распространённый subject для широкого поиска
+        # Используем переданный subject_id или дефолтный (Футболки = 1)
+        search_subject = getattr(self, '_default_subject_id', None) or 1
+
         params = {
+            'subjectId': search_subject,
             'top': top,
             'pattern': pattern.strip(),
             'locale': 'ru',
@@ -1919,7 +1925,7 @@ class WildberriesAPIClient:
         try:
             response = self._make_request('GET', 'content', endpoint, params=params)
             result = response.json()
-            brands = result.get('data', [])
+            brands = result.get('brands', [])
             logger.info(f"Found {len(brands)} brands matching '{pattern}'")
             return {'data': brands}
         except Exception as e:
@@ -1963,7 +1969,7 @@ class WildberriesAPIClient:
             for sid in subject_ids:
                 try:
                     result = self.get_brands_by_subject(sid)
-                    for brand in result.get('data', []):
+                    for brand in result.get('brands', result.get('data', [])):
                         brand_id = brand.get('id')
                         if brand_id and brand_id not in seen_ids:
                             seen_ids.add(brand_id)
