@@ -150,18 +150,9 @@ class WBProductImporter:
             # где id - это числовой ID из справочника WB
             characteristics = self._build_wb_characteristics(imported_product)
 
-            # Формируем медиа (фотографии)
-            media_urls = []
-            for photo in photo_urls[:30]:  # Максимум 30 фото
-                # Приоритет sexoptovik (без цензуры) по умолчанию
-                # TODO: Добавить настройку для включения цензуры (blur)
-                if isinstance(photo, dict):
-                    # Сначала пробуем sexoptovik, потом blur, потом original
-                    url = photo.get('sexoptovik') or photo.get('blur') or photo.get('original')
-                else:
-                    url = photo
-                if url:
-                    media_urls.append(url)
+            # Формируем медиа (фотографии) — серверные URL
+            from routes.photos import generate_public_photo_urls
+            media_urls = generate_public_photo_urls(imported_product)
 
             # Формируем dimensions (габариты)
             # Для начала используем дефолтные значения
@@ -505,14 +496,9 @@ class WBProductImporter:
         photo_urls = json.loads(imported_product.photo_urls) if imported_product.photo_urls else []
 
         # --- Photos ---
-        media_urls = []
-        for photo in photo_urls[:30]:
-            if isinstance(photo, dict):
-                url = photo.get('sexoptovik') or photo.get('blur') or photo.get('original')
-            else:
-                url = photo
-            if url:
-                media_urls.append(url)
+        # Генерируем серверные proxy URLs вместо прямых URL поставщика
+        from routes.photos import generate_public_photo_urls
+        media_urls = generate_public_photo_urls(imported_product)
 
         if not media_urls:
             issues.append({'field': 'photos', 'level': 'error', 'message': 'Нет фотографий'})
