@@ -278,6 +278,55 @@ class WBProductImporter:
 
             return False, error_msg, None
 
+    @staticmethod
+    def _assemble_chars_from_fields(imported_product: ImportedProduct) -> Dict:
+        """
+        Собирает словарь характеристик из отдельных полей ImportedProduct
+        (colors, materials, gender, country, brand) когда characteristics пуст.
+        """
+        chars = {}
+
+        # Цвет
+        if imported_product.colors:
+            try:
+                colors = json.loads(imported_product.colors)
+                if colors:
+                    chars['Цвет'] = colors[0] if len(colors) == 1 else colors
+            except Exception:
+                pass
+
+        # Материал / Состав
+        if imported_product.materials:
+            try:
+                materials = json.loads(imported_product.materials)
+                if materials:
+                    chars['Состав'] = '; '.join(materials) if len(materials) > 1 else materials[0]
+            except Exception:
+                pass
+
+        # Пол
+        if imported_product.gender:
+            gender = imported_product.gender
+            gender_map = {
+                'male': 'Мужской', 'female': 'Женский', 'unisex': 'Унисекс',
+                'для женщин и мужчин': 'Унисекс', 'для женщин': 'Женский', 'для мужчин': 'Мужской',
+                'мужской': 'Мужской', 'женский': 'Женский', 'унисекс': 'Унисекс',
+            }
+            chars['Пол'] = gender_map.get(gender.lower(), gender)
+
+        # Страна производства
+        if imported_product.country:
+            chars['Страна производства'] = imported_product.country
+
+        # Бренд
+        if imported_product.brand:
+            chars['Бренд'] = imported_product.brand
+
+        if chars:
+            logger.info(f"Товар {imported_product.external_id}: собрано {len(chars)} характеристик из отдельных полей")
+
+        return chars
+
     def _build_wb_characteristics(self, imported_product: ImportedProduct) -> List[Dict]:
         """
         Строит массив характеристик в формате WB API
@@ -302,6 +351,10 @@ class WBProductImporter:
         except Exception as e:
             logger.warning(f"Ошибка парсинга характеристик: {e}")
             product_chars = {}
+
+        # Фолбэк: собираем характеристики из отдельных полей ImportedProduct
+        if not product_chars:
+            product_chars = self._assemble_chars_from_fields(imported_product)
 
         if not product_chars:
             logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
@@ -567,6 +620,10 @@ class WBProductImporter:
                 chars_dict = {k: v for k, v in raw.items() if not k.startswith('_')}
         except Exception:
             pass
+
+        # Фолбэк: собираем из отдельных полей
+        if not chars_dict:
+            chars_dict = self._assemble_chars_from_fields(imported_product)
 
         if not chars_dict:
             issues.append({'field': 'characteristics', 'level': 'warning', 'message': 'Нет характеристик — WB может отклонить карточку'})
