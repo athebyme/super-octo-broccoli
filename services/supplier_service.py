@@ -2762,6 +2762,35 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
     if not product.ai_bullets_json and mp.get('bullet_points'):
         product.ai_bullets_json = json.dumps(mp['bullet_points'], ensure_ascii=False)
 
+    # Собираем characteristics_json из AI-результатов если пуст
+    if not product.characteristics_json or product.characteristics_json in ('{}', '[]', ''):
+        chars = {}
+        if product.brand:
+            chars['Бренд'] = product.brand
+        if color.get('wb_color') or color.get('primary_color'):
+            chars['Цвет'] = color.get('wb_color') or color.get('primary_color')
+        if materials.get('primary_material'):
+            chars['Материал'] = materials['primary_material']
+        if materials.get('composition'):
+            chars['Состав'] = materials['composition']
+        if product.gender:
+            chars['Пол'] = product.gender
+        if product.country:
+            chars['Страна производства'] = product.country
+        if product.season:
+            chars['Сезон'] = product.season
+        if physical.get('diameter_cm'):
+            chars['Диаметр'] = str(physical['diameter_cm'])
+        if physical.get('volume_ml'):
+            chars['Объем'] = str(physical['volume_ml'])
+        if physical.get('working_length_cm'):
+            chars['Рабочая длина'] = str(physical['working_length_cm'])
+        pkg_contents = parsed.get('contents', {})
+        if pkg_contents.get('package_contents'):
+            chars['Комплектация'] = ', '.join(pkg_contents['package_contents'])
+        if chars:
+            product.characteristics_json = json.dumps(chars, ensure_ascii=False)
+
 
 def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
     """Запускает MarketplaceAwareParsingTask если удалось определить категорию WB."""
