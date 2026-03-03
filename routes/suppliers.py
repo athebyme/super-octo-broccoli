@@ -1699,6 +1699,81 @@ def register_supplier_routes(app):
         return jsonify(result.to_dict())
 
     # -------------------------------------------------------------------
+    # API: Валидация брендов на маркетплейсе
+    # -------------------------------------------------------------------
+    @app.route('/admin/suppliers/<int:supplier_id>/validate-brands', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_validate_brands(supplier_id):
+        """
+        Массовая валидация брендов поставщика на маркетплейсе.
+        Проверяет fuzzy matching с брендами WB.
+        """
+        from services.smart_product_parser import SmartProductParser
+
+        supplier = SupplierService.get_supplier(supplier_id)
+        if not supplier:
+            return jsonify({'error': 'Supplier not found'}), 404
+
+        data = request.get_json(silent=True) or {}
+        marketplace_id = data.get('marketplace_id')
+
+        # Получаем уникальные бренды поставщика
+        query = db.session.query(
+            SupplierProduct.brand, db.func.count(SupplierProduct.id).label('cnt')
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.brand.isnot(None),
+            SupplierProduct.brand != '',
+        ).group_by(SupplierProduct.brand).order_by(db.desc('cnt'))
+
+        brand_rows = query.all()
+
+        parser = SmartProductParser(
+            supplier_id=supplier_id,
+            marketplace_id=marketplace_id,
+        )
+
+        results = []
+        resolved = 0
+        unresolved = 0
+
+        for brand_name, count in brand_rows:
+            from services.smart_product_parser import SmartParseResult
+            result = SmartParseResult()
+            parser._resolve_brand(result, brand_name, '')
+            parser._validate_brand_on_marketplace(result)
+
+            status = 'valid' if result.brand_marketplace_valid else (
+                'uncertain' if result.brand_marketplace_valid is None else 'invalid'
+            )
+
+            if result.brand_marketplace_valid:
+                resolved += 1
+            else:
+                unresolved += 1
+
+            results.append({
+                'supplier_brand': brand_name,
+                'products_count': count,
+                'resolved': result.brand_resolved,
+                'canonical': result.brand_canonical,
+                'confidence': result.brand_confidence,
+                'marketplace_status': status,
+                'marketplace_name': result.brand_marketplace_name,
+                'marketplace_id': result.brand_marketplace_id,
+                'suggestions': result.brand_marketplace_suggestions[:5],
+                'warnings': result.warnings[:3],
+            })
+
+        return jsonify({
+            'total_brands': len(brand_rows),
+            'resolved_on_marketplace': resolved,
+            'unresolved_on_marketplace': unresolved,
+            'brands': results,
+        })
+
+    # -------------------------------------------------------------------
     # API: Smart Import к продавцу (обогащение + импорт)
     # -------------------------------------------------------------------
     @app.route('/supplier-catalog/smart-import', methods=['POST'])

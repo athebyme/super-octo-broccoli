@@ -41,6 +41,12 @@ class SmartParseResult:
     brand_confidence: float = 0.0
     brand_status: str = ''  # exact, confident, uncertain, unresolved
 
+    # Brand marketplace validation
+    brand_marketplace_valid: Optional[bool] = None  # None=не проверен, True/False
+    brand_marketplace_name: Optional[str] = None  # Имя бренда на маркетплейсе
+    brand_marketplace_id: Optional[int] = None  # ID бренда на маркетплейсе
+    brand_marketplace_suggestions: List[str] = field(default_factory=list)
+
     # Category
     category_mapped: bool = False
     wb_subject_id: Optional[int] = None
@@ -68,6 +74,10 @@ class SmartParseResult:
                 'canonical': self.brand_canonical,
                 'confidence': self.brand_confidence,
                 'status': self.brand_status,
+                'marketplace_valid': self.brand_marketplace_valid,
+                'marketplace_name': self.brand_marketplace_name,
+                'marketplace_id': self.brand_marketplace_id,
+                'marketplace_suggestions': self.brand_marketplace_suggestions,
             },
             'category': {
                 'mapped': self.category_mapped,
@@ -193,6 +203,13 @@ _MATERIAL_CANONICAL = {
 # SMART PRODUCT PARSER
 # ============================================================================
 
+def _normalize_alnum(s: str) -> str:
+    """Нормализация строки до alphanumeric lowercase для сравнения."""
+    if not s:
+        return ''
+    return re.sub(r'[^a-zA-Zа-яА-ЯёЁ0-9]', '', s).lower()
+
+
 class SmartProductParser:
     """
     Умный парсер товаров — алгоритмическое обогащение данных.
@@ -261,7 +278,11 @@ class SmartProductParser:
         # --- Step 3: Category mapping ---
         self._map_category(result, product_data)
 
-        # --- Step 4: Readiness scoring ---
+        # --- Step 4: Brand marketplace validation ---
+        # После резолва бренда и маппинга категории — проверяем бренд на маркете
+        self._validate_brand_on_marketplace(result)
+
+        # --- Step 5: Readiness scoring ---
         self._compute_readiness(result, product_data)
 
         return result
@@ -553,6 +574,177 @@ class SmartProductParser:
                 return first
 
         return ''
+
+    # ------------------------------------------------------------------
+    # Step 4: Brand marketplace validation
+    # ------------------------------------------------------------------
+
+    def _validate_brand_on_marketplace(self, result: SmartParseResult):
+        """
+        Проверяет бренд от поставщика на маркетплейсе (WB).
+
+        Ситуации:
+        1. Бренд поставщика "Bior Toys" → на WB может быть "BIOR TOYS" или "BiorToys"
+        2. Бренд "Fantasy" → на WB для категории может не существовать
+        3. Бренд уже в MarketplaceBrand с verified — пропускаем
+
+        Использует:
+        - BrandCategoryLink для проверки допустимости в категории
+        - MarketplaceBrand для маркетплейс-имени
+        - Fuzzy matching по имеющемуся списку брендов маркетплейса
+        """
+        brand_name = result.brand_canonical or ''
+        if not brand_name:
+            return
+
+        # Если есть marketplace данные через BrandEngine — уже проверен
+        engine = self._get_brand_engine()
+        if engine and result.brand_id and self._marketplace_id:
+            try:
+                resolution = engine.resolve(
+                    brand_name,
+                    marketplace_id=self._marketplace_id,
+                    category_id=result.wb_subject_id,
+                )
+                if resolution.marketplace_brand_name:
+                    result.brand_marketplace_valid = True
+                    result.brand_marketplace_name = resolution.marketplace_brand_name
+                    result.brand_marketplace_id = resolution.marketplace_brand_ext_id
+                    if resolution.category_valid is not None:
+                        result.brand_marketplace_valid = resolution.category_valid
+                    return
+            except Exception:
+                pass
+
+        # Fallback: ищем по MarketplaceBrand / BrandCategoryLink напрямую
+        try:
+            from models import MarketplaceBrand, BrandCategoryLink
+
+            if result.brand_id:
+                # Ищем MarketplaceBrand для нашего brand_id
+                mp_brands = MarketplaceBrand.query.filter_by(
+                    brand_id=result.brand_id,
+                ).all()
+
+                for mpb in mp_brands:
+                    if mpb.status == 'verified':
+                        result.brand_marketplace_valid = True
+                        result.brand_marketplace_name = mpb.marketplace_brand_name
+                        result.brand_marketplace_id = mpb.marketplace_brand_id
+
+                        # Проверяем допустимость в категории
+                        if result.wb_subject_id:
+                            link = BrandCategoryLink.query.filter_by(
+                                marketplace_brand_id=mpb.id,
+                                category_id=result.wb_subject_id,
+                            ).first()
+                            if link:
+                                result.brand_marketplace_valid = link.is_available
+                                if not link.is_available:
+                                    result.warnings.append(
+                                        f"Бренд '{brand_name}' недоступен "
+                                        f"для категории WB (subject_id={result.wb_subject_id})"
+                                    )
+                        return
+
+            # Если brand не в MarketplaceBrand — ищем по имени fuzzy
+            self._fuzzy_match_marketplace_brand(result, brand_name)
+
+        except Exception as e:
+            logger.debug(f"Brand marketplace validation error: {e}")
+
+    def _fuzzy_match_marketplace_brand(self, result: SmartParseResult,
+                                       brand_name: str):
+        """
+        Fuzzy matching бренда поставщика по существующему списку MarketplaceBrand.
+
+        Ищем ближайшее совпадение через SequenceMatcher — если поставщик
+        написал "Bior Toys", а на маркетплейсе "BIOR TOYS", нужно сметчить.
+        """
+        from difflib import SequenceMatcher
+
+        try:
+            from models import MarketplaceBrand
+
+            # Загружаем все бренды маркетплейса
+            all_mp_brands = MarketplaceBrand.query.filter(
+                MarketplaceBrand.marketplace_brand_name.isnot(None),
+            ).limit(3000).all()
+
+            if not all_mp_brands:
+                return
+
+            brand_lower = brand_name.lower().strip()
+            brand_alnum = _normalize_alnum(brand_name)
+
+            best_score = 0.0
+            best_brand = None
+            suggestions = []
+
+            for mpb in all_mp_brands:
+                mp_name = mpb.marketplace_brand_name or ''
+                mp_lower = mp_name.lower().strip()
+                mp_alnum = _normalize_alnum(mp_name)
+
+                # Exact case-insensitive
+                if brand_lower == mp_lower:
+                    result.brand_marketplace_valid = True
+                    result.brand_marketplace_name = mp_name
+                    result.brand_marketplace_id = mpb.marketplace_brand_id
+                    return
+
+                # Alphanumeric exact
+                if brand_alnum and mp_alnum and brand_alnum == mp_alnum:
+                    result.brand_marketplace_valid = True
+                    result.brand_marketplace_name = mp_name
+                    result.brand_marketplace_id = mpb.marketplace_brand_id
+                    return
+
+                # Fuzzy matching
+                similarity = SequenceMatcher(None, brand_lower, mp_lower).ratio()
+
+                # Bonus: substring match
+                if brand_lower in mp_lower or mp_lower in brand_lower:
+                    similarity = min(1.0, similarity + 0.2)
+
+                if similarity > best_score:
+                    if best_brand and best_score >= 0.5:
+                        suggestions.append(best_brand.marketplace_brand_name)
+                    best_score = similarity
+                    best_brand = mpb
+                elif similarity >= 0.5:
+                    suggestions.append(mp_name)
+
+            # Результат fuzzy match
+            if best_score >= 0.85 and best_brand:
+                result.brand_marketplace_valid = True
+                result.brand_marketplace_name = best_brand.marketplace_brand_name
+                result.brand_marketplace_id = best_brand.marketplace_brand_id
+                result.brand_marketplace_suggestions = suggestions[:5]
+                result.warnings.append(
+                    f"Бренд '{brand_name}' сопоставлен с маркетплейсовым "
+                    f"'{best_brand.marketplace_brand_name}' "
+                    f"(схожесть {best_score:.0%})"
+                )
+            elif best_score >= 0.6 and best_brand:
+                result.brand_marketplace_valid = False
+                result.brand_marketplace_name = best_brand.marketplace_brand_name
+                result.brand_marketplace_suggestions = suggestions[:8]
+                result.warnings.append(
+                    f"Бренд '{brand_name}' возможно "
+                    f"'{best_brand.marketplace_brand_name}' "
+                    f"(схожесть {best_score:.0%}). Требуется проверка."
+                )
+            else:
+                result.brand_marketplace_valid = False
+                result.brand_marketplace_suggestions = suggestions[:5]
+                if brand_name:
+                    result.warnings.append(
+                        f"Бренд '{brand_name}' не найден на маркетплейсе"
+                    )
+
+        except Exception as e:
+            logger.debug(f"Fuzzy marketplace brand match error: {e}")
 
     # ------------------------------------------------------------------
     # Step 2: Extract characteristics
