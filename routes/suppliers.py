@@ -1855,6 +1855,7 @@ def register_supplier_routes(app):
             result = parser.parse_and_apply_bulk(product_ids)
 
             log_admin_action(
+                admin_user_id=current_user.id,
                 action='smart_parse',
                 details=f'supplier={supplier.code}, products={len(product_ids)}, '
                         f'brands={result.brand_resolved_count}, '
@@ -1925,6 +1926,7 @@ def register_supplier_routes(app):
             )
 
             log_admin_action(
+                admin_user_id=current_user.id,
                 action='validate_characteristics',
                 details=f'supplier={supplier.code}, products={len(product_ids)}, '
                         f'valid={result["valid"]}, errors={result["with_errors"]}, '
@@ -2057,6 +2059,7 @@ def register_supplier_routes(app):
             )
 
             log_admin_action(
+                admin_user_id=current_user.id,
                 action='apply_brand_validation',
                 details=f'supplier={supplier.code}, brands={result["total_brands"]}, '
                         f'resolved={result["resolved"]}, '
