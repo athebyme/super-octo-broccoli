@@ -319,18 +319,36 @@ function smartParser() {
         brandResult: null,
         charResult: null,
 
+        async _fetchJson(url, body) {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (!resp.ok) {
+                let errMsg = `HTTP ${resp.status}`;
+                try {
+                    const errData = await resp.json();
+                    errMsg = errData.error || errMsg;
+                } catch (_) {
+                    const text = await resp.text();
+                    errMsg = text.substring(0, 200) || errMsg;
+                }
+                throw new Error(errMsg);
+            }
+            return await resp.json();
+        },
+
         async runSmartParse() {
             this.parseRunning = true;
             this.parseResult = null;
             try {
-                const resp = await fetch('{{ url_for("admin_supplier_smart_parse", supplier_id=supplier.id) }}', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({scope: this.parseScope, limit: 1000})
-                });
-                this.parseResult = await resp.json();
+                this.parseResult = await this._fetchJson(
+                    '{{ url_for("admin_supplier_smart_parse", supplier_id=supplier.id) }}',
+                    {scope: this.parseScope, limit: 1000}
+                );
             } catch (e) {
-                alert('Ошибка: ' + e.message);
+                alert('Ошибка Smart Parse: ' + e.message);
             }
             this.parseRunning = false;
         },
@@ -339,14 +357,12 @@ function smartParser() {
             this.brandRunning = true;
             this.brandResult = null;
             try {
-                const resp = await fetch('{{ url_for("admin_supplier_validate_brands", supplier_id=supplier.id) }}', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({})
-                });
-                this.brandResult = await resp.json();
+                this.brandResult = await this._fetchJson(
+                    '{{ url_for("admin_supplier_validate_brands", supplier_id=supplier.id) }}',
+                    {}
+                );
             } catch (e) {
-                alert('Ошибка: ' + e.message);
+                alert('Ошибка валидации брендов: ' + e.message);
             }
             this.brandRunning = false;
         },
@@ -355,14 +371,12 @@ function smartParser() {
             this.charRunning = true;
             this.charResult = null;
             try {
-                const resp = await fetch('{{ url_for("admin_supplier_validate_characteristics", supplier_id=supplier.id) }}', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({auto_correct: this.autoCorrect, limit: 1000})
-                });
-                this.charResult = await resp.json();
+                this.charResult = await this._fetchJson(
+                    '{{ url_for("admin_supplier_validate_characteristics", supplier_id=supplier.id) }}',
+                    {auto_correct: this.autoCorrect, limit: 1000}
+                );
             } catch (e) {
-                alert('Ошибка: ' + e.message);
+                alert('Ошибка валидации характеристик: ' + e.message);
             }
             this.charRunning = false;
         }

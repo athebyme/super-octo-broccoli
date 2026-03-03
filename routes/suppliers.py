@@ -1637,66 +1637,74 @@ def register_supplier_routes(app):
         Запуск умного парсинга для выбранных товаров.
         Выполняет brand resolution, category mapping, extraction характеристик.
         """
-        from services.smart_product_parser import SmartProductParser
+        try:
+            from services.smart_product_parser import SmartProductParser
 
-        supplier = SupplierService.get_supplier(supplier_id)
-        if not supplier:
-            return jsonify({'error': 'Supplier not found'}), 404
+            supplier = SupplierService.get_supplier(supplier_id)
+            if not supplier:
+                return jsonify({'error': 'Supplier not found'}), 404
 
-        data = request.get_json(silent=True) or {}
-        product_ids = data.get('product_ids', [])
+            data = request.get_json(silent=True) or {}
+            product_ids = data.get('product_ids', [])
 
-        # Если не указаны конкретные — берём все товары поставщика
-        if not product_ids:
-            scope = data.get('scope', 'all')  # all, unparsed, draft
-            query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
-            if scope == 'unparsed':
-                query = query.filter(
-                    db.or_(
-                        SupplierProduct.resolved_brand_id.is_(None),
-                        SupplierProduct.parsing_confidence.is_(None),
-                        SupplierProduct.parsing_confidence < 0.5,
+            # Если не указаны конкретные — берём все товары поставщика
+            if not product_ids:
+                scope = data.get('scope', 'all')  # all, unparsed, draft
+                query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+                if scope == 'unparsed':
+                    query = query.filter(
+                        db.or_(
+                            SupplierProduct.resolved_brand_id.is_(None),
+                            SupplierProduct.parsing_confidence.is_(None),
+                            SupplierProduct.parsing_confidence < 0.5,
+                        )
                     )
-                )
-            elif scope == 'draft':
-                query = query.filter_by(status='draft')
+                elif scope == 'draft':
+                    query = query.filter_by(status='draft')
 
-            limit = min(data.get('limit', 500), 5000)
-            product_ids = [p.id for p in query.limit(limit).all()]
+                limit = min(data.get('limit', 500), 5000)
+                product_ids = [p.id for p in query.limit(limit).all()]
 
-        if not product_ids:
-            return jsonify({'error': 'Нет товаров для парсинга'}), 400
+            if not product_ids:
+                return jsonify({'error': 'Нет товаров для парсинга'}), 400
 
-        parser = SmartProductParser(
-            supplier_id=supplier_id,
-            marketplace_id=data.get('marketplace_id'),
-        )
-        result = parser.parse_and_apply_bulk(product_ids)
+            parser = SmartProductParser(
+                supplier_id=supplier_id,
+                marketplace_id=data.get('marketplace_id'),
+            )
+            result = parser.parse_and_apply_bulk(product_ids)
 
-        log_admin_action(
-            action='smart_parse',
-            details=f'supplier={supplier.code}, products={len(product_ids)}, '
-                    f'brands={result.brand_resolved_count}, '
-                    f'cats={result.category_mapped_count}'
-        )
+            log_admin_action(
+                action='smart_parse',
+                details=f'supplier={supplier.code}, products={len(product_ids)}, '
+                        f'brands={result.brand_resolved_count}, '
+                        f'cats={result.category_mapped_count}'
+            )
 
-        return jsonify(result.to_dict())
+            return jsonify(result.to_dict())
+        except Exception as e:
+            logger.exception(f"Smart parse error for supplier {supplier_id}")
+            return jsonify({'error': f'Ошибка парсинга: {str(e)}'}), 500
 
     @app.route('/admin/suppliers/<int:supplier_id>/smart-parse/<int:product_id>', methods=['POST'])
     @login_required
     @admin_required
     def admin_supplier_smart_parse_single(supplier_id, product_id):
         """Умный парсинг одного товара."""
-        from services.smart_product_parser import SmartProductParser
+        try:
+            from services.smart_product_parser import SmartProductParser
 
-        supplier = SupplierService.get_supplier(supplier_id)
-        if not supplier:
-            return jsonify({'error': 'Supplier not found'}), 404
+            supplier = SupplierService.get_supplier(supplier_id)
+            if not supplier:
+                return jsonify({'error': 'Supplier not found'}), 404
 
-        parser = SmartProductParser(supplier_id=supplier_id)
-        result = parser.parse_and_apply_single(product_id)
+            parser = SmartProductParser(supplier_id=supplier_id)
+            result = parser.parse_and_apply_single(product_id)
 
-        return jsonify(result)
+            return jsonify(result)
+        except Exception as e:
+            logger.exception(f"Smart parse single error: product {product_id}")
+            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
 
     # -------------------------------------------------------------------
     # API: Валидация характеристик
@@ -1709,40 +1717,44 @@ def register_supplier_routes(app):
         Валидация и автокоррекция AI-извлечённых характеристик.
         Проверяет по справочнику WB, исправляет fuzzy-совпадения.
         """
-        from services.smart_product_parser import CharacteristicsValidator
+        try:
+            from services.smart_product_parser import CharacteristicsValidator
 
-        supplier = SupplierService.get_supplier(supplier_id)
-        if not supplier:
-            return jsonify({'error': 'Supplier not found'}), 404
+            supplier = SupplierService.get_supplier(supplier_id)
+            if not supplier:
+                return jsonify({'error': 'Supplier not found'}), 404
 
-        data = request.get_json(silent=True) or {}
-        product_ids = data.get('product_ids', [])
-        auto_correct = data.get('auto_correct', True)
+            data = request.get_json(silent=True) or {}
+            product_ids = data.get('product_ids', [])
+            auto_correct = data.get('auto_correct', True)
 
-        # Если не указаны — берём все с AI-данными
-        if not product_ids:
-            query = SupplierProduct.query.filter(
-                SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.ai_marketplace_json.isnot(None),
+            # Если не указаны — берём все с AI-данными
+            if not product_ids:
+                query = SupplierProduct.query.filter(
+                    SupplierProduct.supplier_id == supplier_id,
+                    SupplierProduct.ai_marketplace_json.isnot(None),
+                )
+                limit = min(data.get('limit', 500), 5000)
+                product_ids = [p.id for p in query.limit(limit).all()]
+
+            if not product_ids:
+                return jsonify({'error': 'Нет товаров для валидации'}), 400
+
+            result = CharacteristicsValidator.validate_bulk(
+                product_ids, auto_correct=auto_correct
             )
-            limit = min(data.get('limit', 500), 5000)
-            product_ids = [p.id for p in query.limit(limit).all()]
 
-        if not product_ids:
-            return jsonify({'error': 'Нет товаров для валидации'}), 400
+            log_admin_action(
+                action='validate_characteristics',
+                details=f'supplier={supplier.code}, products={len(product_ids)}, '
+                        f'valid={result["valid"]}, errors={result["with_errors"]}, '
+                        f'corrections={result["corrections_applied"]}'
+            )
 
-        result = CharacteristicsValidator.validate_bulk(
-            product_ids, auto_correct=auto_correct
-        )
-
-        log_admin_action(
-            action='validate_characteristics',
-            details=f'supplier={supplier.code}, products={len(product_ids)}, '
-                    f'valid={result["valid"]}, errors={result["with_errors"]}, '
-                    f'corrections={result["corrections_applied"]}'
-        )
-
-        return jsonify(result)
+            return jsonify(result)
+        except Exception as e:
+            logger.exception(f"Characteristics validation error for supplier {supplier_id}")
+            return jsonify({'error': f'Ошибка валидации: {str(e)}'}), 500
 
     @app.route('/admin/suppliers/<int:supplier_id>/validate-characteristics/<int:product_id>')
     @login_required
@@ -1767,69 +1779,72 @@ def register_supplier_routes(app):
         Массовая валидация брендов поставщика на маркетплейсе.
         Проверяет fuzzy matching с брендами WB.
         """
-        from services.smart_product_parser import SmartProductParser
+        try:
+            from services.smart_product_parser import SmartProductParser, SmartParseResult
 
-        supplier = SupplierService.get_supplier(supplier_id)
-        if not supplier:
-            return jsonify({'error': 'Supplier not found'}), 404
+            supplier = SupplierService.get_supplier(supplier_id)
+            if not supplier:
+                return jsonify({'error': 'Supplier not found'}), 404
 
-        data = request.get_json(silent=True) or {}
-        marketplace_id = data.get('marketplace_id')
+            data = request.get_json(silent=True) or {}
+            marketplace_id = data.get('marketplace_id')
 
-        # Получаем уникальные бренды поставщика
-        query = db.session.query(
-            SupplierProduct.brand, db.func.count(SupplierProduct.id).label('cnt')
-        ).filter(
-            SupplierProduct.supplier_id == supplier_id,
-            SupplierProduct.brand.isnot(None),
-            SupplierProduct.brand != '',
-        ).group_by(SupplierProduct.brand).order_by(db.desc('cnt'))
+            # Получаем уникальные бренды поставщика
+            query = db.session.query(
+                SupplierProduct.brand, db.func.count(SupplierProduct.id).label('cnt')
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.brand.isnot(None),
+                SupplierProduct.brand != '',
+            ).group_by(SupplierProduct.brand).order_by(db.desc('cnt'))
 
-        brand_rows = query.all()
+            brand_rows = query.all()
 
-        parser = SmartProductParser(
-            supplier_id=supplier_id,
-            marketplace_id=marketplace_id,
-        )
-
-        results = []
-        resolved = 0
-        unresolved = 0
-
-        for brand_name, count in brand_rows:
-            from services.smart_product_parser import SmartParseResult
-            result = SmartParseResult()
-            parser._resolve_brand(result, brand_name, '')
-            parser._validate_brand_on_marketplace(result)
-
-            status = 'valid' if result.brand_marketplace_valid else (
-                'uncertain' if result.brand_marketplace_valid is None else 'invalid'
+            parser = SmartProductParser(
+                supplier_id=supplier_id,
+                marketplace_id=marketplace_id,
             )
 
-            if result.brand_marketplace_valid:
-                resolved += 1
-            else:
-                unresolved += 1
+            results = []
+            resolved = 0
+            unresolved = 0
 
-            results.append({
-                'supplier_brand': brand_name,
-                'products_count': count,
-                'resolved': result.brand_resolved,
-                'canonical': result.brand_canonical,
-                'confidence': result.brand_confidence,
-                'marketplace_status': status,
-                'marketplace_name': result.brand_marketplace_name,
-                'marketplace_id': result.brand_marketplace_id,
-                'suggestions': result.brand_marketplace_suggestions[:5],
-                'warnings': result.warnings[:3],
+            for brand_name, count in brand_rows:
+                result = SmartParseResult()
+                parser._resolve_brand(result, brand_name, '')
+                parser._validate_brand_on_marketplace(result)
+
+                status = 'valid' if result.brand_marketplace_valid else (
+                    'uncertain' if result.brand_marketplace_valid is None else 'invalid'
+                )
+
+                if result.brand_marketplace_valid:
+                    resolved += 1
+                else:
+                    unresolved += 1
+
+                results.append({
+                    'supplier_brand': brand_name,
+                    'products_count': count,
+                    'resolved': result.brand_resolved,
+                    'canonical': result.brand_canonical,
+                    'confidence': result.brand_confidence,
+                    'marketplace_status': status,
+                    'marketplace_name': result.brand_marketplace_name,
+                    'marketplace_id': result.brand_marketplace_id,
+                    'suggestions': result.brand_marketplace_suggestions[:5],
+                    'warnings': result.warnings[:3],
+                })
+
+            return jsonify({
+                'total_brands': len(brand_rows),
+                'resolved_on_marketplace': resolved,
+                'unresolved_on_marketplace': unresolved,
+                'brands': results,
             })
-
-        return jsonify({
-            'total_brands': len(brand_rows),
-            'resolved_on_marketplace': resolved,
-            'unresolved_on_marketplace': unresolved,
-            'brands': results,
-        })
+        except Exception as e:
+            logger.exception(f"Brand validation error for supplier {supplier_id}")
+            return jsonify({'error': f'Ошибка валидации брендов: {str(e)}'}), 500
 
     # -------------------------------------------------------------------
     # API: Smart Import к продавцу (обогащение + импорт)
