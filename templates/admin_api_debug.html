@@ -229,7 +229,11 @@ function apiDebug() {
                     this.responseItemCount = null;
                 }
 
-                this.formattedResponse = JSON.stringify(data.response, null, 2);
+                // Показываем полный ответ включая _debug
+                const fullResponse = data._debug
+                    ? { response: data.response, _debug: data._debug }
+                    : data.response;
+                this.formattedResponse = JSON.stringify(fullResponse, null, 2);
                 this.collapsed = false;
 
                 this.history.unshift({
