@@ -461,12 +461,17 @@ class WBProductImporter:
             except Exception:
                 pass
 
-        # Материал / Состав
+        # Материал / Состав — добавляем под несколькими названиями,
+        # т.к. WB называет по-разному в разных категориях:
+        # "Состав", "Материал", "Материал изделия", "Основной материал"
         if imported_product.materials:
             try:
                 materials = json.loads(imported_product.materials)
                 if materials:
-                    chars['Состав'] = '; '.join(materials) if len(materials) > 1 else materials[0]
+                    mat_value = '; '.join(materials) if len(materials) > 1 else materials[0]
+                    chars['Состав'] = mat_value
+                    chars['Материал'] = mat_value
+                    chars['Материал изделия'] = mat_value
             except Exception:
                 pass
 
@@ -554,18 +559,22 @@ class WBProductImporter:
         # AI-определённые физические размеры (длина, диаметр, объём и т.д.)
         # Маппинг: внутренний ключ → список возможных WB-названий (от точного к общему)
         # WB разные категории называют одну характеристику по-разному
+        # Маппинг: внутренний ключ → список WB-названий для создания промежуточных chars.
+        # ВАЖНО: короткое базовое имя ПЕРВЫМ — оно лучше матчится через
+        # нормализованное частичное совпадение ("диаметр" in "диаметр секс игрушки").
+        # Более точные имена идут после — для категорий где WB-имя точно совпадает.
         _DIM_TO_WB = {
-            'length_cm': ['Длина изделия, см', 'Длина, см', 'Длина'],
-            'width_cm': ['Ширина изделия, см', 'Ширина, см', 'Ширина'],
-            'height_cm': ['Высота изделия, см', 'Высота, см', 'Высота'],
-            'depth_cm': ['Глубина, см', 'Глубина'],
-            'diameter_cm': ['Диаметр, см', 'Диаметр'],
-            'max_diameter_cm': ['Максимальный диаметр, см', 'Максимальный диаметр'],
-            'min_diameter_cm': ['Минимальный диаметр, см', 'Минимальный диаметр'],
-            'working_length_cm': ['Рабочая длина, см', 'Рабочая длина', 'Глубина проникновения'],
-            'circumference_cm': ['Обхват, см', 'Обхват'],
-            'weight_g': ['Вес товара, г', 'Вес, г', 'Вес товара с упаковкой, г'],
-            'volume_ml': ['Объем, мл', 'Объём, мл', 'Объем'],
+            'length_cm': ['Длина', 'Длина, см', 'Длина изделия, см'],
+            'width_cm': ['Ширина', 'Ширина, см', 'Ширина изделия, см'],
+            'height_cm': ['Высота', 'Высота, см', 'Высота изделия, см'],
+            'depth_cm': ['Глубина', 'Глубина, см'],
+            'diameter_cm': ['Диаметр', 'Диаметр, см'],
+            'max_diameter_cm': ['Максимальный диаметр', 'Максимальный диаметр, см'],
+            'min_diameter_cm': ['Минимальный диаметр', 'Минимальный диаметр, см'],
+            'working_length_cm': ['Рабочая длина', 'Рабочая длина, см', 'Глубина проникновения'],
+            'circumference_cm': ['Обхват', 'Обхват, см'],
+            'weight_g': ['Вес товара', 'Вес товара, г', 'Вес, г'],
+            'volume_ml': ['Объем', 'Объем, мл', 'Объём, мл'],
         }
         ai_dims = None
         # Источник 1: ai_dimensions (заполняется при AI-парсинге)
@@ -677,11 +686,24 @@ class WBProductImporter:
             wb_char = wb_chars_by_name.get(char_name_lower)
 
             if not wb_char:
-                # Пробуем частичное совпадение
+                # Пробуем частичное совпадение по полным именам
                 for wb_name, wb_data in wb_chars_by_name.items():
                     if char_name_lower in wb_name or wb_name in char_name_lower:
                         wb_char = wb_data
                         break
+
+            if not wb_char:
+                # Нормализуем: убираем единицы измерения и скобки для fuzzy-матча
+                # "Диаметр, см" → "диаметр", "Вес товара, г" → "вес товара"
+                # "Диаметр секс игрушки (см)" → "диаметр секс игрушки"
+                _UNIT_RE = re.compile(r'[,(]\s*(?:см|мм|г|гр|кг|мл|л|шт|м)\s*\)?$', re.IGNORECASE)
+                char_norm = _UNIT_RE.sub('', char_name_lower).strip()
+                if char_norm:
+                    for wb_name, wb_data in wb_chars_by_name.items():
+                        wb_norm = _UNIT_RE.sub('', wb_name).strip()
+                        if char_norm in wb_norm or wb_norm in char_norm:
+                            wb_char = wb_data
+                            break
 
             if not wb_char:
                 logger.debug(f"Характеристика '{char_name}' не найдена в WB конфиге")
@@ -919,7 +941,7 @@ class WBProductImporter:
             imported_product: Товар с данными
         """
         if not imported_product.photo_urls:
-            logger.info(f"Товар {imported_product.external_id}: нет фото для загрузки")
+            logger.warning(f"Товар {imported_product.external_id}: photo_urls пусто — фото НЕ будут загружены на WB")
             return
 
         try:
@@ -932,9 +954,14 @@ class WBProductImporter:
             return
 
         # Получаем supplier product для кэша
-        sp = imported_product.supplier_product
+        sp = getattr(imported_product, 'supplier_product', None)
+        if not sp and imported_product.supplier_product_id:
+            from models import SupplierProduct
+            sp = SupplierProduct.query.get(imported_product.supplier_product_id)
         if not sp:
-            logger.warning(f"Товар {imported_product.external_id}: нет связи с SupplierProduct, фото не загружаем")
+            # Нет связи с SupplierProduct — пробуем загрузить напрямую по URL
+            logger.warning(f"Товар {imported_product.external_id}: нет SupplierProduct, пробуем загрузить фото напрямую по URL")
+            self._upload_photos_by_url_fallback(nm_id, photo_urls_raw)
             return
 
         supplier_type = sp.supplier.code if sp.supplier else 'unknown'
@@ -986,6 +1013,36 @@ class WBProductImporter:
 
         success_count = sum(1 for r in results if r.get('success'))
         logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
+
+    def _upload_photos_by_url_fallback(self, nm_id: int, photo_urls_raw: list):
+        """
+        Fallback: загрузка фото на WB через URL (media/save API),
+        когда нет SupplierProduct для кэш-загрузки.
+        """
+        direct_urls = []
+        for ph in photo_urls_raw:
+            if isinstance(ph, dict):
+                url = ph.get('original') or ph.get('sexoptovik') or ph.get('blur')
+            elif isinstance(ph, str):
+                url = ph
+            else:
+                continue
+            if url:
+                direct_urls.append(url)
+
+        if not direct_urls:
+            logger.warning(f"nmID={nm_id}: нет прямых URL для загрузки фото")
+            return
+
+        try:
+            result = self.api_client.upload_photos_by_url(
+                nm_id=nm_id,
+                photo_urls=direct_urls,
+                seller_id=self.seller.id
+            )
+            logger.info(f"nmID={nm_id}: загрузка фото по URL — {result}")
+        except Exception as e:
+            logger.error(f"nmID={nm_id}: не удалось загрузить фото по URL: {e}")
 
     @staticmethod
     def _download_photo(url: str, photo_data, supplier) -> Optional[bytes]:
