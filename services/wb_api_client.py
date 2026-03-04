@@ -272,8 +272,26 @@ class WildberriesAPIClient:
                 error_msg = f"API Error {response.status_code}"
                 try:
                     error_data = response.json()
-                    error_msg = error_data.get('message', error_msg)
-                except:
+                    # WB API возвращает ошибки в разных полях
+                    wb_error = (
+                        error_data.get('errorText')
+                        or error_data.get('message')
+                        or error_data.get('error')
+                        or error_msg
+                    )
+                    # additionalErrors содержит детали по конкретным полям
+                    additional = error_data.get('additionalErrors')
+                    if additional:
+                        if isinstance(additional, dict):
+                            details = '; '.join(f'{k}: {v}' for k, v in additional.items())
+                        else:
+                            details = str(additional)
+                        error_msg = f"{wb_error} | Детали: {details}"
+                    else:
+                        error_msg = str(wb_error) if wb_error != error_msg else error_msg
+                    # Логируем полный ответ для отладки
+                    logger.error(f"WB API {response.status_code} full response: {error_data}")
+                except Exception:
                     error_msg = response.text or error_msg
                 raise WBAPIException(error_msg)
 

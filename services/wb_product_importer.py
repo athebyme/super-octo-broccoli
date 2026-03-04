@@ -104,46 +104,48 @@ class WBProductImporter:
                 vendor_code = imported_product.external_vendor_code
 
             # Формируем sizes для WB API v2
-            # Два формата:
-            # 1. Для товаров С размерами (одежда, обувь): [{techSize, wbSize, price, skus}]
-            # 2. Для товаров БЕЗ размеров (интим-товары, аксессуары): [{skus}] - БЕЗ techSize/wbSize!
+            # Формат: [{techSize, wbSize, price, skus}]
+            # techSize/wbSize обязательны для всех карточек
+            # Для товаров без размеров: techSize="0", wbSize="" (или не указываем)
             wb_sizes = []
 
             if has_real_sizes and sizes_list:
                 # Товар С размерами (одежда, обувь)
                 for idx, size_val in enumerate(sizes_list):
                     size_str = str(size_val)
-
-                    # Берем соответствующий баркод или первый доступный
                     barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')
 
-                    wb_sizes.append({
+                    size_entry = {
                         'techSize': size_str,
                         'wbSize': size_str,
-                        'price': 0,  # Цена будет установлена позже
+                        'price': 0,  # Цена будет установлена позже через Prices API
                         'skus': [barcode] if barcode else []
-                    })
+                    }
+                    wb_sizes.append(size_entry)
             else:
                 # Товар БЕЗ размеров (интим-товары, электроника и т.д.)
-                # Согласно Swagger примеру creatingGroupOfIndividualCards (строки 6380-6382)
-                # для товаров без размеров НЕ указываем techSize и wbSize!
-                # Только баркод в skus
                 if barcodes:
-                    # Если несколько баркодов - создаем несколько записей
-                    # ВАЖНО: каждый баркод = отдельная запись!
                     for barcode in barcodes:
                         wb_sizes.append({
+                            'techSize': '0',
+                            'wbSize': '',
+                            'price': 0,
                             'skus': [barcode]
                         })
                 else:
-                    # Если нет баркодов, WB сгенерирует автоматически
                     wb_sizes.append({
+                        'techSize': '0',
+                        'wbSize': '',
+                        'price': 0,
                         'skus': []
                     })
 
             # Проверка: не должно быть пустого массива sizes
             if not wb_sizes:
                 wb_sizes.append({
+                    'techSize': '0',
+                    'wbSize': '',
+                    'price': 0,
                     'skus': []
                 })
 
@@ -250,7 +252,14 @@ class WBProductImporter:
 
                 full_error = f"Ошибка создания карточки WB: {error_msg}"
                 logger.error(full_error)
-                logger.error(f"Данные которые отправлялись: variant={variant}")
+                try:
+                    variant_json = json.dumps(
+                        [{'subjectID': imported_product.wb_subject_id, 'variants': [variant]}],
+                        ensure_ascii=False, indent=2
+                    )
+                    logger.error(f"Полный request body:\n{variant_json}")
+                except Exception:
+                    logger.error(f"Данные которые отправлялись: variant={variant}")
                 raise Exception(full_error)
 
             # ============================================================
