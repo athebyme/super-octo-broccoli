@@ -21,8 +21,11 @@ services:
       - SSL_COMMON_NAME=${SSL_COMMON_NAME:-seller-platform}
       - SSL_SAN_IPS=${SSL_SAN_IPS:-}
       - HTTP_PORT=${HTTP_PORT:-80}
+      # Публичный URL для раздачи фото (WB скачивает по этим URL)
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
     ports:
       - "${SELLER_PORT:-5001}:${SELLER_PORT:-5001}"
+      - "${HTTP_PORT:-80}:${HTTP_PORT:-80}"
     volumes:
       - ./uploads:/app/uploads
       - ./processed:/app/processed
