@@ -4,7 +4,49 @@
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
-     x-data="{ selectedAll: false, selected: [], bulkRunning: false, bulkResult: null }">
+     x-data="{
+        selectedAll: false,
+        selected: [],
+        bulkRunning: false,
+        bulkResult: null,
+        pushBulkToWB() {
+            if (!this.selected.length) return;
+            if (!confirm('Отправить ' + this.selected.length + ' товаров на WB?')) return;
+            this.bulkRunning = true;
+            this.bulkResult = null;
+            fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_ids: this.selected})
+            })
+            .then(r => r.json())
+            .then(data => {
+                this.bulkResult = data;
+                this.bulkRunning = false;
+                if (data.success > 0) setTimeout(() => location.reload(), 2000);
+            })
+            .catch(e => {
+                alert('Ошибка: ' + e.message);
+                this.bulkRunning = false;
+            });
+        },
+        deleteBulk() {
+            if (!this.selected.length) return;
+            if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
+            this.bulkRunning = true;
+            fetch('{{ url_for("seller_delete_imported_products_bulk") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_ids: this.selected})
+            })
+            .then(r => r.json())
+            .then(() => location.reload())
+            .catch(e => {
+                alert('Ошибка: ' + e.message);
+                this.bulkRunning = false;
+            });
+        }
+     }">
 
     <div class="relative overflow-hidden bg-gradient-to-r from-violet-600 via-purple-700 to-indigo-800 rounded-2xl p-6 sm:p-8 mb-6">
         <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
@@ -235,53 +277,4 @@
     {% endif %}
 </div>
 
-<script>
-function pushBulkToWB() {
-    const el = document.querySelector('[x-data]').__x.$data;
-    if (!el.selected.length) return;
-    if (!confirm(`Отправить ${el.selected.length} товаров на WB?`)) return;
-
-    el.bulkRunning = true;
-    el.bulkResult = null;
-
-    fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({product_ids: el.selected})
-    })
-    .then(r => r.json())
-    .then(data => {
-        el.bulkResult = data;
-        el.bulkRunning = false;
-        if (data.success > 0) setTimeout(() => location.reload(), 2000);
-    })
-    .catch(e => {
-        alert('Ошибка: ' + e.message);
-        el.bulkRunning = false;
-    });
-}
-
-function deleteBulk() {
-    const el = document.querySelector('[x-data]').__x.$data;
-    if (!el.selected.length) return;
-    if (!confirm(`Удалить ${el.selected.length} товаров? Они станут доступны для повторного импорта.`)) return;
-
-    el.bulkRunning = true;
-
-    fetch('{{ url_for("seller_delete_imported_products_bulk") }}', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({product_ids: el.selected})
-    })
-    .then(r => r.json())
-    .then(data => {
-        el.bulkRunning = false;
-        location.reload();
-    })
-    .catch(e => {
-        alert('Ошибка: ' + e.message);
-        el.bulkRunning = false;
-    });
-}
-</script>
 {% endblock %}
