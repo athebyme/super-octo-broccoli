@@ -1044,7 +1044,16 @@ def admin_api_debug_proxy():
 
     try:
         with WildberriesAPIClient(seller.wb_api_key) as client:
-            response = client._make_request(method, api_base, endpoint, params=params or None, json=body)
+            # Используем session напрямую, чтобы не терять ответ при ошибках >= 400
+            from urllib.parse import urljoin
+            base_url = client._get_base_url(api_base)
+            url = urljoin(base_url, endpoint)
+            response = client.session.request(
+                method, url,
+                params=params or None,
+                json=body,
+                timeout=30
+            )
             try:
                 resp_json = response.json()
             except Exception:
