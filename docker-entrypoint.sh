@@ -185,9 +185,13 @@ PYSSL
   fi
 fi
 # ---------- HTTP → HTTPS Redirect ----------
-HTTP_PORT="${HTTP_PORT:-80}"
-echo "🔀 Запуск HTTP→HTTPS редиректа на порту ${HTTP_PORT}..."
-python - <<'PYREDIRECT' &
+# Пропускаем если стоит реверс-прокси (Caddy/nginx) — он сам делает редирект
+if [ "${DISABLE_HTTP_REDIRECT:-}" = "1" ] || [ "${DISABLE_HTTP_REDIRECT:-}" = "true" ]; then
+  echo "⏭️  HTTP→HTTPS редирект отключён (используется внешний прокси)"
+else
+  HTTP_PORT="${HTTP_PORT:-80}"
+  echo "🔀 Запуск HTTP→HTTPS редиректа на порту ${HTTP_PORT}..."
+  python - <<'PYREDIRECT' &
 import http.server, ssl, os
 
 https_port = os.environ.get("PORT", "5001")
@@ -210,6 +214,7 @@ server = http.server.HTTPServer(("0.0.0.0", http_port), RedirectHandler)
 print(f"✅ HTTP redirect: :{http_port} → HTTPS :{https_port}")
 server.serve_forever()
 PYREDIRECT
+fi
 
 exec gunicorn \
   --bind 0.0.0.0:${PORT} \

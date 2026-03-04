@@ -38,7 +38,8 @@ services:
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
       - SSL_COMMON_NAME=${SSL_COMMON_NAME:-seller-platform}
       - SSL_SAN_IPS=${SSL_SAN_IPS:-}
-      - HTTP_PORT=${HTTP_PORT:-80}
+      # HTTP→HTTPS редирект отключён — Caddy делает это сам
+      - DISABLE_HTTP_REDIRECT=1
       # Публичный URL для раздачи фото (WB скачивает по этим URL)
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
     # Порты НЕ пробрасываем наружу — доступ только через Caddy
