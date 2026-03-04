@@ -837,7 +837,7 @@ class WildberriesAPIClient:
         seller_id: int = None
     ) -> List[Dict]:
         """
-        Загрузить фото в карточку WB через Content API v3 media/save
+        Загрузить фото в карточку WB через Content API v3 media/file
 
         Args:
             nm_id: Артикул WB (nmID)
@@ -848,10 +848,10 @@ class WildberriesAPIClient:
             Список результатов по каждому фото
 
         Note:
-            WB API /content/v3/media/save принимает multipart/form-data
+            WB API /content/v3/media/file принимает multipart/form-data
             Параметры: nmId (query), photoNumber (query, 1-based), uploadfile (file)
         """
-        endpoint = "/content/v3/media/save"
+        endpoint = "/content/v3/media/file"
         results = []
 
         for idx, path in enumerate(photo_paths):
@@ -863,13 +863,20 @@ class WildberriesAPIClient:
                     files = {'uploadfile': (f'photo_{photo_number}.jpg', f, 'image/jpeg')}
                     params = {'nmId': nm_id, 'photoNumber': photo_number}
 
-                    response = self._make_request(
-                        'POST', 'content', endpoint,
-                        params=params,
-                        files=files,
-                        log_to_db=False,
-                        seller_id=seller_id
-                    )
+                    # Remove Content-Type header for multipart upload
+                    old_content_type = self.session.headers.pop('Content-Type', None)
+                    try:
+                        response = self._make_request(
+                            'POST', 'content', endpoint,
+                            params=params,
+                            files=files,
+                            log_to_db=False,
+                            seller_id=seller_id
+                        )
+                    finally:
+                        if old_content_type:
+                            self.session.headers['Content-Type'] = old_content_type
+
                     result = response.json() if response.content else {}
                     logger.info(f"✅ Photo {photo_number} uploaded: {result}")
                     results.append({'photo_number': photo_number, 'success': True, 'response': result})
@@ -879,6 +886,51 @@ class WildberriesAPIClient:
                 results.append({'photo_number': photo_number, 'success': False, 'error': str(e)})
 
         return results
+
+    def upload_photos_by_url(
+        self,
+        nm_id: int,
+        photo_urls: List[str],
+        seller_id: int = None
+    ) -> Dict[str, Any]:
+        """
+        Загрузить фото в карточку WB по URL через Content API v3 media/save
+
+        Args:
+            nm_id: Артикул WB (nmID)
+            photo_urls: Список публичных URL фотографий
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Результат загрузки
+
+        Note:
+            POST /content/v3/media/save принимает JSON:
+            {"nmId": 123, "data": ["url1", "url2"]}
+            Новые фото ЗАМЕНЯЮТ старые. Чтобы добавить — укажите и новые, и старые URL.
+        """
+        endpoint = "/content/v3/media/save"
+
+        body = {
+            "nmId": nm_id,
+            "data": photo_urls
+        }
+
+        logger.info(f"📤 Uploading {len(photo_urls)} photos by URL for nmID={nm_id}")
+
+        try:
+            response = self._make_request(
+                'POST', 'content', endpoint,
+                json=body,
+                log_to_db=True,
+                seller_id=seller_id
+            )
+            result = response.json() if response.content else {}
+            logger.info(f"✅ Photos uploaded by URL: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"❌ Failed to upload photos by URL for nmID={nm_id}: {e}")
+            raise
 
     def update_prices(
         self,

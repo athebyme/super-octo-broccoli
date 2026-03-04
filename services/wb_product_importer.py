@@ -7,9 +7,10 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
-from models import db, ImportedProduct, Product, Seller
+from models import db, ImportedProduct, Product, Seller, PricingSettings
 from services.wb_api_client import WildberriesAPIClient
 from services.prohibited_words_filter import filter_prohibited_words
+from services.pricing_engine import calculate_price
 
 logger = logging.getLogger(__name__)
 
@@ -220,13 +221,21 @@ class WBProductImporter:
                 # Или через проверку списка несозданных карточек (errors list)
 
                 # Пытаемся найти созданную карточку по vendorCode
-                try:
-                    created_card = self.api_client.get_card_by_vendor_code(vendor_code)
-                    nm_id = created_card.get('nmID')
-                    logger.info(f"Карточка создана с nmID: {nm_id}")
-                except Exception as e:
-                    logger.warning(f"Не удалось получить nmID: {e}")
-                    nm_id = None
+                # WB обрабатывает создание асинхронно, поэтому пробуем несколько раз
+                import time as _time
+                nm_id = None
+                for attempt in range(3):
+                    try:
+                        if attempt > 0:
+                            _time.sleep(2 * attempt)  # 0s, 2s, 4s
+                        created_card = self.api_client.get_card_by_vendor_code(vendor_code)
+                        nm_id = created_card.get('nmID')
+                        if nm_id:
+                            logger.info(f"Карточка создана с nmID: {nm_id} (попытка {attempt+1})")
+                            break
+                    except Exception as e:
+                        logger.warning(f"Попытка {attempt+1}/3 получить nmID: {e}")
+                        nm_id = None
 
             except Exception as e:
                 error_msg = str(e)
@@ -244,6 +253,29 @@ class WBProductImporter:
                 logger.error(f"Данные которые отправлялись: variant={variant}")
                 raise Exception(full_error)
 
+            # ============================================================
+            # ПОСЛЕ СОЗДАНИЯ КАРТОЧКИ — устанавливаем цены через Prices API
+            # ============================================================
+            calculated_price_value = None
+            calculated_discount_price = None
+            calculated_price_before_discount = None
+
+            if nm_id:
+                try:
+                    calculated_price_value, calculated_discount_price, calculated_price_before_discount = \
+                        self._set_price_for_card(nm_id, imported_product)
+                except Exception as price_err:
+                    logger.warning(f"Не удалось установить цену для nmID={nm_id}: {price_err}")
+
+            # ============================================================
+            # ПОСЛЕ СОЗДАНИЯ КАРТОЧКИ — загружаем фото через WB API
+            # ============================================================
+            if nm_id:
+                try:
+                    self._upload_photos_for_card(nm_id, imported_product)
+                except Exception as photo_err:
+                    logger.warning(f"Не удалось загрузить фото для nmID={nm_id}: {photo_err}")
+
             # Создаем запись Product в БД
             product = Product(
                 seller_id=self.seller.id,
@@ -257,6 +289,9 @@ class WBProductImporter:
                 photos_json=json.dumps(media_urls, ensure_ascii=False),
                 sizes_json=json.dumps(wb_sizes, ensure_ascii=False),
                 characteristics_json=json.dumps(characteristics, ensure_ascii=False),
+                price=calculated_price_before_discount,
+                discount_price=calculated_price_value,
+                supplier_price=imported_product.supplier_price,
                 is_active=True,
                 last_sync=datetime.utcnow()
             )
@@ -336,6 +371,69 @@ class WBProductImporter:
 
         return chars
 
+    @staticmethod
+    def _collect_ai_characteristics(imported_product: ImportedProduct) -> Dict:
+        """
+        Собирает характеристики из AI-обогащённых полей ImportedProduct.
+        Используется как дополнительный источник, если основные характеристики неполные.
+        """
+        chars = {}
+
+        # AI-определённые цвета
+        if imported_product.ai_colors:
+            try:
+                ai_colors = json.loads(imported_product.ai_colors)
+                if ai_colors and isinstance(ai_colors, list):
+                    chars['Цвет'] = ai_colors[0] if len(ai_colors) == 1 else ai_colors
+            except Exception:
+                pass
+
+        # AI-определённые материалы
+        if imported_product.ai_materials:
+            try:
+                ai_materials = json.loads(imported_product.ai_materials)
+                if ai_materials and isinstance(ai_materials, list):
+                    chars['Состав'] = '; '.join(ai_materials) if len(ai_materials) > 1 else ai_materials[0]
+                elif ai_materials and isinstance(ai_materials, str):
+                    chars['Состав'] = ai_materials
+            except Exception:
+                pass
+
+        # AI-определённый пол
+        if imported_product.ai_gender:
+            gender_map = {
+                'male': 'Мужской', 'female': 'Женский', 'unisex': 'Унисекс',
+            }
+            chars.setdefault('Пол', gender_map.get(imported_product.ai_gender.lower(), imported_product.ai_gender))
+
+        # AI-определённая страна
+        if imported_product.ai_country:
+            chars.setdefault('Страна производства', imported_product.ai_country)
+
+        # AI-определённый сезон
+        if imported_product.ai_season:
+            season_map = {
+                'all_season': 'Всесезонный', 'summer': 'Лето', 'winter': 'Зима',
+                'demi': 'Демисезон', 'spring': 'Весна', 'autumn': 'Осень',
+            }
+            chars.setdefault('Сезон', season_map.get(imported_product.ai_season.lower(), imported_product.ai_season))
+
+        # AI-определённые атрибуты (полный набор)
+        if imported_product.ai_attributes:
+            try:
+                ai_attrs = json.loads(imported_product.ai_attributes)
+                if isinstance(ai_attrs, dict):
+                    for key, val in ai_attrs.items():
+                        if key not in chars and val and not key.startswith('_'):
+                            chars[key] = val
+            except Exception:
+                pass
+
+        if chars:
+            logger.info(f"Товар {imported_product.external_id}: собрано {len(chars)} AI-характеристик")
+
+        return chars
+
     def _build_wb_characteristics(self, imported_product: ImportedProduct) -> List[Dict]:
         """
         Строит массив характеристик в формате WB API
@@ -364,6 +462,12 @@ class WBProductImporter:
         # Фолбэк: собираем характеристики из отдельных полей ImportedProduct
         if not product_chars:
             product_chars = self._assemble_chars_from_fields(imported_product)
+
+        # Дополняем данными из AI-анализа (если есть)
+        ai_chars = self._collect_ai_characteristics(imported_product)
+        for key, val in ai_chars.items():
+            if key not in product_chars:
+                product_chars[key] = val
 
         if not product_chars:
             logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
@@ -539,6 +643,245 @@ class WBProductImporter:
 
         # Возвращаем как есть
         return str_value
+
+    def _set_price_for_card(self, nm_id: int, imported_product: ImportedProduct) -> tuple:
+        """
+        Рассчитывает и устанавливает цену на WB карточку по формуле ценообразования продавца.
+
+        Args:
+            nm_id: Артикул WB (nmID)
+            imported_product: Товар с данными
+
+        Returns:
+            Tuple[final_price, discount_price, price_before_discount] или (None, None, None)
+        """
+        supplier_price = imported_product.supplier_price
+        if not supplier_price or supplier_price <= 0:
+            logger.info(f"Товар {imported_product.external_id}: нет закупочной цены, пропускаем установку цены")
+            return None, None, None
+
+        # Загружаем настройки ценообразования продавца
+        pricing_settings = PricingSettings.query.filter_by(seller_id=self.seller.id).first()
+        if not pricing_settings or not pricing_settings.is_enabled:
+            logger.info(f"Ценообразование не настроено/отключено для продавца {self.seller.id}")
+            # Даже без формулы, если есть рассчитанные цены в ImportedProduct - используем их
+            if imported_product.calculated_price:
+                final_price = int(imported_product.calculated_price)
+                price_before = int(imported_product.calculated_price_before_discount or final_price * 1.55)
+                discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
+
+                prices_data = [{
+                    'nmID': nm_id,
+                    'price': price_before,
+                    'discount': discount_pct
+                }]
+                self.api_client.upload_prices_v2(
+                    prices=prices_data,
+                    log_to_db=True,
+                    seller_id=self.seller.id
+                )
+                logger.info(f"Цена установлена для nmID={nm_id}: price={price_before}, discount={discount_pct}% (final~{final_price})")
+                return final_price, imported_product.calculated_discount_price, price_before
+            return None, None, None
+
+        # Рассчитываем цену по формуле
+        price_result = calculate_price(
+            purchase_price=supplier_price,
+            settings=pricing_settings,
+            product_id=imported_product.id
+        )
+
+        if not price_result:
+            logger.warning(f"Не удалось рассчитать цену для товара {imported_product.external_id} (supplier_price={supplier_price})")
+            return None, None, None
+
+        final_price = price_result['final_price']  # Z — итоговая цена
+        price_before_discount = price_result['price_before_discount']  # Y — завышенная цена
+        discount_price = price_result.get('discount_price', 0)  # X — цена с SPP
+
+        # Вычисляем скидку в процентах: discount = (1 - Z/Y) * 100
+        if price_before_discount > 0:
+            discount_pct = max(0, min(99, int((1 - final_price / price_before_discount) * 100)))
+        else:
+            discount_pct = 0
+
+        # Отправляем цену через Prices API v2
+        prices_data = [{
+            'nmID': nm_id,
+            'price': int(price_before_discount),  # Цена до скидки (Y)
+            'discount': discount_pct  # Скидка в % чтобы итоговая = Z
+        }]
+
+        self.api_client.upload_prices_v2(
+            prices=prices_data,
+            log_to_db=True,
+            seller_id=self.seller.id
+        )
+
+        logger.info(
+            f"Цена установлена для nmID={nm_id}: "
+            f"supplier_price={supplier_price}, "
+            f"price_before_discount(Y)={price_before_discount}, "
+            f"discount={discount_pct}%, "
+            f"final_price(Z)={final_price}, "
+            f"discount_price(X)={discount_price}"
+        )
+
+        # Обновляем рассчитанные цены в ImportedProduct
+        imported_product.calculated_price = final_price
+        imported_product.calculated_discount_price = discount_price
+        imported_product.calculated_price_before_discount = price_before_discount
+
+        return final_price, discount_price, price_before_discount
+
+    def _upload_photos_for_card(self, nm_id: int, imported_product: ImportedProduct):
+        """
+        Загружает фотографии товара в WB карточку.
+
+        Использует кэшированные фото из photo_cache.
+        Если фото нет в кэше — скачивает с сервера поставщика.
+
+        Args:
+            nm_id: Артикул WB (nmID)
+            imported_product: Товар с данными
+        """
+        if not imported_product.photo_urls:
+            logger.info(f"Товар {imported_product.external_id}: нет фото для загрузки")
+            return
+
+        try:
+            photo_urls_raw = json.loads(imported_product.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"Товар {imported_product.external_id}: не удалось разобрать photo_urls")
+            return
+
+        if not photo_urls_raw:
+            return
+
+        # Получаем supplier product для кэша
+        sp = imported_product.supplier_product
+        if not sp:
+            logger.warning(f"Товар {imported_product.external_id}: нет связи с SupplierProduct, фото не загружаем")
+            return
+
+        supplier_type = sp.supplier.code if sp.supplier else 'unknown'
+        external_id = sp.external_id or ''
+
+        from services.photo_cache import get_photo_cache
+        cache = get_photo_cache()
+
+        # Собираем пути к кэшированным файлам
+        cached_photo_paths = []
+        for idx, ph in enumerate(photo_urls_raw):
+            # Определяем URL
+            if isinstance(ph, dict):
+                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            elif isinstance(ph, str):
+                url = ph
+            else:
+                continue
+
+            if not url:
+                continue
+
+            # Проверяем кэш
+            if cache.is_cached(supplier_type, external_id, url):
+                cache_path = cache.get_cache_path(supplier_type, external_id, url)
+                cached_photo_paths.append(cache_path)
+            else:
+                # Пробуем скачать фото прямо сейчас
+                try:
+                    photo_bytes = self._download_photo(url, ph, sp.supplier)
+                    if photo_bytes:
+                        cache.save_to_cache(supplier_type, external_id, url, photo_bytes)
+                        cache_path = cache.get_cache_path(supplier_type, external_id, url)
+                        cached_photo_paths.append(cache_path)
+                except Exception as dl_err:
+                    logger.debug(f"Не удалось скачать фото {url[:60]}: {dl_err}")
+
+        if not cached_photo_paths:
+            logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить")
+            return
+
+        # Загружаем фото в WB через file upload API
+        logger.info(f"Загружаем {len(cached_photo_paths)} фото для nmID={nm_id}")
+        results = self.api_client.upload_photos_to_card(
+            nm_id=nm_id,
+            photo_paths=cached_photo_paths,
+            seller_id=self.seller.id
+        )
+
+        success_count = sum(1 for r in results if r.get('success'))
+        logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
+
+    @staticmethod
+    def _download_photo(url: str, photo_data, supplier) -> Optional[bytes]:
+        """
+        Скачивает фото с URL поставщика.
+
+        Args:
+            url: Основной URL фото
+            photo_data: Данные фото (dict или str) для fallback URL
+            supplier: Объект поставщика для авторизации
+
+        Returns:
+            Байты изображения или None
+        """
+        import requests as _requests
+        from PIL import Image as _Image
+        from io import BytesIO
+
+        # Получаем cookies авторизации
+        auth_cookies = {}
+        if supplier and supplier.code == 'sexoptovik' and supplier.auth_login and supplier.auth_password:
+            try:
+                session = _requests.Session()
+                resp = session.post('https://sexoptovik.ru/admin/login', data={
+                    'login': supplier.auth_login,
+                    'password': supplier.auth_password,
+                }, timeout=10, allow_redirects=False)
+                if resp.status_code in (200, 302):
+                    auth_cookies = dict(session.cookies)
+            except Exception:
+                pass
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+        }
+        if 'sexoptovik.ru' in url:
+            headers['Referer'] = 'https://sexoptovik.ru/admin/'
+
+        # Fallback URLs
+        fallbacks = []
+        if isinstance(photo_data, dict):
+            if photo_data.get('blur') and photo_data['blur'] != url:
+                fallbacks.append(photo_data['blur'])
+            if photo_data.get('original') and photo_data['original'] != url:
+                fallbacks.append(photo_data['original'])
+
+        for current_url in [url] + fallbacks:
+            try:
+                resp = _requests.get(
+                    current_url, headers=headers, cookies=auth_cookies,
+                    timeout=15, allow_redirects=True
+                )
+                resp.raise_for_status()
+
+                content_type = resp.headers.get('Content-Type', '')
+                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                    continue
+
+                img = _Image.open(BytesIO(resp.content))
+                output = BytesIO()
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img.save(output, format='JPEG', quality=95)
+                return output.getvalue()
+            except Exception:
+                continue
+
+        return None
 
     def build_wb_card_preview(self, imported_product: ImportedProduct) -> Dict:
         """
