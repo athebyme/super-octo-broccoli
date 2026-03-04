@@ -933,8 +933,11 @@ class WBProductImporter:
         """
         Загружает фотографии товара в WB карточку.
 
-        Использует кэшированные фото из photo_cache.
-        Если фото нет в кэше — скачивает с сервера поставщика.
+        Стратегия:
+        1. Если есть PUBLIC_BASE_URL и supplier_product — формируем публичные URL
+           нашего сервера и отправляем в WB через /media/save (WB сам скачает).
+           Предварительно кэшируем фото, чтобы serve_public_photo отдал их быстро.
+        2. Fallback: загрузка файлов через /media/file (multipart upload).
 
         Args:
             nm_id: Артикул WB (nmID)
@@ -953,27 +956,81 @@ class WBProductImporter:
         if not photo_urls_raw:
             return
 
-        # Получаем supplier product для кэша
+        # Получаем supplier product
         sp = getattr(imported_product, 'supplier_product', None)
         if not sp and imported_product.supplier_product_id:
             from models import SupplierProduct
             sp = SupplierProduct.query.get(imported_product.supplier_product_id)
+
+        # =============================================
+        # Стратегия 1: URL-based upload (media/save)
+        # WB сам скачивает фото по публичным URL нашего сервера
+        # =============================================
+        from flask import current_app
+        public_base_url = current_app.config.get('PUBLIC_BASE_URL', '')
+
+        if public_base_url and sp:
+            # Сначала убеждаемся что фото есть в кэше (чтобы serve_public_photo отдал их)
+            self._ensure_photos_cached(photo_urls_raw, sp)
+
+            # Формируем публичные URL
+            from routes.photos import generate_public_photo_urls
+            public_urls = generate_public_photo_urls(imported_product)
+
+            if public_urls:
+                logger.info(
+                    f"Товар {imported_product.external_id}: загрузка {len(public_urls)} фото "
+                    f"через media/save (URL-based) для nmID={nm_id}"
+                )
+                logger.info(f"  Пример URL: {public_urls[0][:100]}...")
+                try:
+                    result = self.api_client.upload_photos_by_url(
+                        nm_id=nm_id,
+                        photo_urls=public_urls,
+                        seller_id=self.seller.id
+                    )
+                    logger.info(f"Фото отправлены по URL для nmID={nm_id}: {result}")
+                    return
+                except Exception as e:
+                    logger.warning(f"URL-based upload failed для nmID={nm_id}: {e}, пробуем file upload")
+
+        # =============================================
+        # Стратегия 2: File-based upload (media/file)
+        # Загружаем файлы напрямую через multipart
+        # =============================================
         if not sp:
-            # Нет связи с SupplierProduct — пробуем загрузить напрямую по URL
-            logger.warning(f"Товар {imported_product.external_id}: нет SupplierProduct, пробуем загрузить фото напрямую по URL")
-            self._upload_photos_by_url_fallback(nm_id, photo_urls_raw)
+            logger.warning(f"Товар {imported_product.external_id}: нет SupplierProduct, фото не загружены")
             return
+
+        cached_photo_paths = self._ensure_photos_cached(photo_urls_raw, sp)
+
+        if not cached_photo_paths:
+            logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для file upload")
+            return
+
+        logger.info(f"Загружаем {len(cached_photo_paths)} фото (file upload) для nmID={nm_id}")
+        results = self.api_client.upload_photos_to_card(
+            nm_id=nm_id,
+            photo_paths=cached_photo_paths,
+            seller_id=self.seller.id
+        )
+
+        success_count = sum(1 for r in results if r.get('success'))
+        logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
+
+    def _ensure_photos_cached(self, photo_urls_raw: list, sp) -> list:
+        """
+        Убеждается что все фото скачаны и лежат в кэше.
+        Возвращает список путей к кэшированным файлам.
+        """
+        from services.photo_cache import get_photo_cache
+        cache = get_photo_cache()
 
         supplier_type = sp.supplier.code if sp.supplier else 'unknown'
         external_id = sp.external_id or ''
 
-        from services.photo_cache import get_photo_cache
-        cache = get_photo_cache()
-
-        # Собираем пути к кэшированным файлам
-        cached_photo_paths = []
+        cached_paths = []
         for idx, ph in enumerate(photo_urls_raw):
-            # Определяем URL
             if isinstance(ph, dict):
                 url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
             elif isinstance(ph, str):
@@ -984,65 +1041,18 @@ class WBProductImporter:
             if not url:
                 continue
 
-            # Проверяем кэш
             if cache.is_cached(supplier_type, external_id, url):
-                cache_path = cache.get_cache_path(supplier_type, external_id, url)
-                cached_photo_paths.append(cache_path)
+                cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
             else:
-                # Пробуем скачать фото прямо сейчас
                 try:
                     photo_bytes = self._download_photo(url, ph, sp.supplier)
                     if photo_bytes:
                         cache.save_to_cache(supplier_type, external_id, url, photo_bytes)
-                        cache_path = cache.get_cache_path(supplier_type, external_id, url)
-                        cached_photo_paths.append(cache_path)
+                        cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
                 except Exception as dl_err:
                     logger.debug(f"Не удалось скачать фото {url[:60]}: {dl_err}")
 
-        if not cached_photo_paths:
-            logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить")
-            return
-
-        # Загружаем фото в WB через file upload API
-        logger.info(f"Загружаем {len(cached_photo_paths)} фото для nmID={nm_id}")
-        results = self.api_client.upload_photos_to_card(
-            nm_id=nm_id,
-            photo_paths=cached_photo_paths,
-            seller_id=self.seller.id
-        )
-
-        success_count = sum(1 for r in results if r.get('success'))
-        logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
-
-    def _upload_photos_by_url_fallback(self, nm_id: int, photo_urls_raw: list):
-        """
-        Fallback: загрузка фото на WB через URL (media/save API),
-        когда нет SupplierProduct для кэш-загрузки.
-        """
-        direct_urls = []
-        for ph in photo_urls_raw:
-            if isinstance(ph, dict):
-                url = ph.get('original') or ph.get('sexoptovik') or ph.get('blur')
-            elif isinstance(ph, str):
-                url = ph
-            else:
-                continue
-            if url:
-                direct_urls.append(url)
-
-        if not direct_urls:
-            logger.warning(f"nmID={nm_id}: нет прямых URL для загрузки фото")
-            return
-
-        try:
-            result = self.api_client.upload_photos_by_url(
-                nm_id=nm_id,
-                photo_urls=direct_urls,
-                seller_id=self.seller.id
-            )
-            logger.info(f"nmID={nm_id}: загрузка фото по URL — {result}")
-        except Exception as e:
-            logger.error(f"nmID={nm_id}: не удалось загрузить фото по URL: {e}")
+        return cached_paths
 
     @staticmethod
     def _download_photo(url: str, photo_data, supplier) -> Optional[bytes]:

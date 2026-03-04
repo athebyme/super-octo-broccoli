@@ -67,6 +67,11 @@ else:
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Публичный URL сервера для внешнего доступа (WB media/save, превью)
+# Пример: http://176.123.45.230:5000  или  https://myshop.example.com
+# Если не задан — url_for(_external=True) генерит localhost, и WB не сможет забрать фото
+app.config['PUBLIC_BASE_URL'] = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
+
 # SQLite конфигурация для лучшей поддержки конкурентного доступа
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'connect_args': {

@@ -30,14 +30,31 @@ def _sign_photo_token(secret_key: str, sp_id: int, photo_idx: int) -> str:
     return sig
 
 
+def _build_public_photo_url(sp_id: int, photo_idx: int) -> str:
+    """
+    Строит публичный URL для фото, доступный извне (для WB media/save).
+
+    Если задан PUBLIC_BASE_URL — формирует абсолютный URL на его основе.
+    Иначе — через url_for(_external=True) (будет localhost — не работает для WB).
+    """
+    from flask import current_app
+    secret = current_app.config['SECRET_KEY']
+    sig = _sign_photo_token(secret, sp_id, photo_idx)
+
+    public_base = current_app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
+    if public_base:
+        return f"{public_base}/photos/public/{sp_id}/{photo_idx}.jpg?sig={sig}"
+
+    # Fallback: url_for (может генерить localhost)
+    return url_for('serve_public_photo', sp=sp_id, idx=photo_idx, sig=sig, _external=True)
+
+
 def generate_public_photo_url(supplier_product_id: int, photo_idx: int) -> str:
     """
     Генерирует публичный URL для фото товара поставщика.
     Используется для отображения в превью WB и для загрузки фото в WB.
     """
-    from flask import current_app
-    sig = _sign_photo_token(current_app.config['SECRET_KEY'], supplier_product_id, photo_idx)
-    return url_for('serve_public_photo', sp=supplier_product_id, idx=photo_idx, sig=sig, _external=True)
+    return _build_public_photo_url(supplier_product_id, photo_idx)
 
 
 def generate_public_photo_urls(imported_product) -> list:
@@ -45,7 +62,6 @@ def generate_public_photo_urls(imported_product) -> list:
     Генерирует список публичных URL для всех фото ImportedProduct.
     Если есть связь с SupplierProduct — использует её.
     """
-    from flask import current_app
     import json as _json
 
     photo_urls = []
@@ -58,19 +74,12 @@ def generate_public_photo_urls(imported_product) -> list:
     if not photo_urls:
         return []
 
-    secret = current_app.config['SECRET_KEY']
-
     # Предпочитаем supplier_product_id для эффективного кэширования
     sp_id = imported_product.supplier_product_id
     if not sp_id:
         return []
 
-    result = []
-    for idx in range(len(photo_urls)):
-        sig = _sign_photo_token(secret, sp_id, idx)
-        result.append(url_for('serve_public_photo', sp=sp_id, idx=idx, sig=sig, _external=True))
-
-    return result
+    return [_build_public_photo_url(sp_id, idx) for idx in range(len(photo_urls))]
 
 
 def register_photo_routes(app):
