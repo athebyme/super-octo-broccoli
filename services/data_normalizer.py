@@ -127,6 +127,7 @@ class DataNormalizer:
     - Нормализация цветов к словарю WB
     - Валидация и нормализация баркодов (EAN-13/EAN-8)
     - Нормализация заголовков
+    - Фильтрация запрещённых слов WB (латинская ненормативная лексика)
     """
 
     @staticmethod
@@ -173,6 +174,9 @@ class DataNormalizer:
             ]
         if result.get('category'):
             result['category'] = DataNormalizer.clean_string(result['category'])
+
+        # Фильтрация запрещённых слов WB (title + description)
+        result = DataNormalizer.filter_prohibited_words(result)
 
         return result
 
@@ -408,6 +412,26 @@ class DataNormalizer:
                 normalized.append(mat)
 
         return normalized
+
+    # ------------------------------------------------------------------
+    # Фильтрация запрещённых слов WB
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def filter_prohibited_words(data: dict) -> dict:
+        """
+        Фильтрация запрещённых слов в title и description.
+
+        WB блокирует товары с ненормативной лексикой в латинской транскрипции
+        (Cock, Fuck, Vagina и др.). Заменяем на допустимые русские аналоги.
+        """
+        try:
+            from services.prohibited_words_filter import get_prohibited_words_filter
+            word_filter = get_prohibited_words_filter()
+            return word_filter.filter_product(data)
+        except Exception as e:
+            logger.error(f"Ошибка фильтрации запрещённых слов: {e}")
+            return data
 
     # ------------------------------------------------------------------
     # Batch-нормализация

@@ -9,6 +9,7 @@ from datetime import datetime
 
 from models import db, ImportedProduct, Product, Seller
 from services.wb_api_client import WildberriesAPIClient
+from services.prohibited_words_filter import filter_prohibited_words
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +173,19 @@ class WBProductImporter:
             # Логируем бренд для отладки
             logger.info(f"Товар {imported_product.external_id}: бренд = {product_brand}")
 
+            # Фильтрация запрещённых слов WB перед отправкой (финальная страховка)
+            safe_title = filter_prohibited_words(
+                imported_product.title[:60] if imported_product.title else 'Товар'
+            )
+            safe_description = filter_prohibited_words(
+                imported_product.description or imported_product.title or 'Описание товара'
+            )
+
             # Формируем variant для WB API v2
             variant = {
                 'vendorCode': vendor_code,
-                'title': imported_product.title[:60] if imported_product.title else 'Товар',  # Макс 60 символов
-                'description': imported_product.description or imported_product.title or 'Описание товара',
+                'title': safe_title,  # Макс 60 символов
+                'description': safe_description,
                 'brand': product_brand,
                 'dimensions': dimensions,
                 'sizes': wb_sizes,
@@ -579,6 +588,24 @@ class WBProductImporter:
         description = imported_product.description or imported_product.title or ''
         if not description or len(description) < 10:
             issues.append({'field': 'description', 'level': 'warning', 'message': 'Описание слишком короткое'})
+
+        # --- Проверка запрещённых слов WB ---
+        from services.prohibited_words_filter import get_prohibited_words_filter
+        word_filter = get_prohibited_words_filter()
+        prohibited_in_title = word_filter.has_prohibited_words(title)
+        prohibited_in_desc = word_filter.has_prohibited_words(description)
+        if prohibited_in_title:
+            title = filter_prohibited_words(title)
+            issues.append({
+                'field': 'title', 'level': 'warning',
+                'message': f'Заменены запрещённые слова WB: {", ".join(prohibited_in_title)}'
+            })
+        if prohibited_in_desc:
+            description = filter_prohibited_words(description)
+            issues.append({
+                'field': 'description', 'level': 'warning',
+                'message': f'Заменены запрещённые слова WB: {", ".join(prohibited_in_desc[:5])}'
+            })
 
         # --- Sizes ---
         has_real_sizes = False

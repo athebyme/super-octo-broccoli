@@ -5549,6 +5549,10 @@ register_marketplaces_routes(app)
 from routes.brands import register_brand_routes
 register_brand_routes(app)
 
+# ============= РОУТЫ ЗАПРЕЩЁННЫХ СЛОВ =============
+from routes.prohibited_words import register_prohibited_words_routes
+register_prohibited_words_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5593,6 +5597,31 @@ def _run_startup_migrations():
             db.session.commit()
         except Exception:
             db.session.rollback()
+
+    # Создаём таблицу prohibited_words если её нет
+    if 'prohibited_words' not in insp.get_table_names():
+        try:
+            db.session.execute(db.text('''
+                CREATE TABLE prohibited_words (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    word VARCHAR(100) NOT NULL,
+                    replacement VARCHAR(200) NOT NULL DEFAULT '',
+                    scope VARCHAR(20) NOT NULL DEFAULT 'global',
+                    seller_id INTEGER REFERENCES sellers(id),
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_by_user_id INTEGER REFERENCES users(id),
+                    UNIQUE (word, scope, seller_id)
+                )
+            '''))
+            db.session.execute(db.text('CREATE INDEX idx_prohibited_words_word ON prohibited_words(word)'))
+            db.session.execute(db.text('CREATE INDEX idx_prohibited_words_scope ON prohibited_words(scope)'))
+            db.session.execute(db.text('CREATE INDEX idx_prohibited_words_seller ON prohibited_words(seller_id)'))
+            db.session.commit()
+            logger.info("Created table 'prohibited_words'")
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"Could not create prohibited_words table: {e}")
 
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============
