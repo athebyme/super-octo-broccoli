@@ -1063,20 +1063,23 @@ def admin_api_debug_proxy():
             except Exception:
                 resp_json = {'raw_text': response.text[:5000]}
 
-            # Включаем отладку для всех запросов
+            # Вставляем debug прямо в response чтобы было видно в UI
             api_key_preview = seller.wb_api_key[:20] + '...' if seller.wb_api_key else 'N/A'
+            debug_info = {
+                '__debug_url': url,
+                '__debug_method': method,
+                '__debug_params': params if params else None,
+                '__debug_api_key_preview': api_key_preview,
+                '__debug_seller_id': seller.id,
+                '__debug_resp_headers': dict(list(response.headers.items())[:5]),
+            }
+            if isinstance(resp_json, dict):
+                resp_json.update(debug_info)
+            else:
+                resp_json = {'data': resp_json, **debug_info}
             return {
                 'response': resp_json,
                 'status_code': response.status_code,
-                '_debug': {
-                    'url': url,
-                    'method': method,
-                    'params': params if params else None,
-                    'body_sent': body is not None,
-                    'api_key_preview': api_key_preview,
-                    'seller_id': seller.id,
-                    'response_headers': dict(list(response.headers.items())[:10]),
-                }
             }
     except Exception as e:
         import traceback
