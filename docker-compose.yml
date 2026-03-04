@@ -1,6 +1,24 @@
 version: "3.9"
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - SELLER_PORT=${SELLER_PORT:-5001}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - seller-platform
+
   seller-platform:
     build: .
     container_name: seller-platform
@@ -23,9 +41,9 @@ services:
       - HTTP_PORT=${HTTP_PORT:-80}
       # Публичный URL для раздачи фото (WB скачивает по этим URL)
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
-    ports:
-      - "${SELLER_PORT:-5001}:${SELLER_PORT:-5001}"
-      - "${HTTP_PORT:-80}:${HTTP_PORT:-80}"
+    # Порты НЕ пробрасываем наружу — доступ только через Caddy
+    expose:
+      - "${SELLER_PORT:-5001}"
     volumes:
       - ./uploads:/app/uploads
       - ./processed:/app/processed
@@ -50,4 +68,7 @@ services:
 volumes:
   seller_platform_data:
     driver: local
-
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
