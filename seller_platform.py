@@ -1152,20 +1152,47 @@ def admin_api_debug_db_lookup():
 @login_required
 @admin_required
 def admin_api_debug_directories():
-    """Show cached WB directories from DB"""
+    """Show cached WB directories from DB. ?search=золот&type=colors for filtering."""
+    search = request.args.get('search', '').strip().lower()
+    dir_type_filter = request.args.get('type', '').strip()
+
     dirs = MarketplaceDirectory.query.all()
     result = {}
     for d in dirs:
+        if dir_type_filter and d.directory_type != dir_type_filter:
+            continue
         try:
             data = json.loads(d.data_json) if d.data_json else []
         except Exception:
             data = []
-        result[d.directory_type] = {
-            'items_count': d.items_count,
-            'synced_at': d.synced_at.isoformat() if d.synced_at else None,
-            'sample': data[:10] if isinstance(data, list) else data,
-            'total': len(data) if isinstance(data, list) else '?'
-        }
+
+        if search and isinstance(data, list):
+            # Filter entries matching search
+            filtered = []
+            for entry in data:
+                if isinstance(entry, dict):
+                    text = ' '.join(str(v) for v in entry.values()).lower()
+                elif isinstance(entry, str):
+                    text = entry.lower()
+                else:
+                    continue
+                if search in text:
+                    filtered.append(entry)
+            result[d.directory_type] = {
+                'items_count': d.items_count,
+                'synced_at': d.synced_at.isoformat() if d.synced_at else None,
+                'matches': filtered,
+                'total_matches': len(filtered),
+                'search': search,
+                'total': len(data) if isinstance(data, list) else '?'
+            }
+        else:
+            result[d.directory_type] = {
+                'items_count': d.items_count,
+                'synced_at': d.synced_at.isoformat() if d.synced_at else None,
+                'sample': data[:10] if isinstance(data, list) else data,
+                'total': len(data) if isinstance(data, list) else '?'
+            }
     return result
 
 

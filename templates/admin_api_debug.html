@@ -109,6 +109,19 @@
                 <button @click="loadDirectories()"
                     class="px-3 py-1.5 text-sm bg-pink-50 text-pink-700 rounded-lg hover:bg-pink-100">Справочники из БД</button>
             </div>
+            <div class="mt-3 flex gap-2 items-center">
+                <input x-model="dirSearch" type="text" placeholder="Поиск по справочнику (напр. золот)"
+                    class="border rounded-lg px-3 py-1.5 text-sm w-52">
+                <select x-model="dirType" class="border rounded-lg px-3 py-1.5 text-sm">
+                    <option value="">Все справочники</option>
+                    <option value="colors">Цвета</option>
+                    <option value="countries">Страны</option>
+                    <option value="kinds">Пол</option>
+                    <option value="seasons">Сезоны</option>
+                </select>
+                <button @click="searchDirectories()"
+                    class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100">Искать</button>
+            </div>
         </div>
 
         <!-- Response -->
@@ -174,6 +187,8 @@ function apiDebug() {
         quickNmId: '',
         quickSubjectId: '',
         dbProductId: '',
+        dirSearch: '',
+        dirType: '',
 
         async sendRequest() {
             this.loading = true;
@@ -278,6 +293,20 @@ function apiDebug() {
 
         async loadDirectories() {
             const resp = await fetch('/admin/api-debug/directories');
+            const data = await resp.json();
+            this.responseData = data;
+            this.responseStatus = 200;
+            this.responseTime = null;
+            this.responseItemCount = null;
+            this.formattedResponse = JSON.stringify(data, null, 2);
+            this.collapsed = false;
+        },
+
+        async searchDirectories() {
+            if (!this.dirSearch) { this.loadDirectories(); return; }
+            let url = '/admin/api-debug/directories?search=' + encodeURIComponent(this.dirSearch);
+            if (this.dirType) url += '&type=' + this.dirType;
+            const resp = await fetch(url);
             const data = await resp.json();
             this.responseData = data;
             this.responseStatus = 200;
