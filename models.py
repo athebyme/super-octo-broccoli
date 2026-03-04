@@ -2993,3 +2993,50 @@ class BrandCategoryLink(db.Model):
 
     def __repr__(self):
         return f'<BrandCategoryLink MPBrand#{self.marketplace_brand_id} -> Cat#{self.category_id}>'
+
+
+# ============================================================================
+# Запрещённые слова WB
+# ============================================================================
+
+class ProhibitedWord(db.Model):
+    """
+    Запрещённые слова для фильтрации при импорте в WB.
+
+    scope:
+      - 'global' — задаётся админом, действует для всех продавцов
+      - 'seller' — задаётся продавцом, действует только для него
+
+    Если replacement пустой — слово просто удаляется из текста.
+    """
+    __tablename__ = 'prohibited_words'
+
+    id = db.Column(db.Integer, primary_key=True)
+    word = db.Column(db.String(100), nullable=False, index=True)
+    replacement = db.Column(db.String(200), nullable=False, default='')
+    scope = db.Column(db.String(20), nullable=False, default='global', index=True)  # 'global' | 'seller'
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=True, index=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    seller = db.relationship('Seller', backref='prohibited_words', lazy=True)
+    created_by = db.relationship('User', lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('word', 'scope', 'seller_id', name='uq_prohibited_word_scope_seller'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'word': self.word,
+            'replacement': self.replacement,
+            'scope': self.scope,
+            'seller_id': self.seller_id,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ProhibitedWord "{self.word}" → "{self.replacement}" ({self.scope})>'

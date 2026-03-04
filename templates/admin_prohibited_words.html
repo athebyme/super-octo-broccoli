@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}Запрещённые слова WB - Админ{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Hero -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 rounded-2xl p-6 sm:p-8 mb-8">
+        <div class="relative z-10">
+            <h1 class="text-3xl font-bold text-white">Запрещённые слова WB</h1>
+            <p class="mt-2 text-sm text-red-200">Глобальный словарь — действует для всех продавцов. WB блокирует товары с ненормативной лексикой в латинице.</p>
+        </div>
+        <div class="absolute top-0 right-0 -mt-4 -mr-4 opacity-10">
+            <svg class="w-64 h-64" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        </div>
+    </div>
+
+    <!-- Статистика -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-8">
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                </div>
+                <div>
+                    <p class="text-2xl font-bold text-gray-900">{{ default_count }}</p>
+                    <p class="text-sm text-gray-500">Встроенных слов</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                </div>
+                <div>
+                    <p class="text-2xl font-bold text-gray-900">{{ db_words|length }}</p>
+                    <p class="text-sm text-gray-500">Добавлено в БД</p>
+                </div>
+            </div>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                </div>
+                <div>
+                    <p class="text-2xl font-bold text-gray-900">{{ default_count + db_words|length }}</p>
+                    <p class="text-sm text-gray-500">Всего слов</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Тестировщик -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8" x-data="prohibitedWordsTest()">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Тест фильтрации</h2>
+        <div class="flex gap-4">
+            <input type="text" x-model="testText" @keyup.enter="runTest()"
+                placeholder="Введите текст для проверки... (например: Big Cock Ring)"
+                class="flex-1 rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+            <button @click="runTest()" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">
+                Проверить
+            </button>
+        </div>
+        <div x-show="result" x-cloak class="mt-4 p-4 rounded-lg" :class="result?.changed ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'">
+            <template x-if="result?.changed">
+                <div>
+                    <p class="text-sm text-yellow-800"><span class="font-semibold">Найдены запрещённые слова:</span> <span x-text="result.found_words.join(', ')"></span></p>
+                    <p class="text-sm text-yellow-800 mt-1"><span class="font-semibold">Результат:</span> <span x-text="result.filtered"></span></p>
+                </div>
+            </template>
+            <template x-if="!result?.changed">
+                <p class="text-sm text-green-800">Запрещённых слов не найдено</p>
+            </template>
+        </div>
+    </div>
+
+    <!-- Добавить слово -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Добавить слово</h2>
+        <form method="POST" action="{{ url_for('prohibited_words.admin_add') }}" class="flex gap-4 items-end">
+            <div class="flex-1">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Запрещённое слово (латиница)</label>
+                <input type="text" name="word" required placeholder="например: cock"
+                    class="w-full rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <div class="flex-1">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Замена (оставьте пустым для удаления)</label>
+                <input type="text" name="replacement" placeholder="например: Член"
+                    class="w-full rounded-lg border-gray-300 shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+            </div>
+            <button type="submit" class="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors whitespace-nowrap">
+                Добавить
+            </button>
+        </form>
+    </div>
+
+    <!-- Слова из БД -->
+    {% if db_words %}
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Добавленные слова (БД)</h2>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead>
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Слово</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Замена</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for pw in db_words %}
+                    <tr class="hover:bg-gray-50" x-data="{ editing: false }">
+                        <td class="px-4 py-3">
+                            <span x-show="!editing" class="font-mono text-sm text-red-600 font-semibold">{{ pw.word }}</span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span x-show="!editing" class="text-sm {% if pw.replacement %}text-green-700{% else %}text-gray-400 italic{% endif %}">
+                                {{ pw.replacement if pw.replacement else '(удаляется)' }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            {% if pw.is_active %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Активно</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">Выключено</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex gap-2">
+                                <form method="POST" action="{{ url_for('prohibited_words.admin_delete', word_id=pw.id) }}" class="inline"
+                                    onsubmit="return confirm('Удалить слово «{{ pw.word }}»?')">
+                                    <button type="submit" class="text-red-600 hover:text-red-800 text-sm">Удалить</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Встроенный словарь -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6" x-data="{ showDefaults: false }">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">Встроенный словарь ({{ default_count }} слов)</h2>
+            <button @click="showDefaults = !showDefaults" class="text-sm text-indigo-600 hover:text-indigo-800">
+                <span x-show="!showDefaults">Показать</span>
+                <span x-show="showDefaults" x-cloak>Скрыть</span>
+            </button>
+        </div>
+        <p class="text-sm text-gray-500 mb-4">Встроенные слова нельзя удалить, но можно переопределить, добавив слово с таким же написанием через форму выше.</p>
+
+        <div x-show="showDefaults" x-cloak>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {% for dw in default_words %}
+                <div class="flex items-center justify-between p-2 rounded-lg bg-gray-50 text-sm">
+                    <span class="font-mono text-red-600">{{ dw.word }}</span>
+                    <span class="{% if dw.replacement %}text-green-700{% else %}text-gray-400 italic{% endif %}">
+                        {{ dw.replacement if dw.replacement else '(удал.)' }}
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function prohibitedWordsTest() {
+    return {
+        testText: '',
+        result: null,
+        async runTest() {
+            if (!this.testText.trim()) return;
+            try {
+                const resp = await fetch('{{ url_for("prohibited_words.admin_test") }}', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: this.testText})
+                });
+                this.result = await resp.json();
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    }
+}
+</script>
+{% endblock %}
