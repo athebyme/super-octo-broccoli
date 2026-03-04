@@ -1,0 +1,510 @@
+{% extends "base.html" %}
+
+{% block title %}Smart Parser — {{ supplier.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+     x-data="smartParser()">
+    <nav class="mb-4 text-sm text-gray-500">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:text-indigo-600">Поставщики</a>
+        <span class="mx-2">/</span>
+        <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}" class="hover:text-indigo-600">{{ supplier.name }}</a>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">Smart Parser</span>
+    </nav>
+
+    <!-- Header -->
+    <div class="relative overflow-hidden bg-gradient-to-r from-emerald-600 via-teal-700 to-cyan-800 rounded-2xl p-6 sm:p-8 mb-6">
+        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
+            <path d="M60 40 L140 40 L160 100 L140 160 L60 160 L40 100 Z" stroke="white" stroke-width="1.5"/>
+            <circle cx="100" cy="100" r="25" stroke="white" stroke-width="1.5"/>
+            <path d="M85 100h30M100 85v30" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+        <div class="relative flex justify-between items-start">
+            <div>
+                <h1 class="text-2xl font-bold text-white">Smart Product Parser</h1>
+                <p class="text-sm text-emerald-100 mt-1">Brand resolution, характеристики, валидация — без AI</p>
+            </div>
+            <div class="flex gap-2">
+                {% if supplier.ai_enabled %}
+                <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
+                   class="px-4 py-2 border border-white/20 text-white rounded-lg text-sm font-medium hover:bg-white/10">
+                    AI Парсер
+                </a>
+                {% endif %}
+                <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}"
+                   class="px-4 py-2 border border-white/20 text-white rounded-lg text-sm font-medium hover:bg-white/10">
+                    Назад к товарам
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
+            <p class="text-xs text-gray-500">Всего товаров</p>
+            <p class="text-2xl font-bold text-gray-900">{{ stats.total }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
+            <p class="text-xs text-gray-500">Бренд определён</p>
+            <p class="text-2xl font-bold text-emerald-600">{{ stats.brand_resolved }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
+            <p class="text-xs text-gray-500">Бренд не определён</p>
+            <p class="text-2xl font-bold text-red-500">{{ stats.brand_unresolved }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
+            <p class="text-xs text-gray-500">Категория WB</p>
+            <p class="text-2xl font-bold text-blue-600">{{ stats.category_mapped }}</p>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
+            <p class="text-xs text-gray-500">Ср. готовность</p>
+            <p class="text-2xl font-bold text-amber-600">{{ "%.0f"|format(stats.avg_readiness) }}%</p>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
+            <p class="text-xs text-gray-500">В наличии</p>
+            <p class="text-2xl font-bold text-green-600">{{ stats.in_stock }}</p>
+        </div>
+    </div>
+
+    <!-- Action Cards -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+
+        <!-- Smart Parse -->
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-gray-900">Smart Parse</h3>
+                    <p class="text-xs text-gray-500">Brand + Category + Характеристики</p>
+                </div>
+            </div>
+            <p class="text-sm text-gray-600 mb-4">
+                Определение брендов, маппинг категорий WB, извлечение размеров, материалов, цветов из названий.
+            </p>
+            <div class="space-y-2">
+                <select x-model="parseScope" class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2" :disabled="parseRunning">
+                    <option value="unparsed">Только необработанные</option>
+                    <option value="draft">Черновики</option>
+                    <option value="all">Все товары</option>
+                </select>
+                <button @click="runSmartParse()" :disabled="parseRunning"
+                        class="w-full px-4 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors">
+                    <span x-show="!parseRunning">Запустить Smart Parse</span>
+                    <span x-show="parseRunning" class="flex items-center justify-center gap-2">
+                        <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/><path d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" fill="currentColor" class="opacity-75"/></svg>
+                        Обработка...
+                    </span>
+                </button>
+                <!-- Background job progress -->
+                <div x-show="jobId && parseRunning" x-cloak class="space-y-1">
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div class="bg-emerald-600 h-2.5 rounded-full transition-all duration-500" :style="`width: ${jobProgress}%`"></div>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <p class="text-xs text-gray-500" x-text="jobStatus"></p>
+                        <button @click="cancelJob()" class="text-xs text-red-500 hover:text-red-700">Отмена</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Brand Validation -->
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-gray-900">Валидация брендов</h3>
+                    <p class="text-xs text-gray-500">Проверка + применение на маркетплейсе</p>
+                </div>
+            </div>
+            <p class="text-sm text-gray-600 mb-4">
+                Fuzzy matching брендов с WB. <b>Проверить</b> — только посмотреть. <b>Применить</b> — обновить resolved_brand_id на товарах и создать MarketplaceBrand.
+            </p>
+            <div class="space-y-2">
+                <button @click="runBrandValidation()" :disabled="brandRunning || brandApplying"
+                        class="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                    <span x-show="!brandRunning">Проверить бренды</span>
+                    <span x-show="brandRunning" class="flex items-center justify-center gap-2">
+                        <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/><path d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" fill="currentColor" class="opacity-75"/></svg>
+                        Проверка...
+                    </span>
+                </button>
+                <button @click="applyBrandValidation()" :disabled="brandApplying || brandRunning"
+                        class="w-full px-4 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors">
+                    <span x-show="!brandApplying">Применить к товарам</span>
+                    <span x-show="brandApplying" class="flex items-center justify-center gap-2">
+                        <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/><path d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" fill="currentColor" class="opacity-75"/></svg>
+                        Применение...
+                    </span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Characteristics Validation -->
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center">
+                    <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-gray-900">Валидация характеристик</h3>
+                    <p class="text-xs text-gray-500">Проверка AI-данных по справочнику WB</p>
+                </div>
+            </div>
+            <p class="text-sm text-gray-600 mb-4">
+                Проверяет извлечённые AI характеристики по справочнику WB. Автокоррекция ошибок.
+            </p>
+            <label class="flex items-center gap-2 mb-3">
+                <input type="checkbox" x-model="autoCorrect" class="rounded border-gray-300 text-amber-600">
+                <span class="text-sm text-gray-600">Автокоррекция</span>
+            </label>
+            <button @click="runCharValidation()" :disabled="charRunning"
+                    class="w-full px-4 py-2.5 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition-colors">
+                <span x-show="!charRunning">Валидировать характеристики</span>
+                <span x-show="charRunning" class="flex items-center justify-center gap-2">
+                    <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/><path d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" fill="currentColor" class="opacity-75"/></svg>
+                    Валидация...
+                </span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Apply Brand Result -->
+    <div x-show="brandApplyResult" x-cloak
+         class="bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
+        <h3 class="font-semibold text-green-800 mb-2">Бренды применены</h3>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="text-center p-2 bg-white rounded-lg">
+                <p class="text-xs text-gray-500">Брендов</p>
+                <p class="text-lg font-bold" x-text="brandApplyResult?.total_brands || 0"></p>
+            </div>
+            <div class="text-center p-2 bg-white rounded-lg">
+                <p class="text-xs text-gray-500">Определены</p>
+                <p class="text-lg font-bold text-emerald-600" x-text="brandApplyResult?.resolved || 0"></p>
+            </div>
+            <div class="text-center p-2 bg-white rounded-lg">
+                <p class="text-xs text-gray-500">На маркетплейсе</p>
+                <p class="text-lg font-bold text-blue-600" x-text="brandApplyResult?.marketplace_matched || 0"></p>
+            </div>
+            <div class="text-center p-2 bg-white rounded-lg">
+                <p class="text-xs text-gray-500">Товаров обновлено</p>
+                <p class="text-lg font-bold text-green-600" x-text="brandApplyResult?.products_updated || 0"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Panel -->
+    <div x-show="parseResult || brandResult || charResult" x-cloak
+         class="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
+
+        <!-- Smart Parse Result -->
+        <div x-show="parseResult" class="p-6 border-b border-gray-100">
+            <h3 class="font-semibold text-gray-900 mb-3">Результат Smart Parse</h3>
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Обработано</p>
+                    <p class="text-xl font-bold" x-text="parseResult?.processed || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-emerald-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Бренды определены</p>
+                    <p class="text-xl font-bold text-emerald-600" x-text="parseResult?.brand_resolved_count || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Категории</p>
+                    <p class="text-xl font-bold text-blue-600" x-text="parseResult?.category_mapped_count || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-amber-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Ср. готовность</p>
+                    <p class="text-xl font-bold text-amber-600" x-text="(parseResult?.avg_readiness_score || 0).toFixed(0) + '%'"></p>
+                </div>
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Время</p>
+                    <p class="text-xl font-bold" x-text="(parseResult?.duration_seconds || 0).toFixed(1) + 'с'"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Brand Validation Result -->
+        <div x-show="brandResult" class="p-6 border-b border-gray-100">
+            <h3 class="font-semibold text-gray-900 mb-3">
+                Валидация брендов
+                <span class="text-sm font-normal text-gray-500" x-text="'(' + (brandResult?.total_brands || 0) + ' брендов)'"></span>
+            </h3>
+            <div class="grid grid-cols-3 gap-4 mb-4">
+                <div class="text-center p-3 bg-emerald-50 rounded-lg">
+                    <p class="text-xs text-gray-500">На маркетплейсе</p>
+                    <p class="text-xl font-bold text-emerald-600" x-text="brandResult?.resolved_on_marketplace || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-red-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Не найдены</p>
+                    <p class="text-xl font-bold text-red-500" x-text="brandResult?.unresolved_on_marketplace || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Всего брендов</p>
+                    <p class="text-xl font-bold" x-text="brandResult?.total_brands || 0"></p>
+                </div>
+            </div>
+            <!-- Brand Details Table -->
+            <div class="overflow-x-auto max-h-96 overflow-y-auto" x-show="brandResult?.brands?.length > 0">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 sticky top-0">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Бренд поставщика</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Товаров</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Статус</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">На маркетплейсе</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Совпадение</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Варианты</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        <template x-for="b in brandResult?.brands || []" :key="b.supplier_brand">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-3 py-2 font-medium" x-text="b.supplier_brand"></td>
+                                <td class="px-3 py-2 text-gray-500" x-text="b.products_count"></td>
+                                <td class="px-3 py-2">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+                                          :class="b.marketplace_status === 'valid' ? 'bg-green-100 text-green-700' : b.marketplace_status === 'uncertain' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'"
+                                          x-text="b.marketplace_status === 'valid' ? 'OK' : b.marketplace_status === 'uncertain' ? '?' : 'Не найден'"></span>
+                                </td>
+                                <td class="px-3 py-2" x-text="b.marketplace_name || '—'"></td>
+                                <td class="px-3 py-2 text-gray-500" x-text="b.confidence ? (b.confidence * 100).toFixed(0) + '%' : '—'"></td>
+                                <td class="px-3 py-2 text-xs text-gray-400" x-text="(b.suggestions || []).slice(0,3).join(', ') || '—'"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Characteristics Validation Result -->
+        <div x-show="charResult" class="p-6">
+            <h3 class="font-semibold text-gray-900 mb-3">Валидация характеристик</h3>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                <div class="text-center p-3 bg-emerald-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Валидны</p>
+                    <p class="text-xl font-bold text-emerald-600" x-text="charResult?.valid || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-red-50 rounded-lg">
+                    <p class="text-xs text-gray-500">С ошибками</p>
+                    <p class="text-xl font-bold text-red-500" x-text="charResult?.with_errors || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-blue-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Автокоррекций</p>
+                    <p class="text-xl font-bold text-blue-600" x-text="charResult?.corrections_applied || 0"></p>
+                </div>
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <p class="text-xs text-gray-500">Всего</p>
+                    <p class="text-xl font-bold" x-text="charResult?.total || 0"></p>
+                </div>
+            </div>
+            <!-- Error Details -->
+            <div x-show="charResult?.details?.length > 0" class="overflow-x-auto max-h-64 overflow-y-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 sticky top-0">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">ID товара</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Ошибки</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Коррекции</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Не заполнены</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        <template x-for="d in charResult?.details?.slice(0, 30) || []" :key="d.product_id">
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-3 py-2 font-medium" x-text="d.product_id"></td>
+                                <td class="px-3 py-2">
+                                    <span class="text-red-600" x-text="d.invalid_count || d.error || 0"></span>
+                                </td>
+                                <td class="px-3 py-2 text-blue-600" x-text="d.corrected_count || 0"></td>
+                                <td class="px-3 py-2 text-xs text-gray-400" x-text="(d.missing_required || []).join(', ') || '—'"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Info box -->
+    <div class="bg-teal-50 border border-teal-200 rounded-xl p-4 text-sm text-teal-800">
+        <p class="font-medium mb-1">Как работает Smart Parser</p>
+        <ul class="list-disc list-inside space-y-1 text-teal-700">
+            <li><b>Smart Parse</b> — определяет бренды через BrandEngine (fuzzy matching по реестру), маппит категории WB, извлекает размеры/материалы/цвета из названий</li>
+            <li><b>Валидация брендов</b> — проверяет каждый бренд поставщика по списку брендов WB, ищет ближайшее совпадение</li>
+            <li><b>Валидация характеристик</b> — проверяет AI-данные по справочнику WB для конкретной категории, автокорректирует опечатки и регистр</li>
+            <li>Все операции <b>алгоритмические</b> — не тратят токены AI</li>
+        </ul>
+    </div>
+</div>
+
+<script>
+function smartParser() {
+    return {
+        parseScope: 'unparsed',
+        autoCorrect: true,
+        parseRunning: false,
+        brandRunning: false,
+        brandApplying: false,
+        charRunning: false,
+        parseResult: null,
+        brandResult: null,
+        brandApplyResult: null,
+        charResult: null,
+        // Background job state
+        jobId: null,
+        jobProgress: 0,
+        jobStatus: '',
+        _pollTimer: null,
+
+        async _fetchJson(url, body) {
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            if (!resp.ok) {
+                let errMsg = `HTTP ${resp.status}`;
+                try {
+                    const errData = await resp.json();
+                    errMsg = errData.error || errMsg;
+                } catch (_) {
+                    const text = await resp.text();
+                    errMsg = text.substring(0, 200) || errMsg;
+                }
+                throw new Error(errMsg);
+            }
+            return await resp.json();
+        },
+
+        async runSmartParse() {
+            this.parseRunning = true;
+            this.parseResult = null;
+            this.jobId = null;
+            this.jobProgress = 0;
+            this.jobStatus = '';
+            try {
+                const data = await this._fetchJson(
+                    '{{ url_for("admin_supplier_smart_parse", supplier_id=supplier.id) }}',
+                    {scope: this.parseScope}
+                );
+                // Если запущена фоновая задача
+                if (data.background) {
+                    this.jobId = data.job_id;
+                    this.jobStatus = `Запущена фоновая обработка ${data.total} товаров...`;
+                    this._startPolling();
+                    return;
+                }
+                // Синхронный результат
+                this.parseResult = data;
+                this.parseRunning = false;
+            } catch (e) {
+                alert('Ошибка Smart Parse: ' + e.message);
+                this.parseRunning = false;
+            }
+        },
+
+        _startPolling() {
+            if (this._pollTimer) clearInterval(this._pollTimer);
+            this._pollTimer = setInterval(() => this._pollJobStatus(), 2000);
+        },
+
+        async _pollJobStatus() {
+            if (!this.jobId) return;
+            try {
+                const resp = await fetch(`/admin/suppliers/{{ supplier.id }}/smart-parse-job/${this.jobId}/status`);
+                const data = await resp.json();
+                this.jobProgress = data.progress_pct || 0;
+                this.jobStatus = `Обработано ${data.processed}/${data.total} (${this.jobProgress.toFixed(0)}%)`;
+
+                if (data.status === 'done') {
+                    clearInterval(this._pollTimer);
+                    this._pollTimer = null;
+                    this.parseResult = {
+                        processed: data.succeeded,
+                        brand_resolved_count: data.results?.brand_resolved_count || 0,
+                        category_mapped_count: data.results?.category_mapped_count || 0,
+                        avg_readiness_score: data.results?.avg_readiness_score || 0,
+                        duration_seconds: 0,
+                        errors: data.failed,
+                    };
+                    this.jobStatus = 'Готово!';
+                    this.parseRunning = false;
+                } else if (data.status === 'failed' || data.status === 'cancelled') {
+                    clearInterval(this._pollTimer);
+                    this._pollTimer = null;
+                    this.jobStatus = data.status === 'cancelled' ? 'Отменено' : `Ошибка: ${data.error || 'unknown'}`;
+                    this.parseRunning = false;
+                }
+            } catch (e) {
+                console.error('Poll error:', e);
+            }
+        },
+
+        async cancelJob() {
+            if (!this.jobId) return;
+            try {
+                await fetch(`/admin/suppliers/{{ supplier.id }}/smart-parse-job/${this.jobId}/cancel`, {method: 'POST'});
+                this.jobStatus = 'Отмена...';
+            } catch (_) {}
+        },
+
+        async runBrandValidation() {
+            this.brandRunning = true;
+            this.brandResult = null;
+            try {
+                this.brandResult = await this._fetchJson(
+                    '{{ url_for("admin_supplier_validate_brands", supplier_id=supplier.id) }}',
+                    {}
+                );
+            } catch (e) {
+                alert('Ошибка валидации брендов: ' + e.message);
+            }
+            this.brandRunning = false;
+        },
+
+        async applyBrandValidation() {
+            if (!confirm('Применить результаты валидации брендов?\n\nЭто обновит resolved_brand_id на всех товарах и создаст записи MarketplaceBrand.')) return;
+            this.brandApplying = true;
+            this.brandApplyResult = null;
+            try {
+                this.brandApplyResult = await this._fetchJson(
+                    '{{ url_for("admin_supplier_apply_brands", supplier_id=supplier.id) }}',
+                    {}
+                );
+            } catch (e) {
+                alert('Ошибка применения брендов: ' + e.message);
+            }
+            this.brandApplying = false;
+        },
+
+        async runCharValidation() {
+            this.charRunning = true;
+            this.charResult = null;
+            try {
+                this.charResult = await this._fetchJson(
+                    '{{ url_for("admin_supplier_validate_characteristics", supplier_id=supplier.id) }}',
+                    {auto_correct: this.autoCorrect}
+                );
+            } catch (e) {
+                alert('Ошибка валидации характеристик: ' + e.message);
+            }
+            this.charRunning = false;
+        }
+    }
+}
+</script>
+{% endblock %}

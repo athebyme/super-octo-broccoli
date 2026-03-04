@@ -66,11 +66,19 @@
                 </label>
                 <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
             </div>
-            <button type="submit" onclick="return confirm('Импортировать выбранные товары?')"
-                    class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-                    :disabled="selected.length === 0">
-                Импортировать выбранные
-            </button>
+            <div class="flex items-center gap-2">
+                <button type="submit" onclick="return confirm('Импортировать выбранные товары?')"
+                        class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                        :disabled="selected.length === 0">
+                    Импортировать выбранные
+                </button>
+                <button type="submit" formaction="{{ url_for('supplier_catalog_smart_import') }}"
+                        onclick="return confirm('Умный импорт: товары будут обогащены (бренд, категория, характеристики) перед импортом. Продолжить?')"
+                        class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                        :disabled="selected.length === 0">
+                    Smart Import
+                </button>
+            </div>
         </div>
 
         <div class="bg-white border border-gray-200 rounded-b-lg overflow-hidden">

@@ -747,6 +747,30 @@ class SupplierService:
 
             db.session.commit()
 
+            # --- Smart Product Parser: brand resolution + characteristics ---
+            try:
+                from services.smart_product_parser import SmartProductParser
+                smart_parser = SmartProductParser(supplier_id=supplier_id)
+                # Собираем ID товаров, которые нужно обогатить
+                sp_ids_to_parse = []
+                for pd in parsed_products:
+                    ext_id = pd['external_id']
+                    sp_obj = SupplierProduct.query.filter_by(
+                        supplier_id=supplier_id, external_id=ext_id
+                    ).first()
+                    if sp_obj:
+                        sp_ids_to_parse.append(sp_obj.id)
+                if sp_ids_to_parse:
+                    smart_result = smart_parser.parse_and_apply_bulk(sp_ids_to_parse)
+                    logger.info(
+                        f"SmartParse {supplier.code}: "
+                        f"brands={smart_result.brand_resolved_count}, "
+                        f"cats={smart_result.category_mapped_count}, "
+                        f"avg_score={smart_result.avg_readiness_score:.1f}"
+                    )
+            except Exception as e:
+                logger.warning(f"SmartProductParser skipped: {e}")
+
             # Обновляем статистику поставщика
             supplier.total_products = SupplierProduct.query.filter_by(supplier_id=supplier_id).count()
             supplier.last_sync_at = datetime.utcnow()
@@ -1968,11 +1992,23 @@ class SupplierService:
 
             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
+            # Валидация и автокоррекция AI-характеристик
+            validation_result = {}
+            try:
+                from services.smart_product_parser import CharacteristicsValidator
+                val = CharacteristicsValidator.validate_product(
+                    product_id, auto_correct=True
+                )
+                validation_result = val.to_dict()
+            except Exception as ve:
+                logger.debug(f"Characteristics validation skipped: {ve}")
+
             return {
                 'success': True,
                 'parsed_data': result,
                 'marketplace_data': marketplace_data,
                 'fill_percentage': fill_pct,
+                'validation': validation_result,
             }
 
         return {'success': False, 'error': error or 'Ошибка AI парсинга'}
@@ -2183,10 +2219,26 @@ class SupplierService:
                             # Коммит с retry для SQLite (concurrent writes)
                             _commit_with_retry(db.session)
 
+                            # Валидация и автокоррекция AI-характеристик
+                            validation_info = {}
+                            try:
+                                from services.smart_product_parser import CharacteristicsValidator
+                                val_result = CharacteristicsValidator.validate_product(
+                                    pid, auto_correct=True
+                                )
+                                validation_info = {
+                                    'chars_valid': val_result.is_valid,
+                                    'chars_corrected': val_result.corrected_count,
+                                    'chars_invalid': val_result.invalid_count,
+                                }
+                            except Exception as ve:
+                                logger.debug(f"Characteristics validation skipped: {ve}")
+
                             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                             return {
                                 'product_id': pid, 'title': title,
                                 'status': 'success', 'fill_pct': fill_pct,
+                                **validation_info,
                             }
                         else:
                             return {
@@ -2710,6 +2762,35 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
     if not product.ai_bullets_json and mp.get('bullet_points'):
         product.ai_bullets_json = json.dumps(mp['bullet_points'], ensure_ascii=False)
 
+    # Собираем characteristics_json из AI-результатов если пуст
+    if not product.characteristics_json or product.characteristics_json in ('{}', '[]', ''):
+        chars = {}
+        if product.brand:
+            chars['Бренд'] = product.brand
+        if color.get('wb_color') or color.get('primary_color'):
+            chars['Цвет'] = color.get('wb_color') or color.get('primary_color')
+        if materials.get('primary_material'):
+            chars['Материал'] = materials['primary_material']
+        if materials.get('composition'):
+            chars['Состав'] = materials['composition']
+        if product.gender:
+            chars['Пол'] = product.gender
+        if product.country:
+            chars['Страна производства'] = product.country
+        if product.season:
+            chars['Сезон'] = product.season
+        if physical.get('diameter_cm'):
+            chars['Диаметр'] = str(physical['diameter_cm'])
+        if physical.get('volume_ml'):
+            chars['Объем'] = str(physical['volume_ml'])
+        if physical.get('working_length_cm'):
+            chars['Рабочая длина'] = str(physical['working_length_cm'])
+        pkg_contents = parsed.get('contents', {})
+        if pkg_contents.get('package_contents'):
+            chars['Комплектация'] = ', '.join(pkg_contents['package_contents'])
+        if chars:
+            product.characteristics_json = json.dumps(chars, ensure_ascii=False)
+
 
 def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
     """Запускает MarketplaceAwareParsingTask если удалось определить категорию WB."""
@@ -3073,6 +3154,13 @@ def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedPr
         original_data=sp.original_data_json,
     )
 
+    # Копируем resolved brand
+    if sp.resolved_brand_id:
+        imp.resolved_brand_id = sp.resolved_brand_id
+        imp.brand_status = 'exact'
+    elif sp.brand:
+        imp.brand_status = 'unresolved'
+
     # Копируем AI данные если есть
     if sp.ai_seo_title:
         imp.ai_seo_title = sp.ai_seo_title
@@ -3093,6 +3181,9 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
     """Обновить ImportedProduct из SupplierProduct (sync)"""
     imp.title = sp.title or imp.title
     imp.brand = sp.brand or imp.brand
+    if sp.resolved_brand_id and not imp.resolved_brand_id:
+        imp.resolved_brand_id = sp.resolved_brand_id
+        imp.brand_status = 'exact'
     imp.category = sp.category or imp.category
     imp.all_categories = sp.all_categories or imp.all_categories
     imp.mapped_wb_category = sp.wb_category_name or imp.mapped_wb_category

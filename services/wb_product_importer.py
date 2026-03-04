@@ -150,18 +150,9 @@ class WBProductImporter:
             # где id - это числовой ID из справочника WB
             characteristics = self._build_wb_characteristics(imported_product)
 
-            # Формируем медиа (фотографии)
-            media_urls = []
-            for photo in photo_urls[:30]:  # Максимум 30 фото
-                # Приоритет sexoptovik (без цензуры) по умолчанию
-                # TODO: Добавить настройку для включения цензуры (blur)
-                if isinstance(photo, dict):
-                    # Сначала пробуем sexoptovik, потом blur, потом original
-                    url = photo.get('sexoptovik') or photo.get('blur') or photo.get('original')
-                else:
-                    url = photo
-                if url:
-                    media_urls.append(url)
+            # Формируем медиа (фотографии) — серверные URL
+            from routes.photos import generate_public_photo_urls
+            media_urls = generate_public_photo_urls(imported_product)
 
             # Формируем dimensions (габариты)
             # Для начала используем дефолтные значения
@@ -287,6 +278,55 @@ class WBProductImporter:
 
             return False, error_msg, None
 
+    @staticmethod
+    def _assemble_chars_from_fields(imported_product: ImportedProduct) -> Dict:
+        """
+        Собирает словарь характеристик из отдельных полей ImportedProduct
+        (colors, materials, gender, country, brand) когда characteristics пуст.
+        """
+        chars = {}
+
+        # Цвет
+        if imported_product.colors:
+            try:
+                colors = json.loads(imported_product.colors)
+                if colors:
+                    chars['Цвет'] = colors[0] if len(colors) == 1 else colors
+            except Exception:
+                pass
+
+        # Материал / Состав
+        if imported_product.materials:
+            try:
+                materials = json.loads(imported_product.materials)
+                if materials:
+                    chars['Состав'] = '; '.join(materials) if len(materials) > 1 else materials[0]
+            except Exception:
+                pass
+
+        # Пол
+        if imported_product.gender:
+            gender = imported_product.gender
+            gender_map = {
+                'male': 'Мужской', 'female': 'Женский', 'unisex': 'Унисекс',
+                'для женщин и мужчин': 'Унисекс', 'для женщин': 'Женский', 'для мужчин': 'Мужской',
+                'мужской': 'Мужской', 'женский': 'Женский', 'унисекс': 'Унисекс',
+            }
+            chars['Пол'] = gender_map.get(gender.lower(), gender)
+
+        # Страна производства
+        if imported_product.country:
+            chars['Страна производства'] = imported_product.country
+
+        # Бренд
+        if imported_product.brand:
+            chars['Бренд'] = imported_product.brand
+
+        if chars:
+            logger.info(f"Товар {imported_product.external_id}: собрано {len(chars)} характеристик из отдельных полей")
+
+        return chars
+
     def _build_wb_characteristics(self, imported_product: ImportedProduct) -> List[Dict]:
         """
         Строит массив характеристик в формате WB API
@@ -311,6 +351,10 @@ class WBProductImporter:
         except Exception as e:
             logger.warning(f"Ошибка парсинга характеристик: {e}")
             product_chars = {}
+
+        # Фолбэк: собираем характеристики из отдельных полей ImportedProduct
+        if not product_chars:
+            product_chars = self._assemble_chars_from_fields(imported_product)
 
         if not product_chars:
             logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
@@ -486,6 +530,152 @@ class WBProductImporter:
 
         # Возвращаем как есть
         return str_value
+
+    def build_wb_card_preview(self, imported_product: ImportedProduct) -> Dict:
+        """
+        Формирует превью карточки WB БЕЗ отправки на маркетплейс.
+        Показывает продавцу как будет выглядеть карточка.
+
+        Returns:
+            dict с полями карточки WB и статусами готовности
+        """
+        issues = []
+
+        # --- Базовые данные ---
+        colors = json.loads(imported_product.colors) if imported_product.colors else []
+        sizes_data = json.loads(imported_product.sizes) if imported_product.sizes else {}
+        barcodes = json.loads(imported_product.barcodes) if imported_product.barcodes else []
+        materials = json.loads(imported_product.materials) if imported_product.materials else []
+        photo_urls = json.loads(imported_product.photo_urls) if imported_product.photo_urls else []
+
+        # --- Photos ---
+        # Генерируем серверные proxy URLs вместо прямых URL поставщика
+        from routes.photos import generate_public_photo_urls
+        media_urls = generate_public_photo_urls(imported_product)
+
+        if not media_urls:
+            issues.append({'field': 'photos', 'level': 'error', 'message': 'Нет фотографий'})
+
+        # --- Brand ---
+        product_brand = imported_product.brand or ''
+        brand_resolved = bool(imported_product.resolved_brand_id)
+        if not product_brand:
+            issues.append({'field': 'brand', 'level': 'error', 'message': 'Бренд не указан'})
+        elif not brand_resolved:
+            issues.append({'field': 'brand', 'level': 'warning', 'message': f'Бренд "{product_brand}" не подтверждён в реестре'})
+
+        # --- Category ---
+        if not imported_product.wb_subject_id:
+            issues.append({'field': 'category', 'level': 'error', 'message': 'Не определена категория WB'})
+
+        # --- Title ---
+        title = imported_product.title or ''
+        if not title:
+            issues.append({'field': 'title', 'level': 'error', 'message': 'Нет названия'})
+        elif len(title) > 60:
+            issues.append({'field': 'title', 'level': 'warning', 'message': f'Название {len(title)} символов (макс. 60 для WB)'})
+
+        # --- Description ---
+        description = imported_product.description or imported_product.title or ''
+        if not description or len(description) < 10:
+            issues.append({'field': 'description', 'level': 'warning', 'message': 'Описание слишком короткое'})
+
+        # --- Sizes ---
+        has_real_sizes = False
+        sizes_list = []
+        if isinstance(sizes_data, dict):
+            sizes_list = sizes_data.get('simple_sizes', [])
+            if sizes_list:
+                has_real_sizes = True
+        elif isinstance(sizes_data, list):
+            sizes_list = sizes_data
+            has_real_sizes = len(sizes_list) > 0
+
+        wb_sizes = []
+        if has_real_sizes and sizes_list:
+            for idx, size_val in enumerate(sizes_list):
+                barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')
+                wb_sizes.append({
+                    'techSize': str(size_val),
+                    'wbSize': str(size_val),
+                    'price': 0,
+                    'skus': [barcode] if barcode else []
+                })
+        else:
+            if barcodes:
+                for barcode in barcodes:
+                    wb_sizes.append({'skus': [barcode]})
+            else:
+                wb_sizes.append({'skus': []})
+                issues.append({'field': 'barcodes', 'level': 'warning', 'message': 'Нет баркодов'})
+
+        # --- Vendor code ---
+        vendor_code = imported_product.external_vendor_code or f'SP-{imported_product.id}'
+
+        # --- Characteristics ---
+        chars_dict = {}
+        try:
+            if imported_product.characteristics:
+                raw = json.loads(imported_product.characteristics) if isinstance(imported_product.characteristics, str) else imported_product.characteristics
+                chars_dict = {k: v for k, v in raw.items() if not k.startswith('_')}
+        except Exception:
+            pass
+
+        # Фолбэк: собираем из отдельных полей
+        if not chars_dict:
+            chars_dict = self._assemble_chars_from_fields(imported_product)
+
+        if not chars_dict:
+            issues.append({'field': 'characteristics', 'level': 'warning', 'message': 'Нет характеристик — WB может отклонить карточку'})
+
+        # --- Readiness ---
+        errors = len([i for i in issues if i['level'] == 'error'])
+        warnings = len([i for i in issues if i['level'] == 'warning'])
+        is_ready = errors == 0
+
+        return {
+            'product_id': imported_product.id,
+            'is_ready': is_ready,
+            'can_push': is_ready and bool(self.api_client),
+            'issues': issues,
+            'errors_count': errors,
+            'warnings_count': warnings,
+
+            # WB card data
+            'card': {
+                'vendorCode': vendor_code,
+                'title': title[:60] if title else '',
+                'description': description,
+                'brand': product_brand,
+                'brand_resolved': brand_resolved,
+                'subjectID': imported_product.wb_subject_id,
+                'subjectName': imported_product.mapped_wb_category or '',
+                'dimensions': {
+                    'length': 10,
+                    'width': 10,
+                    'height': 5,
+                    'weightBrutto': 0.1
+                },
+                'sizes': wb_sizes,
+                'has_real_sizes': has_real_sizes,
+                'photos': media_urls,
+                'photos_count': len(media_urls),
+                'colors': colors,
+                'materials': materials,
+                'gender': imported_product.gender or '',
+                'country': imported_product.country or '',
+                'characteristics': chars_dict,
+                'characteristics_count': len(chars_dict),
+                'barcodes': barcodes,
+            },
+
+            # Pricing
+            'pricing': {
+                'supplier_price': imported_product.supplier_price,
+                'calculated_price': imported_product.calculated_price,
+                'supplier_quantity': imported_product.supplier_quantity,
+            },
+        }
 
     def import_multiple_products(self, imported_product_ids: List[int]) -> Dict:
         """
