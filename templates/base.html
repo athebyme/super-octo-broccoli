@@ -304,6 +304,15 @@
                     <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Стоп-слова WB</span>
                 </a>
 
+                <a href="{{ url_for('admin_api_debug') }}"
+                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'admin_api_debug' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">API Debug</span>
+                </a>
+
             </div>
             {% endif %}
 

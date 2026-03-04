@@ -29,6 +29,7 @@ from models import (
     SafePriceChangeSettings, PriceChangeBatch, PriceChangeItem,
     PricingSettings, AutoImportSettings,
     Supplier, SupplierProduct, SellerSupplier,
+    Marketplace, MarketplaceDirectory, ImportedProduct,
     log_admin_action, log_user_activity
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
@@ -1008,6 +1009,155 @@ def admin_system_settings():
     settings = SystemSettings.query.order_by(SystemSettings.key).all()
 
     return render_template('admin_system_settings.html', settings=settings)
+
+
+# ============= API DEBUG CONSOLE =============
+
+@app.route('/admin/api-debug')
+@login_required
+@admin_required
+def admin_api_debug():
+    """Debug console for WB API requests"""
+    return render_template('admin_api_debug.html')
+
+
+@app.route('/admin/api-debug/proxy', methods=['POST'])
+@login_required
+@admin_required
+def admin_api_debug_proxy():
+    """Proxy WB API requests for debug console"""
+    data = request.get_json()
+    method = data.get('method', 'GET')
+    api_base = data.get('api_base', 'content')
+    endpoint = data.get('endpoint', '')
+    params = data.get('params', {})
+    body = data.get('body')
+
+    # Find a seller with WB API key
+    seller = current_user.seller
+    if not seller or not seller.wb_api_key:
+        # Try to find any seller with API key
+        seller = Seller.query.filter(Seller.wb_api_key.isnot(None), Seller.wb_api_key != '').first()
+
+    if not seller or not seller.wb_api_key:
+        return {'error': 'No WB API key configured', 'response': None, 'status_code': 0}, 200
+
+    try:
+        with WildberriesAPIClient(seller.wb_api_key) as client:
+            response = client._make_request(method, api_base, endpoint, params=params or None, json=body)
+            try:
+                resp_json = response.json()
+            except Exception:
+                resp_json = {'raw_text': response.text[:5000]}
+            return {
+                'response': resp_json,
+                'status_code': response.status_code
+            }
+    except Exception as e:
+        return {
+            'response': {'error': str(e)},
+            'status_code': 0
+        }
+
+
+@app.route('/admin/api-debug/db-lookup')
+@login_required
+@admin_required
+def admin_api_debug_db_lookup():
+    """Lookup product data in database"""
+    q = request.args.get('q', '').strip()
+    if not q:
+        return {'error': 'No query'}, 400
+
+    result = {}
+
+    # Search ImportedProduct
+    ip = None
+    if q.isdigit():
+        ip = ImportedProduct.query.get(int(q))
+    if not ip:
+        ip = ImportedProduct.query.filter_by(external_id=q).first()
+    if not ip:
+        ip = ImportedProduct.query.filter(ImportedProduct.title.contains(q)).first()
+
+    if ip:
+        result['imported_product'] = {
+            'id': ip.id,
+            'external_id': ip.external_id,
+            'title': ip.title,
+            'import_status': ip.import_status,
+            'wb_subject_id': ip.wb_subject_id,
+            'object_name': ip.object_name,
+            'colors': ip.colors,
+            'materials': ip.materials,
+            'gender': ip.gender,
+            'country': ip.country,
+            'brand': ip.brand,
+            'supplier_price': float(ip.supplier_price) if ip.supplier_price else None,
+            'calculated_price': float(ip.calculated_price) if ip.calculated_price else None,
+            'characteristics': ip.characteristics,
+            'ai_colors': ip.ai_colors,
+            'ai_materials': ip.ai_materials,
+            'ai_gender': ip.ai_gender,
+            'ai_country': ip.ai_country,
+            'ai_season': ip.ai_season,
+            'ai_attributes': ip.ai_attributes,
+            'ai_dimensions': ip.ai_dimensions,
+            'photo_urls': ip.photo_urls,
+            'product_id': ip.product_id,
+        }
+
+        # If linked product exists
+        if ip.product_id:
+            p = Product.query.get(ip.product_id)
+            if p:
+                result['product'] = {
+                    'id': p.id,
+                    'nm_id': p.nm_id,
+                    'vendor_code': p.vendor_code,
+                    'title': p.title,
+                    'price': float(p.price) if p.price else None,
+                    'discount_price': float(p.discount_price) if p.discount_price else None,
+                    'photos_json': p.photos_json,
+                    'characteristics_json': p.characteristics_json,
+                }
+
+        # Supplier product
+        if ip.supplier_product_id:
+            sp = SupplierProduct.query.get(ip.supplier_product_id)
+            if sp:
+                result['supplier_product'] = {
+                    'id': sp.id,
+                    'external_id': sp.external_id,
+                    'title': sp.title,
+                    'price': float(sp.price) if sp.price else None,
+                    'photos_json': sp.photos_json,
+                }
+    else:
+        result['error'] = f'ImportedProduct not found for query: {q}'
+
+    return result
+
+
+@app.route('/admin/api-debug/directories')
+@login_required
+@admin_required
+def admin_api_debug_directories():
+    """Show cached WB directories from DB"""
+    dirs = MarketplaceDirectory.query.all()
+    result = {}
+    for d in dirs:
+        try:
+            data = json.loads(d.data_json) if d.data_json else []
+        except Exception:
+            data = []
+        result[d.directory_type] = {
+            'items_count': d.items_count,
+            'synced_at': d.synced_at.isoformat() if d.synced_at else None,
+            'sample': data[:10] if isinstance(data, list) else data,
+            'total': len(data) if isinstance(data, list) else '?'
+        }
+    return result
 
 
 # ============= НАСТРОЙКИ API =============

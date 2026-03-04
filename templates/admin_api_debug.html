@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+
+{% block title %}API Debug Console - Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="bg-gradient-to-r from-gray-800 to-gray-900 rounded-2xl p-6 mb-6 text-white">
+        <h1 class="text-2xl font-bold">API Debug Console</h1>
+        <p class="text-gray-300 mt-1">WB API запросы, просмотр карточек, справочники</p>
+    </div>
+
+    <div x-data="apiDebug()" class="space-y-6">
+
+        <!-- Quick Actions -->
+        <div class="bg-white rounded-xl shadow-sm border p-4">
+            <h2 class="font-semibold text-gray-700 mb-3">Быстрые запросы</h2>
+            <div class="flex flex-wrap gap-2">
+                <button @click="quickRequest('GET', '/content/v2/directory/colors', {locale:'ru'})"
+                    class="px-3 py-1.5 text-sm bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100">Справочник цветов</button>
+                <button @click="quickRequest('GET', '/content/v2/directory/countries', {locale:'ru'})"
+                    class="px-3 py-1.5 text-sm bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100">Справочник стран</button>
+                <button @click="quickRequest('GET', '/content/v2/directory/kinds', {locale:'ru'})"
+                    class="px-3 py-1.5 text-sm bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100">Справочник полов</button>
+                <button @click="quickRequest('GET', '/content/v2/directory/seasons', {locale:'ru'})"
+                    class="px-3 py-1.5 text-sm bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100">Справочник сезонов</button>
+                <button @click="quickRequest('GET', '/content/v2/object/parent/all', {locale:'ru'})"
+                    class="px-3 py-1.5 text-sm bg-green-50 text-green-700 rounded-lg hover:bg-green-100">Родительские категории</button>
+                <button @click="quickRequest('GET', '/content/v2/cards/list', null, 'POST', JSON.stringify({settings:{cursor:{limit:10},filter:{withPhoto:-1}}}), 'content')"
+                    class="px-3 py-1.5 text-sm bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100">Мои карточки (10шт)</button>
+            </div>
+
+            <!-- Quick card lookup -->
+            <div class="mt-3 flex gap-2 items-center">
+                <input x-model="quickNmId" type="text" placeholder="nmID или vendorCode"
+                    class="border rounded-lg px-3 py-1.5 text-sm w-48">
+                <button @click="lookupCard()"
+                    class="px-3 py-1.5 text-sm bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100">Найти карточку</button>
+                <input x-model="quickSubjectId" type="text" placeholder="subjectID"
+                    class="border rounded-lg px-3 py-1.5 text-sm w-32">
+                <button @click="quickRequest('GET', '/content/v2/object/charcs/' + quickSubjectId)"
+                    class="px-3 py-1.5 text-sm bg-teal-50 text-teal-700 rounded-lg hover:bg-teal-100">Характеристики категории</button>
+            </div>
+        </div>
+
+        <!-- Custom Request -->
+        <div class="bg-white rounded-xl shadow-sm border p-4">
+            <h2 class="font-semibold text-gray-700 mb-3">Произвольный запрос</h2>
+            <div class="grid grid-cols-12 gap-3">
+                <div class="col-span-2">
+                    <label class="block text-xs text-gray-500 mb-1">Метод</label>
+                    <select x-model="method" class="w-full border rounded-lg px-3 py-2 text-sm">
+                        <option>GET</option>
+                        <option>POST</option>
+                        <option>PUT</option>
+                        <option>PATCH</option>
+                        <option>DELETE</option>
+                    </select>
+                </div>
+                <div class="col-span-2">
+                    <label class="block text-xs text-gray-500 mb-1">API Base</label>
+                    <select x-model="apiBase" class="w-full border rounded-lg px-3 py-2 text-sm">
+                        <option value="content">content-api</option>
+                        <option value="suppliers">suppliers-api</option>
+                        <option value="statistics">statistics-api</option>
+                        <option value="adv">adv-api</option>
+                        <option value="prices">discounts-prices-api</option>
+                    </select>
+                </div>
+                <div class="col-span-8">
+                    <label class="block text-xs text-gray-500 mb-1">Endpoint</label>
+                    <input x-model="endpoint" type="text" placeholder="/content/v2/..."
+                        class="w-full border rounded-lg px-3 py-2 text-sm font-mono">
+                </div>
+            </div>
+
+            <div class="mt-3">
+                <label class="block text-xs text-gray-500 mb-1">Query Params (JSON)</label>
+                <input x-model="queryParams" type="text" placeholder='{"locale":"ru"}'
+                    class="w-full border rounded-lg px-3 py-2 text-sm font-mono">
+            </div>
+
+            <div class="mt-3" x-show="method !== 'GET'">
+                <label class="block text-xs text-gray-500 mb-1">Request Body (JSON)</label>
+                <textarea x-model="requestBody" rows="5" placeholder='{"key": "value"}'
+                    class="w-full border rounded-lg px-3 py-2 text-sm font-mono"></textarea>
+            </div>
+
+            <div class="mt-3 flex gap-2">
+                <button @click="sendRequest()"
+                    :disabled="loading"
+                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm font-medium">
+                    <span x-show="!loading">Отправить</span>
+                    <span x-show="loading">Загрузка...</span>
+                </button>
+                <button @click="clearResponse()"
+                    class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm">Очистить</button>
+            </div>
+        </div>
+
+        <!-- DB Lookup -->
+        <div class="bg-white rounded-xl shadow-sm border p-4">
+            <h2 class="font-semibold text-gray-700 mb-3">Данные в базе</h2>
+            <div class="flex flex-wrap gap-2 items-center">
+                <input x-model="dbProductId" type="text" placeholder="ImportedProduct ID или external_id"
+                    class="border rounded-lg px-3 py-1.5 text-sm w-64">
+                <button @click="lookupDbProduct()"
+                    class="px-3 py-1.5 text-sm bg-yellow-50 text-yellow-700 rounded-lg hover:bg-yellow-100">Найти в БД</button>
+                <button @click="loadDirectories()"
+                    class="px-3 py-1.5 text-sm bg-pink-50 text-pink-700 rounded-lg hover:bg-pink-100">Справочники из БД</button>
+            </div>
+        </div>
+
+        <!-- Response -->
+        <div x-show="responseData !== null" class="bg-white rounded-xl shadow-sm border">
+            <div class="flex items-center justify-between p-4 border-b">
+                <div class="flex items-center gap-3">
+                    <h2 class="font-semibold text-gray-700">Ответ</h2>
+                    <span x-show="responseStatus"
+                        :class="responseStatus >= 200 && responseStatus < 300 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+                        class="px-2 py-0.5 text-xs rounded-full font-mono"
+                        x-text="responseStatus"></span>
+                    <span x-show="responseTime" class="text-xs text-gray-400" x-text="responseTime + 'ms'"></span>
+                    <span x-show="responseItemCount !== null" class="text-xs text-gray-500"
+                        x-text="'items: ' + responseItemCount"></span>
+                </div>
+                <div class="flex gap-2">
+                    <button @click="copyResponse()" class="text-xs text-gray-500 hover:text-gray-700">Копировать</button>
+                    <button @click="toggleCollapse()" class="text-xs text-gray-500 hover:text-gray-700"
+                        x-text="collapsed ? 'Развернуть' : 'Свернуть'"></button>
+                </div>
+            </div>
+            <div x-show="!collapsed" class="p-4 max-h-[600px] overflow-auto">
+                <pre class="text-xs font-mono whitespace-pre-wrap break-words" x-text="formattedResponse"></pre>
+            </div>
+        </div>
+
+        <!-- History -->
+        <div x-show="history.length > 0" class="bg-white rounded-xl shadow-sm border p-4">
+            <h2 class="font-semibold text-gray-700 mb-3">История запросов</h2>
+            <div class="space-y-1">
+                <template x-for="(item, idx) in history" :key="idx">
+                    <div @click="replayHistory(item)"
+                        class="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer text-sm">
+                        <span class="font-mono text-xs px-1.5 py-0.5 rounded"
+                            :class="item.method === 'GET' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'"
+                            x-text="item.method"></span>
+                        <span class="font-mono text-gray-600 truncate" x-text="item.endpoint"></span>
+                        <span :class="item.status >= 200 && item.status < 300 ? 'text-green-600' : 'text-red-600'"
+                            class="text-xs ml-auto" x-text="item.status"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function apiDebug() {
+    return {
+        method: 'GET',
+        apiBase: 'content',
+        endpoint: '',
+        queryParams: '',
+        requestBody: '',
+        loading: false,
+        responseData: null,
+        responseStatus: null,
+        responseTime: null,
+        responseItemCount: null,
+        formattedResponse: '',
+        collapsed: false,
+        history: [],
+        quickNmId: '',
+        quickSubjectId: '',
+        dbProductId: '',
+
+        async sendRequest() {
+            this.loading = true;
+            const start = Date.now();
+            try {
+                let params = {};
+                if (this.queryParams) {
+                    try { params = JSON.parse(this.queryParams); } catch(e) { alert('Invalid JSON in query params'); this.loading = false; return; }
+                }
+                let body = null;
+                if (this.method !== 'GET' && this.requestBody) {
+                    try { body = JSON.parse(this.requestBody); } catch(e) { alert('Invalid JSON in body'); this.loading = false; return; }
+                }
+
+                const resp = await fetch('/admin/api-debug/proxy', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        method: this.method,
+                        api_base: this.apiBase,
+                        endpoint: this.endpoint,
+                        params: params,
+                        body: body
+                    })
+                });
+
+                const data = await resp.json();
+                this.responseStatus = data.status_code || resp.status;
+                this.responseTime = Date.now() - start;
+                this.responseData = data.response;
+
+                // Count items
+                if (data.response && data.response.data && Array.isArray(data.response.data)) {
+                    this.responseItemCount = data.response.data.length;
+                } else if (data.response && Array.isArray(data.response)) {
+                    this.responseItemCount = data.response.length;
+                } else {
+                    this.responseItemCount = null;
+                }
+
+                this.formattedResponse = JSON.stringify(data.response, null, 2);
+                this.collapsed = false;
+
+                this.history.unshift({
+                    method: this.method,
+                    endpoint: this.endpoint,
+                    status: this.responseStatus,
+                    apiBase: this.apiBase,
+                    params: this.queryParams,
+                    body: this.requestBody
+                });
+                if (this.history.length > 20) this.history.pop();
+            } catch (e) {
+                this.responseData = {error: e.message};
+                this.formattedResponse = JSON.stringify({error: e.message}, null, 2);
+                this.responseStatus = 0;
+                this.responseTime = Date.now() - start;
+            }
+            this.loading = false;
+        },
+
+        quickRequest(method, endpoint, params, overrideMethod, overrideBody, overrideBase) {
+            this.method = overrideMethod || method;
+            this.apiBase = overrideBase || 'content';
+            this.endpoint = endpoint;
+            this.queryParams = params ? JSON.stringify(params) : '';
+            this.requestBody = overrideBody || '';
+            this.sendRequest();
+        },
+
+        async lookupCard() {
+            if (!this.quickNmId) return;
+            // Try as nmID first (numeric), then as vendorCode
+            const val = this.quickNmId.trim();
+            this.method = 'POST';
+            this.apiBase = 'content';
+            this.endpoint = '/content/v2/get/cards/list';
+            if (/^\d+$/.test(val)) {
+                this.requestBody = JSON.stringify({
+                    settings: {cursor: {limit: 1}, filter: {withPhoto: -1, textSearch: val, allowedCategoriesOnly: false}},
+                });
+            } else {
+                this.requestBody = JSON.stringify({
+                    settings: {cursor: {limit: 1}, filter: {withPhoto: -1, textSearch: val, allowedCategoriesOnly: false}},
+                });
+            }
+            this.queryParams = '';
+            await this.sendRequest();
+        },
+
+        async lookupDbProduct() {
+            if (!this.dbProductId) return;
+            const resp = await fetch('/admin/api-debug/db-lookup?q=' + encodeURIComponent(this.dbProductId));
+            const data = await resp.json();
+            this.responseData = data;
+            this.responseStatus = 200;
+            this.responseTime = null;
+            this.responseItemCount = null;
+            this.formattedResponse = JSON.stringify(data, null, 2);
+            this.collapsed = false;
+        },
+
+        async loadDirectories() {
+            const resp = await fetch('/admin/api-debug/directories');
+            const data = await resp.json();
+            this.responseData = data;
+            this.responseStatus = 200;
+            this.responseTime = null;
+            this.responseItemCount = null;
+            this.formattedResponse = JSON.stringify(data, null, 2);
+            this.collapsed = false;
+        },
+
+        clearResponse() {
+            this.responseData = null;
+            this.formattedResponse = '';
+            this.responseStatus = null;
+        },
+
+        toggleCollapse() { this.collapsed = !this.collapsed; },
+
+        async copyResponse() {
+            try { await navigator.clipboard.writeText(this.formattedResponse); } catch(e) {}
+        },
+
+        replayHistory(item) {
+            this.method = item.method;
+            this.apiBase = item.apiBase;
+            this.endpoint = item.endpoint;
+            this.queryParams = item.params || '';
+            this.requestBody = item.body || '';
+        }
+    }
+}
+</script>
+{% endblock %}

@@ -7,7 +7,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
-from models import db, ImportedProduct, Product, Seller, PricingSettings
+from models import db, ImportedProduct, Product, Seller, PricingSettings, Marketplace, MarketplaceDirectory
 from services.wb_api_client import WildberriesAPIClient
 from services.prohibited_words_filter import filter_prohibited_words
 from services.pricing_engine import calculate_price
@@ -266,13 +266,19 @@ class WBProductImporter:
             calculated_price_value = None
             calculated_discount_price = None
             calculated_price_before_discount = None
+            post_create_warnings = []
 
             if nm_id:
                 try:
                     calculated_price_value, calculated_discount_price, calculated_price_before_discount = \
                         self._set_price_for_card(nm_id, imported_product)
+                    if calculated_price_value is None:
+                        post_create_warnings.append("Цена не установлена (нет закупочной цены или настроек ценообразования)")
                 except Exception as price_err:
-                    logger.warning(f"Не удалось установить цену для nmID={nm_id}: {price_err}")
+                    logger.error(f"Не удалось установить цену для nmID={nm_id}: {price_err}", exc_info=True)
+                    post_create_warnings.append(f"Ошибка установки цены: {price_err}")
+            else:
+                post_create_warnings.append("nmID не получен — цена и фото не установлены")
 
             # ============================================================
             # ПОСЛЕ СОЗДАНИЯ КАРТОЧКИ — загружаем фото через WB API
@@ -281,7 +287,8 @@ class WBProductImporter:
                 try:
                     self._upload_photos_for_card(nm_id, imported_product)
                 except Exception as photo_err:
-                    logger.warning(f"Не удалось загрузить фото для nmID={nm_id}: {photo_err}")
+                    logger.error(f"Не удалось загрузить фото для nmID={nm_id}: {photo_err}", exc_info=True)
+                    post_create_warnings.append(f"Ошибка загрузки фото: {photo_err}")
 
             # Создаем запись Product в БД
             product = Product(
@@ -310,11 +317,14 @@ class WBProductImporter:
             imported_product.product_id = product.id
             imported_product.import_status = 'imported'
             imported_product.imported_at = datetime.utcnow()
-            imported_product.import_error = None
+            imported_product.import_error = '; '.join(post_create_warnings) if post_create_warnings else None
 
             db.session.commit()
 
-            logger.info(f"Товар {imported_product.external_id} успешно импортирован (Product ID: {product.id})")
+            if post_create_warnings:
+                logger.warning(f"Товар {imported_product.external_id} импортирован с предупреждениями: {'; '.join(post_create_warnings)}")
+            else:
+                logger.info(f"Товар {imported_product.external_id} успешно импортирован (Product ID: {product.id})")
             return True, None, product
 
         except Exception as e:
@@ -636,9 +646,11 @@ class WBProductImporter:
             logger.warning(f"Ошибка парсинга характеристик: {e}")
             product_chars = {}
 
-        # Фолбэк: собираем характеристики из отдельных полей ImportedProduct
-        if not product_chars:
-            product_chars = self._assemble_chars_from_fields(imported_product)
+        # Всегда дополняем из отдельных полей ImportedProduct (цвет, материал, пол и т.д.)
+        field_chars = self._assemble_chars_from_fields(imported_product)
+        for key, val in field_chars.items():
+            if key not in product_chars:
+                product_chars[key] = val
 
         # Дополняем данными из AI-анализа (если есть)
         ai_chars = self._collect_ai_characteristics(imported_product)
@@ -662,11 +674,34 @@ class WBProductImporter:
             logger.warning(f"Пустая конфигурация характеристик для subject_id={imported_product.wb_subject_id}")
             return []
 
+        # Загружаем справочники WB из БД для характеристик с пустым dictionary
+        wb_directories = self._load_wb_directories()
+
         # Создаём словарь: name -> {id, type, dictionary, ...}
         wb_chars_by_name = {}
         for char in wb_chars_list:
             char_name = char.get('name', '').strip()
             if char_name:
+                # Если dictionary пуст — подставляем из справочника
+                if not char.get('dictionary'):
+                    dir_type = self._get_directory_type_for_char(char_name)
+                    if dir_type and dir_type in wb_directories:
+                        dir_data = wb_directories[dir_type]
+                        # Преобразуем в формат dictionary: [{value: "..."}]
+                        dict_items = []
+                        for entry in dir_data:
+                            if isinstance(entry, dict):
+                                val = entry.get('name') or entry.get('value') or entry.get('id')
+                            elif isinstance(entry, str):
+                                val = entry
+                            else:
+                                continue
+                            if val:
+                                dict_items.append({'value': val})
+                        if dict_items:
+                            char['dictionary'] = dict_items
+                            logger.info(f"Подставлен справочник '{dir_type}' ({len(dict_items)} значений) для характеристики '{char_name}'")
+
                 wb_chars_by_name[char_name.lower()] = char
 
         result_characteristics = []
@@ -838,6 +873,42 @@ class WBProductImporter:
 
         # Возвращаем как есть
         return str_value
+
+    def _load_wb_directories(self) -> Dict[str, list]:
+        """
+        Загружает справочники WB из БД (MarketplaceDirectory).
+        Возвращает dict: directory_type -> list of entries.
+        """
+        directories = {}
+        try:
+            marketplace = Marketplace.query.filter_by(code='wb').first()
+            if not marketplace:
+                return directories
+            for md in MarketplaceDirectory.query.filter_by(marketplace_id=marketplace.id).all():
+                try:
+                    data = json.loads(md.data_json) if md.data_json else []
+                    directories[md.directory_type] = data
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить справочники из БД: {e}")
+        return directories
+
+    @staticmethod
+    def _get_directory_type_for_char(char_name: str) -> Optional[str]:
+        """Определяет тип справочника по названию характеристики."""
+        name_lower = char_name.lower().strip()
+        if 'цвет' in name_lower:
+            return 'colors'
+        elif 'стран' in name_lower and 'производ' in name_lower:
+            return 'countries'
+        elif name_lower in ('пол', 'пол товара'):
+            return 'kinds'
+        elif 'сезон' in name_lower:
+            return 'seasons'
+        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower:
+            return 'tnved'
+        return None
 
     def _set_price_for_card(self, nm_id: int, imported_product: ImportedProduct) -> tuple:
         """
