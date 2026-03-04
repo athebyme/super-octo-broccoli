@@ -1044,27 +1044,44 @@ def admin_api_debug_proxy():
 
     try:
         with WildberriesAPIClient(seller.wb_api_key) as client:
-            # Используем session напрямую, чтобы не терять ответ при ошибках >= 400
             from urllib.parse import urljoin
             base_url = client._get_base_url(api_base)
             url = urljoin(base_url, endpoint)
-            response = client.session.request(
-                method, url,
-                params=params or None,
-                json=body,
-                timeout=30
-            )
+
+            # Для GET не отправляем json body
+            kwargs = {
+                'params': params if params else None,
+                'timeout': 30,
+            }
+            if method.upper() != 'GET' and body is not None:
+                kwargs['json'] = body
+
+            response = client.session.request(method, url, **kwargs)
+
             try:
                 resp_json = response.json()
             except Exception:
                 resp_json = {'raw_text': response.text[:5000]}
+
+            # Включаем отладку для всех запросов
+            api_key_preview = seller.wb_api_key[:20] + '...' if seller.wb_api_key else 'N/A'
             return {
                 'response': resp_json,
-                'status_code': response.status_code
+                'status_code': response.status_code,
+                '_debug': {
+                    'url': url,
+                    'method': method,
+                    'params': params if params else None,
+                    'body_sent': body is not None,
+                    'api_key_preview': api_key_preview,
+                    'seller_id': seller.id,
+                    'response_headers': dict(list(response.headers.items())[:10]),
+                }
             }
     except Exception as e:
+        import traceback
         return {
-            'response': {'error': str(e)},
+            'response': {'error': str(e), 'traceback': traceback.format_exc()},
             'status_code': 0
         }
 
