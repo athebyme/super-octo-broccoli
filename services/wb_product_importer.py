@@ -382,6 +382,69 @@ class WBProductImporter:
         return parts[0]
 
     @staticmethod
+    def _extract_dimensions_from_text(text: str) -> Dict:
+        """
+        Извлекает физические размеры из текста описания с помощью regex.
+        Fallback когда ai_dimensions и dimensions_json пусты.
+
+        Returns:
+            Dict с ключами вроде 'length_cm', 'diameter_cm' и т.д.
+        """
+        import re
+
+        if not text:
+            return {}
+
+        _DIM_PATTERNS = [
+            (r'(?:общая\s+)?(?:длина|дл\.?)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'length_cm'),
+            (r'(?:рабочая\s+длина|раб\.?\s*дл\.?)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'working_length_cm'),
+            (r'(?:диаметр|диам\.?|Ø)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'diameter_cm'),
+            (r'(?:макс(?:имальный)?\.?\s*диаметр)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'max_diameter_cm'),
+            (r'(?:ширина|шир\.?)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'width_cm'),
+            (r'(?:высота|выс\.?)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'height_cm'),
+            (r'(?:глубина)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'depth_cm'),
+            (r'(?:глубина\s+проникновения)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'working_length_cm'),
+            (r'(?:обхват)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:см|cm)', 'circumference_cm'),
+            (r'(?:вес|масса)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:г|гр|g)\b', 'weight_g'),
+            (r'(?:вес|масса)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:кг|kg)', 'weight_kg'),
+            (r'(?:объ[её]м)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:мл|ml)', 'volume_ml'),
+            # мм → конвертируем в см
+            (r'(?:общая\s+)?(?:длина|дл\.?)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:мм|mm)', 'length_mm'),
+            (r'(?:диаметр|диам\.?|Ø)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:мм|mm)', 'diameter_mm'),
+            (r'(?:рабочая\s+длина)\s*[:=—–-]?\s*(\d+[.,]?\d*)\s*(?:мм|mm)', 'working_length_mm'),
+        ]
+
+        dims = {}
+        text_lower = text.lower()
+
+        for pattern, key in _DIM_PATTERNS:
+            m = re.search(pattern, text_lower)
+            if m:
+                val_str = m.group(1).replace(',', '.')
+                try:
+                    val = float(val_str)
+                except ValueError:
+                    continue
+
+                # Конвертация мм → см
+                if key.endswith('_mm'):
+                    real_key = key.replace('_mm', '_cm')
+                    val = round(val / 10, 1)
+                elif key == 'weight_kg':
+                    real_key = 'weight_g'
+                    val = round(val * 1000)
+                else:
+                    real_key = key
+
+                if real_key not in dims:
+                    dims[real_key] = val
+
+        if dims:
+            logger.info(f"Извлечено из описания: {dims}")
+
+        return dims
+
+    @staticmethod
     def _assemble_chars_from_fields(imported_product: ImportedProduct) -> Dict:
         """
         Собирает словарь характеристик из отдельных полей ImportedProduct
@@ -489,27 +552,29 @@ class WBProductImporter:
                 pass
 
         # AI-определённые физические размеры (длина, диаметр, объём и т.д.)
-        # Маппинг внутренних ключей → названия WB-характеристик
+        # Маппинг: внутренний ключ → список возможных WB-названий (от точного к общему)
+        # WB разные категории называют одну характеристику по-разному
         _DIM_TO_WB = {
-            'length_cm': 'Длина, см',
-            'width_cm': 'Ширина, см',
-            'height_cm': 'Высота, см',
-            'depth_cm': 'Глубина, см',
-            'diameter_cm': 'Диаметр',
-            'max_diameter_cm': 'Максимальный диаметр',
-            'min_diameter_cm': 'Минимальный диаметр',
-            'working_length_cm': 'Рабочая длина',
-            'circumference_cm': 'Обхват',
-            'weight_g': 'Вес товара, г',
-            'volume_ml': 'Объем, мл',
+            'length_cm': ['Длина изделия, см', 'Длина, см', 'Длина'],
+            'width_cm': ['Ширина изделия, см', 'Ширина, см', 'Ширина'],
+            'height_cm': ['Высота изделия, см', 'Высота, см', 'Высота'],
+            'depth_cm': ['Глубина, см', 'Глубина'],
+            'diameter_cm': ['Диаметр, см', 'Диаметр'],
+            'max_diameter_cm': ['Максимальный диаметр, см', 'Максимальный диаметр'],
+            'min_diameter_cm': ['Минимальный диаметр, см', 'Минимальный диаметр'],
+            'working_length_cm': ['Рабочая длина, см', 'Рабочая длина', 'Глубина проникновения'],
+            'circumference_cm': ['Обхват, см', 'Обхват'],
+            'weight_g': ['Вес товара, г', 'Вес, г', 'Вес товара с упаковкой, г'],
+            'volume_ml': ['Объем, мл', 'Объём, мл', 'Объем'],
         }
         ai_dims = None
+        # Источник 1: ai_dimensions (заполняется при AI-парсинге)
         if imported_product.ai_dimensions:
             try:
                 ai_dims = json.loads(imported_product.ai_dimensions) if isinstance(imported_product.ai_dimensions, str) else imported_product.ai_dimensions
             except Exception:
                 pass
-        # Fallback: dimensions_json из SupplierProduct (regex-парсинг)
+        # Источник 2: dimensions_json из SupplierProduct
         if not ai_dims and hasattr(imported_product, 'supplier_product') and imported_product.supplier_product:
             sp = imported_product.supplier_product
             if hasattr(sp, 'dimensions_json') and sp.dimensions_json:
@@ -517,13 +582,20 @@ class WBProductImporter:
                     ai_dims = json.loads(sp.dimensions_json) if isinstance(sp.dimensions_json, str) else sp.dimensions_json
                 except Exception:
                     pass
+        # Источник 3: парсим размеры regex-ом прямо из описания товара
+        if not ai_dims:
+            ai_dims = WBProductImporter._extract_dimensions_from_text(imported_product.description or '')
 
         if ai_dims and isinstance(ai_dims, dict):
-            for dim_key, wb_name in _DIM_TO_WB.items():
+            for dim_key, wb_names in _DIM_TO_WB.items():
                 val = ai_dims.get(dim_key)
-                if val and wb_name not in chars:
-                    # Значения: число или строка с числом
-                    chars[wb_name] = val
+                if not val:
+                    continue
+                # Пробуем каждое возможное WB-название, первое не занятое используем
+                for wb_name in wb_names:
+                    if wb_name not in chars:
+                        chars[wb_name] = val
+                        break
 
         if chars:
             logger.info(f"Товар {imported_product.external_id}: собрано {len(chars)} AI-характеристик")
@@ -1104,6 +1176,12 @@ class WBProductImporter:
         # Фолбэк: собираем из отдельных полей
         if not chars_dict:
             chars_dict = self._assemble_chars_from_fields(imported_product)
+
+        # Дополняем AI-характеристиками (включая физические размеры из описания)
+        ai_chars = self._collect_ai_characteristics(imported_product)
+        for key, val in ai_chars.items():
+            if key not in chars_dict:
+                chars_dict[key] = val
 
         if not chars_dict:
             issues.append({'field': 'characteristics', 'level': 'warning', 'message': 'Нет характеристик — WB может отклонить карточку'})
