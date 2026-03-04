@@ -1003,6 +1003,50 @@ class WBProductImporter:
         warnings = len([i for i in issues if i['level'] == 'warning'])
         is_ready = errors == 0
 
+        # --- Pricing — рассчитываем полную разбивку по формуле продавца ---
+        pricing_data = {
+            'supplier_price': imported_product.supplier_price,
+            'calculated_price': imported_product.calculated_price,
+            'calculated_discount_price': imported_product.calculated_discount_price,
+            'calculated_price_before_discount': imported_product.calculated_price_before_discount,
+            'supplier_quantity': imported_product.supplier_quantity,
+        }
+
+        if imported_product.supplier_price and imported_product.supplier_price > 0:
+            try:
+                pricing_settings = PricingSettings.query.filter_by(
+                    seller_id=imported_product.seller_id
+                ).first()
+                if pricing_settings and pricing_settings.is_enabled:
+                    price_result = calculate_price(
+                        purchase_price=imported_product.supplier_price,
+                        settings=pricing_settings,
+                        product_id=imported_product.id
+                    )
+                    if price_result:
+                        pricing_data['final_price'] = price_result['final_price']  # Z
+                        pricing_data['discount_price'] = price_result['discount_price']  # X
+                        pricing_data['price_before_discount'] = price_result['price_before_discount']  # Y
+                        pricing_data['profit_q'] = price_result['profit_q']
+                        pricing_data['profit_pct_d'] = price_result['profit_pct_d']
+                        pricing_data['delivery_s'] = price_result['delivery_s']
+                        pricing_data['wb_commission'] = price_result['wb_commission']
+                        pricing_data['base_price_r'] = price_result['base_price_r']
+                        pricing_data['spp_discount_t'] = price_result['spp_discount_t']
+                        pricing_data['formula_applied'] = True
+
+                        Y = price_result['price_before_discount']
+                        Z = price_result['final_price']
+                        if Y > 0:
+                            pricing_data['discount_pct'] = max(0, min(99, int((1 - Z / Y) * 100)))
+                elif imported_product.calculated_price:
+                    pricing_data['final_price'] = imported_product.calculated_price
+                    pricing_data['discount_price'] = imported_product.calculated_discount_price
+                    pricing_data['price_before_discount'] = imported_product.calculated_price_before_discount
+                    pricing_data['formula_applied'] = False
+            except Exception as pe:
+                logger.debug(f"Ошибка расчёта цены в превью: {pe}")
+
         return {
             'product_id': imported_product.id,
             'is_ready': is_ready,
@@ -1040,11 +1084,7 @@ class WBProductImporter:
             },
 
             # Pricing
-            'pricing': {
-                'supplier_price': imported_product.supplier_price,
-                'calculated_price': imported_product.calculated_price,
-                'supplier_quantity': imported_product.supplier_quantity,
-            },
+            'pricing': pricing_data,
         }
 
     def import_multiple_products(self, imported_product_ids: List[int]) -> Dict:
