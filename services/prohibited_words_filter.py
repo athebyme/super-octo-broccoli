@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 # Прямые замены — слово целиком заменяется на русский аналог
 PROHIBITED_WORDS_REPLACEMENTS = {
     # Анатомические термины
-    'cock': 'Петушок',
-    'cocks': 'Петушки',
+    'cock': 'Член',
+    'cocks': 'Члены',
     'cockring': 'Эрекционное кольцо',
     'cock ring': 'Эрекционное кольцо',
     'cock-ring': 'Эрекционное кольцо',
