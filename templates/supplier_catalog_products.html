@@ -113,6 +113,9 @@
                             <div class="mt-1 flex items-center gap-2 text-xs text-gray-500">
                                 {% if product.brand %}<span>{{ product.brand }}</span>{% endif %}
                                 {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:20] }}</span>{% endif %}
+                                {% if product.ai_parsed_at %}
+                                <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 text-[10px] font-medium" title="AI-парсинг {{ product.ai_parsed_at.strftime('%d.%m.%Y') }}">AI</span>
+                                {% endif %}
                             </div>
 
                             <div class="mt-2 flex items-center justify-between">

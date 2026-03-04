@@ -488,6 +488,43 @@ class WBProductImporter:
             except Exception:
                 pass
 
+        # AI-определённые физические размеры (длина, диаметр, объём и т.д.)
+        # Маппинг внутренних ключей → названия WB-характеристик
+        _DIM_TO_WB = {
+            'length_cm': 'Длина, см',
+            'width_cm': 'Ширина, см',
+            'height_cm': 'Высота, см',
+            'depth_cm': 'Глубина, см',
+            'diameter_cm': 'Диаметр',
+            'max_diameter_cm': 'Максимальный диаметр',
+            'min_diameter_cm': 'Минимальный диаметр',
+            'working_length_cm': 'Рабочая длина',
+            'circumference_cm': 'Обхват',
+            'weight_g': 'Вес товара, г',
+            'volume_ml': 'Объем, мл',
+        }
+        ai_dims = None
+        if imported_product.ai_dimensions:
+            try:
+                ai_dims = json.loads(imported_product.ai_dimensions) if isinstance(imported_product.ai_dimensions, str) else imported_product.ai_dimensions
+            except Exception:
+                pass
+        # Fallback: dimensions_json из SupplierProduct (regex-парсинг)
+        if not ai_dims and hasattr(imported_product, 'supplier_product') and imported_product.supplier_product:
+            sp = imported_product.supplier_product
+            if hasattr(sp, 'dimensions_json') and sp.dimensions_json:
+                try:
+                    ai_dims = json.loads(sp.dimensions_json) if isinstance(sp.dimensions_json, str) else sp.dimensions_json
+                except Exception:
+                    pass
+
+        if ai_dims and isinstance(ai_dims, dict):
+            for dim_key, wb_name in _DIM_TO_WB.items():
+                val = ai_dims.get(dim_key)
+                if val and wb_name not in chars:
+                    # Значения: число или строка с числом
+                    chars[wb_name] = val
+
         if chars:
             logger.info(f"Товар {imported_product.external_id}: собрано {len(chars)} AI-характеристик")
 
