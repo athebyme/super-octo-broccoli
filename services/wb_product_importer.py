@@ -104,47 +104,45 @@ class WBProductImporter:
                 vendor_code = imported_product.external_vendor_code
 
             # Формируем sizes для WB API v2
-            # Формат: [{techSize, wbSize, price, skus}]
-            # techSize/wbSize обязательны для всех карточек
-            # Для товаров без размеров: techSize="0", wbSize="" (или не указываем)
+            # WB различает:
+            # - Размерные товары (одежда, обувь): [{techSize, wbSize, price, skus}]
+            # - Безразмерные товары (аксессуары, интим): [{price, skus}] — БЕЗ techSize/wbSize!
+            #
+            # ВАЖНО: Если WB-категория безразмерная, передавать techSize/wbSize НЕЛЬЗЯ
+            # (ошибка: "Недопустимо указывать Размер и Рос.Размер для безразмерного товара")
             wb_sizes = []
 
-            if has_real_sizes and sizes_list:
-                # Товар С размерами (одежда, обувь)
+            # Проверяем через WB API, поддерживает ли категория размеры
+            category_has_sizes = self._category_supports_sizes(imported_product.wb_subject_id)
+
+            if has_real_sizes and sizes_list and category_has_sizes:
+                # Товар С размерами И категория поддерживает размеры
                 for idx, size_val in enumerate(sizes_list):
                     size_str = str(size_val)
                     barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')
 
-                    size_entry = {
+                    wb_sizes.append({
                         'techSize': size_str,
                         'wbSize': size_str,
-                        'price': 0,  # Цена будет установлена позже через Prices API
+                        'price': 0,
                         'skus': [barcode] if barcode else []
-                    }
-                    wb_sizes.append(size_entry)
+                    })
             else:
-                # Товар БЕЗ размеров (интим-товары, электроника и т.д.)
+                # Безразмерный товар — НЕ указываем techSize/wbSize
                 if barcodes:
                     for barcode in barcodes:
                         wb_sizes.append({
-                            'techSize': '0',
-                            'wbSize': '',
                             'price': 0,
                             'skus': [barcode]
                         })
                 else:
                     wb_sizes.append({
-                        'techSize': '0',
-                        'wbSize': '',
                         'price': 0,
                         'skus': []
                     })
 
-            # Проверка: не должно быть пустого массива sizes
             if not wb_sizes:
                 wb_sizes.append({
-                    'techSize': '0',
-                    'wbSize': '',
                     'price': 0,
                     'skus': []
                 })
@@ -331,6 +329,58 @@ class WBProductImporter:
 
             return False, error_msg, None
 
+    def _category_supports_sizes(self, wb_subject_id: int) -> bool:
+        """
+        Проверяет, поддерживает ли WB-категория размеры.
+        Запрашивает характеристики категории и ищет поле 'Размер'.
+
+        Returns:
+            True если категория поддерживает размеры, False если безразмерная
+        """
+        if not wb_subject_id or not self.api_client:
+            return False
+
+        try:
+            chars_config = self.api_client.get_card_characteristics_config(wb_subject_id)
+            wb_chars = chars_config.get('data', [])
+
+            for char in wb_chars:
+                char_name = (char.get('name') or '').lower()
+                # Ищем характеристики связанные с размерами
+                if char_name in ('размер', 'рос. размер', 'размер пользователя'):
+                    logger.info(f"Категория {wb_subject_id}: поддерживает размеры (найдена характеристика '{char.get('name')}')")
+                    return True
+
+            logger.info(f"Категория {wb_subject_id}: безразмерная (нет характеристики 'Размер')")
+            return False
+        except Exception as e:
+            logger.warning(f"Не удалось проверить размеры для категории {wb_subject_id}: {e}")
+            # По умолчанию считаем безразмерной — безопаснее
+            return False
+
+    @staticmethod
+    def _sanitize_country(country: str) -> str:
+        """
+        Нормализует страну производства для WB API.
+        WB не принимает составные значения типа 'Россия-Китай'.
+
+        Returns:
+            Валидное название страны
+        """
+        if not country:
+            return ''
+
+        # Разбиваем по разделителям: '-', '/', ','
+        import re
+        parts = re.split(r'[-/,;]', country)
+        parts = [p.strip() for p in parts if p.strip()]
+
+        if not parts:
+            return country.strip()
+
+        # Берём первую страну
+        return parts[0]
+
     @staticmethod
     def _assemble_chars_from_fields(imported_product: ImportedProduct) -> Dict:
         """
@@ -367,9 +417,9 @@ class WBProductImporter:
             }
             chars['Пол'] = gender_map.get(gender.lower(), gender)
 
-        # Страна производства
+        # Страна производства (WB не принимает составные: "Россия-Китай")
         if imported_product.country:
-            chars['Страна производства'] = imported_product.country
+            chars['Страна производства'] = WBProductImporter._sanitize_country(imported_product.country)
 
         # Бренд
         if imported_product.brand:
@@ -417,7 +467,7 @@ class WBProductImporter:
 
         # AI-определённая страна
         if imported_product.ai_country:
-            chars.setdefault('Страна производства', imported_product.ai_country)
+            chars.setdefault('Страна производства', WBProductImporter._sanitize_country(imported_product.ai_country))
 
         # AI-определённый сезон
         if imported_product.ai_season:
@@ -507,6 +557,11 @@ class WBProductImporter:
             # Пропускаем служебные поля
             if char_name.startswith('_'):
                 continue
+
+            # Санитизация: WB не принимает составные страны ("Россия-Китай")
+            if char_name.lower() in ('страна производства', 'страна'):
+                if isinstance(char_value, str):
+                    char_value = self._sanitize_country(char_value)
 
             # Находим соответствующую характеристику WB
             char_name_lower = char_name.lower().strip()
@@ -970,8 +1025,17 @@ class WBProductImporter:
             sizes_list = sizes_data
             has_real_sizes = len(sizes_list) > 0
 
+        # Проверяем, поддерживает ли WB-категория размеры
+        category_has_sizes = self._category_supports_sizes(imported_product.wb_subject_id)
+        if has_real_sizes and not category_has_sizes:
+            issues.append({
+                'field': 'sizes', 'level': 'warning',
+                'message': f'Категория WB безразмерная — размеры {sizes_list} будут проигнорированы'
+            })
+            has_real_sizes = False
+
         wb_sizes = []
-        if has_real_sizes and sizes_list:
+        if has_real_sizes and sizes_list and category_has_sizes:
             for idx, size_val in enumerate(sizes_list):
                 barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')
                 wb_sizes.append({
@@ -983,9 +1047,9 @@ class WBProductImporter:
         else:
             if barcodes:
                 for barcode in barcodes:
-                    wb_sizes.append({'skus': [barcode]})
+                    wb_sizes.append({'price': 0, 'skus': [barcode]})
             else:
-                wb_sizes.append({'skus': []})
+                wb_sizes.append({'price': 0, 'skus': []})
                 issues.append({'field': 'barcodes', 'level': 'warning', 'message': 'Нет баркодов'})
 
         # --- Vendor code ---
