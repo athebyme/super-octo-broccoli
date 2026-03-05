@@ -1037,7 +1037,7 @@ def admin_api_debug_proxy():
     seller = current_user.seller
     if not seller or not seller.wb_api_key:
         # Try to find any seller with API key
-        seller = Seller.query.filter(Seller.wb_api_key.isnot(None), Seller.wb_api_key != '').first()
+        seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None), Seller._wb_api_key_encrypted != '').first()
 
     if not seller or not seller.wb_api_key:
         return {'error': 'No WB API key configured', 'response': None, 'status_code': 0}, 200
