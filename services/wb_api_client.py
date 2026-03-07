@@ -496,26 +496,64 @@ class WildberriesAPIClient:
     def get_sales_report(
         self,
         date_from: str,
-        date_to: Optional[str] = None
+        date_to: Optional[str] = None,
+        limit: int = 100000,
     ) -> List[Dict[str, Any]]:
         """
-        Получить отчет о продажах (Statistics API)
+        Получить отчет о продажах / реализации (Statistics API v5).
+
+        Использует пагинацию через rrdid. Автоматически загружает
+        все страницы до исчерпания данных.
 
         Args:
             date_from: Дата начала в формате YYYY-MM-DD
             date_to: Дата окончания (опционально)
+            limit: Макс. строк на запрос (до 100000)
 
         Returns:
-            Список продаж
+            Список строк отчёта реализации
         """
-        endpoint = "/api/v1/supplier/reportDetailByPeriod"
+        endpoint = "/api/v5/supplier/reportDetailByPeriod"
 
-        params = {'dateFrom': date_from}
-        if date_to:
-            params['dateTo'] = date_to
+        all_rows: List[Dict[str, Any]] = []
+        rrdid = 0
 
-        response = self._make_request('GET', 'statistics', endpoint, params=params)
-        return response.json()
+        while True:
+            params = {
+                'dateFrom': date_from,
+                'rrdid': rrdid,
+                'limit': limit,
+            }
+            if date_to:
+                params['dateTo'] = date_to
+
+            response = self._make_request('GET', 'statistics', endpoint, params=params)
+
+            # 204 = нет данных (конец пагинации или пустой отчёт)
+            if response.status_code == 204:
+                break
+
+            page = response.json()
+            if not isinstance(page, list) or not page:
+                break
+
+            all_rows.extend(page)
+
+            # Если страница неполная — данные кончились
+            if len(page) < limit:
+                break
+
+            # Пагинация: берём rrd_id последней строки
+            last_rrd_id = page[-1].get('rrd_id', 0)
+            if last_rrd_id and last_rrd_id != rrdid:
+                rrdid = last_rrd_id
+                # reportDetailByPeriod: макс 1 запрос/мин
+                logger.info(f"Pagination: fetched {len(all_rows)} rows, next rrdid={rrdid}, waiting 61s...")
+                time.sleep(61)
+            else:
+                break
+
+        return all_rows
 
     def get_orders(
         self,
