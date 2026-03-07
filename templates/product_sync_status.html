@@ -66,9 +66,9 @@
                 <button type="submit"
                         :disabled="status.is_syncing"
                         :class="{
-                            'w-full px-6 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2': true,
-                            'bg-blue-600 text-white hover:bg-blue-700': !status.is_syncing,
-                            'bg-gray-400 text-white cursor-not-allowed': status.is_syncing
+                            'w-full px-6 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 font-medium text-sm': true,
+                            'bg-[#1a1a1a] text-white hover:bg-[#2a2a2a]': !status.is_syncing,
+                            'bg-gray-300 text-gray-500 cursor-not-allowed': status.is_syncing
                         }">
                     <svg x-show="status.is_syncing" class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -85,16 +85,16 @@
 
             <div class="grid grid-cols-3 gap-4">
                 <div class="text-center">
-                    <div class="text-3xl font-bold text-blue-600" x-text="status.products_synced || 0"></div>
-                    <div class="text-sm text-gray-600 mt-1">Получено</div>
+                    <div class="text-3xl font-normal text-[#1a1a1a]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_synced || 0"></div>
+                    <div class="text-sm text-gray-500 mt-1">Получено</div>
                 </div>
                 <div class="text-center">
-                    <div class="text-3xl font-bold text-green-600" x-text="status.products_added || 0"></div>
-                    <div class="text-sm text-gray-600 mt-1">Добавлено</div>
+                    <div class="text-3xl font-normal text-[#1a1a1a]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_added || 0"></div>
+                    <div class="text-sm text-gray-500 mt-1">Добавлено</div>
                 </div>
                 <div class="text-center">
-                    <div class="text-3xl font-bold text-yellow-600" x-text="status.products_updated || 0"></div>
-                    <div class="text-sm text-gray-600 mt-1">Обновлено</div>
+                    <div class="text-3xl font-normal text-[#c45d3e]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_updated || 0"></div>
+                    <div class="text-sm text-gray-500 mt-1">Обновлено</div>
                 </div>
             </div>
         </div>
@@ -118,7 +118,7 @@
                            x-model="settings.is_enabled"
                            @change="updateSettings()"
                            class="sr-only peer">
-                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gray-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#1a1a1a]"></div>
                 </label>
             </div>
 
@@ -148,12 +148,12 @@
             </div>
 
             <!-- Время следующей синхронизации -->
-            <div x-show="settings.is_enabled && status.next_sync_at" class="p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div x-show="settings.is_enabled && status.next_sync_at" class="p-4 bg-gray-50 rounded-lg border border-gray-200">
                 <div class="flex items-center gap-2">
-                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                     </svg>
-                    <span class="text-sm text-blue-800">
+                    <span class="text-sm text-gray-700">
                         Следующая синхронизация: <strong x-text="formatDateTime(status.next_sync_at)"></strong>
                     </span>
                 </div>
