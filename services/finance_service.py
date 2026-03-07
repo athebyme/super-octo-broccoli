@@ -96,12 +96,17 @@ class FinanceService:
             )
 
             if not isinstance(rows, list):
-                logger.error(f"WB report returned unexpected type: {type(rows)}")
-                if isinstance(rows, dict) and rows.get('errors'):
-                    logger.error(f"WB report errors: {rows['errors']}")
-                return cls._empty_snapshot(period_start, period_end)
+                error_detail = ''
+                if isinstance(rows, dict):
+                    error_detail = str(rows)[:500]
+                logger.error(f"WB report returned unexpected type: {type(rows)}, content: {error_detail}")
+                result = cls._empty_snapshot(period_start, period_end)
+                result['_debug'] = f"API returned {type(rows).__name__}: {error_detail}"
+                return result
 
             logger.info(f"WB report returned {len(rows)} rows")
+            if rows:
+                logger.info(f"First row keys: {list(rows[0].keys())[:15]}")
 
             snapshot = cls._build_snapshot(seller.id, period_start, period_end, rows)
             db.session.add(snapshot)
@@ -112,20 +117,25 @@ class FinanceService:
 
         except WBAPIException as e:
             logger.error(f"WB API error fetching finance report: {e}")
-            # Возвращаем последний доступный кэш
             fallback = FinanceSnapshot.query.filter(
                 FinanceSnapshot.seller_id == seller.id,
                 FinanceSnapshot.period_start == period_start,
                 FinanceSnapshot.period_end == period_end,
             ).order_by(FinanceSnapshot.created_at.desc()).first()
             if fallback:
-                return fallback.to_dict()
-            return cls._empty_snapshot(period_start, period_end)
+                result = fallback.to_dict()
+                result['_debug'] = f"WBAPIException: {e}; using cached data"
+                return result
+            result = cls._empty_snapshot(period_start, period_end)
+            result['_debug'] = f"WBAPIException: {e}; no cache"
+            return result
 
         except Exception as e:
             logger.exception(f"Unexpected error fetching finance report: {e}")
             db.session.rollback()
-            return cls._empty_snapshot(period_start, period_end)
+            result = cls._empty_snapshot(period_start, period_end)
+            result['_debug'] = f"Exception: {type(e).__name__}: {e}"
+            return result
 
         finally:
             client.close()

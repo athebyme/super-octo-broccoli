@@ -59,6 +59,9 @@
             <p class="text-sm text-gray-500 max-w-md mx-auto mb-4">
                 WB API не вернул данных за выбранный период. Отчёт реализации (reportDetailByPeriod) обновляется с задержкой — попробуйте выбрать больший период или обновить позже.
             </p>
+            <template x-if="debugInfo">
+                <p class="text-xs text-red-400 bg-red-50 rounded-lg p-3 max-w-lg mx-auto mb-4 font-mono break-all" x-text="debugInfo"></p>
+            </template>
             <div class="flex items-center justify-center gap-3">
                 <button @click="changePeriod('90d')" class="px-4 py-2 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors">
                     Попробовать за 90 дней
@@ -282,6 +285,7 @@ function financesPage() {
         expenseBreakdown: [],
         revenueChart: null,
         expenseDonutChart: null,
+        debugInfo: null,
 
         formatMoney(val) {
             return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val || 0);
@@ -335,6 +339,7 @@ function financesPage() {
 
         applyData(data) {
             if (!data) return;
+            this.debugInfo = data._debug || null;
             this.balance = data.balance || { total: 0, income: 0, expenses: 0 };
             this.breakdown = data.breakdown || {};
             this.weeklyData = data.weeklyData || [];
