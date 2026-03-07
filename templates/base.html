@@ -770,7 +770,7 @@
             </div>
 
             <!-- Аналитика -->
-            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'reports', 'download_report'] %}
+            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -784,7 +784,6 @@
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('analytics_page') }}" class="sidebar-sublink {% if request.endpoint == 'analytics_page' %}active{% endif %}">Обзор</a>
                     <a href="{{ url_for('finances_page') }}" class="sidebar-sublink {% if request.endpoint == 'finances_page' %}active{% endif %}">Финансы</a>
-                    <a href="{{ url_for('reports') }}" class="sidebar-sublink {% if request.endpoint in ['reports', 'download_report'] %}active{% endif %}">Отчёты</a>
                 </div>
             </div>
 
