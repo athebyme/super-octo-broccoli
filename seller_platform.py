@@ -14,7 +14,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from sqlalchemy import or_
 
 from models import (
-    db, User, Seller, SellerReport, Product, APILog, ProductStock,
+    db, User, Seller, Product, APILog, ProductStock,
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
@@ -196,14 +196,6 @@ def ensure_storage_roots() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
-def get_latest_report(seller_id: int) -> Optional[SellerReport]:
-    return (
-        SellerReport.query.filter_by(seller_id=seller_id)
-        .order_by(SellerReport.created_at.desc())
-        .first()
-    )
-
-
 @app.after_request
 def after_request(response):
     """Устанавливаем правильную кодировку UTF-8 для всех ответов"""
@@ -330,26 +322,15 @@ def logout():
 @login_required
 def dashboard():
     """Главная страница - дашборд продавца"""
-    latest_report = None
-    summary = None
-    latest_filename = None
     products_count = 0
     api_logs_count = 0
     if current_user.seller:
-        latest_report = get_latest_report(current_user.seller.id)
-        if latest_report:
-            summary = latest_report.summary or {}
-            processed_path = Path(latest_report.processed_path)
-            latest_filename = processed_path.name if processed_path.exists() else None
         products_count = Product.query.filter_by(seller_id=current_user.seller.id).count()
         api_logs_count = APILog.query.filter_by(seller_id=current_user.seller.id).count()
 
     return render_template(
         'dashboard.html',
         user=current_user,
-        latest_report=latest_report,
-        summary=summary,
-        latest_filename=latest_filename,
         products_count=products_count,
         api_logs_count=api_logs_count,
     )

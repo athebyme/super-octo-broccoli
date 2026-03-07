@@ -223,7 +223,6 @@
 
 {% block content %}
 <div class="dash">
-    {% set has_summary = summary is not none %}
 
     <!-- Greeting -->
     <div class="dash-greeting">
@@ -256,25 +255,25 @@
 
     <!-- Key metrics -->
     <div class="dash-section-header">
-        <span class="dash-section-title">Показатели</span>
+        <span class="dash-section-title">Показатели за неделю</span>
         <div class="dash-section-line"></div>
     </div>
 
-    <div class="dash-stats">
-        <a href="{{ url_for('reports') }}" class="dash-stat">
-            <div class="dash-stat-label">Начислено</div>
-            <div class="dash-stat-value">{{ "{:,.0f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}</div>
-            <div class="dash-stat-meta">₽ за период</div>
+    <div class="dash-stats" x-data="dashFinance()">
+        <a href="{{ url_for('finances_page') }}" class="dash-stat">
+            <div class="dash-stat-label">К перечислению</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.income)"></div>
+            <div class="dash-stat-meta">₽ за 7 дней</div>
         </a>
-        <a href="{{ url_for('reports') }}" class="dash-stat">
-            <div class="dash-stat-label">Прибыль</div>
-            <div class="dash-stat-value">{{ "{:,.0f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}</div>
-            <div class="dash-stat-meta">₽ за период</div>
+        <a href="{{ url_for('finances_page') }}" class="dash-stat">
+            <div class="dash-stat-label">Баланс</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.total)"></div>
+            <div class="dash-stat-meta">₽ доход − расходы</div>
         </a>
-        <a href="{{ url_for('reports') }}" class="dash-stat">
-            <div class="dash-stat-label">Маржа</div>
-            <div class="dash-stat-value">{{ "{:.1f}".format(summary.get('avg_margin', 0)) + '%' if has_summary else '—' }}</div>
-            <div class="dash-stat-meta">средняя</div>
+        <a href="{{ url_for('finances_page') }}" class="dash-stat">
+            <div class="dash-stat-label">Расходы</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.expenses)"></div>
+            <div class="dash-stat-meta">₽ комиссия + логистика</div>
         </a>
         <a href="{{ url_for('products_list') }}" class="dash-stat">
             <div class="dash-stat-label">Товары</div>
@@ -330,10 +329,7 @@
             </div>
             <div>
                 <div class="dash-nav-title">Аналитика</div>
-                <div class="dash-nav-desc">Продажи, финансы и отчёты</div>
-                {% if latest_filename %}
-                <span class="dash-nav-badge">{{ latest_filename }}</span>
-                {% endif %}
+                <div class="dash-nav-desc">Продажи, финансы, воронка</div>
             </div>
         </a>
     </div>
@@ -467,4 +463,29 @@
 
     {% endif %}
 </div>
+
+{% if current_user.seller and current_user.seller.has_valid_api_key() %}
+<script>
+function dashFinance() {
+    return {
+        loading: true,
+        balance: { total: 0, income: 0, expenses: 0 },
+        formatVal(v) {
+            return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v || 0);
+        },
+        init() {
+            fetch('/api/finances/summary?period=7d')
+                .then(r => r.json())
+                .then(json => {
+                    if (json.success && json.data) {
+                        this.balance = json.data.balance || this.balance;
+                    }
+                })
+                .catch(() => {})
+                .finally(() => { this.loading = false; });
+        }
+    };
+}
+</script>
+{% endif %}
 {% endblock %}
