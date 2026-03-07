@@ -2404,6 +2404,222 @@ class WildberriesAPIClient:
             logger.exception(f"Unexpected error during connection test: {e}")
             return False
 
+    # ==================== АНАЛИТИКА: ВОРОНКА ПРОДАЖ (V3) ====================
+
+    def get_sales_funnel_products(
+        self,
+        period_start: str,
+        period_end: str,
+        past_period_start: Optional[str] = None,
+        past_period_end: Optional[str] = None,
+        nm_ids: Optional[List[int]] = None,
+        brand_names: Optional[List[str]] = None,
+        subject_ids: Optional[List[int]] = None,
+        order_by: Optional[Dict] = None,
+        limit: int = 50,
+        offset: int = 0,
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Статистика карточек товаров за период (воронка продаж v3).
+
+        API: POST https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products
+        Лимит: 3 запроса в минуту, интервал 20 секунд
+
+        Args:
+            period_start: Начало периода (YYYY-MM-DD)
+            period_end: Конец периода (YYYY-MM-DD)
+            past_period_start: Начало периода для сравнения
+            past_period_end: Конец периода для сравнения
+            nm_ids: Артикулы WB для фильтрации (до 1000)
+            brand_names: Бренды для фильтрации
+            subject_ids: ID предметов для фильтрации
+            order_by: Сортировка {field, mode}
+            limit: Количество карточек в ответе
+            offset: Сколько элементов пропустить
+
+        Returns:
+            Данные воронки продаж с products[]
+        """
+        body = {
+            'selectedPeriod': {
+                'start': period_start,
+                'end': period_end,
+            },
+            'limit': limit,
+            'offset': offset,
+        }
+
+        if past_period_start and past_period_end:
+            body['pastPeriod'] = {
+                'start': past_period_start,
+                'end': past_period_end,
+            }
+
+        if nm_ids:
+            body['nmIds'] = nm_ids
+        if brand_names:
+            body['brandNames'] = brand_names
+        if subject_ids:
+            body['subjectIds'] = subject_ids
+        if order_by:
+            body['orderBy'] = order_by
+
+        response = self._make_request(
+            'POST', 'analytics',
+            '/api/analytics/v3/sales-funnel/products',
+            json=body,
+            log_to_db=log_to_db,
+            seller_id=seller_id
+        )
+        return response.json()
+
+    def get_sales_funnel_products_all(
+        self,
+        period_start: str,
+        period_end: str,
+        past_period_start: Optional[str] = None,
+        past_period_end: Optional[str] = None,
+        nm_ids: Optional[List[int]] = None,
+        brand_names: Optional[List[str]] = None,
+        subject_ids: Optional[List[int]] = None,
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить ВСЕ карточки из воронки продаж с пагинацией.
+        Автоматически запрашивает все страницы.
+
+        Returns:
+            Полный список products
+        """
+        all_products = []
+        offset = 0
+        page_size = 50
+
+        while True:
+            result = self.get_sales_funnel_products(
+                period_start=period_start,
+                period_end=period_end,
+                past_period_start=past_period_start,
+                past_period_end=past_period_end,
+                nm_ids=nm_ids,
+                brand_names=brand_names,
+                subject_ids=subject_ids,
+                limit=page_size,
+                offset=offset,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+
+            data = result.get('data', {})
+            products = data.get('products', [])
+            all_products.extend(products)
+
+            if len(products) < page_size:
+                break
+
+            offset += page_size
+            time.sleep(20)  # Лимит: 3 запроса в минуту, интервал 20 секунд
+
+        logger.info(f"Loaded {len(all_products)} products from sales funnel")
+        return all_products
+
+    def get_sales_funnel_history(
+        self,
+        period_start: str,
+        period_end: str,
+        nm_ids: List[int],
+        aggregation_level: str = 'day',
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Статистика карточек товаров по дням (воронка продаж v3).
+
+        API: POST https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products/history
+        Лимит: 3 запроса в минуту, до 20 nmIds
+
+        Args:
+            period_start: Начало периода (YYYY-MM-DD), макс. за неделю
+            period_end: Конец периода (YYYY-MM-DD)
+            nm_ids: Артикулы WB (до 20 шт.)
+            aggregation_level: Уровень агрегации ('day' или 'week')
+
+        Returns:
+            Массив [{product, history: [{date, orderCount, orderSum, ...}]}]
+        """
+        body = {
+            'selectedPeriod': {
+                'start': period_start,
+                'end': period_end,
+            },
+            'nmIds': nm_ids[:20],
+            'aggregationLevel': aggregation_level,
+        }
+
+        response = self._make_request(
+            'POST', 'analytics',
+            '/api/analytics/v3/sales-funnel/products/history',
+            json=body,
+            log_to_db=log_to_db,
+            seller_id=seller_id
+        )
+        return response.json()
+
+    def get_sales_funnel_grouped_history(
+        self,
+        period_start: str,
+        period_end: str,
+        brand_names: Optional[List[str]] = None,
+        subject_ids: Optional[List[int]] = None,
+        tag_ids: Optional[List[int]] = None,
+        aggregation_level: str = 'day',
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Статистика групп карточек товаров по дням (воронка продаж v3).
+
+        API: POST https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/grouped/history
+        Лимит: 3 запроса в минуту, макс. за неделю
+
+        Args:
+            period_start: Начало периода (YYYY-MM-DD)
+            period_end: Конец периода (YYYY-MM-DD)
+            brand_names: Бренды для фильтрации
+            subject_ids: ID предметов для фильтрации
+            tag_ids: ID ярлыков
+            aggregation_level: 'day' или 'week'
+
+        Returns:
+            Данные с history[] по дням
+        """
+        body = {
+            'selectedPeriod': {
+                'start': period_start,
+                'end': period_end,
+            },
+            'aggregationLevel': aggregation_level,
+        }
+
+        if brand_names:
+            body['brandNames'] = brand_names
+        if subject_ids:
+            body['subjectIds'] = subject_ids
+        if tag_ids:
+            body['tagIds'] = tag_ids
+
+        response = self._make_request(
+            'POST', 'analytics',
+            '/api/analytics/v3/sales-funnel/grouped/history',
+            json=body,
+            log_to_db=log_to_db,
+            seller_id=seller_id
+        )
+        return response.json()
+
     def close(self):
         """Закрыть сессию и освободить ресурсы"""
         self.session.close()

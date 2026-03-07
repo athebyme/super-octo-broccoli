@@ -5764,6 +5764,10 @@ register_brand_routes(app)
 from routes.prohibited_words import register_prohibited_words_routes
 register_prohibited_words_routes(app)
 
+# ============= РОУТЫ АНАЛИТИКИ =============
+from routes.analytics import register_analytics_routes
+register_analytics_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5834,14 +5838,87 @@ def _run_startup_migrations():
             db.session.rollback()
             logger.warning(f"Could not create prohibited_words table: {e}")
 
+    # Создаём таблицы аналитики если их нет
+    for tbl_name, tbl_sql in [
+        ('analytics_snapshots', '''
+            CREATE TABLE analytics_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                revenue FLOAT DEFAULT 0,
+                orders_count INTEGER DEFAULT 0,
+                buyouts_count INTEGER DEFAULT 0,
+                buyouts_sum FLOAT DEFAULT 0,
+                cancel_count INTEGER DEFAULT 0,
+                cancel_sum FLOAT DEFAULT 0,
+                open_card_count INTEGER DEFAULT 0,
+                add_to_cart_count INTEGER DEFAULT 0,
+                avg_add_to_cart_percent FLOAT,
+                avg_cart_to_order_percent FLOAT,
+                avg_buyout_percent FLOAT,
+                revenue_dynamics FLOAT,
+                orders_dynamics FLOAT,
+                buyouts_dynamics FLOAT,
+                daily_data JSON,
+                top_products JSON,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        '''),
+        ('product_analytics', '''
+            CREATE TABLE product_analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                nm_id BIGINT NOT NULL,
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                title VARCHAR(500),
+                vendor_code VARCHAR(100),
+                brand_name VARCHAR(200),
+                subject_name VARCHAR(200),
+                open_card_count INTEGER DEFAULT 0,
+                add_to_cart_count INTEGER DEFAULT 0,
+                orders_count INTEGER DEFAULT 0,
+                orders_sum FLOAT DEFAULT 0,
+                buyouts_count INTEGER DEFAULT 0,
+                buyouts_sum FLOAT DEFAULT 0,
+                cancel_count INTEGER DEFAULT 0,
+                cancel_sum FLOAT DEFAULT 0,
+                add_to_cart_percent FLOAT,
+                cart_to_order_percent FLOAT,
+                buyout_percent FLOAT,
+                stocks_wb INTEGER DEFAULT 0,
+                stocks_mp INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        '''),
+    ]:
+        if tbl_name not in insp.get_table_names():
+            try:
+                db.session.execute(db.text(tbl_sql))
+                db.session.commit()
+                logger.info(f"Created table '{tbl_name}'")
+            except Exception as e:
+                db.session.rollback()
+                logger.warning(f"Could not create {tbl_name} table: {e}")
+
+    # Индексы для таблиц аналитики
+    analytics_indexes = [
+        ('idx_analytics_snapshot_seller_period', 'analytics_snapshots', 'seller_id, period_start, period_end'),
+        ('idx_product_analytics_seller_nm', 'product_analytics', 'seller_id, nm_id, period_start'),
+    ]
+    for idx_name, table, columns in analytics_indexes:
+        if table in insp.get_table_names():
+            try:
+                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============
 
-@app.route('/analytics')
-@login_required
-def analytics_page():
-    """Страница аналитики продаж по всем маркетплейсам"""
-    return render_template('analytics.html')
+# Роут /analytics зарегистрирован в routes/analytics.py
 
 
 @app.route('/finances')
