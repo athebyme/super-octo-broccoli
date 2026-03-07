@@ -5878,6 +5878,20 @@ def notifications_page():
     return render_template('notifications.html')
 
 
+@app.route('/health')
+def health_check():
+    """Health check для Coolify / мониторинга"""
+    status = {'status': 'ok', 'timestamp': datetime.utcnow().isoformat()}
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        status['db'] = 'ok'
+    except Exception as e:
+        status['db'] = 'error'
+        status['db_error'] = str(e)
+        return json.dumps(status), 503, {'Content-Type': 'application/json'}
+    return json.dumps(status), 200, {'Content-Type': 'application/json'}
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

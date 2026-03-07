@@ -1,4 +1,9 @@
-version: "3.9"
+# =============================================================================
+# docker-compose.prod.yml — Продакшн конфигурация для Coolify
+#
+# Coolify использует этот файл для деплоя.
+# Для локальной разработки используйте docker-compose.yml
+# =============================================================================
 
 services:
   caddy:
@@ -17,32 +22,37 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - seller-platform
+      seller-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - coolify.managed=true
 
   seller-platform:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: seller-platform
     environment:
       - APP_MODULE=seller_platform:app
       - PORT=${SELLER_PORT:-5001}
-      - SECRET_KEY=${SECRET_KEY:-wb-seller-platform-secret-key-change-in-production}
-      # ЖЁСТКО ПРОПИСЫВАЕМ DATABASE_URL - НЕ полагаемся на .env
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - DATABASE_URL=sqlite:////app/data/seller_platform.db
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      # Credentials для первого администратора (создается автоматически при первом запуске)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-      # SSL/HTTPS (оставьте пустыми для авто-генерации self-signed)
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       - SSL_CERT_PATH=${SSL_CERT_PATH:-}
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
       - SSL_COMMON_NAME=${SSL_COMMON_NAME:-seller-platform}
       - SSL_SAN_IPS=${SSL_SAN_IPS:-}
-      # HTTP→HTTPS редирект отключён — Caddy делает это сам
       - DISABLE_HTTP_REDIRECT=1
-      # Публичный URL для раздачи фото (WB скачивает по этим URL)
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
-    # Порты НЕ пробрасываем наружу — доступ только через Caddy
     expose:
       - "${SELLER_PORT:-5001}"
     volumes:
@@ -56,9 +66,19 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    labels:
+      - coolify.managed=true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
   wb-calculator:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: wb-calculator
     environment:
       - APP_MODULE=app:app
@@ -77,6 +97,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    labels:
+      - coolify.managed=true
 
 volumes:
   seller_platform_data:
