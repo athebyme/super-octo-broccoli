@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, Optional, List
 
-from models import db, FinanceSnapshot, Seller, APILog
+from models import db, FinanceSnapshot, Seller
 from services.wb_api_client import WildberriesAPIClient, WBAPIException
 
 logger = logging.getLogger('finance_service')
@@ -25,7 +25,7 @@ class FinanceService:
     def _get_wb_client(seller: Seller) -> WildberriesAPIClient:
         return WildberriesAPIClient(
             api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
+            timeout=120,  # reportDetailByPeriod может быть медленным
         )
 
     @staticmethod
