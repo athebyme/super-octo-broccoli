@@ -6,64 +6,150 @@
 <style>
     .dash { max-width: 960px; margin: 0 auto; padding: 48px 24px 64px; }
 
+    /* Greeting */
     .dash-greeting {
-        margin-bottom: 48px;
-        border-bottom: 1px solid var(--border);
-        padding-bottom: 48px;
+        margin-bottom: 40px;
     }
     .dash-greeting-label {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.1em;
         color: var(--text-muted);
-        margin-bottom: 12px;
+        margin-bottom: 8px;
     }
     .dash-greeting h1 {
         font-family: var(--font-display);
-        font-size: 42px;
+        font-size: 36px;
         font-weight: 400;
         color: var(--text);
-        line-height: 1.15;
-        margin-bottom: 8px;
+        line-height: 1.2;
+        font-style: italic;
     }
-    .dash-greeting h1 em { color: var(--accent); }
-    .dash-greeting-meta {
-        font-size: 14px;
-        color: var(--text-secondary);
-    }
-    .dash-greeting-actions {
+    .dash-greeting h1 em { color: var(--accent); font-style: italic; }
+
+    /* Section header */
+    .dash-section-header {
         display: flex;
-        gap: 8px;
-        margin-top: 24px;
-        flex-wrap: wrap;
-    }
-    .dash-btn {
-        display: inline-flex;
         align-items: center;
-        gap: 6px;
-        padding: 10px 20px;
-        font-size: 13px;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+    .dash-section-title {
+        font-size: 11px;
         font-weight: 600;
-        font-family: var(--font-body);
-        text-decoration: none;
-        border-radius: 6px;
-        transition: all 0.15s;
-        cursor: pointer;
-        border: none;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-muted);
     }
-    .dash-btn-primary {
-        background: var(--text);
-        color: #fff;
+    .dash-section-line {
+        flex: 1;
+        height: 1px;
+        background: var(--border);
     }
-    .dash-btn-primary:hover { opacity: 0.85; }
-    .dash-btn-secondary {
-        background: none;
-        color: var(--text);
+
+    /* Stat strip */
+    .dash-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1px;
+        background: var(--border);
         border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 40px;
     }
-    .dash-btn-secondary:hover { border-color: var(--text); }
-    .dash-btn svg { width: 16px; height: 16px; }
+    @media (max-width: 640px) { .dash-stats { grid-template-columns: repeat(2, 1fr); } }
+    .dash-stat {
+        background: var(--bg-card);
+        padding: 20px 24px;
+        text-decoration: none;
+        color: var(--text);
+        transition: background 0.15s;
+    }
+    a.dash-stat:hover { background: var(--bg); }
+    .dash-stat-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin-bottom: 6px;
+    }
+    .dash-stat-value {
+        font-family: var(--font-display);
+        font-size: 26px;
+        color: var(--text);
+        font-style: italic;
+        line-height: 1.2;
+    }
+    .dash-stat-meta {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .dash-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    /* Navigation cards */
+    .dash-nav-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 40px;
+    }
+    @media (max-width: 640px) { .dash-nav-grid { grid-template-columns: 1fr; } }
+    .dash-nav-card {
+        background: var(--bg-card);
+        padding: 20px 24px;
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        text-decoration: none;
+        color: var(--text);
+        transition: background 0.15s;
+    }
+    .dash-nav-card:hover { background: var(--bg); }
+    .dash-nav-icon {
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .dash-nav-icon svg { width: 20px; height: 20px; color: var(--text-secondary); stroke-width: 1.5; }
+    .dash-nav-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 2px;
+    }
+    .dash-nav-desc {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.4;
+    }
+    .dash-nav-badge {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--accent);
+        margin-top: 4px;
+        display: inline-block;
+    }
 
     /* Warning */
     .dash-warning {
@@ -78,162 +164,9 @@
         font-size: 13px;
         color: #92400e;
     }
-    .dash-warning-icon {
-        width: 20px;
-        height: 20px;
-        flex-shrink: 0;
-        color: #d97706;
-    }
-    .dash-warning a {
-        color: var(--accent);
-        font-weight: 600;
-        text-decoration: none;
-    }
+    .dash-warning svg { width: 20px; height: 20px; flex-shrink: 0; color: #d97706; }
+    .dash-warning a { color: var(--accent); font-weight: 600; text-decoration: none; }
     .dash-warning a:hover { text-decoration: underline; }
-
-    /* Section header */
-    .dash-section-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 20px;
-    }
-    .dash-section-title {
-        font-size: 12px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: var(--text-muted);
-    }
-    .dash-section-line {
-        flex: 1;
-        height: 1px;
-        background: var(--border);
-    }
-
-    /* KPI Grid */
-    .dash-kpi-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 1px;
-        background: var(--border);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        overflow: hidden;
-        margin-bottom: 48px;
-    }
-    @media (max-width: 640px) { .dash-kpi-grid { grid-template-columns: 1fr; } }
-
-    .dash-kpi {
-        background: var(--bg-card);
-        padding: 24px;
-    }
-    .dash-kpi-label {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--text-muted);
-        margin-bottom: 8px;
-    }
-    .dash-kpi-value {
-        font-family: var(--font-display);
-        font-size: 28px;
-        color: var(--text);
-    }
-
-    /* Marketplace cards */
-    .dash-mp-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 1px;
-        background: var(--border);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        overflow: hidden;
-        margin-bottom: 48px;
-    }
-    @media (max-width: 640px) { .dash-mp-grid { grid-template-columns: 1fr; } }
-
-    .dash-mp-card {
-        background: var(--bg-card);
-        padding: 24px;
-        text-decoration: none;
-        color: var(--text);
-        transition: background 0.15s;
-    }
-    .dash-mp-card:hover { background: var(--bg); }
-    .dash-mp-label {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--text-muted);
-        margin-bottom: 8px;
-    }
-    .dash-mp-value {
-        font-family: var(--font-display);
-        font-size: 28px;
-        color: var(--text);
-        margin-bottom: 4px;
-    }
-    .dash-mp-status {
-        font-size: 12px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .dash-mp-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-    }
-
-    /* Quick actions */
-    .dash-actions-grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 1px;
-        background: var(--border);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        overflow: hidden;
-        margin-bottom: 48px;
-    }
-    @media (max-width: 640px) { .dash-actions-grid { grid-template-columns: 1fr; } }
-
-    .dash-action {
-        background: var(--bg-card);
-        padding: 20px 24px;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        text-decoration: none;
-        color: var(--text);
-        transition: background 0.15s;
-    }
-    .dash-action:hover { background: var(--bg); }
-    .dash-action-icon {
-        width: 36px;
-        height: 36px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-    }
-    .dash-action-icon svg { width: 18px; height: 18px; color: var(--text-secondary); }
-    .dash-action-title {
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--text);
-    }
-    .dash-action-desc {
-        font-size: 12px;
-        color: var(--text-muted);
-        margin-top: 2px;
-    }
 
     /* Company info */
     .dash-company {
@@ -249,7 +182,6 @@
         background: var(--border);
     }
     @media (max-width: 640px) { .dash-company-grid { grid-template-columns: 1fr; } }
-
     .dash-company-col {
         padding: 24px;
         background: var(--bg-card);
@@ -271,32 +203,21 @@
         font-size: 13px;
     }
     .dash-company-row:last-child { border-bottom: none; }
-    .dash-company-row-key {
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    .dash-company-row-val {
-        color: var(--text);
-    }
+    .dash-company-row-key { color: var(--text-secondary); font-weight: 500; }
+    .dash-company-row-val { color: var(--text); }
 
-    /* Admin block */
-    .dash-admin {
+    /* Admin dashboard */
+    .dash-admin-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1px;
+        background: var(--border);
         border: 1px solid var(--border);
         border-radius: 8px;
-        background: var(--bg-card);
-        padding: 32px;
+        overflow: hidden;
+        margin-bottom: 40px;
     }
-    .dash-admin h2 {
-        font-family: var(--font-display);
-        font-size: 24px;
-        font-weight: 400;
-        margin-bottom: 6px;
-    }
-    .dash-admin p {
-        font-size: 14px;
-        color: var(--text-secondary);
-        margin-bottom: 20px;
-    }
+    @media (max-width: 640px) { .dash-admin-grid { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 
@@ -306,168 +227,129 @@
 
     <!-- Greeting -->
     <div class="dash-greeting">
-        <div class="dash-greeting-label">Дашборд</div>
-        <h1>
-            Добро пожаловать,<br>
-            <em>{{ current_user.username }}</em>
-        </h1>
-        <p class="dash-greeting-meta">
+        <div class="dash-greeting-label">
             {% if current_user.seller %}
-                {{ current_user.seller.company_name }} &mdash; Seller Hub
+                {{ current_user.seller.company_name }}
             {% else %}
-                Администратор системы &mdash; Seller Hub
-            {% endif %}
-        </p>
-        <div class="dash-greeting-actions">
-            <a href="{{ url_for('reports') }}" class="dash-btn dash-btn-primary">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                Отчёты
-            </a>
-            <a href="{{ url_for('analytics_page') }}" class="dash-btn dash-btn-secondary">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 12l3-3 3 3 4-4"/></svg>
-                Аналитика
-            </a>
-            {% if latest_filename %}
-            <span style="font-size:12px;color:var(--text-muted);align-self:center">
-                Файл: <span style="color:var(--text)">{{ latest_filename }}</span>
-            </span>
+                Администратор
             {% endif %}
         </div>
+        <h1>Добро пожаловать, <em>{{ current_user.username }}</em></h1>
     </div>
 
-    <!-- API Warning -->
     {% if current_user.seller %}
+    {# ── Seller Dashboard ── #}
+
+    <!-- API Warning -->
     {% if not current_user.seller.has_valid_api_key() %}
     <div class="dash-warning">
-        <svg class="dash-warning-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
         </svg>
         <span>
             <strong>API ключ не настроен.</strong>
-            Настройте API для синхронизации с маркетплейсами.
+            Настройте подключение к Wildberries для синхронизации.
             <a href="{{ url_for('api_settings') }}">Настроить &rarr;</a>
         </span>
     </div>
     {% endif %}
 
-    <!-- KPI -->
+    <!-- Key metrics -->
     <div class="dash-section-header">
-        <span class="dash-section-title">Отчёты и прибыль</span>
+        <span class="dash-section-title">Показатели</span>
         <div class="dash-section-line"></div>
     </div>
 
-    <div class="dash-kpi-grid">
-        <div class="dash-kpi">
-            <div class="dash-kpi-label">Начислено</div>
-            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}</div>
-        </div>
-        <div class="dash-kpi">
-            <div class="dash-kpi-label">Прибыль</div>
-            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}</div>
-        </div>
-        <div class="dash-kpi">
-            <div class="dash-kpi-label">Маржа</div>
-            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '—' }}</div>
-        </div>
+    <div class="dash-stats">
+        <a href="{{ url_for('reports') }}" class="dash-stat">
+            <div class="dash-stat-label">Начислено</div>
+            <div class="dash-stat-value">{{ "{:,.0f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}</div>
+            <div class="dash-stat-meta">₽ за период</div>
+        </a>
+        <a href="{{ url_for('reports') }}" class="dash-stat">
+            <div class="dash-stat-label">Прибыль</div>
+            <div class="dash-stat-value">{{ "{:,.0f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}</div>
+            <div class="dash-stat-meta">₽ за период</div>
+        </a>
+        <a href="{{ url_for('reports') }}" class="dash-stat">
+            <div class="dash-stat-label">Маржа</div>
+            <div class="dash-stat-value">{{ "{:.1f}".format(summary.get('avg_margin', 0)) + '%' if has_summary else '—' }}</div>
+            <div class="dash-stat-meta">средняя</div>
+        </a>
+        <a href="{{ url_for('products_list') }}" class="dash-stat">
+            <div class="dash-stat-label">Товары</div>
+            <div class="dash-stat-value">{{ products_count }}</div>
+            <div class="dash-stat-meta">
+                <span class="dash-dot" style="background: var(--accent)"></span>
+                активных карточек
+            </div>
+        </a>
     </div>
 
-    <!-- Marketplace stats -->
+    <!-- Quick navigation -->
     <div class="dash-section-header">
-        <span class="dash-section-title">Маркетплейсы</span>
+        <span class="dash-section-title">Быстрый доступ</span>
         <div class="dash-section-line"></div>
     </div>
 
-    <div class="dash-mp-grid">
-        <a href="{{ url_for('products_list') }}" class="dash-mp-card">
-            <div class="dash-mp-label">Карточки товаров</div>
-            <div class="dash-mp-value">{{ products_count }}</div>
-            <div class="dash-mp-status" style="color: var(--text-muted)">
-                <span class="dash-mp-dot" style="background: var(--accent)"></span>
-                Активных
+    <div class="dash-nav-grid">
+        <a href="{{ url_for('products_list') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Товары</div>
+                <div class="dash-nav-desc">Карточки, синхронизация, объединение</div>
+                <span class="dash-nav-badge">{{ products_count }} карточек &rarr;</span>
             </div>
         </a>
 
-        <a href="{{ url_for('api_logs') }}" class="dash-mp-card">
-            <div class="dash-mp-label">API запросов</div>
-            <div class="dash-mp-value">{{ api_logs_count }}</div>
-            <div class="dash-mp-status" style="color: var(--text-muted)">
-                <span class="dash-mp-dot" style="background: #10b981"></span>
-                Всего
+        <a href="{{ url_for('prices.prices_dashboard') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Цены</div>
+                <div class="dash-nav-desc">Управление ценами, формулы, мониторинг</div>
             </div>
         </a>
 
-        <a href="{{ url_for('api_settings') }}" class="dash-mp-card">
-            <div class="dash-mp-label">Статус API</div>
-            <div class="dash-mp-value" style="{% if current_user.seller.has_valid_api_key() %}color:#10b981{% else %}color:#d97706{% endif %}">
-                {% if current_user.seller.has_valid_api_key() %}OK{% else %}N/A{% endif %}
+        <a href="{{ url_for('supplier_catalog') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
             </div>
-            <div class="dash-mp-status" style="color: var(--text-muted)">
-                <span class="dash-mp-dot" style="background:{% if current_user.seller.has_valid_api_key() %}#10b981{% else %}#d97706{% endif %}"></span>
-                {% if current_user.seller.has_valid_api_key() %}Настроен{% else %}Не настроен{% endif %}
+            <div>
+                <div class="dash-nav-title">Поставщики</div>
+                <div class="dash-nav-desc">Каталог оптовиков и импорт товаров</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('analytics_page') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Аналитика</div>
+                <div class="dash-nav-desc">Продажи, финансы и отчёты</div>
+                {% if latest_filename %}
+                <span class="dash-nav-badge">{{ latest_filename }}</span>
+                {% endif %}
             </div>
         </a>
     </div>
 
-    <!-- Quick actions -->
+    <!-- Sync & Company info -->
     <div class="dash-section-header">
-        <span class="dash-section-title">Быстрые действия</span>
-        <div class="dash-section-line"></div>
-    </div>
-
-    <div class="dash-actions-grid">
-        <a href="{{ url_for('products_list') }}" class="dash-action">
-            <div class="dash-action-icon">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
-            </div>
-            <div>
-                <div class="dash-action-title">Карточки товаров</div>
-                <div class="dash-action-desc">Просмотр и управление</div>
-            </div>
-        </a>
-
-        <a href="{{ url_for('api_settings') }}" class="dash-action">
-            <div class="dash-action-icon">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-            </div>
-            <div>
-                <div class="dash-action-title">Настройки API</div>
-                <div class="dash-action-desc">Ключи маркетплейсов</div>
-            </div>
-        </a>
-
-        <a href="{{ url_for('api_logs') }}" class="dash-action">
-            <div class="dash-action-icon">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-            </div>
-            <div>
-                <div class="dash-action-title">Логи API</div>
-                <div class="dash-action-desc">История запросов</div>
-            </div>
-        </a>
-
-        <a href="{{ url_for('bulk_edit_history') }}" class="dash-action">
-            <div class="dash-action-icon">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            </div>
-            <div>
-                <div class="dash-action-title">История операций</div>
-                <div class="dash-action-desc">Массовые изменения</div>
-            </div>
-        </a>
-    </div>
-
-    <!-- Company info -->
-    <div class="dash-section-header">
-        <span class="dash-section-title">Компания</span>
+        <span class="dash-section-title">Аккаунт</span>
         <div class="dash-section-line"></div>
     </div>
 
     <div class="dash-company">
         <div class="dash-company-grid">
             <div class="dash-company-col">
-                <div class="dash-company-label">Основные данные</div>
+                <div class="dash-company-label">Компания</div>
                 <div class="dash-company-row">
-                    <span class="dash-company-row-key">Компания</span>
+                    <span class="dash-company-row-key">Название</span>
                     <span class="dash-company-row-val">{{ current_user.seller.company_name }}</span>
                 </div>
                 {% if current_user.seller.wb_seller_id %}
@@ -476,15 +358,19 @@
                     <span class="dash-company-row-val">{{ current_user.seller.wb_seller_id }}</span>
                 </div>
                 {% endif %}
-                {% if current_user.seller.contact_phone %}
-                <div class="dash-company-row">
-                    <span class="dash-company-row-key">Телефон</span>
-                    <span class="dash-company-row-val">{{ current_user.seller.contact_phone }}</span>
-                </div>
-                {% endif %}
                 <div class="dash-company-row">
                     <span class="dash-company-row-key">Email</span>
                     <span class="dash-company-row-val">{{ current_user.email }}</span>
+                </div>
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">API</span>
+                    <span class="dash-company-row-val">
+                        {% if current_user.seller.has_valid_api_key() %}
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#10b981"></span> Подключен</span>
+                        {% else %}
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#d97706"></span> Не настроен</span>
+                        {% endif %}
+                    </span>
                 </div>
             </div>
             <div class="dash-company-col">
@@ -494,47 +380,91 @@
                     <span class="dash-company-row-key">Последняя</span>
                     <span class="dash-company-row-val">{{ current_user.seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}</span>
                 </div>
-                {% else %}
-                <div class="dash-company-row">
-                    <span class="dash-company-row-key" style="color:var(--text-muted)">Ещё не выполнялась</span>
-                    <span></span>
-                </div>
                 {% endif %}
                 {% if current_user.seller.api_sync_status %}
                 <div class="dash-company-row">
                     <span class="dash-company-row-key">Статус</span>
                     <span class="dash-company-row-val">
                         {% if current_user.seller.api_sync_status == 'success' %}
-                            <span style="display:inline-flex;align-items:center;gap:6px;color:#10b981"><span class="dash-mp-dot" style="background:#10b981"></span> Успешно</span>
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#10b981"></span> Успешно</span>
                         {% elif current_user.seller.api_sync_status == 'syncing' %}
-                            <span style="display:inline-flex;align-items:center;gap:6px;color:#3b82f6"><span class="dash-mp-dot" style="background:#3b82f6"></span> Выполняется</span>
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#3b82f6"></span> Выполняется</span>
                         {% elif current_user.seller.api_sync_status == 'error' %}
-                            <span style="display:inline-flex;align-items:center;gap:6px;color:#ef4444"><span class="dash-mp-dot" style="background:#ef4444"></span> Ошибка</span>
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#ef4444"></span> Ошибка</span>
                         {% else %}
                             {{ current_user.seller.api_sync_status }}
                         {% endif %}
                     </span>
                 </div>
+                {% else %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key" style="color:var(--text-muted)">Ещё не выполнялась</span>
+                    <span></span>
+                </div>
                 {% endif %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">Товаров</span>
+                    <span class="dash-company-row-val">{{ products_count }}</span>
+                </div>
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">API запросов</span>
+                    <span class="dash-company-row-val">{{ api_logs_count }}</span>
+                </div>
             </div>
         </div>
     </div>
 
     {% else %}
-    <!-- Admin -->
+    {# ── Admin Dashboard ── #}
+
+    <!-- Admin quick access -->
     <div class="dash-section-header">
         <span class="dash-section-title">Управление</span>
         <div class="dash-section-line"></div>
     </div>
 
-    <div class="dash-admin">
-        <h2>Административная панель</h2>
-        <p>Вы вошли как администратор</p>
-        <a href="{{ url_for('admin_panel') }}" class="dash-btn dash-btn-primary">
-            Перейти в админ-панель
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+    <div class="dash-admin-grid">
+        <a href="{{ url_for('admin_panel') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Пользователи</div>
+                <div class="dash-nav-desc">Управление продавцами и доступом</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('admin_suppliers') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Поставщики</div>
+                <div class="dash-nav-desc">Каталог, парсинг, AI обработка</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('marketplaces.index') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Маркетплейсы</div>
+                <div class="dash-nav-desc">Категории, бренды, характеристики</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('admin_system_settings') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Система</div>
+                <div class="dash-nav-desc">Настройки, логи, API debug</div>
+            </div>
         </a>
     </div>
+
     {% endif %}
 </div>
 {% endblock %}
