@@ -485,10 +485,11 @@ def batch_confirm(batch_id: int):
 
     settings = get_or_create_settings(seller.id)
 
-    # Получаем изменения по категориям
-    dangerous_items = batch.items.filter_by(safety_level='dangerous').all()
-    warning_items = batch.items.filter_by(safety_level='warning').all()
-    safe_items = batch.items.filter_by(safety_level='safe').all()
+    # Получаем изменения по категориям (исключаем уже пропущенные)
+    dangerous_items = batch.items.filter_by(safety_level='dangerous').filter(PriceChangeItem.status != 'skipped').all()
+    warning_items = batch.items.filter_by(safety_level='warning').filter(PriceChangeItem.status != 'skipped').all()
+    safe_items = batch.items.filter_by(safety_level='safe').filter(PriceChangeItem.status != 'skipped').all()
+    excluded_items = batch.items.filter_by(status='skipped').all()
 
     if request.method == 'POST':
         action = request.form.get('action')
@@ -514,12 +515,47 @@ def batch_confirm(batch_id: int):
             flash('Изменения отклонены', 'info')
             return redirect(url_for('prices.prices_dashboard'))
 
+        elif action == 'exclude_selected':
+            # Исключить выбранные товары из батча
+            excluded_ids = request.form.getlist('exclude_items')
+            if excluded_ids:
+                excluded_ids = [int(x) for x in excluded_ids]
+                excluded_count = 0
+                for item in batch.items.filter(PriceChangeItem.id.in_(excluded_ids)).all():
+                    item.status = 'skipped'
+                    excluded_count += 1
+
+                # Пересчитываем счётчики батча
+                batch.dangerous_count = batch.items.filter_by(safety_level='dangerous').filter(PriceChangeItem.status != 'skipped').count()
+                batch.warning_count = batch.items.filter_by(safety_level='warning').filter(PriceChangeItem.status != 'skipped').count()
+                batch.safe_count = batch.items.filter_by(safety_level='safe').filter(PriceChangeItem.status != 'skipped').count()
+                batch.total_items = batch.dangerous_count + batch.warning_count + batch.safe_count
+                batch.has_dangerous_changes = batch.dangerous_count > 0
+                batch.has_warning_changes = batch.warning_count > 0
+
+                # Если больше нет опасных изменений — автоматически подтверждаем
+                if batch.dangerous_count == 0:
+                    batch.status = 'confirmed'
+                    batch.confirmed_at = datetime.utcnow()
+                    batch.confirmed_by_user_id = current_user.id
+                    batch.confirmation_comment = f'Исключено {excluded_count} товаров, опасных изменений не осталось'
+                    db.session.commit()
+                    flash(f'Исключено {excluded_count} товаров. Опасных изменений не осталось — батч автоматически подтверждён.', 'success')
+                    return redirect(url_for('prices.batch_detail', batch_id=batch_id))
+
+                db.session.commit()
+                flash(f'Исключено {excluded_count} товаров из батча', 'success')
+            else:
+                flash('Не выбрано ни одного товара для исключения', 'warning')
+            return redirect(request.url)
+
     return render_template(
         'prices_batch_confirm.html',
         batch=batch,
         dangerous_items=dangerous_items,
         warning_items=warning_items,
         safe_items=safe_items,
+        excluded_items=excluded_items,
         settings=settings
     )
 

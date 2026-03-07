@@ -34,6 +34,8 @@
                     Обнаружено <strong>{{ dangerous_items|length }}</strong> товаров с изменением цены более чем на
                     <strong>{{ settings.warning_threshold_percent }}%</strong>.
                     Пожалуйста, внимательно проверьте изменения перед подтверждением.
+                    <br>
+                    <span class="text-red-600">Вы можете выборочно исключить отдельные товары из изменений.</span>
                 </p>
             </div>
         </div>
@@ -86,97 +88,150 @@
         </div>
     </div>
 
-    <!-- Опасные изменения -->
-    {% if dangerous_items %}
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
-        <div class="px-6 py-4 border-b border-red-200 bg-red-50">
-            <h2 class="text-lg font-medium text-red-800 flex items-center">
-                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-                </svg>
-                Опасные изменения ({{ dangerous_items|length }})
-            </h2>
-            <p class="mt-1 text-sm text-red-600">
-                Эти товары имеют изменение цены более {{ settings.warning_threshold_percent }}%
-            </p>
+    <!-- Форма исключения товаров -->
+    <form method="POST" action="{{ url_for('prices.batch_confirm', batch_id=batch.id) }}" id="excludeForm">
+        <!-- Панель действий для исключения -->
+        <div id="excludeBar" class="hidden sticky top-0 z-10 bg-orange-50 border border-orange-300 rounded-xl p-4 mb-4 shadow-md">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 text-orange-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+                    </svg>
+                    <span class="text-sm font-medium text-orange-800">
+                        Выбрано товаров: <strong id="excludeCount">0</strong>
+                    </span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button type="button" onclick="clearSelection()" class="text-sm text-gray-600 hover:text-gray-800 underline">
+                        Снять выделение
+                    </button>
+                    <button type="submit" name="action" value="exclude_selected"
+                            class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-lg shadow-sm transition-colors flex items-center">
+                        <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                        </svg>
+                        Исключить выбранные
+                    </button>
+                </div>
+            </div>
         </div>
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая цена</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая цена</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-200">
-                    {% for item in dangerous_items %}
-                    <tr class="hover:bg-red-50">
-                        <td class="px-6 py-4">
-                            <div class="text-sm font-medium text-gray-900">{{ item.vendor_code }}</div>
-                            <div class="text-sm text-gray-500 truncate max-w-xs">{{ item.product_title[:50] }}{% if item.product_title|length > 50 %}...{% endif %}</div>
-                        </td>
-                        <td class="px-6 py-4 text-right whitespace-nowrap">
-                            <span class="text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</span>
-                        </td>
-                        <td class="px-6 py-4 text-right whitespace-nowrap">
-                            <span class="text-sm font-medium text-red-600">{{ item.new_price|round(2) if item.new_price else '—' }}</span>
-                        </td>
-                        <td class="px-6 py-4 text-right whitespace-nowrap">
-                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                                {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
-                            </span>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    {% endif %}
 
-    <!-- Предупреждения -->
-    {% if warning_items %}
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
-        <div class="px-6 py-4 border-b border-yellow-200 bg-yellow-50">
-            <h2 class="text-lg font-medium text-yellow-800 flex items-center">
-                <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
-                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92z" clip-rule="evenodd"/>
-                </svg>
-                Изменения с предупреждением ({{ warning_items|length }})
-            </h2>
+        <!-- Опасные изменения -->
+        {% if dangerous_items %}
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-red-200 bg-red-50">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-medium text-red-800 flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                        </svg>
+                        Опасные изменения ({{ dangerous_items|length }})
+                    </h2>
+                    <label class="flex items-center cursor-pointer text-sm text-red-700 hover:text-red-900">
+                        <input type="checkbox" onchange="toggleGroup(this, 'dangerous')" class="mr-2 h-4 w-4 text-red-600 border-gray-300 rounded">
+                        Выбрать все
+                    </label>
+                </div>
+                <p class="mt-1 text-sm text-red-600">
+                    Эти товары имеют изменение цены более {{ settings.warning_threshold_percent }}%
+                </p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th scope="col" class="px-4 py-3 w-10"></th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая цена</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая цена</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for item in dangerous_items %}
+                        <tr class="hover:bg-red-50 exclude-row" data-group="dangerous">
+                            <td class="px-4 py-4">
+                                <input type="checkbox" name="exclude_items" value="{{ item.id }}"
+                                       onchange="updateExcludeCount()"
+                                       class="exclude-checkbox h-4 w-4 text-orange-500 focus:ring-orange-400 border-gray-300 rounded cursor-pointer">
+                            </td>
+                            <td class="px-4 py-4">
+                                <div class="text-sm font-medium text-gray-900">{{ item.vendor_code }}</div>
+                                <div class="text-sm text-gray-500 truncate max-w-xs">{{ item.product_title[:50] }}{% if item.product_title|length > 50 %}...{% endif %}</div>
+                            </td>
+                            <td class="px-6 py-4 text-right whitespace-nowrap">
+                                <span class="text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</span>
+                            </td>
+                            <td class="px-6 py-4 text-right whitespace-nowrap">
+                                <span class="text-sm font-medium text-red-600">{{ item.new_price|round(2) if item.new_price else '—' }}</span>
+                            </td>
+                            <td class="px-6 py-4 text-right whitespace-nowrap">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                    {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
-        <div class="overflow-x-auto max-h-64 overflow-y-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50 sticky top-0">
-                    <tr>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-200">
-                    {% for item in warning_items %}
-                    <tr class="hover:bg-yellow-50">
-                        <td class="px-6 py-3">
-                            <div class="text-sm text-gray-900">{{ item.vendor_code }}</div>
-                        </td>
-                        <td class="px-6 py-3 text-right text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</td>
-                        <td class="px-6 py-3 text-right text-sm font-medium text-yellow-600">{{ item.new_price|round(2) if item.new_price else '—' }}</td>
-                        <td class="px-6 py-3 text-right">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                                {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
-                            </span>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        {% endif %}
+
+        <!-- Предупреждения -->
+        {% if warning_items %}
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+            <div class="px-6 py-4 border-b border-yellow-200 bg-yellow-50">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-medium text-yellow-800 flex items-center">
+                        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92z" clip-rule="evenodd"/>
+                        </svg>
+                        Изменения с предупреждением ({{ warning_items|length }})
+                    </h2>
+                    <label class="flex items-center cursor-pointer text-sm text-yellow-700 hover:text-yellow-900">
+                        <input type="checkbox" onchange="toggleGroup(this, 'warning')" class="mr-2 h-4 w-4 text-yellow-600 border-gray-300 rounded">
+                        Выбрать все
+                    </label>
+                </div>
+            </div>
+            <div class="overflow-x-auto max-h-64 overflow-y-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50 sticky top-0">
+                        <tr>
+                            <th scope="col" class="px-4 py-3 w-10"></th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for item in warning_items %}
+                        <tr class="hover:bg-yellow-50 exclude-row" data-group="warning">
+                            <td class="px-4 py-3">
+                                <input type="checkbox" name="exclude_items" value="{{ item.id }}"
+                                       onchange="updateExcludeCount()"
+                                       class="exclude-checkbox h-4 w-4 text-orange-500 focus:ring-orange-400 border-gray-300 rounded cursor-pointer">
+                            </td>
+                            <td class="px-4 py-3">
+                                <div class="text-sm text-gray-900">{{ item.vendor_code }}</div>
+                            </td>
+                            <td class="px-4 py-3 text-right text-sm text-gray-900">{{ item.old_price|round(2) if item.old_price else '—' }}</td>
+                            <td class="px-4 py-3 text-right text-sm font-medium text-yellow-600">{{ item.new_price|round(2) if item.new_price else '—' }}</td>
+                            <td class="px-4 py-3 text-right">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                                    {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
-    </div>
-    {% endif %}
+        {% endif %}
+    </form>
 
     <!-- Безопасные изменения (свернуты) -->
     {% if safe_items %}
@@ -214,6 +269,52 @@
                         <td class="px-6 py-3 text-right">
                             <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                                 {{ '+' if item.price_change_percent >= 0 else '' }}{{ item.price_change_percent|round(1) }}%
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Исключённые товары -->
+    {% if excluded_items %}
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6" x-data="{ open: false }">
+        <button @click="open = !open" type="button"
+                class="w-full px-6 py-4 border-b border-gray-300 bg-gray-100 flex items-center justify-between">
+            <h2 class="text-lg font-medium text-gray-500 flex items-center">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                </svg>
+                Исключённые товары ({{ excluded_items|length }})
+            </h2>
+            <svg class="w-5 h-5 text-gray-400 transform transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </button>
+        <div x-show="open" x-collapse class="overflow-x-auto max-h-64 overflow-y-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50 sticky top-0">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Текущая</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Новая</th>
+                        <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Изменение</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for item in excluded_items %}
+                    <tr class="bg-gray-50 opacity-60">
+                        <td class="px-6 py-3">
+                            <div class="text-sm text-gray-500 line-through">{{ item.vendor_code }}</div>
+                        </td>
+                        <td class="px-6 py-3 text-right text-sm text-gray-400">{{ item.old_price|round(2) if item.old_price else '—' }}</td>
+                        <td class="px-6 py-3 text-right text-sm text-gray-400 line-through">{{ item.new_price|round(2) if item.new_price else '—' }}</td>
+                        <td class="px-6 py-3 text-right">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-500">
+                                исключён
                             </span>
                         </td>
                     </tr>
@@ -275,4 +376,32 @@
         </div>
     </form>
 </div>
+
+<script>
+function updateExcludeCount() {
+    const checked = document.querySelectorAll('.exclude-checkbox:checked');
+    const count = checked.length;
+    const bar = document.getElementById('excludeBar');
+    const countEl = document.getElementById('excludeCount');
+
+    countEl.textContent = count;
+    if (count > 0) {
+        bar.classList.remove('hidden');
+    } else {
+        bar.classList.add('hidden');
+    }
+}
+
+function toggleGroup(masterCheckbox, group) {
+    const rows = document.querySelectorAll(`.exclude-row[data-group="${group}"] .exclude-checkbox`);
+    rows.forEach(cb => { cb.checked = masterCheckbox.checked; });
+    updateExcludeCount();
+}
+
+function clearSelection() {
+    document.querySelectorAll('.exclude-checkbox').forEach(cb => { cb.checked = false; });
+    document.querySelectorAll('input[onchange*="toggleGroup"]').forEach(cb => { cb.checked = false; });
+    updateExcludeCount();
+}
+</script>
 {% endblock %}
