@@ -86,9 +86,20 @@ class AnalyticsService:
         # Проверяем кэш
         if not force:
             cached = cls.get_cached_snapshot(seller.id, period_start, period_end)
-            if cached:
+            if cached and (cached.orders_count or cached.open_card_count):
                 logger.info(f"Using cached analytics snapshot for seller={seller.id}, period={period_code}")
                 return cached.to_dict()
+            elif cached:
+                logger.info(f"Cached snapshot is empty (0 orders), refreshing from API")
+
+        # При force-обновлении удаляем старые пустые снимки
+        if force:
+            AnalyticsSnapshot.query.filter(
+                AnalyticsSnapshot.seller_id == seller.id,
+                AnalyticsSnapshot.period_start == period_start,
+                AnalyticsSnapshot.period_end == period_end,
+            ).delete()
+            db.session.commit()
 
         # Загружаем из WB API
         logger.info(f"Fetching analytics from WB API for seller={seller.id}, period={period_code}")
@@ -103,14 +114,45 @@ class AnalyticsService:
                 period_end=period_end.isoformat(),
                 past_period_start=past_start.isoformat(),
                 past_period_end=past_end.isoformat(),
-                order_by={'field': 'ordersSumRub', 'mode': 'desc'},
+                order_by={'field': 'orderSum', 'mode': 'desc'},
                 limit=50,
                 offset=0,
                 seller_id=seller.id,
             )
 
-            data = result.get('data', {})
-            products = data.get('products', [])
+            logger.info(f"WB API raw response keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+
+            # Проверяем на ошибку API
+            if isinstance(result, dict) and result.get('error'):
+                error_text = result.get('errorText', 'Unknown error')
+                additional = result.get('additionalErrors', [])
+                logger.error(f"WB Analytics API error: {error_text}, additional: {additional}")
+                return cls._empty_snapshot(period_start, period_end)
+
+            # Извлекаем products — структура может быть разной
+            data = result.get('data', result)
+            products = []
+            if isinstance(data, dict):
+                products = data.get('products', [])
+                # Если products пуст, логируем data keys для диагностики
+                if not products:
+                    logger.warning(f"WB API data keys (no products found): {list(data.keys())}")
+                    # Попытка: может products лежит на уровне выше
+                    products = result.get('products', [])
+            elif isinstance(data, list):
+                products = data
+
+            logger.info(f"WB API returned {len(products)} products for analytics")
+            if products:
+                # Логируем структуру первого продукта для диагностики
+                first = products[0]
+                logger.info(f"First product keys: {list(first.keys())}")
+                if 'statistic' in first:
+                    stat_keys = list(first['statistic'].keys())
+                    logger.info(f"First product statistic keys: {stat_keys}")
+                    selected = first['statistic'].get('selected', {})
+                    logger.info(f"First product selected keys: {list(selected.keys())}")
+                    logger.info(f"First product orderSum={selected.get('orderSum')}, orderCount={selected.get('orderCount')}")
 
             # Агрегируем KPI
             snapshot = cls._build_snapshot(seller.id, period_start, period_end, products)
@@ -206,12 +248,24 @@ class AnalyticsService:
                     'buyoutSum': buyout_sum,
                 })
 
-        # Динамика из первого продукта (общая)
+        # Динамика — агрегируем из comparison всех продуктов
+        # v3 API использует поля: orderSumDynamic, orderCountDynamic, buyoutCountDynamic
         if products:
             first_comparison = products[0].get('statistic', {}).get('comparison', {})
-            revenue_dynamics = first_comparison.get('ordersSumRubDynamics')
-            orders_dynamics = first_comparison.get('ordersCountDynamics')
-            buyouts_dynamics = first_comparison.get('buyoutsCountDynamics')
+            # Пробуем v3 поля, затем v2 как fallback
+            revenue_dynamics = (
+                first_comparison.get('orderSumDynamic')
+                or first_comparison.get('ordersSumRubDynamics')
+            )
+            orders_dynamics = (
+                first_comparison.get('orderCountDynamic')
+                or first_comparison.get('ordersCountDynamics')
+            )
+            buyouts_dynamics = (
+                first_comparison.get('buyoutCountDynamic')
+                or first_comparison.get('buyoutsCountDynamics')
+            )
+            logger.debug(f"Comparison fields: {list(first_comparison.keys())}")
 
         # Конверсии (средние)
         avg_cart_pct = (total_cart / total_open * 100) if total_open else 0
