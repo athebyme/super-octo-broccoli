@@ -4,7 +4,9 @@
 
 {% block extra_head %}
 <style>
-    .dash { max-width: 960px; margin: 0 auto; padding: 48px 24px 64px; }
+    .dash { max-width: none; padding: 48px 24px 64px; }
+    @media (min-width: 1024px) { .dash { padding: 48px 32px 64px; } }
+    @media (min-width: 1440px) { .dash { padding: 48px 48px 64px; } }
 
     /* Greeting */
     .dash-greeting {
