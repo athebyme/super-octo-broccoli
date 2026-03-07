@@ -165,7 +165,7 @@
     <div class="mb-4 flex flex-wrap gap-2 items-center justify-between">
         <div class="flex gap-2">
             <button id="importSelectedBtn"
-                    class="hidden px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-xl text-white bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                    class="hidden px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-[#1a1a1a] bg-white hover:bg-gray-100 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                     disabled>
                 Импортировать в WB (<span id="selectedCount">0</span>)
             </button>
@@ -384,7 +384,7 @@
             </p>
             <div class="mt-6">
                 <a href="{{ url_for('auto_import_dashboard') }}"
-                   class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-xl text-white bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 transition-colors">
+                   class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-[#1a1a1a] bg-white hover:bg-gray-100 transition-colors">
                     Перейти к импорту
                 </a>
             </div>

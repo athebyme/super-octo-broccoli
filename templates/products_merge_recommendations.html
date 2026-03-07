@@ -22,7 +22,7 @@
     </div>
 
     <!-- Инфо-панель -->
-    <div class="bg-gradient-to-r from-purple-50 to-indigo-50 border-l-4 border-purple-500 p-6 mb-6 rounded-r-lg">
+    <div class="bg-gray-50 border-l-4 border-gray-400 p-6 mb-6 rounded-r-lg">
         <div class="flex items-start">
             <div class="flex-shrink-0">
                 <svg class="h-6 w-6 text-purple-600" fill="currentColor" viewBox="0 0 20 20">
@@ -53,7 +53,7 @@
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
             <div class="flex items-center">
-                <div class="p-3 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl">
+                <div class="p-3 bg-purple-600 rounded-xl">
                     <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
                         <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"></path>
@@ -68,7 +68,7 @@
 
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
             <div class="flex items-center">
-                <div class="p-3 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl">
+                <div class="p-3 bg-indigo-600 rounded-xl">
                     <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z"></path>
                     </svg>
@@ -82,7 +82,7 @@
 
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
             <div class="flex items-center">
-                <div class="p-3 bg-gradient-to-br from-green-500 to-green-600 rounded-xl">
+                <div class="p-3 bg-green-600 rounded-xl">
                     <svg class="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
                     </svg>
@@ -137,7 +137,7 @@
                 <div class="flex items-center justify-between mb-4">
                     <div class="flex items-center space-x-3">
                         <div class="p-2 rounded-xl
-                                    {% if rec.score >= 0.9 %}bg-gradient-to-br from-green-500 to-green-600{% elif rec.score >= 0.7 %}bg-gradient-to-br from-blue-500 to-blue-600{% else %}bg-gradient-to-br from-yellow-500 to-yellow-600{% endif %}">
+                                    {% if rec.score >= 0.9 %}bg-green-600{% elif rec.score >= 0.7 %}bg-blue-600{% else %}bg-yellow-600{% endif %}">
                             <svg class="w-6 h-6 text-white"
                                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
@@ -214,7 +214,7 @@
                     {% set nm_ids_list = rec.cards | map(attribute='nm_id') | list %}
                     {% set target_nm_id = rec.suggested_target.nm_id %}
                     <a href="{{ url_for('products_merge', subject_id=rec.subject_id, brand=rec.brand, auto_select_nm_ids=nm_ids_list|join(','), auto_target_nm_id=target_nm_id) }}"
-                       class="inline-flex items-center px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium rounded-lg hover:from-indigo-700 hover:to-purple-700 transition shadow-lg">
+                       class="inline-flex items-center px-6 py-3 bg-white text-[#1a1a1a] font-medium rounded-md hover:bg-gray-100 transition shadow-sm">
                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                         </svg>

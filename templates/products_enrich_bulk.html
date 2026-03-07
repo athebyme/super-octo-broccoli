@@ -164,14 +164,14 @@
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <div x-show="phase === 'running'"
-               class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-xl flex items-center justify-center">
+               class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center">
             <svg class="animate-spin w-5 h-5 text-white" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
             </svg>
           </div>
           <div x-show="phase === 'done'"
-               class="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center">
+               class="w-10 h-10 bg-green-600 rounded-xl flex items-center justify-center">
             <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
             </svg>
@@ -200,7 +200,7 @@
 
       <!-- Прогресс-бар -->
       <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden mb-5">
-        <div class="h-2.5 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500 ease-out"
+        <div class="h-2.5 rounded-full bg-indigo-500 transition-all duration-500 ease-out"
              :style="`width: ${progress.pct}%`"></div>
       </div>
 

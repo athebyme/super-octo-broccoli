@@ -122,7 +122,7 @@
                                     <span id="brandStatus" class="hidden text-xs px-1.5 py-0.5 rounded font-medium"></span>
                                 </div>
                                 <div class="flex items-center gap-1">
-                                    <button type="button" id="detectBrandAIBtn" class="hidden inline-flex items-center px-2 py-1 text-xs font-medium rounded bg-gradient-to-r from-violet-500 to-purple-500 text-white hover:from-violet-600 hover:to-purple-600 shadow-sm" title="Определить бренд с помощью ИИ">
+                                    <button type="button" id="detectBrandAIBtn" class="hidden inline-flex items-center px-2 py-1 text-xs font-medium rounded-md bg-white text-[#1a1a1a] hover:bg-gray-100 shadow-sm" title="Определить бренд с помощью ИИ">
                                         <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
                                         AI
                                     </button>
@@ -142,7 +142,7 @@
                                     <button type="button" id="searchBrandBtn" class="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 shadow-sm" title="Искать в WB">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                                     </button>
-                                    <button type="button" id="detectBrandAIEditorBtn" class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md text-white bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 shadow-sm" title="Определить с ИИ">
+                                    <button type="button" id="detectBrandAIEditorBtn" class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-md text-[#1a1a1a] bg-white hover:bg-gray-100 shadow-sm" title="Определить с ИИ">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
                                     </button>
                                 </div>
@@ -588,14 +588,14 @@
 
                 <!-- Полная оптимизация -->
                 <div class="space-y-3">
-                    <button id="aiFullOptimizeBtn" class="w-full inline-flex justify-center items-center px-4 py-2.5 border border-transparent text-sm font-medium rounded-md text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 shadow-md">
+                    <button id="aiFullOptimizeBtn" class="w-full inline-flex justify-center items-center px-4 py-2.5 border border-transparent text-sm font-medium rounded-md text-[#1a1a1a] bg-white hover:bg-gray-100 disabled:opacity-50 shadow-md">
                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                         </svg>
                         Полная AI-оптимизация
                     </button>
 
-                    <button id="aiRichContentBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-gradient-to-r from-pink-500 to-orange-500 hover:from-pink-600 hover:to-orange-600 disabled:opacity-50">
+                    <button id="aiRichContentBtn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-[#1a1a1a] bg-white hover:bg-gray-100 disabled:opacity-50">
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
                         </svg>
@@ -773,7 +773,7 @@
 
                     <!-- Rich контент -->
                     {% if product.ai_rich_content_data %}
-                    <div class="bg-gradient-to-r from-orange-50 to-pink-50 p-3 rounded-lg border border-orange-200">
+                    <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
                         <div class="flex justify-between items-start mb-2">
                             <h4 class="text-sm font-medium text-orange-700">Rich-контент</h4>
                             <button onclick="viewRichContentSlides()" class="text-xs text-orange-600 hover:text-orange-800 underline">
@@ -1286,7 +1286,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         brandValidation.innerHTML = '<span class="text-amber-600">Точное совпадение не найдено.</span> <span class="text-gray-600">Выберите из похожих:</span>';
                         showBrandSuggestions(data.suggestions);
                     } else {
-                        brandValidation.innerHTML = '<span class="text-amber-600">Бренд "' + brandName + '" не найден.</span> <button type="button" class="ml-2 px-2 py-1 text-xs font-medium rounded bg-gradient-to-r from-violet-500 to-purple-500 text-white hover:from-violet-600 hover:to-purple-600" onclick="detectBrandWithAI()">Определить с AI</button>';
+                        brandValidation.innerHTML = '<span class="text-amber-600">Бренд "' + brandName + '" не найден.</span> <button type="button" class="ml-2 px-2 py-1 text-xs font-medium rounded-md bg-white text-[#1a1a1a] hover:bg-gray-100" onclick="detectBrandWithAI()">Определить с AI</button>';
                         brandSuggestions.classList.add('hidden');
                     }
                 }
@@ -1781,7 +1781,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Header with specs
             content += `
-                <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white p-4 rounded-lg">
+                <div class="bg-[#0a0a0a] text-white p-4 rounded-lg">
                     <h4 class="font-bold text-lg">Rich-контент для Wildberries</h4>
                     <p class="text-sm opacity-90">Макеты слайдов инфографики 1440x810px</p>
                     ${data.total_slides ? `<p class="text-xs mt-1">Всего слайдов: ${data.total_slides}</p>` : ''}
@@ -1822,7 +1822,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     content += `
                         <div class="bg-white border-2 border-orange-200 rounded-lg overflow-hidden">
-                            <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2 flex justify-between items-center">
+                            <div class="bg-[#0a0a0a] text-white px-4 py-2 flex justify-between items-center rounded-t-lg">
                                 <span class="font-bold">Слайд ${slide.number || i+1}: ${slide.type || ''}</span>
                                 <span class="text-xs opacity-75">1440x810px</span>
                             </div>
@@ -2369,7 +2369,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const fillRate = stats.fill_rate || 0;
             const fillColor = fillRate >= 70 ? 'text-green-600' : fillRate >= 40 ? 'text-yellow-600' : 'text-red-600';
             content += `
-                <div class="bg-gradient-to-r from-emerald-50 to-green-50 p-4 rounded-lg">
+                <div class="bg-gray-50 p-4 rounded-lg">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-sm font-medium text-gray-700">Заполнение карточки:</span>
                         <span class="text-lg font-bold ${fillColor}">${fillRate}%</span>
@@ -2577,7 +2577,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const textLayout = slide.text_layout || {};
             content += `
                 <div class="border-2 border-orange-200 rounded-lg overflow-hidden">
-                    <div class="bg-gradient-to-r from-orange-500 to-pink-500 text-white px-4 py-2">
+                    <div class="bg-[#0a0a0a] text-white px-4 py-2 rounded-t-lg">
                         <span class="font-bold">Слайд ${slide.number || i+1}: ${slide.type || ''}</span>
                     </div>
                     <div class="p-4">
