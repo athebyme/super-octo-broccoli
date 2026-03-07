@@ -4,22 +4,41 @@
 
 {% block extra_head %}
 <style>
-    .my-stat-card {
-        background: var(--bg-card);
+    .my-stat-strip {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 1px;
+        background: var(--border);
         border: 1px solid var(--border);
         border-radius: 8px;
-        padding: 16px;
+        overflow: hidden;
+    }
+    @media (max-width: 640px) { .my-stat-strip { grid-template-columns: repeat(3, 1fr); } }
+    .my-stat-card {
+        background: var(--bg-card);
+        padding: 16px 12px;
         text-align: center;
         text-decoration: none;
         color: var(--text);
         transition: background 0.15s;
+        position: relative;
     }
     .my-stat-card:hover { background: var(--bg); }
     .my-stat-card.active {
-        border-color: var(--text);
+        background: var(--bg);
+    }
+    .my-stat-card.active::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 20%;
+        right: 20%;
+        height: 2px;
+        background: var(--accent);
+        border-radius: 1px;
     }
     .my-stat-label {
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -93,8 +112,8 @@
         </div>
     </div>
 
-    <!-- Stats cards -->
-    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+    <!-- Stats -->
+    <div class="my-stat-strip mb-6">
         <a href="?status=" class="my-stat-card {{ 'active' if not status else '' }}">
             <p class="my-stat-label">В работе</p>
             <p class="my-stat-value">{{ stats.total - stats.imported }}</p>

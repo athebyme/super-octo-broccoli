@@ -107,7 +107,10 @@
                                 {% if product.brand %}<span>{{ product.brand }}</span>{% endif %}
                                 {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:20] }}</span>{% endif %}
                                 {% if product.ai_parsed_at %}
-                                <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-[10px] font-medium text-gray-500" title="AI-парсинг {{ product.ai_parsed_at.strftime('%d.%m.%Y') }}">AI</span>
+                                <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide" style="background:var(--accent-light,#f0e0da);color:var(--accent,#c45d3e)" title="AI-обработано {{ product.ai_parsed_at.strftime('%d.%m.%Y') }}">
+                                    <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1l2.2 4.4L15 6.3l-3.5 3.4.8 4.8L8 12.2 3.7 14.5l.8-4.8L1 6.3l4.8-.9L8 1z"/></svg>
+                                    AI
+                                </span>
                                 {% endif %}
                             </div>
 
