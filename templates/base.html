@@ -5,405 +5,915 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Seller Hub{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        display: ["'Instrument Serif'", 'Georgia', 'serif'],
+                        body: ["'Inter'", '-apple-system', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: { DEFAULT: '#c45d3e', light: '#f0e0da', dark: '#a34a2f' },
+                    },
+                }
+            }
+        }
+    </script>
     <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
-        [x-cloak] {
+        [x-cloak] { display: none !important; }
+
+        *, *::before, *::after { box-sizing: border-box; }
+
+        :root {
+            --bg: #faf9f7;
+            --bg-card: #ffffff;
+            --bg-sidebar: #0a0a0a;
+            --text: #1a1a1a;
+            --text-secondary: #6b6b6b;
+            --text-muted: #9a9a9a;
+            --text-sidebar: #e8e8e8;
+            --text-sidebar-muted: #737373;
+            --accent: #c45d3e;
+            --accent-light: #f0e0da;
+            --border: #e8e5e1;
+            --border-light: #f0eeeb;
+            --font-display: 'Instrument Serif', Georgia, serif;
+            --font-body: 'Inter', -apple-system, sans-serif;
+            --sidebar-w: 260px;
+            --sidebar-collapsed: 72px;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            font-size: 14px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 50;
+            height: 100vh;
+            background: var(--bg-sidebar);
+            border-right: 1px solid #1f1f1f;
+            display: flex;
+            flex-direction: column;
+            transition: width 0.2s ease;
+            overflow: hidden;
+        }
+        .sidebar.expanded { width: var(--sidebar-w); }
+        .sidebar.collapsed { width: var(--sidebar-collapsed); }
+
+        .sidebar-logo {
+            height: 64px;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            border-bottom: 1px solid #1f1f1f;
+            gap: 14px;
+            text-decoration: none;
+        }
+        .sidebar-logo-mark {
+            width: 32px;
+            height: 32px;
+            background: var(--accent);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-family: var(--font-display);
+            font-size: 18px;
+            color: white;
+            font-style: italic;
+        }
+        .sidebar-logo-text {
+            font-family: var(--font-display);
+            font-size: 20px;
+            color: #fff;
+            white-space: nowrap;
+            font-style: italic;
+        }
+
+        .sidebar-toggle {
+            position: absolute;
+            top: 20px;
+            right: 12px;
+            background: none;
+            border: none;
+            color: #555;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: color 0.15s;
+        }
+        .sidebar-toggle:hover { color: #999; }
+
+        .sidebar-nav {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 12px;
+        }
+        .sidebar-nav::-webkit-scrollbar { width: 3px; }
+        .sidebar-nav::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+        .sidebar-section { margin-bottom: 24px; }
+        .sidebar-section-title {
+            padding: 0 12px;
+            margin-bottom: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-sidebar-muted);
+            white-space: nowrap;
+        }
+
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 2px;
+            text-decoration: none;
+            color: var(--text-sidebar-muted);
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .sidebar-link:hover {
+            color: var(--text-sidebar);
+            background: #1a1a1a;
+        }
+        .sidebar-link.active {
+            color: #fff;
+            background: #1a1a1a;
+        }
+        .sidebar-link.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            width: 3px;
+            height: 20px;
+            background: var(--accent);
+            border-radius: 0 2px 2px 0;
+        }
+        .sidebar-link svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            stroke-width: 1.5;
+        }
+
+        /* Collapsible group toggle */
+        .sidebar-group-toggle {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 2px;
+            background: none;
+            border: none;
+            color: var(--text-sidebar-muted);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+            width: 100%;
+            text-align: left;
+        }
+        .sidebar-group-toggle:hover {
+            color: var(--text-sidebar);
+            background: #1a1a1a;
+        }
+        .sidebar-group-toggle.active { color: var(--text-sidebar); }
+        .sidebar-group-toggle svg:first-child {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+            stroke-width: 1.5;
+        }
+        .sidebar-chevron {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            transition: transform 0.2s;
+            opacity: 0.4;
+        }
+        .sidebar-chevron.rotated { transform: rotate(180deg); }
+
+        /* Sub-navigation links */
+        .sidebar-subnav {
+            padding-left: 30px;
+            margin-bottom: 4px;
+        }
+        .sidebar-sublink {
+            display: block;
+            padding: 5px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-sidebar-muted);
+            text-decoration: none;
+            border-radius: 4px;
+            transition: all 0.15s;
+            position: relative;
+        }
+        .sidebar-sublink:hover { color: var(--text-sidebar); }
+        .sidebar-sublink.active {
+            color: #fff;
+        }
+        .sidebar-sublink.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 4px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        .sidebar-footer {
+            border-top: 1px solid #1f1f1f;
+            padding: 12px;
+        }
+        .sidebar-user {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            width: 100%;
+            text-align: left;
+            transition: background 0.15s;
+        }
+        .sidebar-user:hover { background: #1a1a1a; }
+        .sidebar-user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #2a2a2a;
+            border: 1px solid #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-sidebar);
+        }
+        .sidebar-user-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-sidebar);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .sidebar-user-role {
+            font-size: 11px;
+            color: var(--text-sidebar-muted);
+            white-space: nowrap;
+        }
+
+        .sidebar-dropdown {
+            position: absolute;
+            bottom: 100%;
+            left: 8px;
+            right: 8px;
+            margin-bottom: 4px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 4px;
+            z-index: 50;
+        }
+        .sidebar-dropdown a {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            color: var(--text-sidebar-muted);
+            text-decoration: none;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .sidebar-dropdown a:hover {
+            color: var(--text-sidebar);
+            background: #2a2a2a;
+        }
+        .sidebar-dropdown a.danger { color: #e57373; }
+        .sidebar-dropdown a.danger:hover { background: #2a1a1a; }
+        .sidebar-dropdown a svg { width: 16px; height: 16px; }
+        .sidebar-dropdown-divider {
+            height: 1px;
+            background: #2a2a2a;
+            margin: 4px 0;
+        }
+
+        /* Mobile */
+        .mobile-header {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 40;
+            height: 56px;
+            background: var(--bg-sidebar);
+            border-bottom: 1px solid #1f1f1f;
+            padding: 0 16px;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .mobile-header button {
+            background: none;
+            border: none;
+            color: #999;
+            padding: 8px;
+            cursor: pointer;
+        }
+        .mobile-header span {
+            font-family: var(--font-display);
+            font-style: italic;
+            color: #fff;
+            font-size: 18px;
+        }
+        .mobile-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 45;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(2px);
+        }
+
+        @media (max-width: 1023px) {
+            .mobile-header { display: flex; }
+            .sidebar {
+                transform: translateX(-100%);
+                width: var(--sidebar-w) !important;
+            }
+            .sidebar.mobile-open { transform: translateX(0); }
+            .mobile-overlay.active { display: block; }
+            .main-content { margin-left: 0 !important; padding-top: 56px !important; }
+        }
+
+        /* Main content */
+        .main-content {
+            min-height: 100vh;
+            transition: margin-left 0.2s ease;
+        }
+
+        /* Flash messages */
+        .flash-container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 16px 24px 0;
+        }
+        .flash-msg {
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border: 1px solid;
+        }
+        .flash-msg.success { background: #f0faf0; color: #1a6b1a; border-color: #c8e6c8; }
+        .flash-msg.danger { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+        .flash-msg.warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+        .flash-msg.info { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+        .flash-close {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: inherit;
+            opacity: 0.5;
+            padding: 4px;
+        }
+        .flash-close:hover { opacity: 1; }
+
+        /* =========================================
+           GLOBAL TAILWIND OVERRIDES — Editorial Style
+           ========================================= */
+
+        /* Hero headers: replace gradient with clean editorial header */
+        .bg-gradient-to-r,
+        [class*="bg-gradient-to-r"] {
+            background: var(--bg-sidebar) !important;
+            border-radius: 8px !important;
+        }
+        .bg-gradient-to-r *,
+        [class*="bg-gradient-to-r"] * {
+            font-family: var(--font-body) !important;
+        }
+        .bg-gradient-to-r h1,
+        [class*="bg-gradient-to-r"] h1 {
+            font-family: var(--font-display) !important;
+            font-weight: 400 !important;
+            font-style: italic;
+        }
+        /* Hide decorative SVGs and dots inside hero sections */
+        .bg-gradient-to-r > svg,
+        [class*="bg-gradient-to-r"] > svg,
+        .bg-gradient-to-r > .absolute,
+        [class*="bg-gradient-to-r"] > div[class*="absolute"][class*="rounded-full"] {
+            display: none !important;
+        }
+        /* Fix text colors in dark hero */
+        [class*="text-indigo-200"],
+        [class*="text-emerald-200"],
+        [class*="text-gray-400"] {
+            color: #999 !important;
+        }
+
+        /* Cards: remove shadows, use thin borders */
+        .shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl {
+            box-shadow: none !important;
+        }
+        .hover\:shadow-md:hover { box-shadow: none !important; }
+
+        /* Rounded corners: editorial (smaller) */
+        .rounded-2xl { border-radius: 8px !important; }
+        .rounded-xl { border-radius: 6px !important; }
+        .rounded-lg { border-radius: 6px !important; }
+
+        /* Border colors */
+        .border-gray-100, .border-gray-200 {
+            border-color: var(--border) !important;
+        }
+
+        /* Background overrides */
+        .bg-white {
+            background-color: var(--bg-card) !important;
+        }
+        .bg-gray-50 {
+            background-color: var(--bg) !important;
+        }
+
+        /* Gradient icon boxes: replace with bordered boxes */
+        [class*="bg-gradient-to-br"][class*="rounded-xl"],
+        [class*="bg-gradient-to-br"][class*="rounded-lg"],
+        [class*="bg-gradient-to-br"][class*="rounded-md"] {
+            background: var(--bg) !important;
+            border: 1px solid var(--border) !important;
+        }
+        [class*="bg-gradient-to-br"][class*="rounded-xl"] svg,
+        [class*="bg-gradient-to-br"][class*="rounded-lg"] svg,
+        [class*="bg-gradient-to-br"][class*="rounded-md"] svg {
+            color: var(--text) !important;
+        }
+        /* Exception: keep sidebar logo mark colored */
+        .sidebar-logo-mark {
+            background: var(--accent) !important;
+            border: none !important;
+        }
+
+        /* Corner decorative blobs: hide */
+        [class*="bg-gradient-to-bl"][class*="rounded-bl-full"] {
             display: none !important;
         }
 
-        /* Плавные переходы для sidebar */
-        .sidebar-transition {
-            transition: width 0.2s ease-in-out, transform 0.2s ease-in-out;
+        /* Buttons: editorial style */
+        .bg-indigo-600, .bg-indigo-700,
+        [class*="bg-indigo-600"], [class*="bg-indigo-700"],
+        .hover\:bg-indigo-700:hover,
+        [class*="from-indigo-600"], [class*="to-purple-600"] {
+            background: var(--text) !important;
+            border-color: var(--text) !important;
         }
 
-        .content-transition {
-            transition: margin-left 0.2s ease-in-out;
+        .text-indigo-600, .text-indigo-700,
+        .hover\:text-indigo-900:hover,
+        .text-indigo-800 {
+            color: var(--accent) !important;
         }
 
-        /* Скрытие скроллбара но с возможностью прокрутки */
-        .scrollbar-thin::-webkit-scrollbar {
-            width: 4px;
+        .bg-indigo-100, .bg-indigo-50 {
+            background: var(--accent-light) !important;
+        }
+        .text-indigo-800, .text-indigo-700, .text-indigo-600 {
+            color: var(--accent) !important;
         }
 
-        .scrollbar-thin::-webkit-scrollbar-track {
-            background: transparent;
+        /* Ring colors */
+        .ring-indigo-500\/20, [class*="ring-indigo"] {
+            --tw-ring-color: rgba(196, 93, 62, 0.2) !important;
+        }
+        .focus\:ring-indigo-500:focus {
+            --tw-ring-color: rgba(196, 93, 62, 0.3) !important;
+        }
+        .focus\:border-indigo-500:focus {
+            border-color: var(--accent) !important;
         }
 
-        .scrollbar-thin::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 2px;
+        /* Badge pills: editorial style */
+        .rounded-full[class*="bg-green-"] {
+            background: #f0faf0 !important;
+            color: #1a6b1a !important;
+        }
+        .rounded-full[class*="bg-red-"] {
+            background: #fef2f2 !important;
+            color: #991b1b !important;
+        }
+        .rounded-full[class*="bg-yellow-"] {
+            background: #fffbeb !important;
+            color: #92400e !important;
+        }
+        .rounded-full[class*="bg-blue-"] {
+            background: #eff6ff !important;
+            color: #1e40af !important;
+        }
+        .rounded-full[class*="bg-purple-"] {
+            background: #f5f0ff !important;
+            color: #6b21a8 !important;
+        }
+        .rounded-full[class*="bg-orange-"] {
+            background: #fff7ed !important;
+            color: #c2410c !important;
+        }
+        .rounded-full[class*="bg-pink-"] {
+            background: #fdf2f8 !important;
+            color: #be185d !important;
+        }
+        .rounded-full[class*="bg-gray-100"] {
+            background: var(--bg) !important;
+            color: var(--text-secondary) !important;
         }
 
-        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
+        /* Typography: headings use display font */
+        .main-content h1 {
+            font-family: var(--font-display);
+            font-weight: 400;
+        }
+        .main-content h2 {
+            font-family: var(--font-display);
+            font-weight: 400;
+        }
+
+        /* Tables: clean editorial style */
+        .divide-y > tr:hover, tr.hover\:bg-gray-50:hover {
+            background: var(--bg) !important;
+        }
+        thead.bg-gray-50 {
+            background: var(--bg) !important;
+        }
+        th[class*="uppercase"] {
+            font-size: 11px !important;
+            letter-spacing: 0.08em !important;
+            color: var(--text-muted) !important;
+            font-weight: 600 !important;
+        }
+
+        /* Form inputs */
+        input[type="text"],
+        input[type="password"],
+        input[type="email"],
+        input[type="number"],
+        input[type="search"],
+        input[type="url"],
+        textarea,
+        select {
+            font-family: var(--font-body) !important;
+            border-radius: 6px !important;
+            border-color: var(--border) !important;
+        }
+        input:focus, textarea:focus, select:focus {
+            border-color: var(--text) !important;
+            box-shadow: none !important;
+            outline: 2px solid rgba(26, 26, 26, 0.1) !important;
+            outline-offset: 1px !important;
+        }
+
+        /* Gradient buttons: replace with solid dark */
+        [class*="shadow-indigo"],
+        [class*="shadow-lg"] {
+            box-shadow: none !important;
+        }
+
+        /* White/light buttons on hero: editorial style */
+        .bg-white.text-emerald-700,
+        a[class*="bg-white"][class*="text-emerald"],
+        a[class*="bg-white"][class*="text-gray-900"] {
+            background: #fff !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+        }
+        [class*="bg-white/15"],
+        [class*="bg-white/10"],
+        [class*="bg-white/25"] {
+            background: rgba(255,255,255,0.1) !important;
+        }
+
+        /* Animate pulse dots in hero: hide */
+        [class*="animate-pulse"][class*="rounded-full"][class*="bg-white"] {
+            display: none !important;
+        }
+
+        /* Page container max-width */
+        .max-w-7xl {
+            max-width: 960px !important;
+        }
+        .max-w-2xl {
+            max-width: 640px !important;
+        }
+
+        /* Alerts */
+        .bg-green-50 { background: #f0faf0 !important; }
+        .border-green-200 { border-color: #c8e6c8 !important; }
+        .bg-amber-50, .bg-yellow-50 { background: #fffbeb !important; }
+        .border-amber-200, .border-yellow-200 { border-color: #fde68a !important; }
+
+        /* Tab/filter pills override */
+        [class*="backdrop-blur"] {
+            backdrop-filter: none !important;
+        }
+
+        /* Modals */
+        .bg-gray-500.bg-opacity-75 {
+            background: rgba(0,0,0,0.5) !important;
+            backdrop-filter: blur(2px) !important;
         }
     </style>
+    {% block extra_head %}{% endblock %}
 </head>
 
-<body class="bg-gray-50 min-h-screen" x-data="{ sidebarOpen: true, mobileMenuOpen: false }">
+<body x-data="{ sidebarOpen: true, mobileMenuOpen: false }">
     {% if current_user.is_authenticated %}
 
     <!-- Mobile header -->
-    <div
-        class="lg:hidden fixed top-0 left-0 right-0 z-40 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-        <button @click="mobileMenuOpen = !mobileMenuOpen" class="p-2 rounded-md text-gray-600 hover:bg-gray-100">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+    <div class="mobile-header">
+        <button @click="mobileMenuOpen = !mobileMenuOpen">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
         </button>
-        <span class="font-semibold text-gray-900">Seller Hub</span>
-        <div class="w-10"></div>
+        <span>Seller Hub</span>
+        <div style="width:36px"></div>
     </div>
 
-    <!-- Mobile sidebar overlay -->
-    <div x-show="mobileMenuOpen" x-cloak @click="mobileMenuOpen = false"
-        class="lg:hidden fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"></div>
+    <!-- Mobile overlay -->
+    <div class="mobile-overlay" :class="{ 'active': mobileMenuOpen }" @click="mobileMenuOpen = false"></div>
 
     <!-- Sidebar -->
-    <aside
-        :class="{'w-64': sidebarOpen, 'w-20': !sidebarOpen, 'translate-x-0': mobileMenuOpen, '-translate-x-full lg:translate-x-0': !mobileMenuOpen}"
-        class="fixed top-0 left-0 z-50 h-screen bg-white border-r border-gray-200 sidebar-transition flex flex-col">
+    <aside class="sidebar" :class="{ 'expanded': sidebarOpen, 'collapsed': !sidebarOpen, 'mobile-open': mobileMenuOpen }">
 
-        <!-- Logo -->
-        <div class="h-16 flex items-center justify-between px-4 border-b border-gray-100">
-            <a href="{{ url_for('dashboard') }}" class="flex items-center gap-3 overflow-hidden">
-                <div
-                    class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <span class="text-white font-bold text-lg">S</span>
-                </div>
-                <span x-show="sidebarOpen" x-cloak class="font-bold text-gray-900 whitespace-nowrap">Seller Hub</span>
-            </a>
-            <button @click="sidebarOpen = !sidebarOpen"
-                class="hidden lg:block p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-                <svg x-show="sidebarOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                        d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                </svg>
-                <svg x-show="!sidebarOpen" x-cloak class="w-5 h-5" fill="none" stroke="currentColor"
-                    viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                        d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                </svg>
-            </button>
-        </div>
+        <a href="{{ url_for('dashboard') }}" class="sidebar-logo">
+            <div class="sidebar-logo-mark">S</div>
+            <span x-show="sidebarOpen" x-cloak class="sidebar-logo-text">Seller Hub</span>
+        </a>
 
-        <!-- Navigation -->
-        <nav class="flex-1 overflow-y-auto scrollbar-thin py-4 px-3">
+        <button @click="sidebarOpen = !sidebarOpen" class="sidebar-toggle" style="display:none" x-init="if(window.innerWidth >= 1024) $el.style.display='block'">
+            <svg x-show="sidebarOpen" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+            </svg>
+            <svg x-show="!sidebarOpen" x-cloak width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+        </button>
 
-            <!-- Основное -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Основное</p>
-
-                <a href="{{ url_for('dashboard') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'dashboard' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Дашборд</span>
-                </a>
-
-                <a href="{{ url_for('reports') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['reports', 'download_report'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Отчёты</span>
-                </a>
-            </div>
-
-            <!-- Аналитика -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Аналитика</p>
-
-                <a href="{{ url_for('analytics_page') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'analytics_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Аналитика</span>
-                </a>
-
-                <a href="{{ url_for('finances_page') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'finances_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Финансы</span>
-                </a>
-            </div>
+        <nav class="sidebar-nav">
 
             {% if current_user.seller %}
+            {# ── Seller Navigation ── #}
+
+            <!-- Главная -->
+            <div class="sidebar-section">
+                <a href="{{ url_for('dashboard') }}" class="sidebar-link {% if request.endpoint == 'dashboard' %}active{% endif %}" style="position:relative">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak>Главная</span>
+                </a>
+            </div>
+
             <!-- Товары -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Товары</p>
-
-                <a href="{{ url_for('products_list') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'products_bulk_edit'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history'] %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if products_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Карточки</span>
-                </a>
-
-                <a href="{{ url_for('product_sync_status_page') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'product_sync_status_page' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Товары</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Синхронизация</span>
-                </a>
-
-                <a href="{{ url_for('products_merge') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Объединение</span>
-                </a>
-
-                <a href="{{ url_for('auto_import_products') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['product_enrich', 'products_enrich_bulk'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Обогащение</span>
-                </a>
-
-                <a href="{{ url_for('blocked_cards') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['blocked_cards', 'blocked_cards_export'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636">
-                        </path>
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Блокировки</span>
-                </a>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('products_list') }}" class="sidebar-sublink {% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history'] %}active{% endif %}">Карточки</a>
+                    <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_sync_status_page' %}active{% endif %}">Синхронизация</a>
+                    <a href="{{ url_for('products_merge') }}" class="sidebar-sublink {% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %}active{% endif %}">Объединение</a>
+                    <a href="{{ url_for('blocked_cards') }}" class="sidebar-sublink {% if request.endpoint in ['blocked_cards', 'blocked_cards_export'] %}active{% endif %}">Блокировки</a>
+                </div>
             </div>
 
             <!-- Цены -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Цены</p>
-
-                <a href="{{ url_for('prices.prices_dashboard') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and request.endpoint.startswith('prices.') %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            {% set prices_active = (request.endpoint and request.endpoint.startswith('prices.')) or request.endpoint in ['auto_import_pricing', 'price_monitor_settings', 'suspicious_price_changes'] %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if prices_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if prices_active else 'false' }} }">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Изменение цен</span>
-                </a>
-
-                <a href="{{ url_for('auto_import_pricing') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'auto_import_pricing' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Цены</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Ценообразование</span>
-                </a>
-
-                <a href="{{ url_for('price_monitor_settings') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['price_monitor_settings', 'suspicious_price_changes'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Мониторинг</span>
-                </a>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('prices.prices_dashboard') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('prices.') %}active{% endif %}">Управление</a>
+                    <a href="{{ url_for('auto_import_pricing') }}" class="sidebar-sublink {% if request.endpoint == 'auto_import_pricing' %}active{% endif %}">Ценообразование</a>
+                    <a href="{{ url_for('price_monitor_settings') }}" class="sidebar-sublink {% if request.endpoint in ['price_monitor_settings', 'suspicious_price_changes'] %}active{% endif %}">Мониторинг</a>
+                </div>
             </div>
 
-            <!-- Инструменты -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Инструменты</p>
-
-                <a href="{{ url_for('auto_import_dashboard') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['auto_import_dashboard', 'auto_import_settings', 'auto_import_products', 'auto_import_product_detail', 'auto_import_ai_update', 'auto_import_validate', 'auto_import_pricing'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            <!-- Поставщики -->
+            {% set suppliers_active = request.endpoint and ('supplier_catalog' in request.endpoint or request.endpoint in ['seller_my_products', 'seller_product_wb_preview']) %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if suppliers_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if suppliers_active else 'false' }} }">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Автоимпорт</span>
-                </a>
-
-                <a href="{{ url_for('api_settings') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'api_settings' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Поставщики</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Настройки API</span>
-                </a>
-
-                <a href="{{ url_for('prohibited_words.seller_index') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and request.endpoint.startswith('prohibited_words.seller') %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Стоп-слова WB</span>
-                </a>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('supplier_catalog') }}" class="sidebar-sublink {% if request.endpoint and 'supplier_catalog' in request.endpoint %}active{% endif %}">Каталог</a>
+                    <a href="{{ url_for('seller_my_products') }}" class="sidebar-sublink {% if request.endpoint in ['seller_my_products', 'seller_product_wb_preview'] %}active{% endif %}">Мои товары</a>
+                </div>
             </div>
+
+            <!-- Аналитика -->
+            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'reports', 'download_report'] %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Аналитика</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('analytics_page') }}" class="sidebar-sublink {% if request.endpoint == 'analytics_page' %}active{% endif %}">Обзор</a>
+                    <a href="{{ url_for('finances_page') }}" class="sidebar-sublink {% if request.endpoint == 'finances_page' %}active{% endif %}">Финансы</a>
+                    <a href="{{ url_for('reports') }}" class="sidebar-sublink {% if request.endpoint in ['reports', 'download_report'] %}active{% endif %}">Отчёты</a>
+                </div>
+            </div>
+
+            <!-- Разделитель -->
+            <div style="height:1px;background:#1f1f1f;margin:8px 12px 16px"></div>
+
+            <!-- Настройки -->
+            {% set settings_active = request.endpoint in ['api_settings', 'api_logs'] or (request.endpoint and request.endpoint.startswith('prohibited_words.seller')) %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if settings_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if settings_active else 'false' }} }">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Настройки</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('api_settings') }}" class="sidebar-sublink {% if request.endpoint == 'api_settings' %}active{% endif %}">API ключи</a>
+                    <a href="{{ url_for('api_logs') }}" class="sidebar-sublink {% if request.endpoint == 'api_logs' %}active{% endif %}">Логи API</a>
+                    <a href="{{ url_for('prohibited_words.seller_index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('prohibited_words.seller') %}active{% endif %}">Стоп-слова</a>
+                </div>
+            </div>
+
             {% endif %}
 
             {% if current_user.is_admin %}
-            <!-- Администрирование -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Админ</p>
+            {# ── Admin Navigation ── #}
 
-                <a href="{{ url_for('admin_panel') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['admin_panel', 'add_seller', 'edit_seller'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            <!-- Главная (admin) -->
+            {% if not current_user.seller %}
+            <div class="sidebar-section">
+                <a href="{{ url_for('dashboard') }}" class="sidebar-link {% if request.endpoint == 'dashboard' %}active{% endif %}" style="position:relative">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Пользователи</span>
+                    <span x-show="sidebarOpen" x-cloak>Главная</span>
                 </a>
-
-                <a href="{{ url_for('admin_suppliers') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and 'supplier' in request.endpoint and 'catalog' not in request.endpoint %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Поставщики</span>
-                </a>
-
-                <a href="{{ url_for('marketplaces.index') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and (request.endpoint.startswith('marketplaces.') or request.endpoint.startswith('brands.')) %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Маркетплейсы</span>
-                </a>
-
-                <a href="{{ url_for('prohibited_words.admin_index') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and request.endpoint.startswith('prohibited_words.admin') %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Стоп-слова WB</span>
-                </a>
-
-                <a href="{{ url_for('admin_api_debug') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint == 'admin_api_debug' %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                    </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">API Debug</span>
-                </a>
-
             </div>
             {% endif %}
 
-            {% if current_user.seller %}
-            <!-- Каталог поставщиков (для продавца) -->
-            <div class="mb-6">
-                <p x-show="sidebarOpen" x-cloak
-                    class="px-3 mb-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">Поставщики</p>
+            <div style="{% if current_user.seller %}height:1px;background:#1f1f1f;margin:8px 12px 16px{% endif %}"></div>
 
-                <a href="{{ url_for('supplier_catalog') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and 'supplier_catalog' in request.endpoint %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            <div class="sidebar-section">
+                <p x-show="sidebarOpen" x-cloak class="sidebar-section-title">Админ</p>
+
+                <a href="{{ url_for('admin_panel') }}" class="sidebar-link {% if request.endpoint in ['admin_panel', 'add_seller', 'edit_seller'] %}active{% endif %}" style="position:relative">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Каталог поставщиков</span>
+                    <span x-show="sidebarOpen" x-cloak>Пользователи</span>
                 </a>
 
-                <a href="{{ url_for('seller_my_products') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint in ['seller_my_products', 'seller_product_wb_preview'] %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                <a href="{{ url_for('admin_suppliers') }}" class="sidebar-link {% if request.endpoint and 'supplier' in request.endpoint and 'catalog' not in request.endpoint and 'seller' not in request.endpoint %}active{% endif %}" style="position:relative">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Мои товары</span>
+                    <span x-show="sidebarOpen" x-cloak>Поставщики</span>
                 </a>
+
+                <a href="{{ url_for('marketplaces.index') }}" class="sidebar-link {% if request.endpoint and (request.endpoint.startswith('marketplaces.') or request.endpoint.startswith('brands.')) %}active{% endif %}" style="position:relative">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak>Маркетплейсы</span>
+                </a>
+            </div>
+
+            <!-- Система -->
+            {% set system_active = request.endpoint in ['admin_system_settings', 'admin_activity_logs', 'admin_audit_logs', 'admin_api_debug'] or (request.endpoint and request.endpoint.startswith('prohibited_words.admin')) %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if system_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if system_active else 'false' }} }">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Система</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('admin_system_settings') }}" class="sidebar-sublink {% if request.endpoint == 'admin_system_settings' %}active{% endif %}">Настройки</a>
+                    <a href="{{ url_for('prohibited_words.admin_index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('prohibited_words.admin') %}active{% endif %}">Стоп-слова</a>
+                    <a href="{{ url_for('admin_activity_logs') }}" class="sidebar-sublink {% if request.endpoint == 'admin_activity_logs' %}active{% endif %}">Активность</a>
+                    <a href="{{ url_for('admin_audit_logs') }}" class="sidebar-sublink {% if request.endpoint == 'admin_audit_logs' %}active{% endif %}">Аудит</a>
+                    <a href="{{ url_for('admin_api_debug') }}" class="sidebar-sublink {% if request.endpoint == 'admin_api_debug' %}active{% endif %}">API Debug</a>
+                </div>
             </div>
             {% endif %}
 
             <!-- Документация -->
-            <div class="mb-6">
-                <a href="{{ url_for('docs.docs_index') }}"
-                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors {% if request.endpoint and request.endpoint.startswith('docs.') %}bg-indigo-50 text-indigo-700{% else %}text-gray-600 hover:bg-gray-100{% endif %}">
-                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            <div class="sidebar-section">
+                <a href="{{ url_for('docs.docs_index') }}" class="sidebar-link {% if request.endpoint and request.endpoint.startswith('docs.') %}active{% endif %}" style="position:relative">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                     </svg>
-                    <span x-show="sidebarOpen" x-cloak class="whitespace-nowrap">Документация</span>
+                    <span x-show="sidebarOpen" x-cloak>Документация</span>
                 </a>
             </div>
 
         </nav>
 
-        <!-- User section -->
-        <div class="border-t border-gray-200 p-3">
-            <div x-data="{ userMenuOpen: false }" class="relative">
-                <button @click="userMenuOpen = !userMenuOpen"
-                    class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-600 hover:bg-gray-100 transition-colors">
-                    <div
-                        class="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-full flex items-center justify-center flex-shrink-0">
-                        <span class="text-white text-sm font-medium">{{ current_user.username[0].upper() }}</span>
+        <!-- User -->
+        <div class="sidebar-footer">
+            <div x-data="{ userMenuOpen: false }" style="position:relative">
+                <button @click="userMenuOpen = !userMenuOpen" class="sidebar-user">
+                    <div class="sidebar-user-avatar">{{ current_user.username[0].upper() }}</div>
+                    <div x-show="sidebarOpen" x-cloak style="overflow:hidden;flex:1">
+                        <div class="sidebar-user-name">{{ current_user.username }}</div>
+                        <div class="sidebar-user-role">
+                            {% if current_user.is_admin %}Администратор{% elif current_user.seller %}{{ current_user.seller.company_name or 'Продавец' }}{% else %}Пользователь{% endif %}
+                        </div>
                     </div>
-                    <div x-show="sidebarOpen" x-cloak class="flex-1 text-left overflow-hidden">
-                        <p class="text-sm font-medium text-gray-900 truncate">{{ current_user.username }}</p>
-                        <p class="text-xs text-gray-500 truncate">
-                            {% if current_user.is_admin %}Администратор{% elif current_user.seller %}{{
-                            current_user.seller.company_name or 'Продавец' }}{% else %}Пользователь{% endif %}
-                        </p>
-                    </div>
-                    <svg x-show="sidebarOpen" x-cloak class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none"
-                        stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                    </svg>
                 </button>
 
-                <!-- User dropdown -->
-                <div x-show="userMenuOpen" x-cloak @click.away="userMenuOpen = false"
-                    class="absolute bottom-full left-0 right-0 mb-2 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-                    <a href="{{ url_for('profile_page') }}"
-                        class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                        </svg>
+                <div x-show="userMenuOpen" x-cloak @click.away="userMenuOpen = false" class="sidebar-dropdown">
+                    <a href="{{ url_for('profile_page') }}">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                         Профиль
                     </a>
-                    <a href="{{ url_for('notifications_page') }}"
-                        class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                        </svg>
+                    <a href="{{ url_for('notifications_page') }}">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
                         Уведомления
                     </a>
-                    <div class="border-t border-gray-100 my-1"></div>
-                    <a href="{{ url_for('logout') }}"
-                        class="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                        </svg>
+                    <div class="sidebar-dropdown-divider"></div>
+                    <a href="{{ url_for('logout') }}" class="danger">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
                         Выйти
                     </a>
                 </div>
@@ -411,23 +921,19 @@
         </div>
     </aside>
 
-    <!-- Main content -->
-    <div :class="{'lg:ml-64': sidebarOpen, 'lg:ml-20': !sidebarOpen}"
-        class="min-h-screen content-transition pt-14 lg:pt-0">
+    <!-- Main -->
+    <div class="main-content" :style="sidebarOpen ? 'margin-left: var(--sidebar-w)' : 'margin-left: var(--sidebar-collapsed)'">
 
-        <!-- Flash сообщения -->
+        <!-- Flash -->
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+        <div class="flash-container">
             {% for category, message in messages %}
             <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)"
-                class="rounded-lg p-4 mb-4 flex items-center justify-between {% if category == 'success' %}bg-green-50 text-green-800 border border-green-200{% elif category == 'danger' %}bg-red-50 text-red-800 border border-red-200{% elif category == 'warning' %}bg-yellow-50 text-yellow-800 border border-yellow-200{% else %}bg-blue-50 text-blue-800 border border-blue-200{% endif %}">
-                <p class="text-sm font-medium">{{ message }}</p>
-                <button @click="show = false" class="ml-4 text-sm font-medium hover:opacity-70">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                class="flash-msg {{ category }}">
+                <span>{{ message }}</span>
+                <button @click="show = false" class="flash-close">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
             </div>
             {% endfor %}
@@ -435,22 +941,21 @@
         {% endif %}
         {% endwith %}
 
-        <!-- Page content -->
         <main>
             {% block content %}{% endblock %}
         </main>
     </div>
 
     {% else %}
-    <!-- Non-authenticated layout (login page, etc.) -->
-    <main class="min-h-screen">
+    <!-- Non-authenticated -->
+    <main style="min-height:100vh">
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-        <div class="max-w-md mx-auto px-4 pt-4">
+        <div style="max-width:420px;margin:0 auto;padding:16px 16px 0">
             {% for category, message in messages %}
             <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)"
-                class="rounded-lg p-4 mb-4 {% if category == 'success' %}bg-green-50 text-green-800{% elif category == 'danger' %}bg-red-50 text-red-800{% elif category == 'warning' %}bg-yellow-50 text-yellow-800{% else %}bg-blue-50 text-blue-800{% endif %}">
-                <p class="text-sm font-medium">{{ message }}</p>
+                class="flash-msg {{ category }}">
+                <span>{{ message }}</span>
             </div>
             {% endfor %}
         </div>

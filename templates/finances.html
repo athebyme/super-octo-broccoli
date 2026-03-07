@@ -6,28 +6,25 @@
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="financesPage()">
 
     <!-- Header -->
-    <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div class="flex items-center gap-4">
-            <div class="hidden sm:flex w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-2xl items-center justify-center shadow-lg shadow-emerald-500/20 flex-shrink-0">
-                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-            </div>
+    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
+        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-                <h1 class="text-3xl font-bold text-gray-900">Финансы</h1>
-                <p class="mt-1 text-sm text-gray-500">Доходы, расходы и баланс по всем маркетплейсам</p>
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Финансы</h1>
+                <p class="mt-1 text-sm text-gray-400">Доходы, расходы и баланс по всем маркетплейсам</p>
             </div>
-        </div>
-        <div class="flex items-center gap-3">
-            <div class="inline-flex rounded-xl bg-gray-100 p-1">
-                <template x-for="p in periods" :key="p.value">
-                    <button @click="period = p.value"
-                        :class="period === p.value ? 'bg-white shadow-sm text-indigo-700 font-semibold' : 'text-gray-500 hover:text-gray-700'"
-                        class="px-3 py-1.5 text-sm rounded-lg transition-all" x-text="p.label"></button>
-                </template>
+            <div class="flex items-center gap-3">
+                <div class="inline-flex rounded-md bg-white/10 p-1">
+                    <template x-for="p in periods" :key="p.value">
+                        <button @click="period = p.value"
+                            :class="period === p.value ? 'bg-white shadow-sm text-[#1a1a1a] font-semibold' : 'text-white/80 hover:text-white hover:bg-white/10'"
+                            class="px-3 py-1.5 text-sm rounded-md transition-all" x-text="p.label"></button>
+                    </template>
+                </div>
+                <button class="inline-flex items-center gap-2 px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 text-sm font-medium transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Экспорт
+                </button>
             </div>
-            <button class="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                Экспорт
-            </button>
         </div>
     </div>
 

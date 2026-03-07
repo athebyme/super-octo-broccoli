@@ -5,22 +5,15 @@
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <nav class="mb-4 text-sm text-gray-500">
-        <a href="{{ url_for('supplier_catalog') }}" class="hover:text-indigo-600">Каталог поставщиков</a>
+        <a href="{{ url_for('supplier_catalog') }}" class="hover:text-gray-900">Каталог поставщиков</a>
         <span class="mx-2">/</span>
         <span class="text-gray-900">{{ supplier.name }}</span>
     </nav>
 
-    <div class="relative overflow-hidden bg-gradient-to-r from-amber-500 via-amber-400 to-orange-500 rounded-2xl p-6 sm:p-8 mb-6">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <rect x="40" y="50" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
-            <rect x="110" y="50" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
-            <rect x="40" y="110" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
-            <rect x="110" y="110" width="50" height="50" rx="6" stroke="white" stroke-width="3"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
         <div class="relative">
-            <h1 class="text-3xl font-bold text-white">{{ supplier.name }}</h1>
-            <p class="mt-2 text-sm text-amber-100">
+            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">{{ supplier.name }}</h1>
+            <p class="mt-2 text-sm text-gray-400">
                 {{ stats.total }} товаров в каталоге
                 {% if price_stock_stats and price_stock_stats.in_stock > 0 %}
                 | {{ price_stock_stats.in_stock }} в наличии
@@ -30,13 +23,13 @@
     </div>
 
     <!-- Поиск и фильтры -->
-    <form method="GET" class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6 flex flex-wrap gap-3 items-end">
+    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end">
         <div class="flex-1 min-w-[200px]">
             <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, ID, бренду..."
-                   class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                   class="w-full rounded-md border-gray-300 text-sm border px-3 py-2">
         </div>
         <div>
-            <select name="stock_status" class="rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+            <select name="stock_status" class="rounded-md border-gray-300 text-sm border px-3 py-2">
                 <option value="in_stock" {{ 'selected' if stock_status == 'in_stock' }}>В наличии</option>
                 <option value="all" {{ 'selected' if stock_status == 'all' }}>Все товары</option>
                 <option value="out_of_stock" {{ 'selected' if stock_status == 'out_of_stock' }}>Нет в наличии</option>
@@ -44,10 +37,10 @@
         </div>
         <label class="flex items-center gap-2">
             <input type="checkbox" name="show_imported" value="1" {{ 'checked' if show_imported }}
-                   class="rounded border-gray-300 text-indigo-600">
+                   class="rounded border-gray-300 text-gray-900">
             <span class="text-sm text-gray-600">Показать импортированные</span>
         </label>
-        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Найти</button>
+        <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
     </form>
 
     <!-- Товары -->
@@ -61,20 +54,20 @@
                 <label class="flex items-center gap-2">
                     <input type="checkbox" x-model="selectedAll"
                            @change="selected = selectedAll ? [...document.querySelectorAll('[name=product_ids]')].map(el => el.value) : []"
-                           class="rounded border-gray-300 text-indigo-600">
+                           class="rounded border-gray-300 text-gray-900">
                     <span class="text-sm text-gray-600">Все на странице</span>
                 </label>
                 <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
             </div>
             <div class="flex items-center gap-2">
                 <button type="submit" onclick="return confirm('Импортировать выбранные товары?')"
-                        class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                        class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40"
                         :disabled="selected.length === 0">
-                    Импортировать выбранные
+                    Импортировать
                 </button>
                 <button type="submit" formaction="{{ url_for('supplier_catalog_smart_import') }}"
                         onclick="return confirm('Умный импорт: товары будут обогащены (бренд, категория, характеристики) перед импортом. Продолжить?')"
-                        class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                        class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-gray-900 hover:text-gray-900 disabled:opacity-40"
                         :disabled="selected.length === 0">
                     Smart Import
                 </button>
@@ -86,27 +79,27 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-0 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
                 {% for product in pagination.items %}
                 {% set is_imported = product.id in imported_sp_ids %}
-                <div class="p-4 {{ 'bg-green-50/30' if is_imported else '' }} hover:bg-gray-50 transition-colors border-b border-gray-100">
+                <div class="p-4 {{ 'bg-gray-50/50' if is_imported else '' }} hover:bg-gray-50 transition-colors border-b border-gray-100">
                     <div class="flex items-start gap-3">
                         {% if not is_imported %}
                         <input type="checkbox" name="product_ids" value="{{ product.id }}"
                                :checked="selected.includes('{{ product.id }}')"
                                @change="selected = $event.target.checked ? [...selected, '{{ product.id }}'] : selected.filter(id => id !== '{{ product.id }}')"
-                               class="mt-1 rounded border-gray-300 text-indigo-600">
+                               class="mt-1 rounded border-gray-300 text-gray-900">
                         {% else %}
-                        <span class="mt-1 text-green-500 text-sm" title="Уже импортирован">&#10003;</span>
+                        <span class="mt-1 text-gray-400 text-sm" title="Уже импортирован">&#10003;</span>
                         {% endif %}
                         <div class="flex-1 min-w-0">
                             <!-- Фото -->
                             {% set photos = product.get_photos() %}
                             {% if photos %}
                             <img src="{{ url_for('serve_supplier_product_photo', supplier_product_id=product.id, photo_idx=0) }}"
-                                 class="w-full h-32 object-cover rounded-lg mb-2"
+                                 class="w-full h-32 object-cover rounded-md mb-2"
                                  onerror="this.style.display='none'" alt="">
                             {% endif %}
 
                             <a href="{{ url_for('supplier_catalog_product_detail', supplier_id=supplier.id, product_id=product.id) }}"
-                               class="text-sm font-medium text-gray-900 hover:text-indigo-600 line-clamp-2">
+                               class="text-sm font-medium text-gray-900 hover:text-gray-600 line-clamp-2">
                                 {{ product.title or 'Без названия' }}
                             </a>
 
@@ -114,7 +107,10 @@
                                 {% if product.brand %}<span>{{ product.brand }}</span>{% endif %}
                                 {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:20] }}</span>{% endif %}
                                 {% if product.ai_parsed_at %}
-                                <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 text-[10px] font-medium" title="AI-парсинг {{ product.ai_parsed_at.strftime('%d.%m.%Y') }}">AI</span>
+                                <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide" style="background:var(--accent-light,#f0e0da);color:var(--accent,#c45d3e)" title="AI-обработано {{ product.ai_parsed_at.strftime('%d.%m.%Y') }}">
+                                    <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1l2.2 4.4L15 6.3l-3.5 3.4.8 4.8L8 12.2 3.7 14.5l.8-4.8L1 6.3l4.8-.9L8 1z"/></svg>
+                                    AI
+                                </span>
                                 {% endif %}
                             </div>
 
@@ -129,13 +125,13 @@
 
                                 <div class="flex items-center gap-2">
                                     {% if product.supplier_quantity is not none and product.supplier_quantity > 0 %}
-                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">{{ product.supplier_quantity }} шт</span>
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-600">{{ product.supplier_quantity }} шт</span>
                                     {% elif product.supplier_quantity is not none and product.supplier_quantity == 0 %}
-                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-600">Нет</span>
+                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-400">Нет</span>
                                     {% endif %}
 
                                     {% if is_imported %}
-                                    <span class="text-xs text-green-600 font-medium">Импортирован</span>
+                                    <span class="text-xs text-gray-500 font-medium">Импортирован</span>
                                     {% endif %}
                                 </div>
                             </div>
@@ -165,19 +161,19 @@
         <nav class="flex gap-1">
             {% if pagination.has_prev %}
             <a href="?page={{ pagination.prev_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}"
-               class="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">&laquo;</a>
+               class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&laquo;</a>
             {% endif %}
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
                 <a href="?page={{ p }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}"
-                   class="px-3 py-2 text-sm border rounded-lg {{ 'bg-indigo-600 text-white border-indigo-600' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
+                   class="px-3 py-2 text-sm border rounded-md {{ 'bg-[#1a1a1a] text-white border-[#1a1a1a]' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
                 {% else %}
                 <span class="px-2 py-2 text-gray-400">...</span>
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
             <a href="?page={{ pagination.next_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}"
-               class="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">&raquo;</a>
+               class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>
     </div>

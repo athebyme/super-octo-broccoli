@@ -2,6 +2,58 @@
 
 {% block title %}Мои товары — Seller Hub{% endblock %}
 
+{% block extra_head %}
+<style>
+    .my-stat-strip {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    @media (max-width: 640px) { .my-stat-strip { grid-template-columns: repeat(3, 1fr); } }
+    .my-stat-card {
+        background: var(--bg-card);
+        padding: 16px 12px;
+        text-align: center;
+        text-decoration: none;
+        color: var(--text);
+        transition: background 0.15s;
+        position: relative;
+    }
+    .my-stat-card:hover { background: var(--bg); }
+    .my-stat-card.active {
+        background: var(--bg);
+    }
+    .my-stat-card.active::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 20%;
+        right: 20%;
+        height: 2px;
+        background: var(--accent);
+        border-radius: 1px;
+    }
+    .my-stat-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin-bottom: 4px;
+    }
+    .my-stat-value {
+        font-family: var(--font-display);
+        font-size: 22px;
+        font-style: italic;
+        color: var(--text);
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
      x-data="{
@@ -48,16 +100,10 @@
         }
      }">
 
-    <div class="relative overflow-hidden bg-gradient-to-r from-violet-600 via-purple-700 to-indigo-800 rounded-2xl p-6 sm:p-8 mb-6">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <rect x="40" y="40" width="120" height="120" rx="12" stroke="white" stroke-width="1.5"/>
-            <path d="M70 90h60M70 110h40M70 130h50" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-            <circle cx="140" cy="70" r="12" stroke="white" stroke-width="1.5"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
         <div class="relative">
-            <h1 class="text-2xl font-bold text-white">Мои товары</h1>
-            <p class="text-sm text-purple-200 mt-1">
+            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Мои товары</h1>
+            <p class="text-sm text-gray-400 mt-1">
                 {{ stats.total }} товаров | {{ stats.validated }} готово к WB | {{ stats.imported }} на WB
                 {% if not has_wb_key %}
                 | <span class="text-yellow-300">API ключ WB не настроен</span>
@@ -66,38 +112,38 @@
         </div>
     </div>
 
-    <!-- Stats cards -->
-    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
-        <a href="?status=" class="bg-white rounded-xl border {{ 'border-purple-300 ring-1 ring-purple-200' if not status else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
-            <p class="text-xs text-gray-500">В работе</p>
-            <p class="text-xl font-bold text-gray-900">{{ stats.total - stats.imported }}</p>
+    <!-- Stats -->
+    <div class="my-stat-strip mb-6">
+        <a href="?status=" class="my-stat-card {{ 'active' if not status else '' }}">
+            <p class="my-stat-label">В работе</p>
+            <p class="my-stat-value">{{ stats.total - stats.imported }}</p>
         </a>
-        <a href="?status=pending" class="bg-white rounded-xl border {{ 'border-yellow-300 ring-1 ring-yellow-200' if status == 'pending' else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
-            <p class="text-xs text-gray-500">Ожидают</p>
-            <p class="text-xl font-bold text-yellow-600">{{ stats.pending }}</p>
+        <a href="?status=pending" class="my-stat-card {{ 'active' if status == 'pending' else '' }}">
+            <p class="my-stat-label">Ожидают</p>
+            <p class="my-stat-value">{{ stats.pending }}</p>
         </a>
-        <a href="?status=validated" class="bg-white rounded-xl border {{ 'border-blue-300 ring-1 ring-blue-200' if status == 'validated' else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
-            <p class="text-xs text-gray-500">Готово к WB</p>
-            <p class="text-xl font-bold text-blue-600">{{ stats.validated }}</p>
+        <a href="?status=validated" class="my-stat-card {{ 'active' if status == 'validated' else '' }}">
+            <p class="my-stat-label">Готово к WB</p>
+            <p class="my-stat-value">{{ stats.validated }}</p>
         </a>
-        <a href="?status=imported" class="bg-white rounded-xl border {{ 'border-green-300 ring-1 ring-green-200' if status == 'imported' else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
-            <p class="text-xs text-gray-500">На WB</p>
-            <p class="text-xl font-bold text-green-600">{{ stats.imported }}</p>
+        <a href="?status=imported" class="my-stat-card {{ 'active' if status == 'imported' else '' }}">
+            <p class="my-stat-label">На WB</p>
+            <p class="my-stat-value">{{ stats.imported }}</p>
         </a>
-        <a href="?status=failed" class="bg-white rounded-xl border {{ 'border-red-300 ring-1 ring-red-200' if status == 'failed' else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
-            <p class="text-xs text-gray-500">Ошибки</p>
-            <p class="text-xl font-bold text-red-500">{{ stats.failed }}</p>
+        <a href="?status=failed" class="my-stat-card {{ 'active' if status == 'failed' else '' }}">
+            <p class="my-stat-label">Ошибки</p>
+            <p class="my-stat-value">{{ stats.failed }}</p>
         </a>
     </div>
 
     <!-- Search -->
-    <form method="GET" class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6 flex gap-3 items-end">
+    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex gap-3 items-end">
         <div class="flex-1">
             <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, бренду, ID..."
-                   class="w-full rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                   class="w-full rounded-md border-gray-300 text-sm border px-3 py-2">
         </div>
         <input type="hidden" name="status" value="{{ status }}">
-        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Найти</button>
+        <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
     </form>
 
     <!-- Bulk actions bar -->
@@ -106,7 +152,7 @@
             <label class="flex items-center gap-2">
                 <input type="checkbox" x-model="selectedAll"
                        @change="selected = selectedAll ? [...document.querySelectorAll('[data-product-id]')].map(el => parseInt(el.dataset.productId)) : []"
-                       class="rounded border-gray-300 text-indigo-600">
+                       class="rounded border-gray-300 text-gray-900">
                 <span class="text-sm text-gray-600">Все на странице</span>
             </label>
             <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
@@ -114,13 +160,13 @@
         <div class="flex gap-2">
             {% if has_wb_key %}
             <button @click="pushBulkToWB()" :disabled="selected.length === 0 || bulkRunning"
-                    class="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50">
+                    class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40">
                 <span x-show="!bulkRunning">Отправить на WB</span>
                 <span x-show="bulkRunning">Отправка...</span>
             </button>
             {% endif %}
             <button @click="deleteBulk()" :disabled="selected.length === 0 || bulkRunning"
-                    class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-red-300 hover:text-red-600 disabled:opacity-40">
                 Удалить выбранные
             </button>
         </div>
@@ -129,8 +175,8 @@
     <!-- Bulk result -->
     <div x-show="bulkResult" x-cloak class="bg-white border-x border-gray-200 px-4 py-3">
         <div class="flex items-center gap-4 text-sm">
-            <span class="text-green-600 font-medium" x-text="'Отправлено: ' + (bulkResult?.success || 0)"></span>
-            <span class="text-red-500" x-text="'Ошибок: ' + (bulkResult?.failed || 0)"></span>
+            <span class="text-gray-900 font-medium" x-text="'Отправлено: ' + (bulkResult?.success || 0)"></span>
+            <span class="text-gray-500" x-text="'Ошибок: ' + (bulkResult?.failed || 0)"></span>
             <span class="text-gray-400" x-text="'Пропущено: ' + (bulkResult?.skipped || 0)"></span>
         </div>
     </div>
@@ -159,7 +205,7 @@
                         <input type="checkbox"
                                :checked="selected.includes({{ p.id }})"
                                @change="selected = $event.target.checked ? [...selected, {{ p.id }}] : selected.filter(id => id !== {{ p.id }})"
-                               class="rounded border-gray-300 text-indigo-600">
+                               class="rounded border-gray-300 text-gray-900">
                     </td>
                     <td class="px-3 py-2">
                         {% set photos = p.photo_urls %}
@@ -177,7 +223,7 @@
                     </td>
                     <td class="px-3 py-2">
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
-                           class="text-sm font-medium text-gray-900 hover:text-indigo-600 line-clamp-2">
+                           class="text-sm font-medium text-gray-900 hover:text-gray-600 line-clamp-2">
                             {{ p.title or 'Без названия' }}
                         </a>
                         <p class="text-xs text-gray-400">{{ p.external_id }}</p>
@@ -185,14 +231,14 @@
                     <td class="px-3 py-2 text-sm text-gray-600">
                         {{ p.brand or '—' }}
                         {% if p.resolved_brand_id %}
-                        <span class="inline-block w-1.5 h-1.5 bg-green-500 rounded-full ml-1" title="Бренд подтверждён"></span>
+                        <span class="inline-block w-1.5 h-1.5 bg-gray-900 rounded-full ml-1" title="Бренд подтверждён"></span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-sm text-gray-600">
                         {% if p.mapped_wb_category %}
                         <span class="text-xs">{{ p.mapped_wb_category[:25] }}</span>
                         {% else %}
-                        <span class="text-xs text-red-400">Не определена</span>
+                        <span class="text-xs text-gray-400">Не определена</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-sm">
@@ -204,33 +250,33 @@
                     </td>
                     <td class="px-3 py-2">
                         {% if p.supplier_quantity is not none and p.supplier_quantity > 0 %}
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">{{ p.supplier_quantity }}</span>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-600">{{ p.supplier_quantity }}</span>
                         {% elif p.supplier_quantity is not none %}
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-600">0</span>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-400">0</span>
                         {% else %}
                         <span class="text-gray-400 text-xs">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center">
                         {% if p.import_status == 'imported' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">На WB</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-900">На WB</span>
                         {% elif p.import_status == 'validated' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Готов</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Готов</span>
                         {% elif p.import_status == 'failed' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-600">Ошибка</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fef2f2;color:#991b1b">Ошибка</span>
                         {% else %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">Ожидает</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fffbeb;color:#92400e">Ожидает</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center whitespace-nowrap">
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
-                           class="inline-flex items-center px-2.5 py-1 bg-purple-50 text-purple-700 rounded text-xs font-medium hover:bg-purple-100">
+                           class="inline-flex items-center px-2.5 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium hover:bg-gray-200">
                             WB карточка
                         </a>
                         <form method="POST" action="{{ url_for('seller_delete_imported_product', product_id=p.id) }}"
                               class="inline" onsubmit="return confirm('Удалить товар? Он станет доступен для повторного импорта.')">
                             <button type="submit"
-                                    class="inline-flex items-center px-2.5 py-1 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 ml-1"
+                                    class="inline-flex items-center px-2.5 py-1 border border-gray-200 text-gray-500 rounded text-xs font-medium hover:border-red-300 hover:text-red-600 ml-1"
                                     title="Удалить из моих товаров">
                                 Удалить
                             </button>
@@ -243,7 +289,7 @@
         {% else %}
         <div class="text-center py-12">
             <p class="text-gray-500">Нет импортированных товаров</p>
-            <a href="{{ url_for('supplier_catalog') }}" class="text-indigo-600 text-sm hover:underline mt-2 inline-block">Перейти в каталог поставщиков</a>
+            <a href="{{ url_for('supplier_catalog') }}" class="text-gray-900 text-sm hover:underline mt-2 inline-block">Перейти в каталог поставщиков &rarr;</a>
         </div>
         {% endif %}
     </div>
@@ -258,19 +304,19 @@
         <nav class="flex gap-1">
             {% if pagination.has_prev %}
             <a href="?page={{ pagination.prev_num }}&search={{ search }}&status={{ status }}"
-               class="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">&laquo;</a>
+               class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&laquo;</a>
             {% endif %}
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
                 <a href="?page={{ p }}&search={{ search }}&status={{ status }}"
-                   class="px-3 py-2 text-sm border rounded-lg {{ 'bg-indigo-600 text-white border-indigo-600' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
+                   class="px-3 py-2 text-sm border rounded-md {{ 'bg-[#1a1a1a] text-white border-[#1a1a1a]' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
                 {% else %}
                 <span class="px-2 py-2 text-gray-400">...</span>
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
             <a href="?page={{ pagination.next_num }}&search={{ search }}&status={{ status }}"
-               class="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">&raquo;</a>
+               class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>
     </div>

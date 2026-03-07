@@ -5,26 +5,19 @@
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="supplierMarketplaces()">
     <!-- Hero Banner -->
-    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 rounded-2xl p-6 sm:p-8 mb-8">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <rect x="30" y="30" width="140" height="140" rx="16" stroke="white" stroke-width="1.5"/>
-            <path d="M70 85h60M70 105h40M70 125h50" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-            <circle cx="100" cy="60" r="15" stroke="white" stroke-width="1.5"/>
-            <path d="M95 60h10M100 55v10" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
             <nav class="flex mb-3" aria-label="Breadcrumb">
-                <ol class="flex items-center space-x-2 text-sm text-slate-400">
+                <ol class="flex items-center space-x-2 text-sm text-gray-400">
                     <li><a href="{{ url_for('admin_suppliers') }}" class="hover:text-white">Поставщики</a></li>
-                    <li><svg class="h-4 w-4 text-slate-500" viewBox="0 0 20 20" fill="currentColor">
+                    <li><svg class="h-4 w-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
                             <path fill-rule="evenodd"
                                 d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
                                 clip-rule="evenodd" />
                         </svg></li>
                     <li><a href="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) }}"
                             class="hover:text-white">{{ supplier.name }}</a></li>
-                    <li><svg class="h-4 w-4 text-slate-500" viewBox="0 0 20 20" fill="currentColor">
+                    <li><svg class="h-4 w-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
                             <path fill-rule="evenodd"
                                 d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
                                 clip-rule="evenodd" />
@@ -32,8 +25,8 @@
                     <li class="font-medium text-white">Интеграции с маркетплейсами</li>
                 </ol>
             </nav>
-            <h1 class="text-3xl font-bold text-white">Интеграции с маркетплейсами</h1>
-            <p class="mt-2 text-sm text-slate-300">
+            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Интеграции с маркетплейсами</h1>
+            <p class="mt-2 text-sm text-gray-400">
                 Подключите маркетплейсы к поставщику <strong class="text-white">{{ supplier.name }}</strong>, чтобы получать валидацию и
                 структуры
             </p>

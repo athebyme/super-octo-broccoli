@@ -2,333 +2,469 @@
 
 {% block title %}Дашборд - Seller Hub{% endblock %}
 
+{% block extra_head %}
+<style>
+    .dash { max-width: 960px; margin: 0 auto; padding: 48px 24px 64px; }
+
+    /* Greeting */
+    .dash-greeting {
+        margin-bottom: 40px;
+    }
+    .dash-greeting-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+    }
+    .dash-greeting h1 {
+        font-family: var(--font-display);
+        font-size: 36px;
+        font-weight: 400;
+        color: var(--text);
+        line-height: 1.2;
+        font-style: italic;
+    }
+    .dash-greeting h1 em { color: var(--accent); font-style: italic; }
+
+    /* Section header */
+    .dash-section-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+    .dash-section-title {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-muted);
+    }
+    .dash-section-line {
+        flex: 1;
+        height: 1px;
+        background: var(--border);
+    }
+
+    /* Stat strip */
+    .dash-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 40px;
+    }
+    @media (max-width: 640px) { .dash-stats { grid-template-columns: repeat(2, 1fr); } }
+    .dash-stat {
+        background: var(--bg-card);
+        padding: 20px 24px;
+        text-decoration: none;
+        color: var(--text);
+        transition: background 0.15s;
+    }
+    a.dash-stat:hover { background: var(--bg); }
+    .dash-stat-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin-bottom: 6px;
+    }
+    .dash-stat-value {
+        font-family: var(--font-display);
+        font-size: 26px;
+        color: var(--text);
+        font-style: italic;
+        line-height: 1.2;
+    }
+    .dash-stat-meta {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .dash-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    /* Navigation cards */
+    .dash-nav-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 40px;
+    }
+    @media (max-width: 640px) { .dash-nav-grid { grid-template-columns: 1fr; } }
+    .dash-nav-card {
+        background: var(--bg-card);
+        padding: 20px 24px;
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        text-decoration: none;
+        color: var(--text);
+        transition: background 0.15s;
+    }
+    .dash-nav-card:hover { background: var(--bg); }
+    .dash-nav-icon {
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+    .dash-nav-icon svg { width: 20px; height: 20px; color: var(--text-secondary); stroke-width: 1.5; }
+    .dash-nav-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 2px;
+    }
+    .dash-nav-desc {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.4;
+    }
+    .dash-nav-badge {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--accent);
+        margin-top: 4px;
+        display: inline-block;
+    }
+
+    /* Warning */
+    .dash-warning {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 18px;
+        background: #fffbeb;
+        border: 1px solid #f0e0b0;
+        border-radius: 6px;
+        margin-bottom: 40px;
+        font-size: 13px;
+        color: #92400e;
+    }
+    .dash-warning svg { width: 20px; height: 20px; flex-shrink: 0; color: #d97706; }
+    .dash-warning a { color: var(--accent); font-weight: 600; text-decoration: none; }
+    .dash-warning a:hover { text-decoration: underline; }
+
+    /* Company info */
+    .dash-company {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        overflow: hidden;
+    }
+    .dash-company-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1px;
+        background: var(--border);
+    }
+    @media (max-width: 640px) { .dash-company-grid { grid-template-columns: 1fr; } }
+    .dash-company-col {
+        padding: 24px;
+        background: var(--bg-card);
+    }
+    .dash-company-label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        margin-bottom: 16px;
+    }
+    .dash-company-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border-light);
+        font-size: 13px;
+    }
+    .dash-company-row:last-child { border-bottom: none; }
+    .dash-company-row-key { color: var(--text-secondary); font-weight: 500; }
+    .dash-company-row-val { color: var(--text); }
+
+    /* Admin dashboard */
+    .dash-admin-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 40px;
+    }
+    @media (max-width: 640px) { .dash-admin-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="dash">
     {% set has_summary = summary is not none %}
 
-    <!-- Hero Banner -->
-    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-2xl p-6 sm:p-8 mb-8">
-        <!-- SVG decoration -->
-        <svg class="absolute right-0 top-0 h-full w-1/2 opacity-10" viewBox="0 0 400 250" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="320" cy="60" r="100" stroke="white" stroke-width="1.5"/>
-            <circle cx="320" cy="60" r="60" stroke="white" stroke-width="1"/>
-            <path d="M160 200L200 140L240 165L280 100L320 130L360 80" stroke="white" stroke-width="2" stroke-linecap="round"/>
-            <rect x="170" y="150" width="14" height="50" rx="3" fill="white" opacity="0.2"/>
-            <rect x="200" y="120" width="14" height="80" rx="3" fill="white" opacity="0.2"/>
-            <rect x="230" y="135" width="14" height="65" rx="3" fill="white" opacity="0.2"/>
-            <rect x="260" y="100" width="14" height="100" rx="3" fill="white" opacity="0.2"/>
-            <rect x="290" y="110" width="14" height="90" rx="3" fill="white" opacity="0.2"/>
-            <rect x="320" y="80" width="14" height="120" rx="3" fill="white" opacity="0.2"/>
-        </svg>
-        <div class="absolute top-4 right-10 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
-        <div class="absolute top-12 right-24 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.5s"></div>
-        <div class="absolute bottom-6 right-36 w-2.5 h-2.5 rounded-full bg-white/25 animate-pulse" style="animation-delay:1s"></div>
-
-        <div class="relative">
-            <h1 class="text-3xl font-bold text-white">
-                Добро пожаловать, {{ current_user.username }}!
-            </h1>
-            <p class="mt-2 text-sm text-indigo-200">
-                {% if current_user.seller %}
-                    {{ current_user.seller.company_name }} &middot; Seller Hub
-                {% else %}
-                    Администратор системы &middot; Seller Hub
-                {% endif %}
-            </p>
-            <div class="mt-4 flex flex-wrap items-center gap-3">
-                <a href="{{ url_for('reports') }}"
-                   class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-indigo-700 bg-white hover:bg-indigo-50 transition-colors shadow-sm">
-                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    Отчёты
-                </a>
-                <a href="{{ url_for('analytics_page') }}"
-                   class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-white bg-white/20 hover:bg-white/30 backdrop-blur-sm transition-colors border border-white/20">
-                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4"/></svg>
-                    Аналитика
-                </a>
-                {% if latest_filename %}
-                <p class="text-xs text-indigo-200">
-                    Последний файл: <span class="font-medium text-white">{{ latest_filename }}</span>
-                </p>
-                {% endif %}
-            </div>
+    <!-- Greeting -->
+    <div class="dash-greeting">
+        <div class="dash-greeting-label">
+            {% if current_user.seller %}
+                {{ current_user.seller.company_name }}
+            {% else %}
+                Администратор
+            {% endif %}
         </div>
+        <h1>Добро пожаловать, <em>{{ current_user.username }}</em></h1>
     </div>
+
+    {% if current_user.seller %}
+    {# ── Seller Dashboard ── #}
 
     <!-- API Warning -->
-    {% if current_user.seller %}
     {% if not current_user.seller.has_valid_api_key() %}
-    <div class="mb-6 bg-amber-50 border border-amber-200 rounded-2xl p-4">
-        <div class="flex items-start gap-3">
-            <div class="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
-                <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                </svg>
-            </div>
-            <div>
-                <p class="text-sm text-amber-800">
-                    <strong>API ключ не настроен.</strong> Настройте API для синхронизации с маркетплейсами.
-                    <a href="{{ url_for('api_settings') }}" class="font-semibold underline decoration-amber-400 hover:text-amber-900 ml-1">
-                        Настроить &rarr;
-                    </a>
-                </p>
-            </div>
-        </div>
+    <div class="dash-warning">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <span>
+            <strong>API ключ не настроен.</strong>
+            Настройте подключение к Wildberries для синхронизации.
+            <a href="{{ url_for('api_settings') }}">Настроить &rarr;</a>
+        </span>
     </div>
     {% endif %}
 
-    <!-- KPI Stats -->
-    <div class="mb-4 flex items-center gap-3">
-        <div class="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
-            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        </div>
-        <h2 class="text-lg font-semibold text-gray-900">Отчёты и прибыль</h2>
-    </div>
-    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-8">
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
-                <div>
-                    <p class="text-sm text-gray-500">Начислено</p>
-                    <p class="text-xl font-bold text-gray-900">
-                        {{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}
-                    </p>
-                </div>
-            </div>
-        </div>
-
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-emerald-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-gradient-to-br from-emerald-500 to-green-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                    </svg>
-                </div>
-                <div>
-                    <p class="text-sm text-gray-500">Прибыль</p>
-                    <p class="text-xl font-bold text-gray-900">
-                        {{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}
-                    </p>
-                </div>
-            </div>
-        </div>
-
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-blue-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
-                    </svg>
-                </div>
-                <div>
-                    <p class="text-sm text-gray-500">Маржа</p>
-                    <p class="text-xl font-bold text-gray-900">
-                        {{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '—' }}
-                    </p>
-                </div>
-            </div>
-        </div>
+    <!-- Key metrics -->
+    <div class="dash-section-header">
+        <span class="dash-section-title">Показатели</span>
+        <div class="dash-section-line"></div>
     </div>
 
-    <!-- API Stats -->
-    <div class="mb-4 flex items-center gap-3">
-        <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center">
-            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        </div>
-        <h2 class="text-lg font-semibold text-gray-900">Маркетплейсы</h2>
-    </div>
-    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 mb-8">
-        <a href="{{ url_for('products_list') }}" class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all group">
-            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
-                    </svg>
-                </div>
-                <div>
-                    <p class="text-sm text-gray-500">Карточки товаров</p>
-                    <p class="text-xl font-bold text-gray-900">{{ products_count }}</p>
-                </div>
-            </div>
+    <div class="dash-stats">
+        <a href="{{ url_for('reports') }}" class="dash-stat">
+            <div class="dash-stat-label">Начислено</div>
+            <div class="dash-stat-value">{{ "{:,.0f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}</div>
+            <div class="dash-stat-meta">₽ за период</div>
         </a>
-
-        <a href="{{ url_for('api_logs') }}" class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all group">
-            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-green-500/10 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-                    </svg>
-                </div>
-                <div>
-                    <p class="text-sm text-gray-500">API запросов</p>
-                    <p class="text-xl font-bold text-gray-900">{{ api_logs_count }}</p>
-                </div>
-            </div>
+        <a href="{{ url_for('reports') }}" class="dash-stat">
+            <div class="dash-stat-label">Прибыль</div>
+            <div class="dash-stat-value">{{ "{:,.0f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}</div>
+            <div class="dash-stat-meta">₽ за период</div>
         </a>
-
-        <a href="{{ url_for('api_settings') }}" class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-all group">
-            <div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-bl from-blue-500/10 to-transparent rounded-bl-full opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-gradient-to-br {% if current_user.seller.has_valid_api_key() %}from-blue-500 to-indigo-600{% else %}from-amber-400 to-orange-500{% endif %} rounded-xl flex items-center justify-center flex-shrink-0">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                    </svg>
-                </div>
-                <div>
-                    <p class="text-sm text-gray-500">Статус API</p>
-                    <p class="text-xl font-bold {% if current_user.seller.has_valid_api_key() %}text-green-600{% else %}text-amber-600{% endif %}">
-                        {% if current_user.seller.has_valid_api_key() %}Настроен{% else %}Не настроен{% endif %}
-                    </p>
-                </div>
+        <a href="{{ url_for('reports') }}" class="dash-stat">
+            <div class="dash-stat-label">Маржа</div>
+            <div class="dash-stat-value">{{ "{:.1f}".format(summary.get('avg_margin', 0)) + '%' if has_summary else '—' }}</div>
+            <div class="dash-stat-meta">средняя</div>
+        </a>
+        <a href="{{ url_for('products_list') }}" class="dash-stat">
+            <div class="dash-stat-label">Товары</div>
+            <div class="dash-stat-value">{{ products_count }}</div>
+            <div class="dash-stat-meta">
+                <span class="dash-dot" style="background: var(--accent)"></span>
+                активных карточек
             </div>
         </a>
     </div>
-    {% endif %}
 
-    <!-- Quick Actions -->
-    {% if current_user.seller %}
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6 relative overflow-hidden">
-        <svg class="absolute -right-4 -top-4 w-24 h-24 opacity-[0.03]" viewBox="0 0 100 100" fill="none"><path d="M50 10L60 40H90L66 58L76 88L50 70L24 88L34 58L10 40H40Z" fill="currentColor"/></svg>
-        <div class="flex items-center gap-3 mb-5">
-            <div class="w-8 h-8 bg-gradient-to-br from-violet-500 to-purple-600 rounded-lg flex items-center justify-center">
-                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            </div>
-            <h2 class="text-lg font-semibold text-gray-900">Быстрые действия</h2>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            <a href="{{ url_for('products_list') }}"
-               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-indigo-50/50 hover:border-indigo-200 transition-all group">
-                <div class="flex-shrink-0 w-10 h-10 bg-indigo-100 group-hover:bg-indigo-200 rounded-xl flex items-center justify-center transition-colors">
-                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
-                    </svg>
-                </div>
-                <div class="ml-3">
-                    <p class="text-sm font-medium text-gray-900">Карточки товаров</p>
-                    <p class="text-xs text-gray-500">Просмотр и управление</p>
-                </div>
-            </a>
-
-            <a href="{{ url_for('api_settings') }}"
-               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-blue-50/50 hover:border-blue-200 transition-all group">
-                <div class="flex-shrink-0 w-10 h-10 bg-blue-100 group-hover:bg-blue-200 rounded-xl flex items-center justify-center transition-colors">
-                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                    </svg>
-                </div>
-                <div class="ml-3">
-                    <p class="text-sm font-medium text-gray-900">Настройки API</p>
-                    <p class="text-xs text-gray-500">Ключи маркетплейсов</p>
-                </div>
-            </a>
-
-            <a href="{{ url_for('api_logs') }}"
-               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-green-50/50 hover:border-green-200 transition-all group">
-                <div class="flex-shrink-0 w-10 h-10 bg-green-100 group-hover:bg-green-200 rounded-xl flex items-center justify-center transition-colors">
-                    <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-                    </svg>
-                </div>
-                <div class="ml-3">
-                    <p class="text-sm font-medium text-gray-900">Логи API</p>
-                    <p class="text-xs text-gray-500">История запросов</p>
-                </div>
-            </a>
-
-            <a href="{{ url_for('bulk_edit_history') }}"
-               class="flex items-center p-4 border border-gray-100 rounded-xl hover:bg-purple-50/50 hover:border-purple-200 transition-all group">
-                <div class="flex-shrink-0 w-10 h-10 bg-purple-100 group-hover:bg-purple-200 rounded-xl flex items-center justify-center transition-colors">
-                    <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
-                <div class="ml-3">
-                    <p class="text-sm font-medium text-gray-900">История операций</p>
-                    <p class="text-xs text-gray-500">Массовые изменения</p>
-                </div>
-            </a>
-        </div>
+    <!-- Quick navigation -->
+    <div class="dash-section-header">
+        <span class="dash-section-title">Быстрый доступ</span>
+        <div class="dash-section-line"></div>
     </div>
 
-    <!-- Company Info -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
-        <svg class="absolute -right-2 -top-2 w-20 h-20 opacity-[0.04]" viewBox="0 0 80 80" fill="none"><rect x="10" y="10" width="60" height="60" rx="12" stroke="currentColor" stroke-width="3"/><circle cx="40" cy="35" r="10" stroke="currentColor" stroke-width="2.5"/><path d="M22 65c0-10 8-18 18-18s18 8 18 18" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-        <div class="flex items-center gap-3 mb-5">
-            <div class="w-8 h-8 bg-gradient-to-br from-gray-600 to-gray-800 rounded-lg flex items-center justify-center">
-                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-            </div>
-            <h2 class="text-lg font-semibold text-gray-900">Информация о компании</h2>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Основные данные</h3>
-                <div class="space-y-2.5 text-sm">
-                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Компания:</span> <span class="text-gray-600">{{ current_user.seller.company_name }}</span></p>
-                    {% if current_user.seller.wb_seller_id %}
-                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">WB ID:</span> <span class="text-gray-600">{{ current_user.seller.wb_seller_id }}</span></p>
-                    {% endif %}
-                    {% if current_user.seller.contact_phone %}
-                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Телефон:</span> <span class="text-gray-600">{{ current_user.seller.contact_phone }}</span></p>
-                    {% endif %}
-                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Email:</span> <span class="text-gray-600">{{ current_user.email }}</span></p>
-                </div>
+    <div class="dash-nav-grid">
+        <a href="{{ url_for('products_list') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
             </div>
             <div>
-                <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Синхронизация</h3>
-                <div class="space-y-2.5 text-sm">
-                    {% if current_user.seller.api_last_sync %}
-                    <p class="flex items-center gap-2"><span class="font-medium text-gray-700">Последняя:</span> <span class="text-gray-600">{{ current_user.seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}</span></p>
-                    {% else %}
-                    <p class="text-gray-400">Синхронизация ещё не выполнялась</p>
-                    {% endif %}
-                    {% if current_user.seller.api_sync_status %}
-                    <p class="flex items-center gap-2">
-                        <span class="font-medium text-gray-700">Статус:</span>
-                        {% if current_user.seller.api_sync_status == 'success' %}
-                            <span class="inline-flex items-center gap-1 text-green-600"><span class="w-1.5 h-1.5 rounded-full bg-green-500"></span> Успешно</span>
-                        {% elif current_user.seller.api_sync_status == 'syncing' %}
-                            <span class="inline-flex items-center gap-1 text-blue-600"><span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span> Выполняется...</span>
-                        {% elif current_user.seller.api_sync_status == 'error' %}
-                            <span class="inline-flex items-center gap-1 text-red-600"><span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Ошибка</span>
+                <div class="dash-nav-title">Товары</div>
+                <div class="dash-nav-desc">Карточки, синхронизация, объединение</div>
+                <span class="dash-nav-badge">{{ products_count }} карточек &rarr;</span>
+            </div>
+        </a>
+
+        <a href="{{ url_for('prices.prices_dashboard') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Цены</div>
+                <div class="dash-nav-desc">Управление ценами, формулы, мониторинг</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('supplier_catalog') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Поставщики</div>
+                <div class="dash-nav-desc">Каталог оптовиков и импорт товаров</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('analytics_page') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Аналитика</div>
+                <div class="dash-nav-desc">Продажи, финансы и отчёты</div>
+                {% if latest_filename %}
+                <span class="dash-nav-badge">{{ latest_filename }}</span>
+                {% endif %}
+            </div>
+        </a>
+    </div>
+
+    <!-- Sync & Company info -->
+    <div class="dash-section-header">
+        <span class="dash-section-title">Аккаунт</span>
+        <div class="dash-section-line"></div>
+    </div>
+
+    <div class="dash-company">
+        <div class="dash-company-grid">
+            <div class="dash-company-col">
+                <div class="dash-company-label">Компания</div>
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">Название</span>
+                    <span class="dash-company-row-val">{{ current_user.seller.company_name }}</span>
+                </div>
+                {% if current_user.seller.wb_seller_id %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">WB ID</span>
+                    <span class="dash-company-row-val">{{ current_user.seller.wb_seller_id }}</span>
+                </div>
+                {% endif %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">Email</span>
+                    <span class="dash-company-row-val">{{ current_user.email }}</span>
+                </div>
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">API</span>
+                    <span class="dash-company-row-val">
+                        {% if current_user.seller.has_valid_api_key() %}
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#10b981"></span> Подключен</span>
                         {% else %}
-                            <span class="text-gray-500">{{ current_user.seller.api_sync_status }}</span>
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#d97706"></span> Не настроен</span>
                         {% endif %}
-                    </p>
-                    {% endif %}
+                    </span>
+                </div>
+            </div>
+            <div class="dash-company-col">
+                <div class="dash-company-label">Синхронизация</div>
+                {% if current_user.seller.api_last_sync %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">Последняя</span>
+                    <span class="dash-company-row-val">{{ current_user.seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}</span>
+                </div>
+                {% endif %}
+                {% if current_user.seller.api_sync_status %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">Статус</span>
+                    <span class="dash-company-row-val">
+                        {% if current_user.seller.api_sync_status == 'success' %}
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#10b981"></span> Успешно</span>
+                        {% elif current_user.seller.api_sync_status == 'syncing' %}
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#3b82f6"></span> Выполняется</span>
+                        {% elif current_user.seller.api_sync_status == 'error' %}
+                            <span style="display:inline-flex;align-items:center;gap:5px"><span class="dash-dot" style="background:#ef4444"></span> Ошибка</span>
+                        {% else %}
+                            {{ current_user.seller.api_sync_status }}
+                        {% endif %}
+                    </span>
+                </div>
+                {% else %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key" style="color:var(--text-muted)">Ещё не выполнялась</span>
+                    <span></span>
+                </div>
+                {% endif %}
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">Товаров</span>
+                    <span class="dash-company-row-val">{{ products_count }}</span>
+                </div>
+                <div class="dash-company-row">
+                    <span class="dash-company-row-key">API запросов</span>
+                    <span class="dash-company-row-val">{{ api_logs_count }}</span>
                 </div>
             </div>
         </div>
     </div>
+
     {% else %}
-    <!-- Admin section -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
-        <svg class="absolute -right-4 -top-4 w-28 h-28 opacity-[0.04]" viewBox="0 0 100 100" fill="none"><path d="M50 10c22 0 40 18 40 40s-18 40-40 40S10 72 10 50 28 10 50 10z" stroke="currentColor" stroke-width="3"/><path d="M50 30v20l15 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-        <div class="flex items-center gap-3 mb-4">
-            <div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
-                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+    {# ── Admin Dashboard ── #}
+
+    <!-- Admin quick access -->
+    <div class="dash-section-header">
+        <span class="dash-section-title">Управление</span>
+        <div class="dash-section-line"></div>
+    </div>
+
+    <div class="dash-admin-grid">
+        <a href="{{ url_for('admin_panel') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
             </div>
             <div>
-                <h2 class="text-lg font-semibold text-gray-900">Административная панель</h2>
-                <p class="text-sm text-gray-500">Вы вошли как администратор</p>
+                <div class="dash-nav-title">Пользователи</div>
+                <div class="dash-nav-desc">Управление продавцами и доступом</div>
             </div>
-        </div>
-        <a href="{{ url_for('admin_panel') }}"
-           class="inline-flex items-center px-5 py-2.5 text-sm font-medium rounded-xl text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 transition-all shadow-sm">
-            Перейти в админ-панель
-            <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+        </a>
+
+        <a href="{{ url_for('admin_suppliers') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Поставщики</div>
+                <div class="dash-nav-desc">Каталог, парсинг, AI обработка</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('marketplaces.index') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Маркетплейсы</div>
+                <div class="dash-nav-desc">Категории, бренды, характеристики</div>
+            </div>
+        </a>
+
+        <a href="{{ url_for('admin_system_settings') }}" class="dash-nav-card">
+            <div class="dash-nav-icon">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </div>
+            <div>
+                <div class="dash-nav-title">Система</div>
+                <div class="dash-nav-desc">Настройки, логи, API debug</div>
+            </div>
         </a>
     </div>
+
     {% endif %}
 </div>
 {% endblock %}

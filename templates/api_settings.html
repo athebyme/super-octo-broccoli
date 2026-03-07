@@ -5,23 +5,10 @@
 {% block content %}
 <div class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
     <!-- Hero header -->
-    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 rounded-2xl p-6 sm:p-8">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <rect x="40" y="40" width="120" height="120" rx="16" stroke="white" stroke-width="1.5"/>
-            <circle cx="100" cy="100" r="30" stroke="white" stroke-width="1.5"/>
-            <path d="M100 80v40M80 100h40" stroke="white" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="60" cy="60" r="6" stroke="white" stroke-width="1"/>
-            <circle cx="140" cy="60" r="6" stroke="white" stroke-width="1"/>
-            <circle cx="60" cy="140" r="6" stroke="white" stroke-width="1"/>
-            <circle cx="140" cy="140" r="6" stroke="white" stroke-width="1"/>
-            <line x1="66" y1="60" x2="94" y2="74" stroke="white" stroke-width="0.8" opacity="0.5"/>
-            <line x1="134" y1="60" x2="106" y2="74" stroke="white" stroke-width="0.8" opacity="0.5"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
-        <div class="absolute bottom-4 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
+    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
         <div class="relative">
-            <h1 class="text-3xl font-bold text-white">Настройки API</h1>
-            <p class="mt-2 text-sm text-indigo-200">
+            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Настройки API</h1>
+            <p class="mt-2 text-sm text-gray-400">
                 Настройте API ключи для синхронизации данных с маркетплейсами
             </p>
         </div>
@@ -60,7 +47,7 @@
 
     <!-- Инструкция -->
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <div class="px-6 py-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-gray-100">
+        <div class="px-6 py-4 bg-gray-50 border-b border-gray-100">
             <div class="flex items-center gap-3">
                 <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center">
                     <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -132,7 +119,7 @@
 
             <div class="flex gap-3">
                 <button type="submit"
-                        class="flex-1 px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl hover:from-indigo-700 hover:to-purple-700 transition-all font-medium shadow-lg shadow-indigo-500/25">
+                        class="flex-1 px-6 py-3 bg-white text-[#1a1a1a] rounded-md hover:bg-gray-100 transition-all font-medium">
                     Сохранить и проверить
                 </button>
                 <a href="{{ url_for('dashboard') }}"
