@@ -343,8 +343,7 @@ class AnalyticsService:
             )
             db.session.add(pa)
 
-    # Макс. количество недельных чанков за один HTTP-запрос.
-    # 3 чанка ≈ 21 день, укладывается в разумный таймаут (~45с).
+    # WB API: макс. 3 запроса/мин к grouped history. Берём 3 чанка ≈ 21 день.
     MAX_DAILY_CHUNKS = 3
 
     @classmethod
@@ -358,8 +357,8 @@ class AnalyticsService:
         Получить дневную историю через grouped history API.
         Макс. за неделю, поэтому для длинных периодов разбиваем на чанки.
 
-        Для периодов > MAX_DAILY_CHUNKS недель загружаем только последние
-        MAX_DAILY_CHUNKS недель, чтобы не упасть в таймаут HTTP-запроса.
+        WB API допускает 3 запроса/мин — делаем до 3 чанков быстро (без sleep).
+        Для периодов > 21 дня загружаем только последние 21 день.
 
         Returns:
             Список [{date, orderCount, orderSum, buyoutCount, buyoutSum, openCount, cartCount}]
@@ -367,7 +366,7 @@ class AnalyticsService:
         client = cls._get_wb_client(seller)
         all_history = []
 
-        # Ограничиваем период чтобы не упасть в таймаут
+        # Ограничиваем период чтобы уложиться в 3 запроса (= лимит API/мин)
         max_days = cls.MAX_DAILY_CHUNKS * 7
         effective_start = period_start
         if (period_end - period_start).days > max_days:
@@ -376,17 +375,14 @@ class AnalyticsService:
                         f"(max {cls.MAX_DAILY_CHUNKS} chunks)")
 
         try:
-            import time as _time
-            # API ограничен неделей, разбиваем на чанки
+            # API ограничен неделей, разбиваем на чанки.
+            # До 3 чанков — без пауз (лимит 3 req/min).
             chunk_start = effective_start
             chunk_idx = 0
-            while chunk_start < period_end:
+            while chunk_start < period_end and chunk_idx < cls.MAX_DAILY_CHUNKS:
                 chunk_end = min(chunk_start + timedelta(days=6), period_end)
 
-                # Пауза между запросами (API: 3 req/min)
-                if chunk_idx > 0:
-                    _time.sleep(21)
-
+                logger.info(f"Daily data chunk {chunk_idx}: {chunk_start}..{chunk_end}")
                 result = client.get_sales_funnel_grouped_history(
                     period_start=chunk_start.isoformat(),
                     period_end=chunk_end.isoformat(),

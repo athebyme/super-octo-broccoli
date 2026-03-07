@@ -199,9 +199,14 @@
             </div>
             <template x-if="!dailyData.length && !loadingDaily">
                 <div class="absolute inset-0 flex items-center justify-center bg-white/80">
-                    <button @click="loadDailyData()" class="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm hover:bg-indigo-600 transition">
-                        Загрузить данные по дням
-                    </button>
+                    <div class="text-center">
+                        <template x-if="dailyError">
+                            <p class="text-sm text-red-500 mb-3" x-text="dailyError"></p>
+                        </template>
+                        <button @click="loadDailyData()" class="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm hover:bg-indigo-600 transition">
+                            <span x-text="dailyError ? 'Попробовать снова' : 'Загрузить данные по дням'"></span>
+                        </button>
+                    </div>
                 </div>
             </template>
             <template x-if="loadingDaily">
@@ -448,16 +453,31 @@ function analyticsPage() {
             }
         },
 
+        dailyError: null,
+
         async loadDailyData() {
             this.loadingDaily = true;
+            this.dailyError = null;
             try {
-                const resp = await fetch(`/api/analytics/daily?period=${this.period}`);
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 120000);
+                const resp = await fetch(`/api/analytics/daily?period=${this.period}`, { signal: controller.signal });
+                clearTimeout(timeout);
                 const json = await resp.json();
-                if (resp.ok && json.data) {
+                if (!resp.ok) {
+                    this.dailyError = json.error || 'Ошибка загрузки';
+                } else if (json.data && json.data.length) {
                     this.dailyData = json.data;
                     this.$nextTick(() => this.initSalesChart());
+                } else {
+                    this.dailyError = 'Нет данных за выбранный период';
                 }
             } catch (e) {
+                if (e.name === 'AbortError') {
+                    this.dailyError = 'Превышено время ожидания. Попробуйте позже.';
+                } else {
+                    this.dailyError = 'Ошибка загрузки данных';
+                }
                 console.error('Error loading daily data:', e);
             } finally {
                 this.loadingDaily = false;
