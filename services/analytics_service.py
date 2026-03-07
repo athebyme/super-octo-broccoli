@@ -207,10 +207,10 @@ class AnalyticsService:
         total_cart = 0
         top_products = []
 
-        # Динамика
-        revenue_dynamics = None
-        orders_dynamics = None
-        buyouts_dynamics = None
+        # Прошлый период — для расчёта динамики из агрегатов
+        past_revenue = 0
+        past_orders = 0
+        past_buyouts = 0
 
         for item in products:
             product_info = item.get('product', {})
@@ -236,6 +236,11 @@ class AnalyticsService:
             total_open += open_count
             total_cart += cart_count
 
+            # Суммируем абсолютные значения прошлого периода из comparison
+            past_revenue += (comparison.get('orderSum', 0) or 0)
+            past_orders += (comparison.get('orderCount', 0) or 0)
+            past_buyouts += (comparison.get('buyoutCount', 0) or 0)
+
             # Собираем топ товаров (первые 10)
             if len(top_products) < 10:
                 top_products.append({
@@ -248,24 +253,19 @@ class AnalyticsService:
                     'buyoutSum': buyout_sum,
                 })
 
-        # Динамика — агрегируем из comparison всех продуктов
-        # v3 API использует поля: orderSumDynamic, orderCountDynamic, buyoutCountDynamic
-        if products:
-            first_comparison = products[0].get('statistic', {}).get('comparison', {})
-            # Пробуем v3 поля, затем v2 как fallback
-            revenue_dynamics = (
-                first_comparison.get('orderSumDynamic')
-                or first_comparison.get('ordersSumRubDynamics')
-            )
-            orders_dynamics = (
-                first_comparison.get('orderCountDynamic')
-                or first_comparison.get('ordersCountDynamics')
-            )
-            buyouts_dynamics = (
-                first_comparison.get('buyoutCountDynamic')
-                or first_comparison.get('buyoutsCountDynamics')
-            )
-            logger.debug(f"Comparison fields: {list(first_comparison.keys())}")
+        # Динамика — считаем из агрегированных сумм текущего и прошлого периодов
+        def _calc_dynamics_pct(current, past):
+            if past == 0:
+                return 100.0 if current > 0 else 0.0
+            return round((current - past) / past * 100, 1)
+
+        revenue_dynamics = _calc_dynamics_pct(total_revenue, past_revenue)
+        orders_dynamics = _calc_dynamics_pct(total_orders, past_orders)
+        buyouts_dynamics = _calc_dynamics_pct(total_buyouts, past_buyouts)
+
+        logger.info(f"Dynamics computed from totals: revenue={total_revenue}/{past_revenue}={revenue_dynamics}%, "
+                     f"orders={total_orders}/{past_orders}={orders_dynamics}%, "
+                     f"buyouts={total_buyouts}/{past_buyouts}={buyouts_dynamics}%")
 
         # Конверсии (средние)
         avg_cart_pct = (total_cart / total_open * 100) if total_open else 0
@@ -343,6 +343,10 @@ class AnalyticsService:
             )
             db.session.add(pa)
 
+    # Макс. количество недельных чанков за один HTTP-запрос.
+    # 3 чанка ≈ 21 день, укладывается в разумный таймаут (~45с).
+    MAX_DAILY_CHUNKS = 3
+
     @classmethod
     def fetch_daily_data(
         cls,
@@ -354,17 +358,34 @@ class AnalyticsService:
         Получить дневную историю через grouped history API.
         Макс. за неделю, поэтому для длинных периодов разбиваем на чанки.
 
+        Для периодов > MAX_DAILY_CHUNKS недель загружаем только последние
+        MAX_DAILY_CHUNKS недель, чтобы не упасть в таймаут HTTP-запроса.
+
         Returns:
             Список [{date, orderCount, orderSum, buyoutCount, buyoutSum, openCount, cartCount}]
         """
         client = cls._get_wb_client(seller)
         all_history = []
 
+        # Ограничиваем период чтобы не упасть в таймаут
+        max_days = cls.MAX_DAILY_CHUNKS * 7
+        effective_start = period_start
+        if (period_end - period_start).days > max_days:
+            effective_start = period_end - timedelta(days=max_days)
+            logger.info(f"Daily data: trimming period from {period_start} to {effective_start}..{period_end} "
+                        f"(max {cls.MAX_DAILY_CHUNKS} chunks)")
+
         try:
+            import time as _time
             # API ограничен неделей, разбиваем на чанки
-            chunk_start = period_start
+            chunk_start = effective_start
+            chunk_idx = 0
             while chunk_start < period_end:
                 chunk_end = min(chunk_start + timedelta(days=6), period_end)
+
+                # Пауза между запросами (API: 3 req/min)
+                if chunk_idx > 0:
+                    _time.sleep(21)
 
                 result = client.get_sales_funnel_grouped_history(
                     period_start=chunk_start.isoformat(),
@@ -388,9 +409,7 @@ class AnalyticsService:
                         })
 
                 chunk_start = chunk_end + timedelta(days=1)
-                if chunk_start < period_end:
-                    import time
-                    time.sleep(20)  # Лимит API
+                chunk_idx += 1
 
             # Агрегируем по дате если несколько групп
             daily_map = {}
@@ -430,7 +449,16 @@ class AnalyticsService:
         ).order_by(AnalyticsSnapshot.created_at.desc()).first()
 
         if not snapshot:
-            return None
+            # Снимка ещё нет — сначала загружаем основные данные
+            logger.info(f"No snapshot found for daily data, fetching summary first")
+            cls.fetch_and_cache_snapshot(seller=seller, period_code=period_code)
+            snapshot = AnalyticsSnapshot.query.filter(
+                AnalyticsSnapshot.seller_id == seller.id,
+                AnalyticsSnapshot.period_start == period_start,
+                AnalyticsSnapshot.period_end == period_end,
+            ).order_by(AnalyticsSnapshot.created_at.desc()).first()
+            if not snapshot:
+                return None
 
         daily = cls.fetch_daily_data(seller, period_start, period_end)
         if daily:
