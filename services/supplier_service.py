@@ -2529,7 +2529,7 @@ class SupplierService:
             AIParseJob.status.in_(['pending', 'running'])
         ).order_by(AIParseJob.created_at.desc()).all()
 
-        return [SupplierService.get_ai_parse_job(j.id) for j in jobs]
+        return [r for r in (SupplierService.get_ai_parse_job(j.id) for j in jobs) if r]
 
     @staticmethod
     def get_recent_ai_parse_jobs(supplier_id: int, limit: int = 10) -> List[dict]:
@@ -2539,7 +2539,7 @@ class SupplierService:
         jobs = AIParseJob.query.filter_by(supplier_id=supplier_id)\
             .order_by(AIParseJob.created_at.desc()).limit(limit).all()
 
-        return [SupplierService.get_ai_parse_job(j.id) for j in jobs]
+        return [r for r in (SupplierService.get_ai_parse_job(j.id) for j in jobs) if r]
 
     @staticmethod
     def get_product_raw_json(product_id: int) -> dict:

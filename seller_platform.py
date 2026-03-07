@@ -22,7 +22,16 @@ from models import (
     PricingSettings, AutoImportSettings,
     Supplier, SupplierProduct, SellerSupplier,
     Marketplace, MarketplaceDirectory, ImportedProduct,
-    log_admin_action, log_user_activity
+    log_admin_action, log_user_activity,
+    AIParseJob, EnrichmentJob, AIHistory,
+    BlockedCard, ShadowedCard, BlockedCardsSyncSettings,
+    MarketplaceCategory, MarketplaceCategoryCharacteristic,
+    MarketplaceConnection, MarketplaceSyncJob,
+    ParsingLog, Brand, BrandAlias, MarketplaceBrand,
+    BrandCategoryLink, ProhibitedWord,
+    AnalyticsSnapshot, ProductAnalytics, FinanceSnapshot,
+    CategoryMapping, ProductCategoryCorrection,
+    CardMergeHistory, SellerReport,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
