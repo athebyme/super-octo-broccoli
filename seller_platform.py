@@ -5768,6 +5768,10 @@ register_prohibited_words_routes(app)
 from routes.analytics import register_analytics_routes
 register_analytics_routes(app)
 
+# ============= РОУТЫ ФИНАНСОВ =============
+from routes.finances import register_finance_routes
+register_finance_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5902,10 +5906,42 @@ def _run_startup_migrations():
                 db.session.rollback()
                 logger.warning(f"Could not create {tbl_name} table: {e}")
 
-    # Индексы для таблиц аналитики
+    # Создаём таблицу finance_snapshots если её нет
+    if 'finance_snapshots' not in insp.get_table_names():
+        try:
+            db.session.execute(db.text('''
+                CREATE TABLE finance_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    period_start DATE NOT NULL,
+                    period_end DATE NOT NULL,
+                    sales_total FLOAT DEFAULT 0,
+                    for_pay_total FLOAT DEFAULT 0,
+                    returns_total FLOAT DEFAULT 0,
+                    commission_total FLOAT DEFAULT 0,
+                    logistics_total FLOAT DEFAULT 0,
+                    storage_total FLOAT DEFAULT 0,
+                    penalties_total FLOAT DEFAULT 0,
+                    deductions_total FLOAT DEFAULT 0,
+                    acceptance_total FLOAT DEFAULT 0,
+                    additional_payment_total FLOAT DEFAULT 0,
+                    weekly_data JSON,
+                    recent_transactions JSON,
+                    report_rows_count INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            '''))
+            db.session.commit()
+            logger.info("Created table 'finance_snapshots'")
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"Could not create finance_snapshots table: {e}")
+
+    # Индексы для таблиц аналитики и финансов
     analytics_indexes = [
         ('idx_analytics_snapshot_seller_period', 'analytics_snapshots', 'seller_id, period_start, period_end'),
         ('idx_product_analytics_seller_nm', 'product_analytics', 'seller_id, nm_id, period_start'),
+        ('idx_finance_snapshot_seller_period', 'finance_snapshots', 'seller_id, period_start, period_end'),
     ]
     for idx_name, table, columns in analytics_indexes:
         if table in insp.get_table_names():
@@ -5918,14 +5954,7 @@ def _run_startup_migrations():
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============
 
-# Роут /analytics зарегистрирован в routes/analytics.py
-
-
-@app.route('/finances')
-@login_required
-def finances_page():
-    """Финансовый обзор: доходы, расходы, баланс"""
-    return render_template('finances.html')
+# Роуты /analytics и /finances зарегистрированы в routes/
 
 
 @app.route('/profile', methods=['GET', 'POST'])

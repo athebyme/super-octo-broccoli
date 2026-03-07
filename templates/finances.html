@@ -10,44 +10,64 @@
         <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
                 <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Финансы</h1>
-                <p class="mt-1 text-sm text-gray-400">Доходы, расходы и баланс по всем маркетплейсам</p>
+                <p class="mt-1 text-sm text-gray-400">Доходы, расходы и баланс Wildberries</p>
             </div>
             <div class="flex items-center gap-3">
+                <button @click="refreshData()" :disabled="loading"
+                    class="px-3 py-1.5 text-sm rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20 transition-all disabled:opacity-50">
+                    <svg class="w-4 h-4 inline-block mr-1" :class="loading && 'animate-spin'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    Обновить
+                </button>
                 <div class="inline-flex rounded-md bg-white/10 p-1">
                     <template x-for="p in periods" :key="p.value">
-                        <button @click="period = p.value"
+                        <button @click="changePeriod(p.value)"
                             :class="period === p.value ? 'bg-white shadow-sm text-[#1a1a1a] font-semibold' : 'text-white/80 hover:text-white hover:bg-white/10'"
                             class="px-3 py-1.5 text-sm rounded-md transition-all" x-text="p.label"></button>
                     </template>
                 </div>
-                <button class="inline-flex items-center gap-2 px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 text-sm font-medium transition-colors">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    Экспорт
-                </button>
             </div>
         </div>
     </div>
 
+    <!-- Loading -->
+    <template x-if="loading && !hasData">
+        <div class="flex items-center justify-center py-20">
+            <div class="text-center">
+                <svg class="animate-spin h-10 w-10 text-indigo-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <p class="text-gray-500">Загрузка финансов...</p>
+                <p class="text-xs text-gray-400 mt-1">Отчёт может загружаться до минуты</p>
+            </div>
+        </div>
+    </template>
+
+    <!-- Error -->
+    <template x-if="error && !hasData">
+        <div class="bg-red-50 border border-red-200 rounded-xl p-6 mb-8">
+            <p class="text-red-700" x-text="error"></p>
+            <button @click="loadData()" class="mt-3 text-sm text-red-600 underline">Попробовать снова</button>
+        </div>
+    </template>
+
+    <template x-if="hasData || !loading">
+    <div>
     <!-- Balance Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <!-- Total Balance -->
         <div class="relative overflow-hidden rounded-2xl p-6 bg-gradient-to-br from-indigo-600 via-indigo-700 to-purple-700 text-white shadow-lg">
             <div class="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full -translate-y-1/2 translate-x-1/2"></div>
             <div class="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full translate-y-1/2 -translate-x-1/2"></div>
-            <!-- Decorative coin SVG -->
-            <svg class="absolute right-4 bottom-4 w-20 h-20 opacity-10" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg class="absolute right-4 bottom-4 w-20 h-20 opacity-10" viewBox="0 0 80 80" fill="none">
                 <circle cx="40" cy="40" r="36" stroke="white" stroke-width="3"/>
                 <circle cx="40" cy="40" r="28" stroke="white" stroke-width="1.5"/>
                 <text x="40" y="48" text-anchor="middle" fill="white" font-size="28" font-weight="bold">₽</text>
             </svg>
-            <p class="text-indigo-200 text-sm font-medium mb-2">Общий баланс</p>
+            <p class="text-indigo-200 text-sm font-medium mb-2">Баланс (к перечислению − расходы)</p>
             <p class="text-3xl font-bold mb-3" x-text="formatMoney(balance.total)"></p>
-            <div class="flex items-center gap-2 text-sm">
-                <span class="inline-flex items-center gap-1 bg-white/20 backdrop-blur-sm rounded-full px-2 py-0.5">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                    +15.2%
-                </span>
-                <span class="text-indigo-200">vs прошлый период</span>
+            <div class="text-sm text-indigo-200">
+                <span x-text="'Строк в отчёте: ' + reportRowsCount.toLocaleString('ru-RU')"></span>
             </div>
         </div>
 
@@ -58,13 +78,14 @@
                 <div class="w-10 h-10 bg-gradient-to-br from-emerald-400 to-green-500 rounded-xl flex items-center justify-center">
                     <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/></svg>
                 </div>
-                <p class="text-sm text-gray-500 font-medium">Доход</p>
+                <p class="text-sm text-gray-500 font-medium">К перечислению</p>
             </div>
             <p class="text-2xl font-bold text-gray-900 mb-2" x-text="formatMoney(balance.income)"></p>
-            <span class="inline-flex items-center gap-1 text-xs font-medium text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                +18.4% vs прошлый период
-            </span>
+            <template x-if="breakdown.returnsTotal > 0">
+                <span class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                    Возвраты: <span x-text="formatMoney(breakdown.returnsTotal)"></span>
+                </span>
+            </template>
         </div>
 
         <!-- Expenses -->
@@ -77,27 +98,29 @@
                 <p class="text-sm text-gray-500 font-medium">Расходы</p>
             </div>
             <p class="text-2xl font-bold text-gray-900 mb-2" x-text="formatMoney(balance.expenses)"></p>
-            <span class="inline-flex items-center gap-1 text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                +5.7% vs прошлый период
-            </span>
+            <span class="text-xs text-gray-400">Комиссия + Логистика + Хранение + Штрафы</span>
         </div>
     </div>
 
     <!-- Charts row -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        <!-- Revenue/Expenses chart -->
+        <!-- Weekly income/expenses chart -->
         <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <div class="flex items-center justify-between mb-6">
-                <h2 class="text-lg font-semibold text-gray-900">Доходы и расходы</h2>
+                <h2 class="text-lg font-semibold text-gray-900">Доходы и расходы по неделям</h2>
                 <div class="flex items-center gap-4 text-xs">
-                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-emerald-400"></span> Доход</span>
-                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-400"></span> Расход</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-emerald-400"></span> К перечислению</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-400"></span> Расходы</span>
                 </div>
             </div>
             <div class="h-72">
                 <canvas x-ref="revenueChart"></canvas>
             </div>
+            <template x-if="!weeklyData.length">
+                <div class="absolute inset-0 flex items-center justify-center bg-white/80 rounded-2xl">
+                    <p class="text-gray-400 text-sm">Нет данных за выбранный период</p>
+                </div>
+            </template>
         </div>
 
         <!-- Expense breakdown donut -->
@@ -119,40 +142,52 @@
                         </div>
                     </div>
                 </template>
+                <template x-if="!expenseBreakdown.length">
+                    <p class="text-sm text-gray-400 text-center py-4">Нет данных</p>
+                </template>
             </div>
         </div>
     </div>
 
-    <!-- Marketplace Breakdown -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8 relative overflow-hidden">
-        <svg class="absolute -right-4 -top-4 w-28 h-28 opacity-[0.04]" viewBox="0 0 100 100" fill="none"><rect x="10" y="50" width="16" height="40" rx="3" fill="currentColor"/><rect x="32" y="30" width="16" height="60" rx="3" fill="currentColor"/><rect x="54" y="40" width="16" height="50" rx="3" fill="currentColor"/><rect x="76" y="15" width="16" height="75" rx="3" fill="currentColor"/></svg>
+    <!-- Detailed breakdown -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-8">
         <div class="flex items-center gap-3 mb-6">
             <div class="w-8 h-8 bg-gradient-to-br from-violet-400 to-purple-500 rounded-lg flex items-center justify-center">
-                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
             </div>
-            <h2 class="text-lg font-semibold text-gray-900">Доход по маркетплейсам</h2>
+            <h2 class="text-lg font-semibold text-gray-900">Детализация</h2>
         </div>
-        <div class="h-64">
-            <canvas x-ref="mpBarChart"></canvas>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div class="bg-gray-50 rounded-xl p-4">
+                <p class="text-xs text-gray-500 mb-1">Выручка (продажи)</p>
+                <p class="text-lg font-bold text-gray-900" x-text="formatMoney(breakdown.salesTotal)"></p>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-4">
+                <p class="text-xs text-gray-500 mb-1">Комиссия WB</p>
+                <p class="text-lg font-bold text-red-600" x-text="formatMoney(breakdown.commission)"></p>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-4">
+                <p class="text-xs text-gray-500 mb-1">Логистика</p>
+                <p class="text-lg font-bold text-red-600" x-text="formatMoney(breakdown.logistics)"></p>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-4">
+                <p class="text-xs text-gray-500 mb-1">Хранение</p>
+                <p class="text-lg font-bold text-red-600" x-text="formatMoney(breakdown.storage)"></p>
+            </div>
+            <div class="bg-gray-50 rounded-xl p-4">
+                <p class="text-xs text-gray-500 mb-1">Штрафы / Удержания</p>
+                <p class="text-lg font-bold text-red-600" x-text="formatMoney(breakdown.penalties + breakdown.deductions)"></p>
+            </div>
         </div>
     </div>
 
     <!-- Transactions Table -->
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <div class="flex items-center gap-3">
-                <div class="w-8 h-8 bg-gradient-to-br from-indigo-400 to-blue-500 rounded-lg flex items-center justify-center">
-                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
-                </div>
-                <h2 class="text-lg font-semibold text-gray-900">Последние транзакции</h2>
+        <div class="flex items-center gap-3 mb-6">
+            <div class="w-8 h-8 bg-gradient-to-br from-indigo-400 to-blue-500 rounded-lg flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
             </div>
-            <div class="flex items-center gap-2">
-                <template x-for="f in filters" :key="f.value">
-                    <button @click="activeFilter = f.value"
-                        :class="activeFilter === f.value ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'"
-                        class="px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors" x-text="f.label"></button>
-                </template>
-            </div>
+            <h2 class="text-lg font-semibold text-gray-900">Отчёты реализации</h2>
         </div>
         <div class="overflow-x-auto">
             <table class="w-full text-sm">
@@ -160,8 +195,8 @@
                     <tr class="text-left text-gray-500 border-b border-gray-100">
                         <th class="pb-3 font-medium">Описание</th>
                         <th class="pb-3 font-medium">МП</th>
-                        <th class="pb-3 font-medium">Тип</th>
                         <th class="pb-3 font-medium text-right">Сумма</th>
+                        <th class="pb-3 font-medium text-right">Строк</th>
                         <th class="pb-3 font-medium text-right">Дата</th>
                     </tr>
                 </thead>
@@ -172,26 +207,32 @@
                                 <p class="font-medium text-gray-800" x-text="tx.description"></p>
                             </td>
                             <td class="py-3.5">
-                                <span class="text-xs px-2 py-0.5 rounded-full font-medium"
-                                    :class="tx.mp === 'WB' ? 'bg-pink-50 text-pink-700' : tx.mp === 'Ozon' ? 'bg-blue-50 text-blue-700' : 'bg-yellow-50 text-yellow-700'"
-                                    x-text="tx.mp"></span>
-                            </td>
-                            <td class="py-3.5">
-                                <span class="text-xs px-2 py-0.5 rounded-full font-medium"
-                                    :class="tx.type === 'income' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'"
-                                    x-text="tx.type === 'income' ? 'Доход' : 'Расход'"></span>
+                                <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-pink-50 text-pink-700" x-text="tx.mp"></span>
                             </td>
                             <td class="py-3.5 text-right">
                                 <span class="font-medium" :class="tx.type === 'income' ? 'text-green-600' : 'text-red-600'"
-                                    x-text="(tx.type === 'income' ? '+' : '-') + formatMoney(tx.amount)"></span>
+                                    x-text="(tx.type === 'income' ? '+' : '−') + formatMoney(tx.amount)"></span>
                             </td>
+                            <td class="py-3.5 text-right text-gray-400" x-text="tx.rows"></td>
                             <td class="py-3.5 text-right text-gray-500" x-text="tx.date"></td>
                         </tr>
+                    </template>
+                    <template x-if="!transactions.length">
+                        <tr><td colspan="5" class="py-6 text-center text-gray-400">Нет данных за выбранный период</td></tr>
                     </template>
                 </tbody>
             </table>
         </div>
     </div>
+
+    <!-- Data age -->
+    <template x-if="dataAge">
+        <div class="mt-6 text-center text-xs text-gray-400">
+            <span x-text="'Данные обновлены: ' + dataAge"></span>
+        </div>
+    </template>
+    </div>
+    </template>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -199,92 +240,175 @@
 function financesPage() {
     return {
         period: '30d',
-        activeFilter: 'all',
+        loading: false,
+        error: null,
+        hasData: false,
+        dataAge: null,
+        reportRowsCount: 0,
         periods: [
             { label: '7д', value: '7d' },
             { label: '30д', value: '30d' },
             { label: '90д', value: '90d' },
             { label: 'Год', value: '1y' },
         ],
-        filters: [
-            { label: 'Все', value: 'all' },
-            { label: 'Доходы', value: 'income' },
-            { label: 'Расходы', value: 'expense' },
-        ],
-        balance: {
-            total: 1847500,
-            income: 3250000,
-            expenses: 1402500,
+        balance: { total: 0, income: 0, expenses: 0 },
+        breakdown: {
+            salesTotal: 0, forPayTotal: 0, returnsTotal: 0,
+            commission: 0, logistics: 0, storage: 0,
+            penalties: 0, deductions: 0, acceptance: 0,
+            additionalPayment: 0,
         },
-        expenseBreakdown: [
-            { name: 'Комиссия МП', amount: 520000, percent: 37, color: '#6366f1' },
-            { name: 'Логистика', amount: 380000, percent: 27, color: '#f59e0b' },
-            { name: 'Хранение', amount: 245000, percent: 17, color: '#10b981' },
-            { name: 'Реклама', amount: 167500, percent: 12, color: '#ef4444' },
-            { name: 'Штрафы / Прочее', amount: 90000, percent: 7, color: '#8b5cf6' },
-        ],
-        transactions: [
-            { description: 'Оплата реализации — неделя 8', mp: 'WB', type: 'income', amount: 485000, date: '02.03.2026' },
-            { description: 'Комиссия за продажи', mp: 'WB', type: 'expense', amount: 72750, date: '02.03.2026' },
-            { description: 'Оплата реализации', mp: 'Ozon', type: 'income', amount: 312000, date: '01.03.2026' },
-            { description: 'Логистика — доставка', mp: 'Ozon', type: 'expense', amount: 48600, date: '01.03.2026' },
-            { description: 'Оплата реализации', mp: 'YM', type: 'income', amount: 178000, date: '28.02.2026' },
-            { description: 'Услуги хранения', mp: 'WB', type: 'expense', amount: 35200, date: '28.02.2026' },
-            { description: 'Рекламная кампания', mp: 'Ozon', type: 'expense', amount: 25000, date: '27.02.2026' },
-            { description: 'Возврат товара покупателю', mp: 'WB', type: 'expense', amount: 4980, date: '27.02.2026' },
-        ],
+        weeklyData: [],
+        transactions: [],
+        expenseBreakdown: [],
+        revenueChart: null,
+        expenseDonutChart: null,
 
         formatMoney(val) {
-            return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
+            return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val || 0);
         },
 
         init() {
+            this.loadData();
+        },
+
+        changePeriod(p) {
+            if (this.period === p) return;
+            this.period = p;
+            this.loadData();
+        },
+
+        async loadData() {
+            this.loading = true;
+            this.error = null;
+            try {
+                const resp = await fetch(`/api/finances/summary?period=${this.period}`);
+                const json = await resp.json();
+                if (!resp.ok) throw new Error(json.error || 'Ошибка загрузки');
+                this.applyData(json.data);
+                this.hasData = true;
+            } catch (e) {
+                this.error = e.message;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async refreshData() {
+            this.loading = true;
+            this.error = null;
+            try {
+                const resp = await fetch('/api/finances/refresh', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ period: this.period }),
+                });
+                const json = await resp.json();
+                if (!resp.ok) throw new Error(json.error || 'Ошибка обновления');
+                this.applyData(json.data);
+                this.hasData = true;
+            } catch (e) {
+                this.error = e.message;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        applyData(data) {
+            if (!data) return;
+            this.balance = data.balance || { total: 0, income: 0, expenses: 0 };
+            this.breakdown = data.breakdown || {};
+            this.weeklyData = data.weeklyData || [];
+            this.transactions = data.recentTransactions || [];
+            this.reportRowsCount = data.reportRowsCount || 0;
+
+            if (data.created_at) {
+                this.dataAge = new Date(data.created_at).toLocaleString('ru-RU');
+            }
+
+            // Build expense breakdown for donut
+            const b = this.breakdown;
+            const items = [
+                { name: 'Комиссия WB', amount: b.commission || 0, color: '#6366f1' },
+                { name: 'Логистика', amount: b.logistics || 0, color: '#f59e0b' },
+                { name: 'Хранение', amount: b.storage || 0, color: '#10b981' },
+                { name: 'Штрафы', amount: b.penalties || 0, color: '#ef4444' },
+                { name: 'Удержания', amount: b.deductions || 0, color: '#8b5cf6' },
+                { name: 'Приёмка', amount: b.acceptance || 0, color: '#f97316' },
+            ].filter(i => i.amount > 0);
+
+            const expTotal = items.reduce((s, i) => s + i.amount, 0);
+            this.expenseBreakdown = items.map(i => ({
+                ...i,
+                percent: expTotal ? Math.round(i.amount / expTotal * 100) : 0,
+            }));
+
             this.$nextTick(() => {
                 this.initRevenueChart();
                 this.initExpenseDonut();
-                this.initMpBarChart();
             });
         },
 
         initRevenueChart() {
-            const labels = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
-            new Chart(this.$refs.revenueChart, {
+            if (!this.$refs.revenueChart || !this.weeklyData.length) return;
+            if (this.revenueChart) this.revenueChart.destroy();
+
+            const labels = this.weeklyData.map(w => {
+                const dt = new Date(w.week);
+                return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+            });
+
+            const expensesData = this.weeklyData.map(w =>
+                (w.commission || 0) + (w.logistics || 0) + (w.storage || 0) + (w.penalties || 0)
+            );
+
+            this.revenueChart = new Chart(this.$refs.revenueChart, {
                 type: 'line',
                 data: {
                     labels,
                     datasets: [
                         {
-                            label: 'Доход',
-                            data: [1800, 2200, 2100, 2500, 2800, 3100, 2900, 3300, 3500, 3250, 3600, 3900].map(v => v * 1000),
+                            label: 'К перечислению',
+                            data: this.weeklyData.map(w => w.forPay),
                             borderColor: '#34d399',
                             backgroundColor: 'rgba(52,211,153,0.1)',
                             fill: true, tension: 0.4, borderWidth: 2.5,
-                            pointBackgroundColor: '#34d399', pointRadius: 0, pointHoverRadius: 6,
+                            pointBackgroundColor: '#34d399', pointRadius: 3, pointHoverRadius: 6,
                         },
                         {
-                            label: 'Расход',
-                            data: [900, 1100, 1050, 1250, 1350, 1500, 1400, 1550, 1680, 1600, 1720, 1850].map(v => v * 1000),
+                            label: 'Расходы',
+                            data: expensesData,
                             borderColor: '#fb7185',
                             backgroundColor: 'rgba(251,113,133,0.08)',
                             fill: true, tension: 0.4, borderWidth: 2.5,
-                            pointBackgroundColor: '#fb7185', pointRadius: 0, pointHoverRadius: 6,
+                            pointBackgroundColor: '#fb7185', pointRadius: 3, pointHoverRadius: 6,
                         },
                     ]
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     interaction: { mode: 'index', intersect: false },
-                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 } },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 },
+                    },
                     scales: {
                         x: { grid: { display: false }, ticks: { color: '#9ca3af' } },
-                        y: { grid: { color: '#f3f4f6' }, ticks: { color: '#9ca3af', callback: v => (v/1000000).toFixed(1) + 'M' } },
+                        y: { grid: { color: '#f3f4f6' }, ticks: { color: '#9ca3af', callback: v => {
+                            if (Math.abs(v) >= 1000000) return (v/1000000).toFixed(1) + 'M';
+                            if (Math.abs(v) >= 1000) return (v/1000).toFixed(0) + 'k';
+                            return v;
+                        }}},
                     }
                 }
             });
         },
 
         initExpenseDonut() {
-            new Chart(this.$refs.expenseDonut, {
+            if (!this.$refs.expenseDonut || !this.expenseBreakdown.length) return;
+            if (this.expenseDonutChart) this.expenseDonutChart.destroy();
+
+            this.expenseDonutChart = new Chart(this.$refs.expenseDonut, {
                 type: 'doughnut',
                 data: {
                     labels: this.expenseBreakdown.map(e => e.name),
@@ -297,31 +421,9 @@ function financesPage() {
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     cutout: '72%',
-                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 } }
-                }
-            });
-        },
-
-        initMpBarChart() {
-            new Chart(this.$refs.mpBarChart, {
-                type: 'bar',
-                data: {
-                    labels: ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн'],
-                    datasets: [
-                        { label: 'Wildberries', data: [850, 920, 980, 1100, 1250, 1380].map(v => v*1000), backgroundColor: '#CB11AB', borderRadius: 6 },
-                        { label: 'Ozon', data: [620, 680, 710, 800, 920, 1050].map(v => v*1000), backgroundColor: '#005BFF', borderRadius: 6 },
-                        { label: 'Яндекс Маркет', data: [280, 310, 340, 400, 450, 520].map(v => v*1000), backgroundColor: '#FFCC00', borderRadius: 6 },
-                    ]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
                     plugins: {
-                        legend: { position: 'top', labels: { usePointStyle: true, pointStyle: 'circle', padding: 20 } },
+                        legend: { display: false },
                         tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 },
-                    },
-                    scales: {
-                        x: { grid: { display: false }, stacked: true, ticks: { color: '#9ca3af' } },
-                        y: { grid: { color: '#f3f4f6' }, stacked: true, ticks: { color: '#9ca3af', callback: v => (v/1000000).toFixed(1) + 'M' } },
                     }
                 }
             });
