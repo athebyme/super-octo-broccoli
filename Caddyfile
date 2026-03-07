@@ -1,0 +1,7 @@
+{$DOMAIN:localhost} {
+    reverse_proxy seller-platform:{$SELLER_PORT:5001} {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
+}

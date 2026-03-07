@@ -96,18 +96,91 @@
 
             <!-- Pricing -->
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-4 p-4">
-                <h3 class="text-xs font-medium text-gray-500 uppercase mb-3">Цены</h3>
+                <h3 class="text-xs font-medium text-gray-500 uppercase mb-3">Ценообразование</h3>
                 <div class="space-y-2">
+                    <!-- Закупочная -->
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">Закупочная</span>
+                        <span class="text-gray-500">Закупочная (P)</span>
                         <span class="font-medium">{{ '%.0f' | format(preview.pricing.supplier_price) if preview.pricing.supplier_price else '—' }} &#8381;</span>
                     </div>
-                    {% if preview.pricing.calculated_price %}
+
+                    {% if preview.pricing.final_price %}
+                    <!-- Разделитель -->
+                    <div class="border-t border-gray-100 my-1"></div>
+
+                    <!-- Формула -->
+                    {% if preview.pricing.formula_applied %}
+                    <p class="text-xs text-green-600 font-medium">Формула продавца применена</p>
+                    {% else %}
+                    <p class="text-xs text-yellow-600 font-medium">Формула не настроена, ранее рассчитанные</p>
+                    {% endif %}
+
+                    {% if preview.pricing.profit_q %}
                     <div class="flex justify-between text-sm">
-                        <span class="text-gray-500">Расчётная</span>
-                        <span class="font-bold text-green-600">{{ '%.0f' | format(preview.pricing.calculated_price) }} &#8381;</span>
+                        <span class="text-gray-500">Прибыль (Q)</span>
+                        <span class="font-medium text-gray-700">{{ '%.0f' | format(preview.pricing.profit_q) }} &#8381;
+                            {% if preview.pricing.profit_pct_d %}<span class="text-xs text-gray-400">({{ preview.pricing.profit_pct_d }}%)</span>{% endif %}
+                        </span>
                     </div>
                     {% endif %}
+
+                    {% if preview.pricing.delivery_s %}
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Доставка (S)</span>
+                        <span class="font-medium text-gray-700">{{ '%.0f' | format(preview.pricing.delivery_s) }} &#8381;</span>
+                    </div>
+                    {% endif %}
+
+                    <!-- Итоговая цена Z -->
+                    <div class="flex justify-between text-sm bg-green-50 rounded-lg px-2 py-1.5 -mx-2">
+                        <span class="text-green-800 font-medium">Итоговая цена (Z)</span>
+                        <span class="font-bold text-green-700 text-base">{{ '%.0f' | format(preview.pricing.final_price) }} &#8381;</span>
+                    </div>
+
+                    {% if preview.pricing.discount_price %}
+                    <!-- Цена с SPP -->
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Цена с SPP (X)</span>
+                        <span class="font-medium text-blue-600">{{ '%.0f' | format(preview.pricing.discount_price) }} &#8381;</span>
+                    </div>
+                    {% endif %}
+
+                    <!-- Разделитель -->
+                    <div class="border-t border-gray-100 my-1"></div>
+
+                    <!-- Цена до скидки Y -->
+                    {% if preview.pricing.price_before_discount %}
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Цена до скидки (Y)</span>
+                        <span class="font-medium text-gray-700">{{ '%.0f' | format(preview.pricing.price_before_discount) }} &#8381;</span>
+                    </div>
+                    {% endif %}
+
+                    {% if preview.pricing.discount_pct is defined %}
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-500">Скидка WB</span>
+                        <span class="font-bold text-red-500">-{{ preview.pricing.discount_pct }}%</span>
+                    </div>
+                    {% endif %}
+
+                    {% if preview.pricing.wb_commission %}
+                    <div class="flex justify-between text-xs text-gray-400">
+                        <span>Комиссия WB</span>
+                        <span>{{ '%.0f' | format(preview.pricing.wb_commission) }}%</span>
+                    </div>
+                    {% endif %}
+
+                    {% else %}
+                    <!-- Нет рассчитанной цены -->
+                    <div class="text-xs text-gray-400 mt-1">
+                        Цена не рассчитана. Настройте формулу ценообразования.
+                    </div>
+                    {% endif %}
+
+                    <!-- Разделитель -->
+                    <div class="border-t border-gray-100 my-1"></div>
+
+                    <!-- Остаток -->
                     <div class="flex justify-between text-sm">
                         <span class="text-gray-500">Остаток</span>
                         <span class="font-medium {{ 'text-green-600' if preview.pricing.supplier_quantity and preview.pricing.supplier_quantity > 0 else 'text-red-500' }}">

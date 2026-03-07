@@ -4,7 +4,49 @@
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
-     x-data="{ selectedAll: false, selected: [], bulkRunning: false, bulkResult: null }">
+     x-data="{
+        selectedAll: false,
+        selected: [],
+        bulkRunning: false,
+        bulkResult: null,
+        pushBulkToWB() {
+            if (!this.selected.length) return;
+            if (!confirm('Отправить ' + this.selected.length + ' товаров на WB?')) return;
+            this.bulkRunning = true;
+            this.bulkResult = null;
+            fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_ids: this.selected})
+            })
+            .then(r => r.json())
+            .then(data => {
+                this.bulkResult = data;
+                this.bulkRunning = false;
+                if (data.success > 0) setTimeout(() => location.reload(), 2000);
+            })
+            .catch(e => {
+                alert('Ошибка: ' + e.message);
+                this.bulkRunning = false;
+            });
+        },
+        deleteBulk() {
+            if (!this.selected.length) return;
+            if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
+            this.bulkRunning = true;
+            fetch('{{ url_for("seller_delete_imported_products_bulk") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_ids: this.selected})
+            })
+            .then(r => r.json())
+            .then(() => location.reload())
+            .catch(e => {
+                alert('Ошибка: ' + e.message);
+                this.bulkRunning = false;
+            });
+        }
+     }">
 
     <div class="relative overflow-hidden bg-gradient-to-r from-violet-600 via-purple-700 to-indigo-800 rounded-2xl p-6 sm:p-8 mb-6">
         <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
@@ -27,8 +69,8 @@
     <!-- Stats cards -->
     <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
         <a href="?status=" class="bg-white rounded-xl border {{ 'border-purple-300 ring-1 ring-purple-200' if not status else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
-            <p class="text-xs text-gray-500">Все</p>
-            <p class="text-xl font-bold text-gray-900">{{ stats.total }}</p>
+            <p class="text-xs text-gray-500">В работе</p>
+            <p class="text-xl font-bold text-gray-900">{{ stats.total - stats.imported }}</p>
         </a>
         <a href="?status=pending" class="bg-white rounded-xl border {{ 'border-yellow-300 ring-1 ring-yellow-200' if status == 'pending' else 'border-gray-200' }} shadow-sm p-3 text-center hover:shadow-md transition-shadow">
             <p class="text-xs text-gray-500">Ожидают</p>
@@ -77,6 +119,10 @@
                 <span x-show="bulkRunning">Отправка...</span>
             </button>
             {% endif %}
+            <button @click="deleteBulk()" :disabled="selected.length === 0 || bulkRunning"
+                    class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+                Удалить выбранные
+            </button>
         </div>
     </div>
 
@@ -176,11 +222,19 @@
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">Ожидает</span>
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-center">
+                    <td class="px-3 py-2 text-center whitespace-nowrap">
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
                            class="inline-flex items-center px-2.5 py-1 bg-purple-50 text-purple-700 rounded text-xs font-medium hover:bg-purple-100">
                             WB карточка
                         </a>
+                        <form method="POST" action="{{ url_for('seller_delete_imported_product', product_id=p.id) }}"
+                              class="inline" onsubmit="return confirm('Удалить товар? Он станет доступен для повторного импорта.')">
+                            <button type="submit"
+                                    class="inline-flex items-center px-2.5 py-1 bg-red-50 text-red-600 rounded text-xs font-medium hover:bg-red-100 ml-1"
+                                    title="Удалить из моих товаров">
+                                Удалить
+                            </button>
+                        </form>
                     </td>
                 </tr>
                 {% endfor %}
@@ -223,30 +277,4 @@
     {% endif %}
 </div>
 
-<script>
-function pushBulkToWB() {
-    const el = document.querySelector('[x-data]').__x.$data;
-    if (!el.selected.length) return;
-    if (!confirm(`Отправить ${el.selected.length} товаров на WB?`)) return;
-
-    el.bulkRunning = true;
-    el.bulkResult = null;
-
-    fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({product_ids: el.selected})
-    })
-    .then(r => r.json())
-    .then(data => {
-        el.bulkResult = data;
-        el.bulkRunning = false;
-        if (data.success > 0) setTimeout(() => location.reload(), 2000);
-    })
-    .catch(e => {
-        alert('Ошибка: ' + e.message);
-        el.bulkRunning = false;
-    });
-}
-</script>
 {% endblock %}

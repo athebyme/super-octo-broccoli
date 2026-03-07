@@ -1357,6 +1357,9 @@ def register_supplier_routes(app):
         query = ImportedProduct.query.filter_by(seller_id=seller.id)
         if status:
             query = query.filter_by(import_status=status)
+        else:
+            # По умолчанию скрываем товары уже загруженные на WB
+            query = query.filter(ImportedProduct.import_status != 'imported')
         if search:
             query = query.filter(
                 db.or_(
@@ -1520,6 +1523,47 @@ def register_supplier_routes(app):
             flash('Товар готов к импорту на WB', 'success')
 
         return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+    # -------------------------------------------------------------------
+    # Удалить импортированный товар — сбросить для повторного импорта
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/delete', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_delete_imported_product(product_id):
+        """Удалить запись импортированного товара.
+        Товар станет снова доступен для импорта из каталога поставщика."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        title = product.title or product.external_id
+        db.session.delete(product)
+        db.session.commit()
+
+        flash(f'Товар «{title}» удалён и доступен для повторного импорта', 'success')
+        return redirect(url_for('seller_my_products'))
+
+    @app.route('/my-products/delete-bulk', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_delete_imported_products_bulk():
+        """Массовое удаление импортированных товаров."""
+        seller = current_user.seller
+        data = request.get_json() or {}
+        product_ids = data.get('product_ids', [])
+
+        if not product_ids:
+            return jsonify({'error': 'Не выбраны товары'}), 400
+
+        deleted = ImportedProduct.query.filter(
+            ImportedProduct.id.in_(product_ids),
+            ImportedProduct.seller_id == seller.id
+        ).delete(synchronize_session=False)
+        db.session.commit()
+
+        return jsonify({'deleted': deleted, 'message': f'Удалено {deleted} товаров'})
 
     # -------------------------------------------------------------------
     # Обновление существующих товаров из базы поставщика
