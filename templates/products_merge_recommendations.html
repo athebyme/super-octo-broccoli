@@ -3,25 +3,16 @@
 {% block content %}
 <div class="container mx-auto px-4 py-8">
     <!-- Hero Banner -->
-    <div class="relative overflow-hidden bg-gradient-to-r from-violet-600 via-purple-600 to-violet-700 rounded-2xl p-6 sm:p-8 mb-8">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <circle cx="70" cy="80" r="35" stroke="currentColor" stroke-width="5" fill="white"/>
-            <circle cx="130" cy="80" r="35" stroke="currentColor" stroke-width="5" fill="white"/>
-            <path d="M100 60 L100 100" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
-            <path d="M80 140 L120 140" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
-            <path d="M90 155 L110 155" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
-            <path d="M95 170 L105 170" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative flex items-center justify-between">
             <div>
-                <h1 class="text-3xl font-bold text-white">Умные рекомендации для объединения</h1>
-                <p class="mt-2 text-sm text-purple-100">
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Умные рекомендации для объединения</h1>
+                <p class="mt-2 text-sm text-gray-400">
                     Автоматический анализ карточек и рекомендации по объединению на основе схожести
                 </p>
             </div>
             <a href="{{ url_for('products_merge') }}"
-               class="inline-flex items-center px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition backdrop-blur-sm border border-white/20">
+               class="inline-flex items-center px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                 </svg>

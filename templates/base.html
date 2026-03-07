@@ -8,12 +8,28 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        display: ["'Instrument Serif'", 'Georgia', 'serif'],
+                        body: ["'Inter'", '-apple-system', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: { DEFAULT: '#c45d3e', light: '#f0e0da', dark: '#a34a2f' },
+                    },
+                }
+            }
+        }
+    </script>
     <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
 
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        *, *::before, *::after { box-sizing: border-box; }
 
         :root {
             --bg: #faf9f7;
@@ -330,6 +346,248 @@
             padding: 4px;
         }
         .flash-close:hover { opacity: 1; }
+
+        /* =========================================
+           GLOBAL TAILWIND OVERRIDES — Editorial Style
+           ========================================= */
+
+        /* Hero headers: replace gradient with clean editorial header */
+        .bg-gradient-to-r,
+        [class*="bg-gradient-to-r"] {
+            background: var(--bg-sidebar) !important;
+            border-radius: 8px !important;
+        }
+        .bg-gradient-to-r *,
+        [class*="bg-gradient-to-r"] * {
+            font-family: var(--font-body) !important;
+        }
+        .bg-gradient-to-r h1,
+        [class*="bg-gradient-to-r"] h1 {
+            font-family: var(--font-display) !important;
+            font-weight: 400 !important;
+            font-style: italic;
+        }
+        /* Hide decorative SVGs and dots inside hero sections */
+        .bg-gradient-to-r > svg,
+        [class*="bg-gradient-to-r"] > svg,
+        .bg-gradient-to-r > .absolute,
+        [class*="bg-gradient-to-r"] > div[class*="absolute"][class*="rounded-full"] {
+            display: none !important;
+        }
+        /* Fix text colors in dark hero */
+        [class*="text-indigo-200"],
+        [class*="text-emerald-200"],
+        [class*="text-gray-400"] {
+            color: #999 !important;
+        }
+
+        /* Cards: remove shadows, use thin borders */
+        .shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl {
+            box-shadow: none !important;
+        }
+        .hover\:shadow-md:hover { box-shadow: none !important; }
+
+        /* Rounded corners: editorial (smaller) */
+        .rounded-2xl { border-radius: 8px !important; }
+        .rounded-xl { border-radius: 6px !important; }
+        .rounded-lg { border-radius: 6px !important; }
+
+        /* Border colors */
+        .border-gray-100, .border-gray-200 {
+            border-color: var(--border) !important;
+        }
+
+        /* Background overrides */
+        .bg-white {
+            background-color: var(--bg-card) !important;
+        }
+        .bg-gray-50 {
+            background-color: var(--bg) !important;
+        }
+
+        /* Gradient icon boxes: replace with bordered boxes */
+        [class*="bg-gradient-to-br"][class*="rounded-xl"],
+        [class*="bg-gradient-to-br"][class*="rounded-lg"],
+        [class*="bg-gradient-to-br"][class*="rounded-md"] {
+            background: var(--bg) !important;
+            border: 1px solid var(--border) !important;
+        }
+        [class*="bg-gradient-to-br"][class*="rounded-xl"] svg,
+        [class*="bg-gradient-to-br"][class*="rounded-lg"] svg,
+        [class*="bg-gradient-to-br"][class*="rounded-md"] svg {
+            color: var(--text) !important;
+        }
+        /* Exception: keep sidebar logo mark colored */
+        .sidebar-logo-mark {
+            background: var(--accent) !important;
+            border: none !important;
+        }
+
+        /* Corner decorative blobs: hide */
+        [class*="bg-gradient-to-bl"][class*="rounded-bl-full"] {
+            display: none !important;
+        }
+
+        /* Buttons: editorial style */
+        .bg-indigo-600, .bg-indigo-700,
+        [class*="bg-indigo-600"], [class*="bg-indigo-700"],
+        .hover\:bg-indigo-700:hover,
+        [class*="from-indigo-600"], [class*="to-purple-600"] {
+            background: var(--text) !important;
+            border-color: var(--text) !important;
+        }
+
+        .text-indigo-600, .text-indigo-700,
+        .hover\:text-indigo-900:hover,
+        .text-indigo-800 {
+            color: var(--accent) !important;
+        }
+
+        .bg-indigo-100, .bg-indigo-50 {
+            background: var(--accent-light) !important;
+        }
+        .text-indigo-800, .text-indigo-700, .text-indigo-600 {
+            color: var(--accent) !important;
+        }
+
+        /* Ring colors */
+        .ring-indigo-500\/20, [class*="ring-indigo"] {
+            --tw-ring-color: rgba(196, 93, 62, 0.2) !important;
+        }
+        .focus\:ring-indigo-500:focus {
+            --tw-ring-color: rgba(196, 93, 62, 0.3) !important;
+        }
+        .focus\:border-indigo-500:focus {
+            border-color: var(--accent) !important;
+        }
+
+        /* Badge pills: editorial style */
+        .rounded-full[class*="bg-green-"] {
+            background: #f0faf0 !important;
+            color: #1a6b1a !important;
+        }
+        .rounded-full[class*="bg-red-"] {
+            background: #fef2f2 !important;
+            color: #991b1b !important;
+        }
+        .rounded-full[class*="bg-yellow-"] {
+            background: #fffbeb !important;
+            color: #92400e !important;
+        }
+        .rounded-full[class*="bg-blue-"] {
+            background: #eff6ff !important;
+            color: #1e40af !important;
+        }
+        .rounded-full[class*="bg-purple-"] {
+            background: #f5f0ff !important;
+            color: #6b21a8 !important;
+        }
+        .rounded-full[class*="bg-orange-"] {
+            background: #fff7ed !important;
+            color: #c2410c !important;
+        }
+        .rounded-full[class*="bg-pink-"] {
+            background: #fdf2f8 !important;
+            color: #be185d !important;
+        }
+        .rounded-full[class*="bg-gray-100"] {
+            background: var(--bg) !important;
+            color: var(--text-secondary) !important;
+        }
+
+        /* Typography: headings use display font */
+        .main-content h1 {
+            font-family: var(--font-display);
+            font-weight: 400;
+        }
+        .main-content h2 {
+            font-family: var(--font-display);
+            font-weight: 400;
+        }
+
+        /* Tables: clean editorial style */
+        .divide-y > tr:hover, tr.hover\:bg-gray-50:hover {
+            background: var(--bg) !important;
+        }
+        thead.bg-gray-50 {
+            background: var(--bg) !important;
+        }
+        th[class*="uppercase"] {
+            font-size: 11px !important;
+            letter-spacing: 0.08em !important;
+            color: var(--text-muted) !important;
+            font-weight: 600 !important;
+        }
+
+        /* Form inputs */
+        input[type="text"],
+        input[type="password"],
+        input[type="email"],
+        input[type="number"],
+        input[type="search"],
+        input[type="url"],
+        textarea,
+        select {
+            font-family: var(--font-body) !important;
+            border-radius: 6px !important;
+            border-color: var(--border) !important;
+        }
+        input:focus, textarea:focus, select:focus {
+            border-color: var(--text) !important;
+            box-shadow: none !important;
+            outline: 2px solid rgba(26, 26, 26, 0.1) !important;
+            outline-offset: 1px !important;
+        }
+
+        /* Gradient buttons: replace with solid dark */
+        [class*="shadow-indigo"],
+        [class*="shadow-lg"] {
+            box-shadow: none !important;
+        }
+
+        /* White/light buttons on hero: editorial style */
+        .bg-white.text-emerald-700,
+        a[class*="bg-white"][class*="text-emerald"],
+        a[class*="bg-white"][class*="text-gray-900"] {
+            background: #fff !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+        }
+        [class*="bg-white/15"],
+        [class*="bg-white/10"],
+        [class*="bg-white/25"] {
+            background: rgba(255,255,255,0.1) !important;
+        }
+
+        /* Animate pulse dots in hero: hide */
+        [class*="animate-pulse"][class*="rounded-full"][class*="bg-white"] {
+            display: none !important;
+        }
+
+        /* Page container max-width */
+        .max-w-7xl {
+            max-width: 960px !important;
+        }
+        .max-w-2xl {
+            max-width: 640px !important;
+        }
+
+        /* Alerts */
+        .bg-green-50 { background: #f0faf0 !important; }
+        .border-green-200 { border-color: #c8e6c8 !important; }
+        .bg-amber-50, .bg-yellow-50 { background: #fffbeb !important; }
+        .border-amber-200, .border-yellow-200 { border-color: #fde68a !important; }
+
+        /* Tab/filter pills override */
+        [class*="backdrop-blur"] {
+            backdrop-filter: none !important;
+        }
+
+        /* Modals */
+        .bg-gray-500.bg-opacity-75 {
+            background: rgba(0,0,0,0.5) !important;
+            backdrop-filter: blur(2px) !important;
+        }
     </style>
     {% block extra_head %}{% endblock %}
 </head>

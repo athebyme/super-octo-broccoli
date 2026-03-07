@@ -3,22 +3,14 @@
 {% block content %}
 <div class="container mx-auto px-4 py-8">
     <!-- Hero Banner -->
-    <div class="relative overflow-hidden bg-gradient-to-r from-indigo-600 via-blue-600 to-indigo-700 rounded-2xl p-6 sm:p-8 mb-8">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <rect x="30" y="30" width="140" height="180" rx="12" stroke="currentColor" stroke-width="6" fill="white"/>
-            <line x1="60" y1="70" x2="140" y2="70" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
-            <line x1="60" y1="100" x2="130" y2="100" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
-            <line x1="60" y1="130" x2="120" y2="130" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
-            <line x1="60" y1="160" x2="110" y2="160" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative flex items-center justify-between">
             <div>
-                <h1 class="text-3xl font-bold text-white">История массовых изменений</h1>
-                <p class="mt-2 text-sm text-blue-100">Просмотр и откат групповых операций над товарами</p>
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">История массовых изменений</h1>
+                <p class="mt-2 text-sm text-gray-400">Просмотр и откат групповых операций над товарами</p>
             </div>
             <a href="{{ url_for('products_bulk_edit') }}"
-               class="inline-flex items-center px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition backdrop-blur-sm border border-white/20">
+               class="inline-flex items-center px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                 </svg>

@@ -359,15 +359,15 @@
     <div class="dash-kpi-grid">
         <div class="dash-kpi">
             <div class="dash-kpi-label">Начислено</div>
-            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '&mdash;' }}</div>
+            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('total_revenue', 0)).replace(',', ' ') if has_summary else '—' }}</div>
         </div>
         <div class="dash-kpi">
             <div class="dash-kpi-label">Прибыль</div>
-            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '&mdash;' }}</div>
+            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('total_profit', 0)).replace(',', ' ') if has_summary else '—' }}</div>
         </div>
         <div class="dash-kpi">
             <div class="dash-kpi-label">Маржа</div>
-            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '&mdash;' }}</div>
+            <div class="dash-kpi-value">{{ "{:,.2f}".format(summary.get('avg_margin', 0)).replace(',', ' ') + '%' if has_summary else '—' }}</div>
         </div>
     </div>
 

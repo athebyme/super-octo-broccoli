@@ -14,16 +14,10 @@
         <span class="text-gray-900">Raw JSON</span>
     </nav>
 
-    <div class="relative overflow-hidden bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 rounded-2xl p-6 sm:p-8 mb-6">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <rect x="30" y="30" width="140" height="140" rx="16" stroke="white" stroke-width="1.5"/>
-            <path d="M65 75l15 10-15 10M90 95h40" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M65 115h70M65 130h50" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
+    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
         <div class="relative">
-            <h1 class="text-xl font-bold text-white">Raw JSON: {{ (product.title or 'Без названия')[:60] }}</h1>
-            <p class="text-sm text-slate-300 mt-1">
+            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Raw JSON: {{ (product.title or 'Без названия')[:60] }}</h1>
+            <p class="text-sm text-gray-400 mt-1">
                 Полный дамп данных товара для анализа и отладки
             </p>
         </div>

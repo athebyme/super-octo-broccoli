@@ -5,18 +5,9 @@
 {% block content %}
 <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Hero Banner -->
-    <div class="relative overflow-hidden bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 rounded-2xl p-6 sm:p-8 mb-8">
-        <svg class="absolute right-0 top-0 h-full w-1/3 opacity-10" viewBox="0 0 200 200" fill="none">
-            <path d="M100 30l20 40h-40l20-40z" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
-            <circle cx="100" cy="100" r="40" stroke="white" stroke-width="1.5"/>
-            <path d="M100 80v20M100 110v5" stroke="white" stroke-width="2" stroke-linecap="round"/>
-            <path d="M60 150h80" stroke="white" stroke-width="1" stroke-linecap="round"/>
-            <path d="M70 165h60" stroke="white" stroke-width="1" stroke-linecap="round"/>
-        </svg>
-        <div class="absolute top-3 right-6 w-2 h-2 rounded-full bg-white/30 animate-pulse"></div>
-        <div class="absolute bottom-5 right-16 w-1.5 h-1.5 rounded-full bg-white/20 animate-pulse" style="animation-delay:0.7s"></div>
+    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
-            <nav class="text-sm text-amber-200 mb-3">
+            <nav class="text-sm text-gray-400 mb-3">
                 {% if current_marketplace %}
                 <a href="{{ url_for('marketplaces.index') }}" class="hover:text-white transition-colors">Маркетплейсы</a>
                 <span class="mx-2">/</span>
@@ -29,13 +20,13 @@
             </nav>
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                    <h1 class="text-3xl font-bold text-white">Очередь проверки</h1>
-                    <p class="mt-2 text-sm text-amber-200">
+                    <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Очередь проверки</h1>
+                    <p class="mt-2 text-sm text-gray-400">
                         Pending: <strong class="text-white">{{ stats.pending }}</strong> | Needs Review: <strong class="text-white">{{ stats.needs_review }}</strong>
                     </p>
                 </div>
                 <a href="{{ url_for('brands.index', marketplace_id=marketplace_id) }}"
-                   class="inline-flex items-center px-5 py-2.5 rounded-xl shadow-sm text-sm font-medium text-amber-900 bg-white hover:bg-gray-50 transition-colors">
+                   class="inline-flex items-center px-5 py-2.5 bg-white text-[#1a1a1a] rounded-md hover:bg-gray-100 text-sm font-medium transition-colors">
                     <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
                     </svg>
