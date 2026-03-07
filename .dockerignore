@@ -10,4 +10,5 @@ data/
 *.csv
 .idea/
 *.log
-
+deploy.sh
+docs/
