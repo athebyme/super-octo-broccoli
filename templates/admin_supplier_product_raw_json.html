@@ -86,7 +86,7 @@
 </div>
 
 <script>
-const fullData = {{ raw_data|safe }};
+const fullData = JSON.parse({{ raw_data|tojson }});
 
 function renderJson(data, label) {
     const jsonStr = JSON.stringify(data, null, 2);

@@ -518,6 +518,9 @@ def _set_security_headers(response):
     response.headers['X-Frame-Options'] = 'SAMEORIGIN'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
     return response
 
 
@@ -650,10 +653,16 @@ def download() -> BytesIO:
         flash("Нет готового отчета для скачивания. Сначала загрузите файлы.", "warning")
         return redirect(url_for("index"))
 
+    # Защита от path traversal: файл должен быть внутри PROCESSED_DIR
+    resolved = Path(latest).resolve()
+    if not str(resolved).startswith(str(PROCESSED_DIR.resolve())):
+        flash("Некорректный путь к файлу.", "danger")
+        return redirect(url_for("index"))
+
     buffer = BytesIO()
-    buffer.write(Path(latest).read_bytes())
+    buffer.write(resolved.read_bytes())
     buffer.seek(0)
-    filename = Path(latest).name
+    filename = resolved.name
     return send_file(
         buffer,
         as_attachment=True,

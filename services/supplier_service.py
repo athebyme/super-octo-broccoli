@@ -1914,7 +1914,7 @@ class SupplierService:
                     SupplierProduct.supplier_id == supplier_id,
                     db.or_(
                         SupplierProduct.external_id == product_id_raw,
-                        SupplierProduct.external_id.like(f'%{product_id_raw}%')
+                        SupplierProduct.external_id.like('%' + str(product_id_raw).replace('%', '').replace('_', '') + '%')
                     )
                 ).first()
 

@@ -625,7 +625,7 @@ def register_auto_import_routes(app):
             query = query.filter(ImportedProduct.category_confidence <= max_confidence)
 
         if category_filter:
-            query = query.filter(ImportedProduct.mapped_wb_category.like(f'%{category_filter}%'))
+            query = query.filter(ImportedProduct.mapped_wb_category.like('%' + category_filter.replace('%', '').replace('_', '') + '%'))
 
         # Подсчет общего количества
         total_count = query.count()

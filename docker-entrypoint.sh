@@ -51,7 +51,12 @@ with app.app_context():
     # Проверяем, есть ли администратор
     username = os.environ.get('ADMIN_USERNAME', 'admin')
     email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
-    password = os.environ.get('ADMIN_PASSWORD', 'admin123')
+    password = os.environ.get('ADMIN_PASSWORD', '')
+    if not password:
+        import secrets as _s
+        password = _s.token_urlsafe(16)
+        print(f"⚠️  ADMIN_PASSWORD не задан! Сгенерирован случайный пароль: {password}")
+        print(f"   ОБЯЗАТЕЛЬНО сохраните его и задайте ADMIN_PASSWORD в .env!")
 
     # Ищем по username, по email или первого админа
     admin_user = (
