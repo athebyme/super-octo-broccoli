@@ -276,8 +276,44 @@ class WBProductImporter:
                     error_msg = f"Бренд '{product_brand}' не зарегистрирован на Wildberries. Необходимо сначала добавить бренд в личном кабинете WB или использовать существующий бренд."
                 elif 'повторяющиеся Баркоды' in error_msg:
                     error_msg = f"Баркод уже используется в другой карточке или дублируется в текущей. Баркоды: {barcodes}"
-                elif 'Артикул продавца' in error_msg:
-                    error_msg = f"Проблема с артикулом продавца '{vendor_code}'. Возможно, он уже используется или имеет неверный формат."
+                elif 'vendor code is used' in error_msg.lower() or 'Артикул продавца' in error_msg:
+                    # Артикул уже существует на WB — пытаемся найти и привязать существующую карточку
+                    logger.info(f"Артикул '{vendor_code}' уже используется на WB. Пытаемся привязать существующую карточку...")
+                    try:
+                        existing_card = self.api_client.get_card_by_vendor_code(vendor_code)
+                        existing_nm_id = existing_card.get('nmID')
+                        if existing_nm_id:
+                            logger.info(f"Найдена существующая карточка WB: nmID={existing_nm_id} для артикула '{vendor_code}'")
+                            # Привязываем как успешный импорт
+                            imported_product.wb_nm_id = existing_nm_id
+                            imported_product.import_status = 'completed'
+                            imported_product.import_error = None
+                            imported_product.imported_at = datetime.utcnow()
+                            db.session.commit()
+
+                            # Синхронизируем или создаём Product запись
+                            product = Product.query.filter_by(
+                                seller_id=self.seller.id,
+                                nm_id=existing_nm_id
+                            ).first()
+                            if not product:
+                                product = Product(
+                                    seller_id=self.seller.id,
+                                    nm_id=existing_nm_id,
+                                    vendor_code=vendor_code,
+                                    title=existing_card.get('title', imported_product.name or ''),
+                                    brand=existing_card.get('brand', ''),
+                                )
+                                db.session.add(product)
+                                db.session.commit()
+                                logger.info(f"Создана Product запись для nmID={existing_nm_id}")
+
+                            return (True,
+                                    f"Карточка уже существовала на WB (nmID={existing_nm_id}). Привязана к импорту.",
+                                    existing_nm_id)
+                    except Exception as link_err:
+                        logger.warning(f"Не удалось привязать существующую карточку: {link_err}")
+                    error_msg = f"Артикул '{vendor_code}' уже используется в другой карточке на WB. Синхронизируйте товары чтобы обновить базу."
 
                 full_error = f"Ошибка создания карточки WB: {error_msg}"
                 logger.error(full_error)
