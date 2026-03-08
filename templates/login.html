@@ -414,23 +414,29 @@
         display: block;
         color: var(--accent);
         font-style: italic;
-        transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+                    opacity 0.6s ease,
+                    filter 0.6s ease;
         position: absolute;
         left: 0;
         white-space: nowrap;
+        will-change: transform, opacity;
     }
     .login-word-rotator em.word-enter {
-        transform: translateY(100%);
+        transform: translateY(70%);
         opacity: 0;
+        filter: blur(4px);
     }
     .login-word-rotator em.word-active {
         transform: translateY(0);
         opacity: 1;
+        filter: blur(0);
         position: relative;
     }
     .login-word-rotator em.word-exit {
-        transform: translateY(-100%);
+        transform: translateY(-70%);
         opacity: 0;
+        filter: blur(4px);
     }
 </style>
 {% endblock %}
@@ -565,7 +571,7 @@ function wordRotator() {
             setInterval(() => {
                 this.prev = this.current;
                 this.current = (this.current + 1) % this.words.length;
-            }, 2500);
+            }, 3000);
         }
     }
 }
