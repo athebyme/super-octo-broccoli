@@ -53,3 +53,4 @@ processed/*
 # OS
 .DS_Store
 Thumbs.db
+*.log
