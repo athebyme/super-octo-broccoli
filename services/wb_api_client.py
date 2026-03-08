@@ -289,8 +289,45 @@ class WildberriesAPIClient:
                         error_msg = f"{wb_error} | Детали: {details}"
                     else:
                         error_msg = str(wb_error) if wb_error != error_msg else error_msg
+
+                    # Для 400 Bad Request без деталей — пытаемся дать подсказку
+                    if response.status_code == 400 and error_msg in ('bad request', 'Bad Request', 'API Error 400'):
+                        hints = []
+                        # Анализируем request body для подсказок
+                        if request_body_str:
+                            try:
+                                import json as _json
+                                req_data = _json.loads(request_body_str)
+                                if isinstance(req_data, list) and req_data:
+                                    card = req_data[0] if isinstance(req_data[0], dict) else {}
+                                    variants = card.get('variants', [])
+                                    if variants:
+                                        v = variants[0]
+                                        chars = v.get('characteristics', [])
+                                        if not chars:
+                                            hints.append('нет характеристик')
+                                        if not v.get('brand'):
+                                            hints.append('не указан бренд')
+                                        sizes = v.get('sizes', [])
+                                        if sizes:
+                                            for s in sizes:
+                                                if not s.get('skus') or not s['skus'][0]:
+                                                    hints.append('пустые баркоды (skus)')
+                                                    break
+                                        dims = v.get('dimensions', {})
+                                        if not dims or not dims.get('length'):
+                                            hints.append('не указаны габариты')
+                                    if not card.get('subjectID'):
+                                        hints.append('не указан subjectID (категория)')
+                            except Exception:
+                                pass
+                        if hints:
+                            error_msg = f"bad request (возможные причины: {', '.join(hints)})"
+
                     # Логируем полный ответ для отладки
                     logger.error(f"WB API {response.status_code} full response: {error_data}")
+                    if request_body_str:
+                        logger.error(f"WB API {response.status_code} request body: {request_body_str[:2000]}")
                 except Exception:
                     error_msg = response.text or error_msg
                 raise WBAPIException(error_msg)
@@ -905,7 +942,10 @@ class WildberriesAPIClient:
 
         Note:
             WB API /content/v3/media/file принимает multipart/form-data
-            Параметры: nmId (query), photoNumber (query, 1-based), uploadfile (file)
+            Параметры передаются в ЗАГОЛОВКАХ:
+              X-Nm-Id: артикул WB (nmID)
+              X-Photo-Number: номер фото (1-based)
+            Body: multipart/form-data с полем uploadfile
         """
         endpoint = "/content/v3/media/file"
         results = []
@@ -917,14 +957,18 @@ class WildberriesAPIClient:
             try:
                 with open(path, 'rb') as f:
                     files = {'uploadfile': (f'photo_{photo_number}.jpg', f, 'image/jpeg')}
-                    params = {'nmId': nm_id, 'photoNumber': photo_number}
+                    # WB API требует X-Nm-Id и X-Photo-Number в ЗАГОЛОВКАХ, не в query
+                    extra_headers = {
+                        'X-Nm-Id': str(nm_id),
+                        'X-Photo-Number': str(photo_number),
+                    }
 
                     # Remove Content-Type header for multipart upload
                     old_content_type = self.session.headers.pop('Content-Type', None)
                     try:
                         response = self._make_request(
                             'POST', 'content', endpoint,
-                            params=params,
+                            headers=extra_headers,
                             files=files,
                             log_to_db=False,
                             seller_id=seller_id
@@ -934,8 +978,14 @@ class WildberriesAPIClient:
                             self.session.headers['Content-Type'] = old_content_type
 
                     result = response.json() if response.content else {}
-                    logger.info(f"✅ Photo {photo_number} uploaded: {result}")
-                    results.append({'photo_number': photo_number, 'success': True, 'response': result})
+                    # WB может вернуть 200 с error в теле
+                    if result.get('error'):
+                        error_text = result.get('errorText', result.get('message', 'Unknown error'))
+                        logger.error(f"❌ Photo {photo_number} API error (200 body): {error_text}")
+                        results.append({'photo_number': photo_number, 'success': False, 'error': error_text, 'response': result})
+                    else:
+                        logger.info(f"✅ Photo {photo_number} uploaded: {result}")
+                        results.append({'photo_number': photo_number, 'success': True, 'response': result})
 
             except Exception as e:
                 logger.error(f"❌ Failed to upload photo {photo_number} for nmID={nm_id}: {e}")
@@ -982,8 +1032,15 @@ class WildberriesAPIClient:
                 seller_id=seller_id
             )
             result = response.json() if response.content else {}
+            # WB может вернуть 200 с error в теле
+            if result.get('error'):
+                error_text = result.get('errorText', result.get('message', 'Unknown error'))
+                logger.error(f"❌ Photos by URL API error (200 body): {error_text}")
+                raise WBAPIException(f"Media save error: {error_text}")
             logger.info(f"✅ Photos uploaded by URL: {result}")
             return result
+        except WBAPIException:
+            raise
         except Exception as e:
             logger.error(f"❌ Failed to upload photos by URL for nmID={nm_id}: {e}")
             raise
@@ -2248,37 +2305,62 @@ class WildberriesAPIClient:
         seller_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Получить список несозданных карточек товаров с ошибками
+        Получить список несозданных карточек товаров с ошибками.
+
+        WB API v2 POST /content/v2/cards/error/list
+        Возвращает структуру:
+        {
+            "data": {
+                "items": [
+                    {
+                        "batchUUID": "...",
+                        "vendorCodes": ["id-xxx-1366"],
+                        "errors": {"id-xxx-1366": ["Ошибка 1", "Ошибка 2"]},
+                        "updatedAt": "..."
+                    }
+                ],
+                "cursor": {"next": false, ...}
+            },
+            "error": false,
+            "errorText": ""
+        }
 
         Args:
             log_to_db: Логировать ли запрос в БД
             seller_id: ID продавца для логирования
 
         Returns:
-            Список карточек с ошибками создания
+            Полный ответ от WB API
         """
         endpoint = "/content/v2/cards/error/list"
 
-        logger.info(f"🔍 Getting cards errors list")
+        logger.info("Getting cards errors list")
 
         try:
             response = self._make_request(
                 'POST',
                 'content',
                 endpoint,
-                json={},  # Исправлено: json вместо json_data
+                json={},
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )
             result = response.json()
 
-            error_cards = result.get('data', [])
-            logger.info(f"✅ Cards errors list loaded: {len(error_cards)} cards with errors")
+            # Новый формат: data.items вместо data (массив)
+            items = []
+            data = result.get('data')
+            if isinstance(data, dict):
+                items = data.get('items', [])
+            elif isinstance(data, list):
+                items = data  # Старый формат (fallback)
+
+            logger.info(f"Cards errors list loaded: {len(items)} batches with errors")
 
             return result
 
         except Exception as e:
-            logger.error(f"❌ Failed to get cards errors list: {str(e)}")
+            logger.error(f"Failed to get cards errors list: {str(e)}")
             raise
 
     # ==================== ЗАБЛОКИРОВАННЫЕ / СКРЫТЫЕ КАРТОЧКИ ====================

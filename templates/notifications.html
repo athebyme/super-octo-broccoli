@@ -26,56 +26,49 @@
     <!-- Filters -->
     <div class="mb-6 flex items-center gap-2 overflow-x-auto pb-2">
         <template x-for="f in filterOptions" :key="f.value">
-            <button @click="activeFilter = f.value"
+            <button @click="activeFilter = f.value; loadNotifications()"
                 :class="activeFilter === f.value
                     ? 'bg-indigo-600 text-white shadow-md'
                     : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'"
                 class="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap">
                 <span x-text="f.label"></span>
-                <span x-show="f.count > 0"
-                    :class="activeFilter === f.value ? 'bg-white/20' : 'bg-gray-100'"
-                    class="inline-flex items-center justify-center w-5 h-5 rounded-full text-xs" x-text="f.count"></span>
             </button>
         </template>
     </div>
 
+    <!-- Loading -->
+    <div x-show="loading" class="text-center py-8">
+        <div class="inline-block w-6 h-6 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin"></div>
+    </div>
+
     <!-- Notifications List -->
-    <div class="space-y-8">
-        <template x-for="group in filteredGroups" :key="group.label">
+    <div x-show="!loading" class="space-y-8">
+        <template x-for="group in groupedNotifications" :key="group.label">
             <div x-show="group.items.length > 0" x-transition>
                 <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-1" x-text="group.label"></h3>
                 <div class="space-y-2">
-                    <template x-for="(notif, idx) in group.items" :key="notif.id">
-                        <div x-show="!notif.dismissed"
-                            x-transition:enter="transition ease-out duration-200"
-                            x-transition:enter-start="opacity-0 translate-y-2"
-                            x-transition:enter-end="opacity-100 translate-y-0"
-                            x-transition:leave="transition ease-in duration-150"
-                            x-transition:leave-start="opacity-100 translate-y-0"
+                    <template x-for="notif in group.items" :key="notif.id">
+                        <div x-transition:leave="transition ease-in duration-150"
+                            x-transition:leave-start="opacity-100"
                             x-transition:leave-end="opacity-0 -translate-x-8"
-                            :class="notif.read ? 'opacity-60' : ''"
+                            :class="notif.is_read ? 'opacity-60' : ''"
                             class="group bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-all">
-                            <div class="flex items-start gap-4 p-4">
-                                <!-- Color bar + Icon -->
+                            <a :href="notif.link || '#'" class="flex items-start gap-4 p-4" @click="markRead(notif)">
+                                <!-- Icon -->
                                 <div class="flex-shrink-0">
                                     <div class="w-10 h-10 rounded-xl flex items-center justify-center"
                                         :class="{
-                                            'bg-gradient-to-br from-blue-400 to-blue-600': notif.type === 'info',
-                                            'bg-gradient-to-br from-amber-400 to-orange-500': notif.type === 'warning',
-                                            'bg-gradient-to-br from-green-400 to-emerald-500': notif.type === 'success',
-                                            'bg-gradient-to-br from-red-400 to-rose-500': notif.type === 'error',
-                                            'bg-gradient-to-br from-purple-400 to-indigo-500': notif.type === 'promo',
+                                            'bg-gradient-to-br from-blue-400 to-blue-600': notif.category === 'info',
+                                            'bg-gradient-to-br from-amber-400 to-orange-500': notif.category === 'warning',
+                                            'bg-gradient-to-br from-green-400 to-emerald-500': notif.category === 'success',
+                                            'bg-gradient-to-br from-red-400 to-rose-500': notif.category === 'error',
+                                            'bg-gradient-to-br from-purple-400 to-indigo-500': notif.category === 'promo',
                                         }">
-                                        <!-- Info icon -->
-                                        <svg x-show="notif.type === 'info'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        <!-- Warning icon -->
-                                        <svg x-show="notif.type === 'warning'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
-                                        <!-- Success icon -->
-                                        <svg x-show="notif.type === 'success'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        <!-- Error icon -->
-                                        <svg x-show="notif.type === 'error'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        <!-- Promo icon -->
-                                        <svg x-show="notif.type === 'promo'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
+                                        <svg x-show="notif.category === 'info'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <svg x-show="notif.category === 'warning'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                                        <svg x-show="notif.category === 'success'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <svg x-show="notif.category === 'error'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <svg x-show="notif.category === 'promo'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
                                     </div>
                                 </div>
 
@@ -83,26 +76,23 @@
                                 <div class="flex-1 min-w-0">
                                     <div class="flex items-center gap-2 mb-1">
                                         <p class="text-sm font-semibold text-gray-900" x-text="notif.title"></p>
-                                        <span x-show="notif.mp" class="text-xs px-1.5 py-0.5 rounded font-medium"
-                                            :class="notif.mp === 'WB' ? 'bg-pink-50 text-pink-600' : notif.mp === 'Ozon' ? 'bg-blue-50 text-blue-600' : 'bg-yellow-50 text-yellow-600'"
-                                            x-text="notif.mp"></span>
-                                        <span x-show="!notif.read" class="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0"></span>
+                                        <span x-show="!notif.is_read" class="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0"></span>
                                     </div>
                                     <p class="text-sm text-gray-600 mb-2" x-text="notif.message"></p>
-                                    <p class="text-xs text-gray-400" x-text="notif.time"></p>
+                                    <p class="text-xs text-gray-400" x-text="formatTime(notif.created_at)"></p>
                                 </div>
 
                                 <!-- Actions -->
-                                <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button @click="toggleRead(notif)" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" :title="notif.read ? 'Как непрочитанное' : 'Прочитать'">
-                                        <svg x-show="!notif.read" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                        <svg x-show="notif.read" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" @click.prevent.stop>
+                                    <button @click="toggleRead(notif)" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" :title="notif.is_read ? 'Как непрочитанное' : 'Прочитать'">
+                                        <svg x-show="!notif.is_read" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                        <svg x-show="notif.is_read" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                                     </button>
-                                    <button @click="dismiss(notif)" class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Удалить">
+                                    <button @click="deleteNotif(notif)" class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Удалить">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                                     </button>
                                 </div>
-                            </div>
+                            </a>
                         </div>
                     </template>
                 </div>
@@ -110,47 +100,20 @@
         </template>
 
         <!-- Empty State -->
-        <div x-show="allDismissed" x-transition class="text-center py-16">
+        <div x-show="!loading && notifications.length === 0" x-transition class="text-center py-16">
             <div class="inline-block mb-6">
                 <svg width="200" height="180" viewBox="0 0 200 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <!-- Background circle -->
                     <circle cx="100" cy="85" r="70" fill="#EEF2FF"/>
                     <circle cx="100" cy="85" r="55" fill="#E0E7FF"/>
-                    <!-- Bell body -->
                     <path d="M100 30C82 30 68 44 68 62V90C68 90 60 98 58 102C56 106 58 110 62 110H138C142 110 144 106 142 102C140 98 132 90 132 90V62C132 44 118 30 100 30Z" fill="#818CF8" stroke="#6366F1" stroke-width="2"/>
-                    <!-- Bell shine -->
                     <path d="M78 55C78 55 82 40 100 35" stroke="#C7D2FE" stroke-width="3" stroke-linecap="round"/>
-                    <!-- Bell clapper -->
                     <circle cx="100" cy="118" r="8" fill="#6366F1"/>
                     <path d="M90 110C90 110 92 126 100 126C108 126 110 110 110 110" stroke="#6366F1" stroke-width="2" fill="none"/>
-                    <!-- Floating elements -->
-                    <circle cx="48" cy="45" r="4" fill="#C7D2FE" opacity="0.8">
-                        <animate attributeName="cy" values="45;40;45" dur="3s" repeatCount="indefinite"/>
-                    </circle>
-                    <circle cx="155" cy="55" r="3" fill="#A5B4FC" opacity="0.7">
-                        <animate attributeName="cy" values="55;48;55" dur="2.5s" repeatCount="indefinite"/>
-                    </circle>
-                    <circle cx="42" cy="100" r="2.5" fill="#E0E7FF" opacity="0.9">
-                        <animate attributeName="cy" values="100;95;100" dur="2s" repeatCount="indefinite"/>
-                    </circle>
-                    <circle cx="162" cy="95" r="3.5" fill="#C7D2FE" opacity="0.6">
-                        <animate attributeName="cy" values="95;88;95" dur="3.5s" repeatCount="indefinite"/>
-                    </circle>
-                    <!-- Sparkles -->
-                    <path d="M40 70L42 65L44 70L42 75Z" fill="#A5B4FC" opacity="0.7">
-                        <animate attributeName="opacity" values="0.7;0.3;0.7" dur="2s" repeatCount="indefinite"/>
-                    </path>
-                    <path d="M158 40L160 35L162 40L160 45Z" fill="#C7D2FE" opacity="0.8">
-                        <animate attributeName="opacity" values="0.8;0.2;0.8" dur="2.5s" repeatCount="indefinite"/>
-                    </path>
-                    <path d="M165 110L167 106L169 110L167 114Z" fill="#E0E7FF" opacity="0.6">
-                        <animate attributeName="opacity" values="0.6;0.2;0.6" dur="1.8s" repeatCount="indefinite"/>
-                    </path>
-                    <!-- ZZZ sleep marks -->
+                    <circle cx="48" cy="45" r="4" fill="#C7D2FE" opacity="0.8"><animate attributeName="cy" values="45;40;45" dur="3s" repeatCount="indefinite"/></circle>
+                    <circle cx="155" cy="55" r="3" fill="#A5B4FC" opacity="0.7"><animate attributeName="cy" values="55;48;55" dur="2.5s" repeatCount="indefinite"/></circle>
                     <text x="130" y="42" font-size="14" font-weight="bold" fill="#A5B4FC" opacity="0.7">z</text>
                     <text x="140" y="32" font-size="11" font-weight="bold" fill="#C7D2FE" opacity="0.5">z</text>
                     <text x="148" y="24" font-size="9" font-weight="bold" fill="#E0E7FF" opacity="0.4">z</text>
-                    <!-- Shadow -->
                     <ellipse cx="100" cy="150" rx="50" ry="6" fill="#E0E7FF" opacity="0.5"/>
                 </svg>
             </div>
@@ -166,71 +129,104 @@
 function notificationsPage() {
     return {
         activeFilter: 'all',
-        notifications: [
-            { id: 1, type: 'success', title: 'Заказ доставлен', message: 'Заказ #WB-28491 "Футболка оверсайз Premium" успешно доставлен покупателю.', mp: 'WB', time: '14:32', group: 'today', read: false, dismissed: false },
-            { id: 2, type: 'warning', title: 'Цена изменена конкурентом', message: 'Конкурент снизил цену на "Кроссовки AIR" на 15%. Рекомендуем проверить вашу ценовую стратегию.', mp: 'Ozon', time: '13:15', group: 'today', read: false, dismissed: false },
-            { id: 3, type: 'info', title: 'Новый заказ', message: 'Получен новый заказ #YM-7823 на сумму 4 290 руб. Ожидает подтверждения.', mp: 'YM', time: '12:48', group: 'today', read: false, dismissed: false },
-            { id: 4, type: 'error', title: 'Ошибка синхронизации', message: 'Не удалось синхронизировать остатки товаров. API ключ может быть недействителен. Проверьте настройки.', mp: 'Ozon', time: '11:05', group: 'today', read: false, dismissed: false },
-            { id: 5, type: 'success', title: 'Отчёт сформирован', message: 'Финансовый отчёт за февраль 2026 готов к скачиванию.', mp: null, time: '22:10', group: 'yesterday', read: true, dismissed: false },
-            { id: 6, type: 'warning', title: 'Низкий остаток', message: 'Товар "Рюкзак городской 25L" — осталось 3 шт. на складе WB. Рекомендуем пополнить.', mp: 'WB', time: '19:35', group: 'yesterday', read: true, dismissed: false },
-            { id: 7, type: 'info', title: 'Синхронизация завершена', message: 'Каталог товаров успешно синхронизирован. Обновлено 47 карточек.', mp: 'WB', time: '17:22', group: 'yesterday', read: true, dismissed: false },
-            { id: 8, type: 'promo', title: 'Новая функция: ABC-анализ', message: 'Теперь в разделе аналитики доступен ABC-анализ товаров. Узнайте, какие товары приносят максимум прибыли.', mp: null, time: '25 фев', group: 'earlier', read: true, dismissed: false },
-            { id: 9, type: 'success', title: 'Массовое обновление цен', message: 'Успешно обновлены цены на 23 товара на Wildberries.', mp: 'WB', time: '24 фев', group: 'earlier', read: true, dismissed: false },
-            { id: 10, type: 'info', title: 'Яндекс Маркет подключен', message: 'Вы успешно подключили Яндекс Маркет. Начните настройку каталога товаров.', mp: 'YM', time: '22 фев', group: 'earlier', read: true, dismissed: false },
+        notifications: [],
+        loading: true,
+
+        filterOptions: [
+            { label: 'Все', value: 'all' },
+            { label: 'Важные', value: 'important' },
+            { label: 'Успешные', value: 'success' },
+            { label: 'Система', value: 'system' },
         ],
 
-        get filterOptions() {
-            const active = this.notifications.filter(n => !n.dismissed);
-            return [
-                { label: 'Все', value: 'all', count: active.length },
-                { label: 'Важные', value: 'warning', count: active.filter(n => n.type === 'warning' || n.type === 'error').length },
-                { label: 'Заказы', value: 'success', count: active.filter(n => n.type === 'success').length },
-                { label: 'Система', value: 'info', count: active.filter(n => n.type === 'info' || n.type === 'promo').length },
-            ];
-        },
-
         get unreadCount() {
-            return this.notifications.filter(n => !n.read && !n.dismissed).length;
+            return this.notifications.filter(n => !n.is_read).length;
         },
 
-        get allDismissed() {
-            return this.notifications.every(n => n.dismissed);
-        },
+        get groupedNotifications() {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const yesterday = new Date(today - 86400000);
 
-        get filteredGroups() {
             const groups = [
-                { label: 'Сегодня', key: 'today' },
-                { label: 'Вчера', key: 'yesterday' },
-                { label: 'Ранее', key: 'earlier' },
+                { label: 'Сегодня', items: [] },
+                { label: 'Вчера', items: [] },
+                { label: 'Ранее', items: [] },
             ];
-            return groups.map(g => ({
-                label: g.label,
-                items: this.notifications.filter(n => {
-                    if (n.dismissed) return false;
-                    if (n.group !== g.key) return false;
-                    if (this.activeFilter === 'all') return true;
-                    if (this.activeFilter === 'warning') return n.type === 'warning' || n.type === 'error';
-                    if (this.activeFilter === 'success') return n.type === 'success';
-                    if (this.activeFilter === 'info') return n.type === 'info' || n.type === 'promo';
-                    return true;
-                })
-            }));
+
+            for (const n of this.notifications) {
+                const d = new Date(n.created_at);
+                if (d >= today) groups[0].items.push(n);
+                else if (d >= yesterday) groups[1].items.push(n);
+                else groups[2].items.push(n);
+            }
+            return groups;
         },
 
-        toggleRead(notif) {
-            notif.read = !notif.read;
+        async init() {
+            await this.loadNotifications();
+            // Refresh global badge
+            if (Alpine.store('notif')) Alpine.store('notif').poll();
         },
 
-        dismiss(notif) {
-            notif.dismissed = true;
+        async loadNotifications() {
+            this.loading = true;
+            try {
+                let url = '/api/notifications?limit=100';
+                if (this.activeFilter === 'important') url += '&category=warning';
+                if (this.activeFilter === 'success') url += '&category=success';
+                if (this.activeFilter === 'system') url += '&category=info';
+                const r = await fetch(url);
+                const d = await r.json();
+                this.notifications = d.items || [];
+            } catch(e) {
+                this.notifications = [];
+            }
+            this.loading = false;
         },
 
-        markAllRead() {
-            this.notifications.forEach(n => n.read = true);
+        formatTime(iso) {
+            if (!iso) return '';
+            const d = new Date(iso);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            if (d >= today) return d.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+            const yesterday = new Date(today - 86400000);
+            if (d >= yesterday) return 'Вчера ' + d.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+            return d.toLocaleDateString('ru-RU', {day: 'numeric', month: 'short'});
         },
 
-        clearAll() {
-            this.notifications.forEach(n => n.dismissed = true);
+        async markRead(notif) {
+            if (!notif.is_read) {
+                notif.is_read = true;
+                await fetch(`/api/notifications/${notif.id}/read`, {method: 'POST'});
+                if (Alpine.store('notif')) Alpine.store('notif').poll();
+            }
+        },
+
+        async toggleRead(notif) {
+            // Only mark as read (we don't support unread via API for simplicity)
+            await this.markRead(notif);
+        },
+
+        async deleteNotif(notif) {
+            this.notifications = this.notifications.filter(n => n.id !== notif.id);
+            await fetch(`/api/notifications/${notif.id}`, {method: 'DELETE'});
+            if (Alpine.store('notif')) Alpine.store('notif').poll();
+        },
+
+        async markAllRead() {
+            this.notifications.forEach(n => n.is_read = true);
+            await fetch('/api/notifications/read-all', {method: 'POST'});
+            if (Alpine.store('notif')) Alpine.store('notif').poll();
+        },
+
+        async clearAll() {
+            // Mark all as read first, then clear read ones
+            await fetch('/api/notifications/read-all', {method: 'POST'});
+            await fetch('/api/notifications/clear', {method: 'POST'});
+            this.notifications = [];
+            if (Alpine.store('notif')) Alpine.store('notif').poll();
         },
     };
 }

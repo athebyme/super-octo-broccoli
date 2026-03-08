@@ -1518,15 +1518,28 @@ class SupplierService:
                                           page: int = 1, per_page: int = 50,
                                           search: str = None,
                                           show_imported: bool = False,
-                                          stock_status: str = None):
+                                          stock_status: str = None,
+                                          wb_filter: str = None):
         """Товары поставщика, доступные для импорта продавцу
 
         stock_status: 'in_stock' | 'out_of_stock' | None (все)
+        wb_filter: 'on_wb' | 'not_on_wb' | None (все)
         """
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
 
-        if not show_imported:
+        # Фильтр по статусу на WB
+        if wb_filter in ('on_wb', 'not_on_wb'):
+            wb_sp_subq = db.session.query(ImportedProduct.supplier_product_id).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_product_id.isnot(None),
+                ImportedProduct.product_id.isnot(None)
+            ).subquery()
+            if wb_filter == 'on_wb':
+                q = q.filter(SupplierProduct.id.in_(wb_sp_subq))
+            else:
+                q = q.filter(~SupplierProduct.id.in_(wb_sp_subq))
+        elif not show_imported:
             # Исключаем уже импортированные
             imported_sp_ids = db.session.query(ImportedProduct.supplier_product_id).filter(
                 ImportedProduct.seller_id == seller_id,

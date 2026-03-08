@@ -7,6 +7,7 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Optional
 import os
+import json
 from cryptography.fernet import Fernet
 
 db = SQLAlchemy()
@@ -840,6 +841,78 @@ class AutoImportSettings(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+
+class ProductDefaults(db.Model):
+    """Дефолтные значения габаритов/веса и глобальное медиа для товаров продавца"""
+    __tablename__ = 'product_defaults'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Тип правила: 'global' (для всех) или 'category' (для конкретной категории WB)
+    rule_type = db.Column(db.String(20), default='global', nullable=False)
+
+    # Привязка к категории (если rule_type='category')
+    wb_subject_id = db.Column(db.Integer, nullable=True)  # ID категории WB
+    wb_category_name = db.Column(db.String(300), nullable=True)  # Название для отображения
+
+    # Дефолтные габариты упаковки (см)
+    length_cm = db.Column(db.Float, nullable=True)  # Длина
+    width_cm = db.Column(db.Float, nullable=True)   # Ширина
+    height_cm = db.Column(db.Float, nullable=True)   # Высота
+
+    # Дефолтный вес брутто (кг)
+    weight_kg = db.Column(db.Float, nullable=True)
+
+    # Глобальное медиа — файлы, добавляемые ко всем карточкам продавца
+    # JSON: [{"filename": "...", "original_name": "...", "type": "photo|video", "size": 12345}]
+    global_media = db.Column(db.Text, nullable=True)
+
+    # Активность правила
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Приоритет (чем выше — тем важнее, категорийные > глобальных)
+    priority = db.Column(db.Integer, default=0, nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('product_defaults', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'rule_type', 'wb_subject_id', name='uq_product_defaults_rule'),
+    )
+
+    def __repr__(self):
+        if self.rule_type == 'category':
+            return f'<ProductDefaults seller={self.seller_id} category={self.wb_category_name}>'
+        return f'<ProductDefaults seller={self.seller_id} global>'
+
+    def has_dimensions(self):
+        return any([self.length_cm, self.width_cm, self.height_cm, self.weight_kg])
+
+    def get_dimensions_dict(self):
+        """Вернуть габариты в формате WB API"""
+        d = {}
+        if self.length_cm is not None:
+            d['length'] = self.length_cm
+        if self.width_cm is not None:
+            d['width'] = self.width_cm
+        if self.height_cm is not None:
+            d['height'] = self.height_cm
+        if self.weight_kg is not None:
+            d['weightBrutto'] = self.weight_kg
+        return d
+
+    def get_global_media_list(self):
+        """Вернуть список глобальных медиа"""
+        if not self.global_media:
+            return []
+        try:
+            return json.loads(self.global_media)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 class ImportedProduct(db.Model):
@@ -3276,3 +3349,118 @@ class FinanceSnapshot(db.Model):
 
     def __repr__(self):
         return f'<FinanceSnapshot seller={self.seller_id} {self.period_start}..{self.period_end}>'
+
+
+# ============================================================================
+# BackgroundJob — фоновые задачи (массовый импорт и т.д.)
+# ============================================================================
+class BackgroundJob(db.Model):
+    __tablename__ = 'background_jobs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    job_uid = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    job_type = db.Column(db.String(50), nullable=False)  # 'bulk_wb_import', 'price_sync', etc.
+    status = db.Column(db.String(20), nullable=False, default='pending')  # pending, running, completed, failed
+    total = db.Column(db.Integer, default=0)
+    processed = db.Column(db.Integer, default=0)
+    succeeded = db.Column(db.Integer, default=0)
+    failed_count = db.Column(db.Integer, default=0)
+    progress_data = db.Column(db.Text, default='{}')  # JSON: per-item results
+    result_data = db.Column(db.Text, default='{}')     # JSON: final summary
+    error_message = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('background_jobs', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_bgjob_seller_status', 'seller_id', 'status'),
+    )
+
+    def set_progress(self, data):
+        import json as _json
+        self.progress_data = _json.dumps(data, ensure_ascii=False)
+
+    def get_progress(self):
+        import json as _json
+        try:
+            return _json.loads(self.progress_data or '{}')
+        except Exception:
+            return {}
+
+    def set_result(self, data):
+        import json as _json
+        self.result_data = _json.dumps(data, ensure_ascii=False)
+
+    def get_result(self):
+        import json as _json
+        try:
+            return _json.loads(self.result_data or '{}')
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'job_uid': self.job_uid,
+            'job_type': self.job_type,
+            'status': self.status,
+            'total': self.total,
+            'processed': self.processed,
+            'succeeded': self.succeeded,
+            'failed_count': self.failed_count,
+            'progress': self.get_progress(),
+            'result': self.get_result(),
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f'<BackgroundJob {self.job_uid} [{self.status}] {self.processed}/{self.total}>'
+
+
+# ============================================================================
+# Notification — центр уведомлений
+# ============================================================================
+class Notification(db.Model):
+    __tablename__ = 'notifications'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    category = db.Column(db.String(30), nullable=False, default='info')  # info, success, warning, error, promo
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, default=False)
+    link = db.Column(db.String(500))  # optional URL to navigate to
+    metadata_json = db.Column(db.Text, default='{}')  # extra context
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('notifications', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_notif_seller_read', 'seller_id', 'is_read'),
+        db.Index('idx_notif_created', 'created_at'),
+    )
+
+    def get_metadata(self):
+        import json as _json
+        try:
+            return _json.loads(self.metadata_json or '{}')
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'category': self.category,
+            'title': self.title,
+            'message': self.message,
+            'is_read': self.is_read,
+            'link': self.link,
+            'metadata': self.get_metadata(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<Notification {self.id} [{self.category}] {self.title[:30]}>'

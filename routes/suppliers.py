@@ -16,7 +16,8 @@ from flask_login import login_required, current_user
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
-    ImportedProduct, Seller, AIHistory, log_admin_action
+    ImportedProduct, Seller, AIHistory, log_admin_action, Product,
+    BackgroundJob, Notification,
 )
 from services.supplier_service import SupplierService
 
@@ -1262,12 +1263,20 @@ def register_supplier_routes(app):
         if stock_status not in ('in_stock', 'out_of_stock', 'all'):
             stock_status = 'in_stock'
         effective_stock = stock_status if stock_status != 'all' else None
+        # Фильтр по WB: on_wb / not_on_wb / all
+        wb_filter = request.args.get('wb_filter', '').strip()
+        if wb_filter not in ('on_wb', 'not_on_wb'):
+            wb_filter = None
+
+        # wb_filter подразумевает show_imported=True
+        effective_show_imported = show_imported or wb_filter is not None
 
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,
             page=page, per_page=50,
-            search=search, show_imported=show_imported,
-            stock_status=effective_stock
+            search=search, show_imported=effective_show_imported,
+            stock_status=effective_stock,
+            wb_filter=wb_filter
         )
 
         # Получаем ID уже импортированных товаров
@@ -1278,6 +1287,51 @@ def register_supplier_routes(app):
             ).all()
         )
 
+        # Получаем ID товаров, которые уже созданы на WB (есть product_id → есть nm_id)
+        wb_existing_sp_ids = set(
+            row[0] for row in db.session.query(ImportedProduct.supplier_product_id).filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.supplier_product_id.isnot(None),
+                ImportedProduct.product_id.isnot(None)
+            ).all()
+        )
+
+        # Дополнительно: определяем товары на WB по совпадению артикула
+        # Используем ту же логику что и wb_product_importer для формирования vendor_code
+        if pagination.items:
+            settings = seller.auto_import_settings
+            if settings and settings.vendor_code_pattern:
+                vc_pattern = settings.vendor_code_pattern
+                vc_supplier_code = settings.supplier_code or ''
+            elif conn.vendor_code_pattern:
+                vc_pattern = conn.vendor_code_pattern
+                vc_supplier_code = conn.supplier_code or ''
+            else:
+                vc_pattern = 'id-{product_id}-{supplier_code}'
+                vc_supplier_code = conn.supplier_code or ''
+
+            # Вычисляем vendor_code для каждого товара на странице
+            sp_vendor_codes = {}
+            for sp in pagination.items:
+                if sp.id in wb_existing_sp_ids:
+                    continue
+                vc = vc_pattern.replace('{product_id}', str(sp.external_id or ''))
+                vc = vc.replace('{supplier_code}', vc_supplier_code)
+                if vc:
+                    sp_vendor_codes[sp.id] = vc
+
+            if sp_vendor_codes:
+                # Проверяем какие артикулы уже есть в карточках продавца на WB
+                existing_vc = set(
+                    row[0] for row in db.session.query(Product.vendor_code).filter(
+                        Product.seller_id == seller.id,
+                        Product.vendor_code.in_(list(sp_vendor_codes.values()))
+                    ).all()
+                )
+                for sp_id, vc in sp_vendor_codes.items():
+                    if vc in existing_vc:
+                        wb_existing_sp_ids.add(sp_id)
+
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
@@ -1286,8 +1340,10 @@ def register_supplier_routes(app):
                                stats=stats, search=search,
                                show_imported=show_imported,
                                stock_status=stock_status,
+                               wb_filter=wb_filter or '',
                                price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
+                               wb_existing_sp_ids=wb_existing_sp_ids,
                                connection=conn)
 
     @app.route('/supplier-catalog/<int:supplier_id>/products/<int:product_id>')
@@ -1390,6 +1446,13 @@ def register_supplier_routes(app):
             'failed': base_q.filter_by(import_status='failed').count(),
         }
 
+        # Недавние загрузки (последние 10 импортированных или с ошибкой)
+        recent_imports = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status.in_(['imported', 'failed']),
+            ImportedProduct.updated_at.isnot(None)
+        ).order_by(ImportedProduct.updated_at.desc()).limit(10).all()
+
         return render_template(
             'seller_my_products.html',
             pagination=pagination,
@@ -1397,6 +1460,7 @@ def register_supplier_routes(app):
             status=status,
             search=search,
             has_wb_key=seller.has_valid_api_key(),
+            recent_imports=recent_imports,
         )
 
     # -------------------------------------------------------------------
@@ -1447,25 +1511,74 @@ def register_supplier_routes(app):
             return jsonify({'error': str(e)}), 500
 
     # -------------------------------------------------------------------
-    # Push to WB — единичный импорт товара на WB
+    # Push to WB — единичный импорт товара на WB (AJAX)
     # -------------------------------------------------------------------
     @app.route('/my-products/<int:product_id>/push-to-wb', methods=['POST'])
     @login_required
     @seller_required
     def seller_push_to_wb(product_id):
-        """Импорт одного товара в магазин WB продавца."""
+        """Импорт одного товара в магазин WB продавца.
+        Поддерживает как AJAX (JSON), так и обычный form POST (redirect)."""
         seller = current_user.seller
         product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first_or_404()
 
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.accept_mimetypes.best == 'application/json'
+
         if not seller.has_valid_api_key():
+            if is_ajax:
+                return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
             flash('API ключ WB не настроен', 'danger')
             return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+        # Авто-валидация если товар не validated
+        if product.import_status not in ('validated', 'imported'):
+            from services.upload_readiness_validator import validate_product_upload_readiness
+            vr = validate_product_upload_readiness(product, seller=seller)
+            if vr['is_ready']:
+                product.import_status = 'validated'
+                db.session.commit()
+            else:
+                error_msgs = [i['message'] for i in vr['issues'] if i['level'] == 'error']
+                err = f"Товар не прошёл валидацию: {'; '.join(error_msgs[:3])}"
+                if is_ajax:
+                    return jsonify({'success': False, 'error': err}), 400
+                flash(err, 'danger')
+                return redirect(url_for('seller_product_wb_preview', product_id=product_id))
 
         from services.wb_product_importer import WBProductImporter
         importer = WBProductImporter(seller)
         success, error, created = importer.import_product_to_wb(product)
+
+        # Создаём уведомление
+        if success:
+            n = Notification(
+                seller_id=seller.id,
+                category='success',
+                title='Товар отправлен на WB',
+                message=f'{(product.title or "")[:60]} — карточка создана',
+                link=f'/my-products/{product.id}/wb-preview',
+            )
+            db.session.add(n)
+            db.session.commit()
+        else:
+            n = Notification(
+                seller_id=seller.id,
+                category='error',
+                title='Ошибка импорта на WB',
+                message=f'{(product.title or "")[:40]}: {(error or "")[:120]}',
+                link=f'/my-products/{product.id}/wb-preview',
+            )
+            db.session.add(n)
+            db.session.commit()
+
+        if is_ajax:
+            return jsonify({
+                'success': success,
+                'error': error,
+                'product_id': created.id if hasattr(created, 'id') else created,
+            })
 
         if success:
             flash(f'Товар "{product.title}" отправлен на WB', 'success')
@@ -1481,25 +1594,173 @@ def register_supplier_routes(app):
     @login_required
     @seller_required
     def seller_push_to_wb_bulk():
-        """Массовый импорт товаров в магазин WB."""
+        """Массовый импорт товаров в магазин WB — фоновая задача."""
+        import uuid
+        import threading
+
         seller = current_user.seller
 
         if not seller.has_valid_api_key():
-            return jsonify({'error': 'API ключ WB не настроен'}), 400
+            return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
 
         data = request.get_json(silent=True) or {}
         product_ids = data.get('product_ids', [])
 
         if not product_ids:
-            return jsonify({'error': 'Не выбраны товары'}), 400
+            return jsonify({'success': False, 'error': 'Не выбраны товары'}), 400
 
-        try:
-            from services.wb_product_importer import WBProductImporter
-            importer = WBProductImporter(seller)
-            result = importer.import_multiple_products(product_ids)
-            return jsonify(result)
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+        # Создаём фоновую задачу
+        job_uid = f"bulk_wb_{uuid.uuid4().hex[:12]}"
+        job = BackgroundJob(
+            job_uid=job_uid,
+            seller_id=seller.id,
+            job_type='bulk_wb_import',
+            status='pending',
+            total=len(product_ids),
+            processed=0,
+            succeeded=0,
+            failed_count=0,
+        )
+        job.set_progress({'product_ids': product_ids, 'items': []})
+        db.session.add(job)
+        db.session.commit()
+
+        # Запускаем обработку в фоновом потоке
+        from seller_platform import app as flask_app
+
+        def run_bulk_import(app, job_uid, seller_id, product_ids):
+            with app.app_context():
+                try:
+                    from services.wb_product_importer import WBProductImporter
+                    from services.upload_readiness_validator import validate_product_upload_readiness
+
+                    job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                    if not job:
+                        return
+                    job.status = 'running'
+                    db.session.commit()
+
+                    seller = Seller.query.get(seller_id)
+                    importer = WBProductImporter(seller)
+
+                    # Авто-валидация pending/failed
+                    products_to_validate = ImportedProduct.query.filter(
+                        ImportedProduct.id.in_(product_ids),
+                        ImportedProduct.seller_id == seller_id,
+                        ImportedProduct.import_status.in_(['pending', 'failed'])
+                    ).all()
+
+                    validated_count = 0
+                    for p in products_to_validate:
+                        try:
+                            vr = validate_product_upload_readiness(p, seller=seller)
+                            if vr['is_ready']:
+                                p.import_status = 'validated'
+                                validated_count += 1
+                        except Exception:
+                            pass
+                    if products_to_validate:
+                        db.session.commit()
+
+                    # Импорт по одному с обновлением прогресса
+                    items_progress = []
+                    for idx, pid in enumerate(product_ids):
+                        product = ImportedProduct.query.filter_by(
+                            id=pid, seller_id=seller_id
+                        ).first()
+                        item_result = {'product_id': pid, 'title': '', 'status': 'skipped', 'error': None}
+                        if product:
+                            item_result['title'] = (product.title or '')[:50]
+                            if product.import_status not in ('validated', 'imported'):
+                                item_result['status'] = 'skipped'
+                                item_result['error'] = f'Статус: {product.import_status}'
+                                job.failed_count += 1
+                            else:
+                                try:
+                                    success, error, created = importer.import_product_to_wb(product)
+                                    if success:
+                                        item_result['status'] = 'success'
+                                        job.succeeded += 1
+                                    else:
+                                        item_result['status'] = 'failed'
+                                        item_result['error'] = error or 'Неизвестная ошибка'
+                                        job.failed_count += 1
+                                except Exception as e:
+                                    item_result['status'] = 'failed'
+                                    item_result['error'] = str(e)[:200]
+                                    job.failed_count += 1
+                        else:
+                            item_result['error'] = 'Товар не найден'
+                            job.failed_count += 1
+
+                        items_progress.append(item_result)
+                        job.processed = idx + 1
+                        job.set_progress({'product_ids': product_ids, 'items': items_progress})
+                        db.session.commit()
+
+                    # Завершение
+                    job.status = 'completed'
+                    job.set_result({
+                        'imported': job.succeeded,
+                        'failed': job.failed_count,
+                        'total': job.total,
+                        'auto_validated': validated_count,
+                        'errors': [
+                            f"{it['title']}: {it['error']}"
+                            for it in items_progress if it['status'] != 'success' and it['error']
+                        ],
+                    })
+                    db.session.commit()
+
+                    # Создаём уведомление
+                    if job.succeeded > 0:
+                        cat = 'success' if job.failed_count == 0 else 'warning'
+                        n = Notification(
+                            seller_id=seller_id,
+                            category=cat,
+                            title='Массовый импорт на WB завершён',
+                            message=f'Импортировано {job.succeeded} из {job.total} товаров'
+                                    + (f', ошибок: {job.failed_count}' if job.failed_count else ''),
+                            link='/my-products?status=imported',
+                        )
+                    else:
+                        n = Notification(
+                            seller_id=seller_id,
+                            category='error',
+                            title='Массовый импорт на WB не удался',
+                            message=f'Ни один из {job.total} товаров не был импортирован',
+                            link='/my-products',
+                        )
+                    db.session.add(n)
+                    db.session.commit()
+
+                except Exception as e:
+                    try:
+                        job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                        if job:
+                            job.status = 'failed'
+                            job.error_message = str(e)[:500]
+                            db.session.commit()
+                        n = Notification(
+                            seller_id=seller_id,
+                            category='error',
+                            title='Ошибка массового импорта',
+                            message=str(e)[:200],
+                            link='/my-products',
+                        )
+                        db.session.add(n)
+                        db.session.commit()
+                    except Exception:
+                        pass
+
+        t = threading.Thread(
+            target=run_bulk_import,
+            args=(flask_app, job_uid, seller.id, product_ids),
+            daemon=True,
+        )
+        t.start()
+
+        return jsonify({'success': True, 'job_uid': job_uid})
 
     # -------------------------------------------------------------------
     # Validate product for WB — пометить как валидированный
@@ -1508,29 +1769,48 @@ def register_supplier_routes(app):
     @login_required
     @seller_required
     def seller_validate_product(product_id):
-        """Пометить товар как validated (готов к пушу на WB)."""
+        """Пометить товар как validated (готов к пушу на WB).
+        Использует глубокую валидацию: цены, фото, характеристики, баркоды."""
         seller = current_user.seller
         product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first_or_404()
 
-        # Проверяем минимальные требования
-        issues = []
-        if not product.title:
-            issues.append('Нет названия')
-        if not product.brand:
-            issues.append('Нет бренда')
-        if not product.wb_subject_id:
-            issues.append('Нет категории WB')
+        from services.upload_readiness_validator import validate_product_upload_readiness
+        result = validate_product_upload_readiness(product, seller=seller)
 
-        if issues:
-            flash(f'Невозможно валидировать: {", ".join(issues)}', 'danger')
+        if not result['is_ready']:
+            error_msgs = [i['message'] for i in result['issues'] if i['level'] == 'error']
+            flash(f'Невозможно валидировать: {"; ".join(error_msgs[:5])}', 'danger')
         else:
             product.import_status = 'validated'
             db.session.commit()
-            flash('Товар готов к импорту на WB', 'success')
+            if result['warnings_count'] > 0:
+                warn_msgs = [i['message'] for i in result['issues'] if i['level'] == 'warning']
+                flash(f'Товар готов к импорту на WB (предупреждений: {len(warn_msgs)})', 'warning')
+            else:
+                flash('Товар готов к импорту на WB', 'success')
 
         return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+    # -------------------------------------------------------------------
+    # Deep validation API (JSON) — полная проверка готовности
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/check-readiness')
+    @login_required
+    @seller_required
+    def seller_check_readiness(product_id):
+        """API: глубокая проверка готовности товара к загрузке на WB."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+        if not product:
+            return jsonify({'error': 'Товар не найден'}), 404
+
+        from services.upload_readiness_validator import validate_product_upload_readiness
+        result = validate_product_upload_readiness(product, seller=seller)
+        return jsonify(result)
 
     # -------------------------------------------------------------------
     # Удалить импортированный товар — сбросить для повторного импорта

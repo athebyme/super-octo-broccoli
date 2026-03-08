@@ -24,9 +24,7 @@
         position: relative;
     }
     .my-stat-card:hover { background: var(--bg); }
-    .my-stat-card.active {
-        background: var(--bg);
-    }
+    .my-stat-card.active { background: var(--bg); }
     .my-stat-card.active::after {
         content: '';
         position: absolute;
@@ -51,54 +49,30 @@
         font-style: italic;
         color: var(--text);
     }
+    /* Progress bar animation */
+    @keyframes progress-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+    .progress-pulse { animation: progress-pulse 1.5s ease-in-out infinite; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
-     x-data="{
-        selectedAll: false,
-        selected: [],
-        bulkRunning: false,
-        bulkResult: null,
-        pushBulkToWB() {
-            if (!this.selected.length) return;
-            if (!confirm('Отправить ' + this.selected.length + ' товаров на WB?')) return;
-            this.bulkRunning = true;
-            this.bulkResult = null;
-            fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({product_ids: this.selected})
-            })
-            .then(r => r.json())
-            .then(data => {
-                this.bulkResult = data;
-                this.bulkRunning = false;
-                if (data.success > 0) setTimeout(() => location.reload(), 2000);
-            })
-            .catch(e => {
-                alert('Ошибка: ' + e.message);
-                this.bulkRunning = false;
-            });
-        },
-        deleteBulk() {
-            if (!this.selected.length) return;
-            if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
-            this.bulkRunning = true;
-            fetch('{{ url_for("seller_delete_imported_products_bulk") }}', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({product_ids: this.selected})
-            })
-            .then(r => r.json())
-            .then(() => location.reload())
-            .catch(e => {
-                alert('Ошибка: ' + e.message);
-                this.bulkRunning = false;
-            });
-        }
-     }">
+     x-data="myProductsPage()"
+     x-init="init()">
+
+    <!-- Inline notification (replaces flash) -->
+    <template x-if="notification">
+        <div x-transition class="mb-4 px-4 py-3 rounded-lg text-sm font-medium"
+             :class="notification.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-green-50 text-green-800 border border-green-200'">
+            <div class="flex items-center justify-between">
+                <span x-text="notification.msg"></span>
+                <button @click="notification = null" class="ml-4 text-current opacity-50 hover:opacity-100">&times;</button>
+            </div>
+        </div>
+    </template>
 
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
         <div class="relative">
@@ -159,27 +133,66 @@
         </div>
         <div class="flex gap-2">
             {% if has_wb_key %}
-            <button @click="pushBulkToWB()" :disabled="selected.length === 0 || bulkRunning"
+            <button @click="pushBulkToWB()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
                     class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40">
-                <span x-show="!bulkRunning">Отправить на WB</span>
-                <span x-show="bulkRunning">Отправка...</span>
+                <span x-show="!activeJob || activeJob.status === 'completed' || activeJob.status === 'failed'">Отправить на WB</span>
+                <span x-show="activeJob && (activeJob.status === 'pending' || activeJob.status === 'running')" class="flex items-center gap-2">
+                    <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Отправка...
+                </span>
             </button>
             {% endif %}
-            <button @click="deleteBulk()" :disabled="selected.length === 0 || bulkRunning"
+            <button @click="deleteBulk()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
                     class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-red-300 hover:text-red-600 disabled:opacity-40">
                 Удалить выбранные
             </button>
         </div>
     </div>
 
-    <!-- Bulk result -->
-    <div x-show="bulkResult" x-cloak class="bg-white border-x border-gray-200 px-4 py-3">
-        <div class="flex items-center gap-4 text-sm">
-            <span class="text-gray-900 font-medium" x-text="'Отправлено: ' + (bulkResult?.success || 0)"></span>
-            <span class="text-gray-500" x-text="'Ошибок: ' + (bulkResult?.failed || 0)"></span>
-            <span class="text-gray-400" x-text="'Пропущено: ' + (bulkResult?.skipped || 0)"></span>
+    <!-- Progress bar (during bulk import — persistent) -->
+    <template x-if="activeJob">
+        <div class="bg-white border-x border-gray-200 px-4 py-3">
+            <template x-if="activeJob.status === 'pending' || activeJob.status === 'running'">
+                <div>
+                    <div class="flex items-center justify-between text-sm mb-2">
+                        <span class="text-gray-700 font-medium flex items-center gap-2">
+                            <svg class="animate-spin h-4 w-4 text-gray-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span x-text="'Обработка товаров ' + activeJob.processed + ' / ' + activeJob.total + '...'"></span>
+                        </span>
+                        <span class="text-gray-400" x-text="Math.floor(bulkElapsed / 60) + ':' + String(bulkElapsed % 60).padStart(2, '0')"></span>
+                    </div>
+                    <div class="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                        <div class="h-full bg-gray-900 rounded-full transition-all duration-500"
+                             :style="'width:' + (activeJob.total > 0 ? Math.round(activeJob.processed / activeJob.total * 100) : 0) + '%'"></div>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-2">Валидация, создание карточек, установка цен, загрузка фото — ~30-60 сек/товар. Можно уйти со страницы.</p>
+                </div>
+            </template>
+            <template x-if="activeJob.status === 'completed' || activeJob.status === 'failed'">
+                <div>
+                    <div class="flex items-center gap-4 text-sm">
+                        <span class="text-green-700 font-medium" x-text="'Отправлено: ' + (activeJob.succeeded || 0)"></span>
+                        <span class="text-red-600" x-text="'Ошибок: ' + (activeJob.failed_count || 0)"></span>
+                        <span class="text-gray-400" x-text="'Всего: ' + activeJob.total"></span>
+                        <button @click="dismissJob()" class="ml-auto text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+                    </div>
+                    <template x-if="activeJob.result && activeJob.result.errors && activeJob.result.errors.length > 0">
+                        <div class="mt-2 text-xs text-red-600 space-y-0.5 max-h-40 overflow-y-auto">
+                            <template x-for="(err, i) in activeJob.result.errors.slice(0, 10)" :key="i">
+                                <div x-text="err"></div>
+                            </template>
+                            <template x-if="activeJob.result.errors.length > 10">
+                                <div class="text-gray-400" x-text="'... и ещё ' + (activeJob.result.errors.length - 10) + ' ошибок'"></div>
+                            </template>
+                        </div>
+                    </template>
+                    <template x-if="activeJob.error_message">
+                        <div class="mt-2 text-xs text-red-600" x-text="activeJob.error_message"></div>
+                    </template>
+                </div>
+            </template>
         </div>
-    </div>
+    </template>
 
     <!-- Products list -->
     <div class="bg-white border border-gray-200 rounded-b-lg overflow-hidden">
@@ -210,13 +223,12 @@
                     <td class="px-3 py-2">
                         {% set photos = p.photo_urls %}
                         {% if photos and photos != '[]' %}
-                        <div class="w-10 h-10 rounded bg-gray-100 overflow-hidden">
-                            {% set first_photo = (photos | tojson if photos is string else photos) %}
+                        <div class="w-10 h-10 rounded bg-gray-100 overflow-hidden flex-shrink-0">
                             <img src="{{ url_for('serve_imported_product_photo', product_id=p.id, photo_idx=0) }}"
                                  class="w-full h-full object-cover" onerror="this.style.display='none'" alt="">
                         </div>
                         {% else %}
-                        <div class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300">
+                        <div class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300 flex-shrink-0">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         </div>
                         {% endif %}
@@ -263,7 +275,7 @@
                         {% elif p.import_status == 'validated' %}
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Готов</span>
                         {% elif p.import_status == 'failed' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fef2f2;color:#991b1b">Ошибка</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fef2f2;color:#991b1b" title="{{ p.import_error or '' }}">Ошибка</span>
                         {% else %}
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fffbeb;color:#92400e">Ожидает</span>
                         {% endif %}
@@ -321,6 +333,202 @@
         </nav>
     </div>
     {% endif %}
+
+    <!-- Import History -->
+    {% if recent_imports %}
+    <div class="mt-8">
+        <h2 class="text-lg font-medium text-gray-900 mb-3">История загрузок</h2>
+        <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Товар</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Дата</th>
+                        <th class="px-4 py-2 text-center text-xs font-medium text-gray-500">Результат</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Детали</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for imp in recent_imports %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-2">
+                            <a href="{{ url_for('seller_product_wb_preview', product_id=imp.id) }}"
+                               class="text-sm text-gray-900 hover:text-gray-600">
+                                {{ (imp.title or 'Без названия')[:40] }}
+                            </a>
+                            <span class="text-xs text-gray-400 ml-1">#{{ imp.external_id }}</span>
+                        </td>
+                        <td class="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">
+                            {% if imp.imported_at %}
+                            {{ imp.imported_at.strftime('%d.%m %H:%M') }}
+                            {% elif imp.updated_at %}
+                            {{ imp.updated_at.strftime('%d.%m %H:%M') }}
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-center">
+                            {% if imp.import_status == 'imported' %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">OK</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700">Ошибка</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-xs text-gray-500 max-w-xs truncate" title="{{ imp.import_error or 'Успешно загружен на WB' }}">
+                            {% if imp.import_error %}
+                            {{ imp.import_error[:80] }}
+                            {% elif imp.wb_nm_id %}
+                            nmID: {{ imp.wb_nm_id }}
+                            {% else %}
+                            Успешно
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
+<script>
+function myProductsPage() {
+    return {
+        selectedAll: false,
+        selected: [],
+        activeJob: null,
+        bulkElapsed: 0,
+        notification: null,
+        _pollTimer: null,
+        _elapsedTimer: null,
+
+        init() {
+            // Check for active/recent job in localStorage
+            const savedJobUid = localStorage.getItem('bulk_wb_job_uid');
+            if (savedJobUid) {
+                this.resumeJob(savedJobUid);
+            } else {
+                // Also check server for active jobs
+                this.checkActiveJobs();
+            }
+        },
+
+        async checkActiveJobs() {
+            try {
+                const r = await fetch('/api/jobs/active');
+                const d = await r.json();
+                if (d.jobs && d.jobs.length > 0) {
+                    const wbJob = d.jobs.find(j => j.job_type === 'bulk_wb_import');
+                    if (wbJob) {
+                        localStorage.setItem('bulk_wb_job_uid', wbJob.job_uid);
+                        this.activeJob = wbJob;
+                        this.startPolling(wbJob.job_uid);
+                        this.startElapsedTimer();
+                    }
+                }
+            } catch(e) {}
+        },
+
+        async resumeJob(jobUid) {
+            try {
+                const r = await fetch('/api/jobs/' + jobUid);
+                if (!r.ok) { localStorage.removeItem('bulk_wb_job_uid'); return; }
+                const job = await r.json();
+                this.activeJob = job;
+                if (job.status === 'pending' || job.status === 'running') {
+                    this.startPolling(jobUid);
+                    this.startElapsedTimer();
+                }
+                // Keep completed/failed visible for user to dismiss
+            } catch(e) {
+                localStorage.removeItem('bulk_wb_job_uid');
+            }
+        },
+
+        pushBulkToWB() {
+            if (!this.selected.length) return;
+            if (!confirm('Отправить ' + this.selected.length + ' товаров на WB?\nТовары будут автоматически провалидированы.')) return;
+            this.bulkElapsed = 0;
+
+            fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_ids: this.selected})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.job_uid) {
+                    localStorage.setItem('bulk_wb_job_uid', data.job_uid);
+                    this.activeJob = {job_uid: data.job_uid, status: 'pending', total: this.selected.length, processed: 0, succeeded: 0, failed_count: 0};
+                    this.startPolling(data.job_uid);
+                    this.startElapsedTimer();
+                } else if (data.error) {
+                    this.showNotification('Ошибка: ' + data.error, 'error');
+                }
+            })
+            .catch(e => {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            });
+        },
+
+        startPolling(jobUid) {
+            if (this._pollTimer) clearInterval(this._pollTimer);
+            this._pollTimer = setInterval(() => this.pollJob(jobUid), 2000);
+        },
+
+        startElapsedTimer() {
+            if (this._elapsedTimer) clearInterval(this._elapsedTimer);
+            this._elapsedTimer = setInterval(() => { this.bulkElapsed++; }, 1000);
+        },
+
+        async pollJob(jobUid) {
+            try {
+                const r = await fetch('/api/jobs/' + jobUid);
+                if (!r.ok) { this.stopPolling(); return; }
+                const job = await r.json();
+                this.activeJob = job;
+                if (job.status === 'completed' || job.status === 'failed') {
+                    this.stopPolling();
+                    // Refresh global notification badge
+                    if (Alpine.store('notif')) Alpine.store('notif').poll();
+                    // Reload page after successful import
+                    if (job.succeeded > 0) {
+                        setTimeout(() => location.reload(), 3000);
+                    }
+                }
+            } catch(e) {}
+        },
+
+        stopPolling() {
+            if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+            if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        },
+
+        dismissJob() {
+            this.activeJob = null;
+            localStorage.removeItem('bulk_wb_job_uid');
+            this.stopPolling();
+        },
+
+        deleteBulk() {
+            if (!this.selected.length) return;
+            if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
+            fetch('{{ url_for("seller_delete_imported_products_bulk") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_ids: this.selected})
+            })
+            .then(r => r.json())
+            .then(() => location.reload())
+            .catch(e => {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            });
+        },
+
+        showNotification(msg, type) {
+            this.notification = {msg, type};
+            setTimeout(() => this.notification = null, 5000);
+        }
+    };
+}
+</script>
 {% endblock %}
