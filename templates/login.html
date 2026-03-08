@@ -402,41 +402,34 @@
         animation: lineSweep 4s ease-in-out infinite;
     }
 
-    /* Rotating word */
+    /* Rotating word — character reveal */
     .login-word-rotator {
-        display: inline-block;
-        position: relative;
-        overflow: hidden;
-        vertical-align: bottom;
-        height: 1.15em;
-    }
-    .login-word-rotator em {
-        display: block;
+        display: inline-flex;
         color: var(--accent);
         font-style: italic;
-        transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1),
-                    opacity 0.6s ease,
-                    filter 0.6s ease;
-        position: absolute;
-        left: 0;
-        white-space: nowrap;
-        will-change: transform, opacity;
+        min-width: 2ch;
     }
-    .login-word-rotator em.word-enter {
-        transform: translateY(70%);
+    .login-word-rotator .word-char {
+        display: inline-block;
         opacity: 0;
-        filter: blur(4px);
+        transform: translateY(0.3em);
+        filter: blur(6px);
+        animation: charReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
-    .login-word-rotator em.word-active {
-        transform: translateY(0);
-        opacity: 1;
-        filter: blur(0);
-        position: relative;
+    .login-word-rotator .word-char.is-space {
+        width: 0.3em;
     }
-    .login-word-rotator em.word-exit {
-        transform: translateY(-70%);
-        opacity: 0;
-        filter: blur(4px);
+    .login-word-rotator .word-char.fade-out {
+        animation: charFade 0.4s cubic-bezier(0.4, 0, 1, 1) forwards;
+    }
+    @keyframes charReveal {
+        0%   { opacity: 0; transform: translateY(0.3em); filter: blur(6px); }
+        50%  { opacity: 0.7; filter: blur(2px); }
+        100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+    }
+    @keyframes charFade {
+        0%   { opacity: 1; transform: translateY(0); filter: blur(0); }
+        100% { opacity: 0; transform: translateY(-0.2em); filter: blur(4px); }
     }
 </style>
 {% endblock %}
@@ -472,12 +465,7 @@
             <h1 class="anim-fade-right anim-delay-2">
                 Управляйте<br>
                 продажами<br>
-                <span class="login-word-rotator" x-data="wordRotator()" x-init="start()">
-                    <template x-for="(w, i) in words" :key="i">
-                        <em :class="{ 'word-active': i === current, 'word-exit': i === prev, 'word-enter': i !== current && i !== prev }"
-                            x-text="w" x-show="i === current || i === prev"></em>
-                    </template>
-                </span>
+                <span class="login-word-rotator" id="word-rotator"></span>
             </h1>
             <p class="anim-fade-right anim-delay-3">
                 Единая платформа для аналитики, ценообразования и управления товарами на маркетплейсах. Wildberries, Ozon, Яндекс Маркет.
@@ -554,26 +542,53 @@
 </div>
 
 <script>
-function wordRotator() {
-    return {
-        words: [
-            'эффективно', 'прибыльно', 'умнее', 'быстрее', 'удобно',
-            'масштабно', 'точно', 'грамотно', 'стабильно', 'безопасно',
-            'наглядно', 'автоматически', 'легко', 'системно', 'гибко',
-            'прозрачно', 'надёжно', 'уверенно', 'разумно', 'продуктивно',
-            'стратегически', 'без стресса', 'с удовольствием', 'на максимум',
-            'без ошибок', 'с AI', 'круглосуточно', 'по-новому', 'комплексно',
-            'с аналитикой', 'профессионально', 'современно',
-        ],
-        current: 0,
-        prev: -1,
-        start() {
-            setInterval(() => {
-                this.prev = this.current;
-                this.current = (this.current + 1) % this.words.length;
-            }, 3000);
+(function() {
+    const words = [
+        'эффективно', 'прибыльно', 'умнее', 'быстрее', 'удобно',
+        'масштабно', 'точно', 'грамотно', 'стабильно', 'безопасно',
+        'наглядно', 'автоматически', 'легко', 'системно', 'гибко',
+        'прозрачно', 'надёжно', 'уверенно', 'разумно', 'продуктивно',
+        'стратегически', 'без стресса', 'с удовольствием', 'на максимум',
+        'без ошибок', 'с AI', 'круглосуточно', 'по-новому', 'комплексно',
+        'с аналитикой', 'профессионально', 'современно',
+    ];
+    let idx = 0;
+    const el = document.getElementById('word-rotator');
+    if (!el) return;
+
+    function renderWord(word, fadeIn) {
+        el.innerHTML = '';
+        for (let i = 0; i < word.length; i++) {
+            const span = document.createElement('span');
+            span.className = 'word-char' + (word[i] === ' ' ? ' is-space' : '');
+            span.textContent = word[i] === ' ' ? '\u00A0' : word[i];
+            if (fadeIn) {
+                span.style.animationDelay = (i * 35) + 'ms';
+            }
+            el.appendChild(span);
         }
     }
-}
+
+    function fadeOut(cb) {
+        const chars = el.querySelectorAll('.word-char');
+        const total = chars.length;
+        if (total === 0) { cb(); return; }
+        chars.forEach((ch, i) => {
+            ch.style.animationDelay = (i * 25) + 'ms';
+            ch.classList.add('fade-out');
+        });
+        setTimeout(cb, total * 25 + 400);
+    }
+
+    function next() {
+        fadeOut(() => {
+            idx = (idx + 1) % words.length;
+            renderWord(words[idx], true);
+        });
+    }
+
+    renderWord(words[0], true);
+    setInterval(next, 3500);
+})();
 </script>
 {% endblock %}
