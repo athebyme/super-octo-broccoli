@@ -1,0 +1,602 @@
+{% extends "base.html" %}
+
+{% block title %}Дефолты товаров - Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="productDefaults()">
+
+    <!-- Hero Banner -->
+    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
+        <div class="relative">
+            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">
+                Дефолты товаров
+            </h1>
+            <p class="mt-2 text-sm text-gray-400">
+                Задайте габариты и вес по умолчанию, а также общие фото/видео для всех карточек
+            </p>
+        </div>
+    </div>
+
+    <!-- Табы -->
+    <div class="flex space-x-1 bg-gray-100 rounded-lg p-1 mb-6">
+        <button @click="tab = 'dimensions'"
+                :class="tab === 'dimensions' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'"
+                class="flex-1 py-2.5 px-4 text-sm font-medium rounded-md transition-all">
+            <span class="flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                </svg>
+                Габариты и вес
+            </span>
+        </button>
+        <button @click="tab = 'media'"
+                :class="tab === 'media' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'"
+                class="flex-1 py-2.5 px-4 text-sm font-medium rounded-md transition-all">
+            <span class="flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                </svg>
+                Глобальные медиа
+            </span>
+        </button>
+    </div>
+
+    <!-- ============== ТАБ: ГАБАРИТЫ ============== -->
+    <div x-show="tab === 'dimensions'" x-cloak>
+
+        <!-- Глобальные дефолты -->
+        <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6 mb-6">
+            <div class="flex items-center justify-between mb-5">
+                <div>
+                    <h3 class="text-lg font-medium text-gray-900">Глобальные дефолты</h3>
+                    <p class="text-sm text-gray-500 mt-1">Применяются ко всем товарам, если нет данных от поставщика</p>
+                </div>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    По умолчанию
+                </span>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1.5">Длина, см</label>
+                    <div class="relative">
+                        <input type="number" step="0.1" min="0" x-model="globalRule.length_cm"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm pr-10"
+                               placeholder="10">
+                        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">см</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1.5">Ширина, см</label>
+                    <div class="relative">
+                        <input type="number" step="0.1" min="0" x-model="globalRule.width_cm"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm pr-10"
+                               placeholder="10">
+                        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">см</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1.5">Высота, см</label>
+                    <div class="relative">
+                        <input type="number" step="0.1" min="0" x-model="globalRule.height_cm"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm pr-10"
+                               placeholder="5">
+                        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">см</span>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500 mb-1.5">Вес брутто, кг</label>
+                    <div class="relative">
+                        <input type="number" step="0.01" min="0" x-model="globalRule.weight_kg"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm pr-10"
+                               placeholder="0.1">
+                        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">кг</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-5 flex justify-end">
+                <button @click="saveGlobal()" :disabled="saving"
+                        class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-[#0a0a0a] rounded-lg hover:bg-gray-800 transition disabled:opacity-50">
+                    <svg x-show="saving" class="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span x-text="saving ? 'Сохраняю...' : 'Сохранить'"></span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Правила по категориям -->
+        <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
+            <div class="flex items-center justify-between mb-5">
+                <div>
+                    <h3 class="text-lg font-medium text-gray-900">Правила по категориям</h3>
+                    <p class="text-sm text-gray-500 mt-1">
+                        Переопределяют глобальные дефолты для конкретных категорий WB
+                    </p>
+                </div>
+                <button @click="showAddCategory = true"
+                        class="inline-flex items-center px-3 py-1.5 text-sm font-medium text-[#c45d3e] bg-[#f0e0da] rounded-lg hover:bg-[#e8d0c8] transition">
+                    <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Добавить категорию
+                </button>
+            </div>
+
+            <!-- Форма добавления категории -->
+            <div x-show="showAddCategory" x-collapse x-cloak
+                 class="mb-5 bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <h4 class="text-sm font-medium text-gray-700 mb-3">Новое правило для категории</h4>
+                <div class="mb-3">
+                    <label class="block text-xs font-medium text-gray-500 mb-1.5">Категория WB</label>
+                    <div class="relative">
+                        <input type="text" x-model="newCatSearch"
+                               @input="filterCategories()"
+                               @focus="showCatDropdown = true"
+                               placeholder="Начните вводить название категории..."
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm">
+                        <!-- Dropdown -->
+                        <div x-show="showCatDropdown && filteredCategories.length > 0" x-cloak
+                             @click.outside="showCatDropdown = false"
+                             class="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                            <template x-for="cat in filteredCategories.slice(0, 20)" :key="cat.id">
+                                <button @click="selectCategory(cat)"
+                                        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 last:border-0">
+                                    <span x-text="cat.subject_name" class="font-medium"></span>
+                                    <span x-text="'(ID: ' + cat.subject_id + ')'" class="text-gray-400 text-xs ml-1"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                    <div x-show="newCatSelected" x-cloak class="mt-2">
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            <span x-text="newCatName"></span>
+                            <button @click="newCatSelected = false; newCatSearch = ''; newCatId = null; newCatName = ''" class="hover:text-green-600">
+                                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>
+                            </button>
+                        </span>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Длина, см</label>
+                        <input type="number" step="0.1" x-model="newCatLength" class="block w-full rounded-lg border-gray-300 text-sm" placeholder="10">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Ширина, см</label>
+                        <input type="number" step="0.1" x-model="newCatWidth" class="block w-full rounded-lg border-gray-300 text-sm" placeholder="10">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Высота, см</label>
+                        <input type="number" step="0.1" x-model="newCatHeight" class="block w-full rounded-lg border-gray-300 text-sm" placeholder="5">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Вес, кг</label>
+                        <input type="number" step="0.01" x-model="newCatWeight" class="block w-full rounded-lg border-gray-300 text-sm" placeholder="0.1">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2">
+                    <button @click="showAddCategory = false; resetNewCat()"
+                            class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">
+                        Отмена
+                    </button>
+                    <button @click="saveCategory()" :disabled="!newCatSelected || saving"
+                            class="px-4 py-1.5 text-sm font-medium text-white bg-[#c45d3e] rounded-lg hover:bg-[#a34a2f] transition disabled:opacity-50">
+                        Сохранить
+                    </button>
+                </div>
+            </div>
+
+            <!-- Список категорийных правил -->
+            <div class="space-y-3">
+                {% if category_rules %}
+                    {% for rule in category_rules %}
+                    <div class="flex items-center gap-4 p-4 bg-gray-50 rounded-lg border border-gray-100 group hover:border-gray-200 transition"
+                         x-data="{ editing: false, len: {{ rule.length_cm or 'null' }}, wid: {{ rule.width_cm or 'null' }}, hei: {{ rule.height_cm or 'null' }}, wei: {{ rule.weight_kg or 'null' }} }">
+
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <span class="font-medium text-sm text-gray-900 truncate">{{ rule.wb_category_name or 'Без названия' }}</span>
+                                <span class="text-xs text-gray-400">ID: {{ rule.wb_subject_id }}</span>
+                            </div>
+                            <div x-show="!editing" class="mt-1 flex gap-3 text-xs text-gray-500">
+                                <span>{{ rule.length_cm or '—' }} x {{ rule.width_cm or '—' }} x {{ rule.height_cm or '—' }} см</span>
+                                <span>{{ rule.weight_kg or '—' }} кг</span>
+                            </div>
+                        </div>
+
+                        <!-- Inline edit -->
+                        <div x-show="editing" x-cloak class="flex gap-2">
+                            <input type="number" step="0.1" x-model="len" class="w-16 rounded border-gray-300 text-xs py-1" placeholder="Д">
+                            <input type="number" step="0.1" x-model="wid" class="w-16 rounded border-gray-300 text-xs py-1" placeholder="Ш">
+                            <input type="number" step="0.1" x-model="hei" class="w-16 rounded border-gray-300 text-xs py-1" placeholder="В">
+                            <input type="number" step="0.01" x-model="wei" class="w-16 rounded border-gray-300 text-xs py-1" placeholder="Вес">
+                        </div>
+
+                        <div class="flex items-center gap-1">
+                            <template x-if="!editing">
+                                <button @click="editing = true" class="p-1.5 text-gray-400 hover:text-gray-600 rounded opacity-0 group-hover:opacity-100 transition" title="Редактировать">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                    </svg>
+                                </button>
+                            </template>
+                            <template x-if="editing">
+                                <div class="flex gap-1">
+                                    <button @click="updateCategory({{ rule.id }}, {{ rule.wb_subject_id }}, '{{ rule.wb_category_name }}', len, wid, hei, wei); editing = false"
+                                            class="p-1.5 text-green-600 hover:text-green-800 rounded">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                        </svg>
+                                    </button>
+                                    <button @click="editing = false" class="p-1.5 text-gray-400 hover:text-gray-600 rounded">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </template>
+
+                            <button @click="if(confirm('Удалить правило?')) deleteCategory({{ rule.id }})"
+                                    class="p-1.5 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition" title="Удалить">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center py-8 text-gray-400">
+                        <svg class="mx-auto h-10 w-10 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+                        </svg>
+                        <p class="text-sm">Нет категорийных правил</p>
+                        <p class="text-xs mt-1">Добавьте правило для категории, чтобы задать свои габариты</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Подсказка -->
+        <div class="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div class="flex gap-3">
+                <svg class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+                <div class="text-sm text-amber-800">
+                    <p class="font-medium">Приоритет применения</p>
+                    <p class="mt-1 text-amber-700">Данные от поставщика > Правило категории > Глобальные дефолты > Системные дефолты (10x10x5 см, 0.1 кг)</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============== ТАБ: МЕДИА ============== -->
+    <div x-show="tab === 'media'" x-cloak>
+
+        <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
+            <div class="mb-5">
+                <h3 class="text-lg font-medium text-gray-900">Глобальные фото и видео</h3>
+                <p class="text-sm text-gray-500 mt-1">
+                    Эти файлы автоматически добавляются ко всем карточкам товаров при импорте на WB.
+                    Полезно для брендового слайда, сертификата или промо-видео.
+                </p>
+            </div>
+
+            <!-- Зона загрузки -->
+            <div class="mb-6">
+                <div @dragover.prevent="dragover = true"
+                     @dragleave.prevent="dragover = false"
+                     @drop.prevent="handleDrop($event)"
+                     :class="dragover ? 'border-[#c45d3e] bg-[#fdf5f3]' : 'border-gray-300 bg-gray-50'"
+                     class="border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer"
+                     @click="$refs.fileInput.click()">
+
+                    <input type="file" x-ref="fileInput" @change="uploadFile($event)" class="hidden"
+                           accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.avi">
+
+                    <svg class="mx-auto h-10 w-10 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                    </svg>
+                    <p class="text-sm text-gray-600">
+                        <span class="font-medium text-[#c45d3e]">Нажмите для загрузки</span> или перетащите файл
+                    </p>
+                    <p class="text-xs text-gray-400 mt-1">JPG, PNG, WebP, MP4, MOV (макс. 20 МБ)</p>
+                </div>
+
+                <!-- Прогресс загрузки -->
+                <div x-show="uploading" x-cloak class="mt-3">
+                    <div class="flex items-center gap-3">
+                        <div class="flex-1 bg-gray-200 rounded-full h-2">
+                            <div class="bg-[#c45d3e] h-2 rounded-full transition-all" style="width: 100%; animation: pulse 1.5s infinite"></div>
+                        </div>
+                        <span class="text-xs text-gray-500">Загрузка...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Список загруженных медиа -->
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4" id="mediaGrid">
+                {% if global_rule and global_rule.get_global_media_list() %}
+                    {% for media in global_rule.get_global_media_list() %}
+                    <div class="group relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50 aspect-square"
+                         x-data="{ deleting: false }">
+                        {% if media.type == 'photo' %}
+                        <img src="{{ url_for('product_defaults_serve_media', filename=media.filename) }}"
+                             class="w-full h-full object-cover" alt="{{ media.original_name }}">
+                        {% else %}
+                        <div class="w-full h-full flex items-center justify-center bg-gray-100">
+                            <div class="text-center">
+                                <svg class="mx-auto w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                                </svg>
+                                <p class="mt-1 text-xs text-gray-500 truncate px-2">{{ media.original_name }}</p>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <!-- Overlay -->
+                        <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <button @click="if(confirm('Удалить этот файл?')) deleteMedia('{{ media.filename }}')"
+                                    class="p-2 bg-white/20 rounded-full hover:bg-white/30 transition">
+                                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- Type badge -->
+                        <div class="absolute top-2 left-2">
+                            {% if media.type == 'video' %}
+                            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700">VIDEO</span>
+                            {% else %}
+                            <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">PHOTO</span>
+                            {% endif %}
+                        </div>
+
+                        <!-- Size -->
+                        <div class="absolute bottom-2 right-2">
+                            <span class="px-1.5 py-0.5 rounded text-[10px] bg-black/50 text-white">
+                                {{ "%.1f"|format(media.size / 1024 / 1024) }} MB
+                            </span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="col-span-full text-center py-12 text-gray-400">
+                        <svg class="mx-auto h-10 w-10 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                        </svg>
+                        <p class="text-sm">Нет глобальных медиа</p>
+                        <p class="text-xs mt-1">Загрузите фото или видео, которое будет добавлено ко всем карточкам</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Подсказка -->
+        <div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div class="flex gap-3">
+                <svg class="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                </svg>
+                <div class="text-sm text-blue-800">
+                    <p class="font-medium">Как это работает</p>
+                    <p class="mt-1 text-blue-700">
+                        Загруженные файлы добавляются в конец списка фотографий при импорте товара на WB.
+                        Это удобно для брендового слайда, сертификата качества или промо-видео.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function productDefaults() {
+    return {
+        tab: 'dimensions',
+        saving: false,
+        uploading: false,
+        dragover: false,
+
+        // Глобальное правило
+        globalRule: {
+            length_cm: {{ (global_rule.length_cm if global_rule and global_rule.length_cm) or 'null' }},
+            width_cm: {{ (global_rule.width_cm if global_rule and global_rule.width_cm) or 'null' }},
+            height_cm: {{ (global_rule.height_cm if global_rule and global_rule.height_cm) or 'null' }},
+            weight_kg: {{ (global_rule.weight_kg if global_rule and global_rule.weight_kg) or 'null' }}
+        },
+
+        // Добавление категории
+        showAddCategory: false,
+        newCatSearch: '',
+        newCatId: null,
+        newCatName: '',
+        newCatSelected: false,
+        newCatLength: '',
+        newCatWidth: '',
+        newCatHeight: '',
+        newCatWeight: '',
+        showCatDropdown: false,
+
+        // Все WB категории
+        allCategories: [
+            {% for cat in wb_categories %}
+            { id: {{ cat.id }}, subject_id: {{ cat.subject_id }}, subject_name: {{ cat.subject_name | tojson }} },
+            {% endfor %}
+        ],
+        filteredCategories: [],
+
+        filterCategories() {
+            const q = this.newCatSearch.toLowerCase().trim();
+            if (q.length < 2) {
+                this.filteredCategories = [];
+                return;
+            }
+            this.filteredCategories = this.allCategories.filter(c =>
+                c.subject_name.toLowerCase().includes(q)
+            );
+            this.showCatDropdown = true;
+        },
+
+        selectCategory(cat) {
+            this.newCatId = cat.subject_id;
+            this.newCatName = cat.subject_name;
+            this.newCatSelected = true;
+            this.newCatSearch = cat.subject_name;
+            this.showCatDropdown = false;
+        },
+
+        resetNewCat() {
+            this.newCatSearch = '';
+            this.newCatId = null;
+            this.newCatName = '';
+            this.newCatSelected = false;
+            this.newCatLength = '';
+            this.newCatWidth = '';
+            this.newCatHeight = '';
+            this.newCatWeight = '';
+        },
+
+        async saveGlobal() {
+            this.saving = true;
+            try {
+                const form = new FormData();
+                form.append('length_cm', this.globalRule.length_cm || '');
+                form.append('width_cm', this.globalRule.width_cm || '');
+                form.append('height_cm', this.globalRule.height_cm || '');
+                form.append('weight_kg', this.globalRule.weight_kg || '');
+
+                const resp = await fetch('{{ url_for("product_defaults_save_global") }}', {
+                    method: 'POST', body: form
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast('Глобальные дефолты сохранены', 'success');
+                } else {
+                    this.showToast(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                this.showToast('Ошибка сети', 'error');
+            }
+            this.saving = false;
+        },
+
+        async saveCategory() {
+            if (!this.newCatSelected) return;
+            this.saving = true;
+            try {
+                const form = new FormData();
+                form.append('wb_subject_id', this.newCatId);
+                form.append('wb_category_name', this.newCatName);
+                form.append('length_cm', this.newCatLength || '');
+                form.append('width_cm', this.newCatWidth || '');
+                form.append('height_cm', this.newCatHeight || '');
+                form.append('weight_kg', this.newCatWeight || '');
+
+                const resp = await fetch('{{ url_for("product_defaults_save_category") }}', {
+                    method: 'POST', body: form
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    this.showToast(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                this.showToast('Ошибка сети', 'error');
+            }
+            this.saving = false;
+        },
+
+        async updateCategory(ruleId, subjectId, catName, len, wid, hei, wei) {
+            const form = new FormData();
+            form.append('rule_id', ruleId);
+            form.append('wb_subject_id', subjectId);
+            form.append('wb_category_name', catName);
+            form.append('length_cm', len || '');
+            form.append('width_cm', wid || '');
+            form.append('height_cm', hei || '');
+            form.append('weight_kg', wei || '');
+
+            const resp = await fetch('{{ url_for("product_defaults_save_category") }}', {
+                method: 'POST', body: form
+            });
+            const data = await resp.json();
+            if (data.success) {
+                this.showToast('Правило обновлено', 'success');
+            }
+        },
+
+        async deleteCategory(ruleId) {
+            const resp = await fetch(`/settings/product-defaults/delete-category/${ruleId}`, {
+                method: 'POST'
+            });
+            const data = await resp.json();
+            if (data.success) location.reload();
+        },
+
+        async uploadFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            await this._doUpload(file);
+            event.target.value = '';
+        },
+
+        async handleDrop(event) {
+            this.dragover = false;
+            const file = event.dataTransfer.files[0];
+            if (file) await this._doUpload(file);
+        },
+
+        async _doUpload(file) {
+            this.uploading = true;
+            try {
+                const form = new FormData();
+                form.append('file', file);
+
+                const resp = await fetch('{{ url_for("product_defaults_upload_media") }}', {
+                    method: 'POST', body: form
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    this.showToast(data.error || 'Ошибка загрузки', 'error');
+                }
+            } catch(e) {
+                this.showToast('Ошибка сети', 'error');
+            }
+            this.uploading = false;
+        },
+
+        async deleteMedia(filename) {
+            const resp = await fetch(`/settings/product-defaults/delete-media/${filename}`, {
+                method: 'POST'
+            });
+            const data = await resp.json();
+            if (data.success) location.reload();
+        },
+
+        showToast(message, type) {
+            // Simple alert fallback
+            if (type === 'error') {
+                alert(message);
+            }
+            // For success we rely on flash messages after reload
+        }
+    };
+}
+</script>
+
+<style>
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+</style>
+{% endblock %}

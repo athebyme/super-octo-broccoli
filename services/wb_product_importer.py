@@ -157,12 +157,16 @@ class WBProductImporter:
             media_urls = generate_public_photo_urls(imported_product)
 
             # Формируем dimensions (габариты)
-            # Для начала используем дефолтные значения
+            # Используем настроенные дефолты продавца (глобальные или по категории)
+            from routes.product_defaults import get_defaults_for_product
+            _product_defaults = get_defaults_for_product(
+                self.seller.id, imported_product.wb_subject_id
+            )
             dimensions = {
-                'length': 10,  # см
-                'width': 10,   # см
-                'height': 5,   # см
-                'weightBrutto': 0.1  # кг
+                'length': _product_defaults.get('length', 10),
+                'width': _product_defaults.get('width', 10),
+                'height': _product_defaults.get('height', 5),
+                'weightBrutto': _product_defaults.get('weightBrutto', 0.1)
             }
 
             # Формируем бренд — используем систему резолва брендов
@@ -1434,6 +1438,26 @@ class WBProductImporter:
             cached_photo_paths = self._ensure_photos_cached(photo_urls_raw, sp)
         else:
             cached_photo_paths = self._ensure_photos_cached_direct(photo_urls_raw, imported_product)
+
+        # =============================================
+        # Добавляем глобальные медиа продавца (брендовые слайды, сертификаты и т.п.)
+        # =============================================
+        try:
+            from routes.product_defaults import get_defaults_for_product
+            _defaults = get_defaults_for_product(self.seller.id, imported_product.wb_subject_id)
+            global_media_list = _defaults.get('global_media', [])
+            if global_media_list:
+                import os
+                from flask import current_app
+                media_dir = os.path.join(current_app.root_path, 'data', 'global_media', str(self.seller.id))
+                for media_item in global_media_list:
+                    if media_item.get('type') == 'photo':
+                        media_path = os.path.join(media_dir, media_item['filename'])
+                        if os.path.exists(media_path):
+                            cached_photo_paths.append(media_path)
+                            logger.info(f"Добавлено глобальное медиа: {media_item.get('original_name', media_item['filename'])}")
+        except Exception as gm_err:
+            logger.warning(f"Не удалось добавить глобальные медиа: {gm_err}")
 
         # =============================================
         # Стратегия 1 (приоритетная): File-based upload (media/file)

@@ -5487,6 +5487,10 @@ from routes.auto_import import register_auto_import_routes
 register_auto_import_routes(app)
 
 
+# ============= РОУТЫ ДЕФОЛТОВ ТОВАРОВ =============
+from routes.product_defaults import register_product_defaults_routes
+register_product_defaults_routes(app)
+
 # ============= РОУТЫ ОБЪЕДИНЕНИЯ КАРТОЧЕК =============
 # Регистрация роутов для объединения/разъединения карточек
 from routes.merge_cards import register_merge_routes

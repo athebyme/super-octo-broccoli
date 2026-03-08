@@ -803,7 +803,7 @@
             <div style="height:1px;background:#1f1f1f;margin:8px 12px 16px"></div>
 
             <!-- Настройки -->
-            {% set settings_active = request.endpoint in ['api_settings', 'api_logs'] or (request.endpoint and request.endpoint.startswith('prohibited_words.seller')) %}
+            {% set settings_active = request.endpoint in ['api_settings', 'api_logs', 'product_defaults_page'] or (request.endpoint and request.endpoint.startswith('prohibited_words.seller')) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if settings_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if settings_active else 'false' }} }">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -816,6 +816,7 @@
                     </svg>
                 </button>
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('product_defaults_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_defaults_page' %}active{% endif %}">Дефолты товаров</a>
                     <a href="{{ url_for('api_settings') }}" class="sidebar-sublink {% if request.endpoint == 'api_settings' %}active{% endif %}">API ключи</a>
                     <a href="{{ url_for('api_logs') }}" class="sidebar-sublink {% if request.endpoint == 'api_logs' %}active{% endif %}">Логи API</a>
                     <a href="{{ url_for('prohibited_words.seller_index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('prohibited_words.seller') %}active{% endif %}">Стоп-слова</a>

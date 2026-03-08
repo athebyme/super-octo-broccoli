@@ -7,6 +7,7 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Optional
 import os
+import json
 from cryptography.fernet import Fernet
 
 db = SQLAlchemy()
@@ -840,6 +841,78 @@ class AutoImportSettings(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+
+class ProductDefaults(db.Model):
+    """Дефолтные значения габаритов/веса и глобальное медиа для товаров продавца"""
+    __tablename__ = 'product_defaults'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Тип правила: 'global' (для всех) или 'category' (для конкретной категории WB)
+    rule_type = db.Column(db.String(20), default='global', nullable=False)
+
+    # Привязка к категории (если rule_type='category')
+    wb_subject_id = db.Column(db.Integer, nullable=True)  # ID категории WB
+    wb_category_name = db.Column(db.String(300), nullable=True)  # Название для отображения
+
+    # Дефолтные габариты упаковки (см)
+    length_cm = db.Column(db.Float, nullable=True)  # Длина
+    width_cm = db.Column(db.Float, nullable=True)   # Ширина
+    height_cm = db.Column(db.Float, nullable=True)   # Высота
+
+    # Дефолтный вес брутто (кг)
+    weight_kg = db.Column(db.Float, nullable=True)
+
+    # Глобальное медиа — файлы, добавляемые ко всем карточкам продавца
+    # JSON: [{"filename": "...", "original_name": "...", "type": "photo|video", "size": 12345}]
+    global_media = db.Column(db.Text, nullable=True)
+
+    # Активность правила
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Приоритет (чем выше — тем важнее, категорийные > глобальных)
+    priority = db.Column(db.Integer, default=0, nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('product_defaults', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'rule_type', 'wb_subject_id', name='uq_product_defaults_rule'),
+    )
+
+    def __repr__(self):
+        if self.rule_type == 'category':
+            return f'<ProductDefaults seller={self.seller_id} category={self.wb_category_name}>'
+        return f'<ProductDefaults seller={self.seller_id} global>'
+
+    def has_dimensions(self):
+        return any([self.length_cm, self.width_cm, self.height_cm, self.weight_kg])
+
+    def get_dimensions_dict(self):
+        """Вернуть габариты в формате WB API"""
+        d = {}
+        if self.length_cm is not None:
+            d['length'] = self.length_cm
+        if self.width_cm is not None:
+            d['width'] = self.width_cm
+        if self.height_cm is not None:
+            d['height'] = self.height_cm
+        if self.weight_kg is not None:
+            d['weightBrutto'] = self.weight_kg
+        return d
+
+    def get_global_media_list(self):
+        """Вернуть список глобальных медиа"""
+        if not self.global_media:
+            return []
+        try:
+            return json.loads(self.global_media)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 class ImportedProduct(db.Model):
