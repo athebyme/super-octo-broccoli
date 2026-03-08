@@ -244,10 +244,26 @@ class WBProductImporter:
                             log_to_db=True,
                             seller_id=self.seller.id
                         )
-                        error_cards = errors_resp.get('data', [])
-                        for ec in (error_cards or []):
-                            if ec.get('vendorCode') == vendor_code:
+                        # Поддерживаем оба формата: новый (data.items) и старый (data=[])
+                        data = errors_resp.get('data', [])
+                        if isinstance(data, dict):
+                            error_items = data.get('items', [])
+                        else:
+                            error_items = data or []
+
+                        for ec in error_items:
+                            # Новый формат: errors = {"vendor_code": ["ошибка1", "ошибка2"]}
+                            ec_errors = ec.get('errors', {})
+                            if isinstance(ec_errors, dict) and vendor_code in ec_errors:
+                                err_detail = ec_errors[vendor_code]
+                                raise Exception(f"WB отклонил карточку: {err_detail}")
+                            # Старый формат: vendorCode + errors (list)
+                            elif ec.get('vendorCode') == vendor_code:
                                 err_detail = ec.get('errors', [])
+                                raise Exception(f"WB отклонил карточку: {err_detail}")
+                            # Проверяем vendorCodes (массив)
+                            elif vendor_code in (ec.get('vendorCodes') or []):
+                                err_detail = ec_errors.get(vendor_code, ec_errors) if isinstance(ec_errors, dict) else ec_errors
                                 raise Exception(f"WB отклонил карточку: {err_detail}")
                     except Exception as err_check:
                         if 'отклонил' in str(err_check):
@@ -279,6 +295,9 @@ class WBProductImporter:
 
             # ============================================================
             # ПОСЛЕ СОЗДАНИЯ КАРТОЧКИ — устанавливаем цены через Prices API
+            # WB обрабатывает создание асинхронно, поэтому Prices API может
+            # отклонить запрос если карточка ещё не полностью зарегистрирована.
+            # Делаем несколько попыток с паузой.
             # ============================================================
             calculated_price_value = None
             calculated_discount_price = None
@@ -286,14 +305,30 @@ class WBProductImporter:
             post_create_warnings = []
 
             if nm_id:
-                try:
-                    calculated_price_value, calculated_discount_price, calculated_price_before_discount = \
-                        self._set_price_for_card(nm_id, imported_product)
-                    if calculated_price_value is None:
-                        post_create_warnings.append("Цена не установлена (нет закупочной цены или настроек ценообразования)")
-                except Exception as price_err:
-                    logger.error(f"Не удалось установить цену для nmID={nm_id}: {price_err}", exc_info=True)
-                    post_create_warnings.append(f"Ошибка установки цены: {price_err}")
+                price_set = False
+                price_retries = [0, 3, 5]  # Пауза перед каждой попыткой (сек)
+                for price_attempt, delay in enumerate(price_retries):
+                    if delay > 0:
+                        _time.sleep(delay)
+                    try:
+                        calculated_price_value, calculated_discount_price, calculated_price_before_discount = \
+                            self._set_price_for_card(nm_id, imported_product)
+                        if calculated_price_value is not None:
+                            price_set = True
+                            break
+                        else:
+                            # Цена None — нет данных для расчёта, повторять бесполезно
+                            break
+                    except Exception as price_err:
+                        logger.warning(
+                            f"Попытка {price_attempt+1}/{len(price_retries)} установки цены для nmID={nm_id}: {price_err}"
+                        )
+                        if price_attempt == len(price_retries) - 1:
+                            logger.error(f"Не удалось установить цену для nmID={nm_id} после {len(price_retries)} попыток", exc_info=True)
+                            post_create_warnings.append(f"Ошибка установки цены: {price_err}")
+
+                if not price_set and not post_create_warnings:
+                    post_create_warnings.append("Цена не установлена (нет закупочной цены или настроек ценообразования)")
             else:
                 post_create_warnings.append("nmID не получен — цена и фото не установлены")
 
@@ -723,59 +758,111 @@ class WBProductImporter:
 
         # Словарь алиасов: наши названия характеристик -> WB названия
         # Решает проблему несовпадения имён между данными поставщика и WB API
+        # Алиасы строят маппинг: наше_название -> wb_название (lowercased).
+        # Сначала пробуем точное совпадение по алиасу, потом partial matching.
+        # ВАЖНО: алиас должен указывать на ТОЧНОЕ имя WB-характеристики (lowercase).
+        # Если указать просто 'материал', а в WB есть 'материал изделия' — не найдёт.
+        # Поэтому для неоднозначных случаев лучше полагаться на partial matching (шаг 2).
         _CHAR_ALIASES = {
+            # === Цвет ===
             'цвет товара': 'цвет',
             'цвета': 'цвет',
             'основной цвет': 'цвет',
-            'материал товара': 'материал',
-            'основной материал': 'материал',
-            'материал изделия': 'материал',
-            'состав': 'материал',
-            'состав материала': 'материал',
+
+            # === Материал / Состав ===
+            # WB называет по-разному в разных категориях:
+            # "Материал изделия", "Материал презерватива", "Состав", "Материал"
+            # Partial matching (шаг 2) ловит "материал" in "материал изделия"/"материал презерватива"
+            'материал товара': 'материал изделия',
+            'основной материал': 'материал изделия',
+            'состав материала': 'материал изделия',
+            # 'состав' и 'материал' обрабатываются через partial matching
+
+            # === Страна ===
             'страна': 'страна производства',
             'страна-производитель': 'страна производства',
             'страна изготовления': 'страна производства',
             'страна изготовитель': 'страна производства',
             'производство': 'страна производства',
             'made in': 'страна производства',
+
+            # === Пол ===
             'пол товара': 'пол',
             'назначение': 'пол',
             'для кого': 'пол',
             'целевой пол': 'пол',
+
+            # === Комплектация ===
             'комплектация товара': 'комплектация',
             'в комплекте': 'комплектация',
+
+            # === Размеры / Габариты ===
+            # WB категории секс-товаров используют специфические имена:
+            # "Общая длина секс игрушки", "Диаметр секс игрушки"
+            # Partial matching (шаг 2) ловит "длина" in "общая длина секс игрушки"
             'длина товара': 'длина',
             'длина изделия': 'длина',
             'общая длина': 'длина',
             'рабочая длина': 'рабочая длина',
             'диаметр товара': 'диаметр',
-            'вес товара': 'вес',
-            'масса': 'вес',
-            'вес изделия': 'вес',
-            'вес нетто': 'вес',
+
+            # === Вес ===
+            'вес товара': 'вес товара без упаковки (г)',
+            'масса': 'вес товара без упаковки (г)',
+            'вес изделия': 'вес товара без упаковки (г)',
+            'вес нетто': 'вес товара без упаковки (г)',
+
+            # === Объем ===
             'объем товара': 'объем',
             'объём': 'объем',
-            'количество в упаковке': 'количество в упаковке',
-            'кол-во в упаковке': 'количество в упаковке',
-            'кол-во': 'количество в упаковке',
-            'количество штук': 'количество в упаковке',
+
+            # === Количество ===
+            'количество в упаковке': 'количество предметов в упаковке (шт.)',
+            'кол-во в упаковке': 'количество предметов в упаковке (шт.)',
+            'кол-во': 'количество предметов в упаковке (шт.)',
+            'количество штук': 'количество предметов в упаковке (шт.)',
+
+            # === Режимы ===
             'количество скоростей': 'количество режимов',
             'кол-во режимов': 'количество режимов',
             'количество режимов вибрации': 'количество режимов',
+
+            # === Питание ===
             'тип питания': 'тип элемента питания',
             'питание': 'тип элемента питания',
             'батарейки': 'тип элемента питания',
             'элемент питания': 'тип элемента питания',
+
+            # === Особенности ===
+            # WB: "Особенности секс игрушки", "Особенности презерватива"
+            # Partial matching ловит "особенности" in "особенности секс игрушки"
             'особенности товара': 'особенности',
             'feature': 'особенности',
             'описание особенностей': 'особенности',
-            'упаковка': 'тип упаковки',
-            'вид упаковки': 'тип упаковки',
+
+            # === Упаковка ===
+            'вид упаковки': 'упаковка',
+            'тип упаковки': 'упаковка',
+
+            # === Прочее ===
             'водонепроницаемость': 'водонепроницаемый',
             'защита от воды': 'водонепроницаемый',
+
+            # === Ширина ===
+            'ширина товара': 'ширина предмета',
+            'ширина изделия': 'ширина предмета',
+
+            # === Текстура (для презервативов) ===
+            'текстура': 'текстура презерватива',
+            'поверхность': 'текстура презерватива',
+
+            # === Аромат ===
+            'запах': 'аромат',
+            'аромат товара': 'аромат',
         }
 
         result_characteristics = []
+        used_char_ids = set()  # Дедупликация: не добавляем одну и ту же WB-характеристику дважды
 
         for char_name, char_value in product_chars.items():
             # Пропускаем служебные поля
@@ -848,6 +935,12 @@ class WBProductImporter:
             if not char_id:
                 continue
 
+            # Дедупликация: пропускаем если эта WB-характеристика уже добавлена
+            # (например, "Состав", "Материал", "Материал изделия" все маппятся на одну WB-характеристику)
+            if char_id in used_char_ids:
+                logger.debug(f"Характеристика '{char_name}' -> id={char_id} уже добавлена, пропускаем дубликат")
+                continue
+
             # Получаем maxCount - максимальное количество значений для характеристики
             max_count = wb_char.get('maxCount', 1)
 
@@ -876,7 +969,7 @@ class WBProductImporter:
                         formatted_value = [str(v) for v in formatted_value]
 
                     # ВАЖНО: Обрезаем до maxCount (например, Особенности max 3)
-                    if len(formatted_value) > max_count:
+                    if max_count > 0 and len(formatted_value) > max_count:
                         logger.info(f"Характеристика '{char_name}': обрезаем с {len(formatted_value)} до {max_count} значений (maxCount)")
                         formatted_value = formatted_value[:max_count]
 
@@ -884,6 +977,7 @@ class WBProductImporter:
                     'id': int(char_id),
                     'value': formatted_value
                 })
+                used_char_ids.add(char_id)
                 logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}, charcType={charc_type}")
 
         logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
@@ -945,7 +1039,10 @@ class WBProductImporter:
             # Если не удалось распарсить, пробуем вернуть как число напрямую
             if isinstance(value, (int, float)):
                 return value
-            return str_value
+            # ВАЖНО: НЕ возвращаем строку для числовой характеристики (charcType=4)!
+            # WB отклонит карточку: "Числовое значение характеристики ... не должно быть строкой"
+            logger.warning(f"Числовая характеристика '{char_name}': не удалось извлечь число из '{str_value}', пропускаем")
+            return None
 
         # Для словарных значений - ищем точное или частичное совпадение
         if dictionary:
@@ -1133,11 +1230,12 @@ class WBProductImporter:
         """
         Загружает фотографии товара в WB карточку.
 
-        Стратегия:
-        1. Если есть PUBLIC_BASE_URL и supplier_product — формируем публичные URL
-           нашего сервера и отправляем в WB через /media/save (WB сам скачает).
-           Предварительно кэшируем фото, чтобы serve_public_photo отдал их быстро.
-        2. Fallback: загрузка файлов через /media/file (multipart upload).
+        Стратегия (приоритетная — file upload, т.к. надёжнее):
+        1. Сначала кэшируем все фото локально (скачиваем с поставщика).
+        2. Загружаем через /media/file (multipart upload) — самый надёжный способ,
+           не зависит от доступности нашего сервера из WB.
+        3. Если file upload провалился — пробуем URL-based /media/save как fallback
+           (работает только если PUBLIC_BASE_URL доступен из интернета).
 
         Args:
             nm_id: Артикул WB (nmID)
@@ -1163,20 +1261,43 @@ class WBProductImporter:
             sp = SupplierProduct.query.get(imported_product.supplier_product_id)
 
         # =============================================
-        # Стратегия 1: URL-based upload (media/save)
-        # WB сам скачивает фото по публичным URL нашего сервера
+        # Шаг 1: Кэшируем фото локально
+        # =============================================
+        if sp:
+            cached_photo_paths = self._ensure_photos_cached(photo_urls_raw, sp)
+        else:
+            cached_photo_paths = self._ensure_photos_cached_direct(photo_urls_raw, imported_product)
+
+        # =============================================
+        # Стратегия 1 (приоритетная): File-based upload (media/file)
+        # Загружаем файлы напрямую через multipart — не зависит от PUBLIC_BASE_URL
+        # =============================================
+        if cached_photo_paths:
+            logger.info(f"Загружаем {len(cached_photo_paths)} фото (file upload) для nmID={nm_id}")
+            try:
+                results = self.api_client.upload_photos_to_card(
+                    nm_id=nm_id,
+                    photo_paths=cached_photo_paths,
+                    seller_id=self.seller.id
+                )
+                success_count = sum(1 for r in results if r.get('success'))
+                logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
+                if success_count > 0:
+                    return  # Успех — выходим
+                else:
+                    logger.warning(f"File upload: 0/{len(cached_photo_paths)} фото загружено, пробуем URL-based")
+            except Exception as e:
+                logger.warning(f"File upload failed для nmID={nm_id}: {e}, пробуем URL-based")
+
+        # =============================================
+        # Стратегия 2 (fallback): URL-based upload (media/save)
+        # WB сам скачивает фото по публичным URL нашего сервера.
+        # Работает только если PUBLIC_BASE_URL доступен из интернета.
         # =============================================
         from flask import current_app
         public_base_url = current_app.config.get('PUBLIC_BASE_URL', '')
 
         if public_base_url:
-            # Кэшируем фото перед отправкой URL
-            if sp:
-                self._ensure_photos_cached(photo_urls_raw, sp)
-            else:
-                self._ensure_photos_cached_direct(photo_urls_raw, imported_product)
-
-            # Формируем публичные URL (теперь работает и без supplier_product_id)
             from routes.photos import generate_public_photo_urls
             public_urls = generate_public_photo_urls(imported_product)
 
@@ -1195,31 +1316,10 @@ class WBProductImporter:
                     logger.info(f"Фото отправлены по URL для nmID={nm_id}: {result}")
                     return
                 except Exception as e:
-                    logger.warning(f"URL-based upload failed для nmID={nm_id}: {e}, пробуем file upload")
-
-        # =============================================
-        # Стратегия 2: File-based upload (media/file)
-        # Загружаем файлы напрямую через multipart
-        # =============================================
-        if sp:
-            cached_photo_paths = self._ensure_photos_cached(photo_urls_raw, sp)
-        else:
-            # Фолбэк: скачиваем напрямую по URL из photo_urls
-            cached_photo_paths = self._ensure_photos_cached_direct(photo_urls_raw, imported_product)
+                    logger.error(f"URL-based upload также failed для nmID={nm_id}: {e}")
 
         if not cached_photo_paths:
-            logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для file upload")
-            return
-
-        logger.info(f"Загружаем {len(cached_photo_paths)} фото (file upload) для nmID={nm_id}")
-        results = self.api_client.upload_photos_to_card(
-            nm_id=nm_id,
-            photo_paths=cached_photo_paths,
-            seller_id=self.seller.id
-        )
-
-        success_count = sum(1 for r in results if r.get('success'))
-        logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
+            logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для загрузки")
 
     def _ensure_photos_cached(self, photo_urls_raw: list, sp) -> list:
         """

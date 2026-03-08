@@ -2248,37 +2248,62 @@ class WildberriesAPIClient:
         seller_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Получить список несозданных карточек товаров с ошибками
+        Получить список несозданных карточек товаров с ошибками.
+
+        WB API v2 POST /content/v2/cards/error/list
+        Возвращает структуру:
+        {
+            "data": {
+                "items": [
+                    {
+                        "batchUUID": "...",
+                        "vendorCodes": ["id-xxx-1366"],
+                        "errors": {"id-xxx-1366": ["Ошибка 1", "Ошибка 2"]},
+                        "updatedAt": "..."
+                    }
+                ],
+                "cursor": {"next": false, ...}
+            },
+            "error": false,
+            "errorText": ""
+        }
 
         Args:
             log_to_db: Логировать ли запрос в БД
             seller_id: ID продавца для логирования
 
         Returns:
-            Список карточек с ошибками создания
+            Полный ответ от WB API
         """
         endpoint = "/content/v2/cards/error/list"
 
-        logger.info(f"🔍 Getting cards errors list")
+        logger.info("Getting cards errors list")
 
         try:
             response = self._make_request(
                 'POST',
                 'content',
                 endpoint,
-                json={},  # Исправлено: json вместо json_data
+                json={},
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )
             result = response.json()
 
-            error_cards = result.get('data', [])
-            logger.info(f"✅ Cards errors list loaded: {len(error_cards)} cards with errors")
+            # Новый формат: data.items вместо data (массив)
+            items = []
+            data = result.get('data')
+            if isinstance(data, dict):
+                items = data.get('items', [])
+            elif isinstance(data, list):
+                items = data  # Старый формат (fallback)
+
+            logger.info(f"Cards errors list loaded: {len(items)} batches with errors")
 
             return result
 
         except Exception as e:
-            logger.error(f"❌ Failed to get cards errors list: {str(e)}")
+            logger.error(f"Failed to get cards errors list: {str(e)}")
             raise
 
     # ==================== ЗАБЛОКИРОВАННЫЕ / СКРЫТЫЕ КАРТОЧКИ ====================
