@@ -1543,9 +1543,10 @@ def register_supplier_routes(app):
             from services.wb_product_importer import WBProductImporter
             importer = WBProductImporter(seller)
             result = importer.import_multiple_products(product_ids)
+            result['success'] = True
             return jsonify(result)
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'success': False, 'error': str(e)}), 500
 
     # -------------------------------------------------------------------
     # Validate product for WB — пометить как валидированный

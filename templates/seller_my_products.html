@@ -75,7 +75,7 @@
             .then(data => {
                 this.bulkResult = data;
                 this.bulkRunning = false;
-                if (data.success > 0) setTimeout(() => location.reload(), 2000);
+                if (data.imported > 0) setTimeout(() => location.reload(), 2000);
             })
             .catch(e => {
                 alert('Ошибка: ' + e.message);
@@ -175,10 +175,20 @@
     <!-- Bulk result -->
     <div x-show="bulkResult" x-cloak class="bg-white border-x border-gray-200 px-4 py-3">
         <div class="flex items-center gap-4 text-sm">
-            <span class="text-gray-900 font-medium" x-text="'Отправлено: ' + (bulkResult?.success || 0)"></span>
+            <span class="text-gray-900 font-medium" x-text="'Отправлено: ' + (bulkResult?.imported || 0)"></span>
             <span class="text-gray-500" x-text="'Ошибок: ' + (bulkResult?.failed || 0)"></span>
             <span class="text-gray-400" x-text="'Пропущено: ' + (bulkResult?.skipped || 0)"></span>
         </div>
+        <template x-if="bulkResult?.errors?.length > 0">
+            <div class="mt-2 text-xs text-red-600 space-y-0.5 max-h-40 overflow-y-auto">
+                <template x-for="err in bulkResult.errors.slice(0, 10)" :key="err">
+                    <div x-text="err"></div>
+                </template>
+                <template x-if="bulkResult.errors.length > 10">
+                    <div class="text-gray-400" x-text="'... и ещё ' + (bulkResult.errors.length - 10) + ' ошибок'"></div>
+                </template>
+            </div>
+        </template>
     </div>
 
     <!-- Products list -->

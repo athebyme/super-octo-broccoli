@@ -162,11 +162,12 @@ class WBProductImporter:
             _product_defaults = get_defaults_for_product(
                 self.seller.id, imported_product.wb_subject_id
             )
+            # WB API spec: length/width/height — integer, weightBrutto — number (max 3 decimals)
             dimensions = {
-                'length': _product_defaults.get('length', 10),
-                'width': _product_defaults.get('width', 10),
-                'height': _product_defaults.get('height', 5),
-                'weightBrutto': _product_defaults.get('weightBrutto', 0.1)
+                'length': int(_product_defaults.get('length', 10)),
+                'width': int(_product_defaults.get('width', 10)),
+                'height': int(_product_defaults.get('height', 5)),
+                'weightBrutto': round(float(_product_defaults.get('weightBrutto', 0.1)), 3)
             }
 
             # Формируем бренд — используем систему резолва брендов
@@ -180,6 +181,9 @@ class WBProductImporter:
             safe_title = filter_prohibited_words(
                 imported_product.title[:60] if imported_product.title else 'Товар'
             )
+            # WB API: title maxLength=60 — обрезаем ПОСЛЕ фильтрации
+            if len(safe_title) > 60:
+                safe_title = safe_title[:60].rsplit(' ', 1)[0] or safe_title[:60]
             safe_description = filter_prohibited_words(
                 imported_product.description or imported_product.title or 'Описание товара'
             )
@@ -195,13 +199,23 @@ class WBProductImporter:
                 'characteristics': characteristics
             }
 
+            # === Pre-flight валидация: проверяем обязательные поля перед отправкой ===
+            if not vendor_code:
+                raise Exception("Артикул продавца (vendorCode) не задан")
+            if not imported_product.wb_subject_id:
+                raise Exception("Категория WB (subjectID) не задана. Выберите категорию для товара")
+            if not product_brand:
+                raise Exception("Бренд не определён. Укажите бренд товара или настройте маппинг брендов")
+
             logger.info(f"Создание карточки WB для товара {imported_product.external_id}")
             logger.info(f"  - Артикул: {vendor_code}")
             logger.info(f"  - Бренд: {product_brand}")
             logger.info(f"  - Категория WB (subject_id): {imported_product.wb_subject_id}")
+            logger.info(f"  - Габариты: {dimensions}")
             logger.info(f"  - Размеры (has_real_sizes={has_real_sizes}): {wb_sizes}")
+            logger.info(f"  - Характеристик: {len(characteristics)}")
             logger.info(f"  - Баркоды: {barcodes}")
-            logger.debug(f"Данные варианта: {variant}")
+            logger.debug(f"Данные варианта: {json.dumps(variant, ensure_ascii=False, default=str)}")
 
             # Вызов API WB для создания карточки
             try:
@@ -1097,7 +1111,11 @@ class WBProductImporter:
                 # charcType=4 (числовой) — WB ожидает число, НЕ массив
                 if charc_type == 4:
                     if isinstance(formatted_value, list):
-                        formatted_value = formatted_value[0]
+                        # Фильтруем None из списка
+                        formatted_value = [v for v in formatted_value if v is not None]
+                        formatted_value = formatted_value[0] if formatted_value else None
+                    if formatted_value is None:
+                        continue
                     # Убеждаемся что это число
                     if isinstance(formatted_value, str):
                         try:
@@ -1111,7 +1129,12 @@ class WBProductImporter:
                     if not isinstance(formatted_value, list):
                         formatted_value = [str(formatted_value)]
                     else:
-                        formatted_value = [str(v) for v in formatted_value]
+                        # Фильтруем None и пустые строки
+                        formatted_value = [str(v) for v in formatted_value if v is not None and str(v).strip()]
+
+                    # Пустой массив — пропускаем характеристику
+                    if not formatted_value:
+                        continue
 
                     # ВАЖНО: Обрезаем до maxCount (например, Особенности max 3)
                     if max_count > 0 and len(formatted_value) > max_count:
