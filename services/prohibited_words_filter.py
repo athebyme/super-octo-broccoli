@@ -254,12 +254,58 @@ class ProhibitedWordsFilter:
         text = re.sub(r'\s+([,.:;!?])', r'\1', text)
         text = text.strip()
 
+        # Удаляем дубли слов (после замены "Anal Snake" → "Анальный Snake"
+        # при наличии "Анальная" в начале — WB снижает рейтинг за повторы)
+        text = self._remove_duplicate_words(text)
+
         if text != original:
             logger.info(
                 f"Prohibited words filtered: '{original[:80]}' → '{text[:80]}'"
             )
 
         return text
+
+    @staticmethod
+    def _remove_duplicate_words(text: str) -> str:
+        """
+        Удаляет повторяющиеся слова (с учётом морфологии).
+
+        Пример: "Анальная змея на присоске Stacked Анальный Snake"
+        → "Анальная змея на присоске Stacked Snake"
+
+        Сравниваем по первым 4+ символам lowercase (ловит Анальная/Анальный,
+        Вагинальная/Вагинальный и т.п.).
+        """
+        if not text:
+            return text
+
+        words = text.split()
+        if len(words) <= 1:
+            return text
+
+        result = []
+        seen_stems = set()
+
+        for word in words:
+            # Нормализуем для сравнения: lowercase, только буквы
+            clean = ''.join(c for c in word.lower() if c.isalpha())
+
+            # Для коротких слов (≤3 буквы) — сравниваем целиком
+            # Для длинных — берём первые 5 символов как "stem"
+            if len(clean) <= 3:
+                stem = clean
+            else:
+                stem = clean[:5]
+
+            if stem and stem in seen_stems:
+                logger.debug(f"Дубль слова удалён: '{word}' (stem='{stem}')")
+                continue
+
+            if stem:
+                seen_stems.add(stem)
+            result.append(word)
+
+        return ' '.join(result)
 
     def filter_product(self, data: dict) -> dict:
         """Отфильтровать запрещённые слова в title и description товара."""

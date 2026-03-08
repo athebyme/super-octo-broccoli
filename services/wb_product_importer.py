@@ -1216,9 +1216,35 @@ class WBProductImporter:
         Returns:
             Tuple[final_price, discount_price, price_before_discount] или (None, None, None)
         """
+        # Проверяем наличие уже рассчитанных цен (приоритет — они могут быть заданы
+        # вручную или рассчитаны при импорте, даже если supplier_price нулевая)
+        if imported_product.calculated_price and imported_product.calculated_price > 0:
+            final_price = int(imported_product.calculated_price)
+            price_before = int(imported_product.calculated_price_before_discount or final_price * 1.55)
+            discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
+
+            prices_data = [{
+                'nmID': nm_id,
+                'price': price_before,
+                'discount': discount_pct
+            }]
+            self.api_client.upload_prices_v2(
+                prices=prices_data,
+                log_to_db=True,
+                seller_id=self.seller.id
+            )
+            logger.info(
+                f"Цена из calculated_price для nmID={nm_id}: "
+                f"price={price_before}, discount={discount_pct}% (final~{final_price})"
+            )
+            return final_price, imported_product.calculated_discount_price, price_before
+
         supplier_price = imported_product.supplier_price
         if not supplier_price or supplier_price <= 0:
-            logger.info(f"Товар {imported_product.external_id}: нет закупочной цены, пропускаем установку цены")
+            logger.warning(
+                f"Товар {imported_product.external_id}: нет ни calculated_price, "
+                f"ни supplier_price — цена НЕ установлена для nmID={nm_id}"
+            )
             return None, None, None
 
         # Загружаем настройки ценообразования продавца
@@ -1453,9 +1479,12 @@ class WBProductImporter:
                     if photo_bytes:
                         cache.save_to_cache(supplier_type, external_id, url, photo_bytes)
                         cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                    else:
+                        logger.warning(f"Фото {idx+1}: _download_photo вернул None для {url[:80]}")
                 except Exception as dl_err:
-                    logger.debug(f"Не удалось скачать фото {url[:60]}: {dl_err}")
+                    logger.warning(f"Не удалось скачать фото {idx+1} ({url[:60]}): {dl_err}")
 
+        logger.info(f"Кэш фото: {len(cached_paths)}/{len(photo_urls_raw)} скачано")
         return cached_paths
 
     def _ensure_photos_cached_direct(self, photo_urls_raw: list, imported_product) -> list:
@@ -1494,9 +1523,12 @@ class WBProductImporter:
                     if photo_bytes:
                         cache.save_to_cache(supplier_type, external_id, url, photo_bytes)
                         cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                    else:
+                        logger.warning(f"Фото {idx+1}: _download_photo вернул None для {url[:80]}")
                 except Exception as dl_err:
-                    logger.debug(f"Не удалось скачать фото напрямую {url[:60]}: {dl_err}")
+                    logger.warning(f"Не удалось скачать фото {idx+1} ({url[:60]}): {dl_err}")
 
+        logger.info(f"Кэш фото (direct): {len(cached_paths)}/{len(photo_urls_raw)} скачано")
         return cached_paths
 
     @staticmethod
@@ -1545,7 +1577,9 @@ class WBProductImporter:
             if photo_data.get('original') and photo_data['original'] != url:
                 fallbacks.append(photo_data['original'])
 
-        for current_url in [url] + fallbacks:
+        all_urls = [url] + fallbacks
+        logger.info(f"Скачивание фото: {len(all_urls)} URL(s), первый: {url[:80]}")
+        for url_idx, current_url in enumerate(all_urls):
             try:
                 resp = _requests.get(
                     current_url, headers=headers, cookies=auth_cookies,
@@ -1554,7 +1588,12 @@ class WBProductImporter:
                 resp.raise_for_status()
 
                 content_type = resp.headers.get('Content-Type', '')
-                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                content_len = len(resp.content)
+                if not content_type.startswith('image/') and content_len < 1024:
+                    logger.warning(
+                        f"Фото {url_idx+1}/{len(all_urls)}: неверный Content-Type='{content_type}', "
+                        f"size={content_len}b, URL={current_url[:80]}"
+                    )
                     continue
 
                 img = _Image.open(BytesIO(resp.content))
@@ -1562,10 +1601,13 @@ class WBProductImporter:
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
                 img.save(output, format='JPEG', quality=95)
+                logger.info(f"Фото скачано: {content_len}b, {img.size[0]}x{img.size[1]}, URL={current_url[:60]}")
                 return output.getvalue()
-            except Exception:
+            except Exception as dl_exc:
+                logger.warning(f"Фото {url_idx+1}/{len(all_urls)} ошибка: {dl_exc}, URL={current_url[:80]}")
                 continue
 
+        logger.error(f"Все {len(all_urls)} URL фото провалились. URLs: {[u[:60] for u in all_urls]}")
         return None
 
     def build_wb_card_preview(self, imported_product: ImportedProduct) -> Dict:
