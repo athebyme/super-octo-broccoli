@@ -5966,14 +5966,29 @@ def _ensure_admin_from_env():
 
     email = os.environ.get('ADMIN_EMAIL', f'{username}@example.com')
 
-    existing = User.query.filter_by(username=username).first()
+    # Ищем по username, по email или первого админа
+    existing = (
+        User.query.filter_by(username=username).first()
+        or User.query.filter_by(email=email).first()
+        or User.query.filter_by(is_admin=True).first()
+    )
     if existing:
+        updated = False
+        if existing.username != username:
+            existing.username = username
+            updated = True
         if not existing.check_password(password):
             existing.set_password(password)
-            if email:
-                existing.email = email
+            updated = True
+        if email and existing.email != email:
+            existing.email = email
+            updated = True
+        if not existing.is_admin:
+            existing.is_admin = True
+            updated = True
+        if updated:
             db.session.commit()
-            app.logger.info(f"Admin '{username}' password updated from environment")
+            app.logger.info(f"Admin '{username}' updated from environment")
     else:
         admin = User(username=username, email=email, is_admin=True, is_active=True)
         admin.set_password(password)

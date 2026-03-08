@@ -53,9 +53,14 @@ with app.app_context():
     email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
     password = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
-    admin_exists = User.query.filter_by(username=username).first()
+    # Ищем по username, по email или первого админа
+    admin_user = (
+        User.query.filter_by(username=username).first()
+        or User.query.filter_by(email=email).first()
+        or User.query.filter_by(is_admin=True).first()
+    )
 
-    if not admin_exists:
+    if not admin_user:
         # Создаем дефолтного администратора
         admin = User(
             username=username,
@@ -72,22 +77,25 @@ with app.app_context():
         print(f"   Email: {email}")
         print(f"   ⚠️  ВАЖНО: Смените пароль после первого входа!")
     else:
-        # Синхронизируем пароль и email из переменных окружения
+        # Синхронизируем username, пароль и email из переменных окружения
         updated = False
-        if not admin_exists.check_password(password):
-            admin_exists.set_password(password)
+        if admin_user.username != username:
+            admin_user.username = username
             updated = True
-        if email and admin_exists.email != email:
-            admin_exists.email = email
+        if not admin_user.check_password(password):
+            admin_user.set_password(password)
             updated = True
-        if not admin_exists.is_admin:
-            admin_exists.is_admin = True
+        if email and admin_user.email != email:
+            admin_user.email = email
+            updated = True
+        if not admin_user.is_admin:
+            admin_user.is_admin = True
             updated = True
         if updated:
             db.session.commit()
             print(f"✅ Администратор '{username}' обновлён из переменных окружения")
         else:
-            print(f"✅ Администратор уже существует: {admin_exists.username}")
+            print(f"✅ Администратор уже существует: {admin_user.username}")
 PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
