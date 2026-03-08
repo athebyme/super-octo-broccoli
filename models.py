@@ -693,7 +693,37 @@ class AutoImportSettings(db.Model):
 
     # Авторизация для доступа к фотографиям sexoptovik
     sexoptovik_login = db.Column(db.String(200))  # Логин для sexoptovik.ru
-    sexoptovik_password = db.Column(db.String(200))  # Пароль для sexoptovik.ru
+    _sexoptovik_password_encrypted = db.Column('sexoptovik_password', db.String(500))  # Пароль (зашифрованный)
+
+    @property
+    def sexoptovik_password(self) -> Optional[str]:
+        """Расшифровать пароль sexoptovik."""
+        if not self._sexoptovik_password_encrypted:
+            return None
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            return self._sexoptovik_password_encrypted
+        try:
+            f = Fernet(encryption_key.encode())
+            return f.decrypt(self._sexoptovik_password_encrypted.encode()).decode()
+        except Exception:
+            return self._sexoptovik_password_encrypted
+
+    @sexoptovik_password.setter
+    def sexoptovik_password(self, value: Optional[str]) -> None:
+        """Зашифровать пароль sexoptovik."""
+        if value is None or value == '':
+            self._sexoptovik_password_encrypted = value
+            return
+        encryption_key = os.environ.get('ENCRYPTION_KEY')
+        if not encryption_key:
+            self._sexoptovik_password_encrypted = value
+            return
+        try:
+            f = Fernet(encryption_key.encode())
+            self._sexoptovik_password_encrypted = f.encrypt(value.encode()).decode()
+        except Exception:
+            self._sexoptovik_password_encrypted = value
 
     # Настройки импорта
     import_only_new = db.Column(db.Boolean, default=True, nullable=False)  # Импортировать только новые товары

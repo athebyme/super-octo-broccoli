@@ -497,7 +497,12 @@ def save_processed_report(
 
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("APP_SECRET_KEY", "wb-calculator-secret")
+import secrets as _secrets
+_app_secret = os.environ.get("APP_SECRET_KEY")
+if not _app_secret:
+    _app_secret = _secrets.token_hex(32)
+    print("⚠️  WARNING: APP_SECRET_KEY not set! Using random key (sessions won't persist across restarts)")
+app.secret_key = _app_secret
 app.jinja_env.filters["basename"] = lambda value: Path(value).name if value else ""
 
 
@@ -505,6 +510,15 @@ app.jinja_env.filters["basename"] = lambda value: Path(value).name if value else
 def _ensure_setup() -> None:
     ensure_directories()
 
+
+@app.after_request
+def _set_security_headers(response):
+    """Заголовки безопасности."""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 
 def gather_columns(df: pd.DataFrame) -> List[str]:
@@ -545,13 +559,38 @@ def index() -> str:
     )
 
 
+ALLOWED_UPLOAD_EXTENSIONS = {'.xlsx', '.xls', '.csv'}
+MAX_UPLOAD_SIZE_MB = 50
+
+
 def handle_upload(file_storage, target_dir: Path) -> Optional[Path]:
     if not file_storage or not file_storage.filename:
         return None
     filename = Path(file_storage.filename).name
+
+    # Валидация расширения файла
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValueError(f"Недопустимый тип файла: {ext}. Разрешены: {', '.join(ALLOWED_UPLOAD_EXTENSIONS)}")
+
+    # Валидация размера файла
+    file_storage.seek(0, 2)  # seek to end
+    size_mb = file_storage.tell() / (1024 * 1024)
+    file_storage.seek(0)  # seek back to start
+    if size_mb > MAX_UPLOAD_SIZE_MB:
+        raise ValueError(f"Файл слишком большой ({size_mb:.1f} MB). Максимум: {MAX_UPLOAD_SIZE_MB} MB")
+
+    # Очищаем имя файла от спецсимволов
+    safe_base = re.sub(r'[^\w\-.]', '_', filename)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = f"{timestamp}_{filename}"
+    safe_name = f"{timestamp}_{safe_base}"
     dest = target_dir / safe_name
+
+    # Проверяем что путь не выходит за пределы target_dir
+    dest = dest.resolve()
+    if not str(dest).startswith(str(target_dir.resolve())):
+        raise ValueError("Некорректное имя файла")
+
     file_storage.save(dest)
     return dest
 
@@ -564,8 +603,12 @@ def upload() -> str:
     price_file = request.files.get("prices")
     selected_columns = request.form.getlist("columns")
 
-    stat_path = handle_upload(stat_file, UPLOAD_DIR) or state.get("statistics_path")
-    price_path = handle_upload(price_file, UPLOAD_DIR) or state.get("price_path")
+    try:
+        stat_path = handle_upload(stat_file, UPLOAD_DIR) or state.get("statistics_path")
+        price_path = handle_upload(price_file, UPLOAD_DIR) or state.get("price_path")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("index"))
 
     if not stat_path or not Path(stat_path).exists():
         flash("Загрузите отчет Wildberries (xlsx).", "warning")
@@ -654,4 +697,4 @@ def refresh_price() -> str:
 
 if __name__ == "__main__":
     ensure_directories()
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=os.environ.get("FLASK_DEBUG", "").lower() in ("1", "true"), host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
