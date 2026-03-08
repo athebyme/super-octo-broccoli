@@ -304,7 +304,7 @@ class WBProductImporter:
 
             if nm_id:
                 price_set = False
-                price_retries = [0, 3, 5]  # Пауза перед каждой попыткой (сек)
+                price_retries = [5, 5, 10]  # Пауза перед каждой попыткой (сек). Первая задержка 5с — WB обрабатывает карточку асинхронно
                 for price_attempt, delay in enumerate(price_retries):
                     if delay > 0:
                         _time.sleep(delay)
@@ -332,13 +332,25 @@ class WBProductImporter:
 
             # ============================================================
             # ПОСЛЕ СОЗДАНИЯ КАРТОЧКИ — загружаем фото через WB API
+            # WB обрабатывает карточку асинхронно, поэтому нужны ретраи.
             # ============================================================
             if nm_id:
-                try:
-                    self._upload_photos_for_card(nm_id, imported_product)
-                except Exception as photo_err:
-                    logger.error(f"Не удалось загрузить фото для nmID={nm_id}: {photo_err}", exc_info=True)
-                    post_create_warnings.append(f"Ошибка загрузки фото: {photo_err}")
+                photo_uploaded = False
+                photo_retries = [0, 5, 10]  # Пауза перед каждой попыткой (0 — первая уже после задержки цены)
+                for photo_attempt, photo_delay in enumerate(photo_retries):
+                    if photo_delay > 0:
+                        _time.sleep(photo_delay)
+                    try:
+                        self._upload_photos_for_card(nm_id, imported_product)
+                        photo_uploaded = True
+                        break
+                    except Exception as photo_err:
+                        logger.warning(
+                            f"Попытка {photo_attempt+1}/{len(photo_retries)} загрузки фото для nmID={nm_id}: {photo_err}"
+                        )
+                        if photo_attempt == len(photo_retries) - 1:
+                            logger.error(f"Не удалось загрузить фото для nmID={nm_id} после {len(photo_retries)} попыток", exc_info=True)
+                            post_create_warnings.append(f"Ошибка загрузки фото: {photo_err}")
 
             # Создаем запись Product в БД
             product = Product(
@@ -1406,6 +1418,9 @@ class WBProductImporter:
 
         if not cached_photo_paths:
             logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для загрузки")
+
+        # Если ни одна стратегия не сработала — бросаем исключение для ретрая
+        raise Exception(f"Все стратегии загрузки фото провалились для nmID={nm_id}")
 
     def _ensure_photos_cached(self, photo_urls_raw: list, sp) -> list:
         """

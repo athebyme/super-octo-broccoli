@@ -905,7 +905,10 @@ class WildberriesAPIClient:
 
         Note:
             WB API /content/v3/media/file принимает multipart/form-data
-            Параметры: nmId (query), photoNumber (query, 1-based), uploadfile (file)
+            Параметры передаются в ЗАГОЛОВКАХ:
+              X-Nm-Id: артикул WB (nmID)
+              X-Photo-Number: номер фото (1-based)
+            Body: multipart/form-data с полем uploadfile
         """
         endpoint = "/content/v3/media/file"
         results = []
@@ -917,14 +920,18 @@ class WildberriesAPIClient:
             try:
                 with open(path, 'rb') as f:
                     files = {'uploadfile': (f'photo_{photo_number}.jpg', f, 'image/jpeg')}
-                    params = {'nmId': nm_id, 'photoNumber': photo_number}
+                    # WB API требует X-Nm-Id и X-Photo-Number в ЗАГОЛОВКАХ, не в query
+                    extra_headers = {
+                        'X-Nm-Id': str(nm_id),
+                        'X-Photo-Number': str(photo_number),
+                    }
 
                     # Remove Content-Type header for multipart upload
                     old_content_type = self.session.headers.pop('Content-Type', None)
                     try:
                         response = self._make_request(
                             'POST', 'content', endpoint,
-                            params=params,
+                            headers=extra_headers,
                             files=files,
                             log_to_db=False,
                             seller_id=seller_id
@@ -934,8 +941,14 @@ class WildberriesAPIClient:
                             self.session.headers['Content-Type'] = old_content_type
 
                     result = response.json() if response.content else {}
-                    logger.info(f"✅ Photo {photo_number} uploaded: {result}")
-                    results.append({'photo_number': photo_number, 'success': True, 'response': result})
+                    # WB может вернуть 200 с error в теле
+                    if result.get('error'):
+                        error_text = result.get('errorText', result.get('message', 'Unknown error'))
+                        logger.error(f"❌ Photo {photo_number} API error (200 body): {error_text}")
+                        results.append({'photo_number': photo_number, 'success': False, 'error': error_text, 'response': result})
+                    else:
+                        logger.info(f"✅ Photo {photo_number} uploaded: {result}")
+                        results.append({'photo_number': photo_number, 'success': True, 'response': result})
 
             except Exception as e:
                 logger.error(f"❌ Failed to upload photo {photo_number} for nmID={nm_id}: {e}")
@@ -982,8 +995,15 @@ class WildberriesAPIClient:
                 seller_id=seller_id
             )
             result = response.json() if response.content else {}
+            # WB может вернуть 200 с error в теле
+            if result.get('error'):
+                error_text = result.get('errorText', result.get('message', 'Unknown error'))
+                logger.error(f"❌ Photos by URL API error (200 body): {error_text}")
+                raise WBAPIException(f"Media save error: {error_text}")
             logger.info(f"✅ Photos uploaded by URL: {result}")
             return result
+        except WBAPIException:
+            raise
         except Exception as e:
             logger.error(f"❌ Failed to upload photos by URL for nmID={nm_id}: {e}")
             raise
