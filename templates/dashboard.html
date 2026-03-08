@@ -257,25 +257,35 @@
 
     <!-- Key metrics -->
     <div class="dash-section-header">
-        <span class="dash-section-title">Показатели за 30 дней</span>
+        <span class="dash-section-title">Показатели за неделю</span>
         <div class="dash-section-line"></div>
     </div>
 
-    <div class="dash-stats" x-data="dashFinance()">
+    <div class="dash-stats" x-data="dashMetrics()">
+        <a href="{{ url_for('analytics_page') }}" class="dash-stat">
+            <div class="dash-stat-label">Продажи</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(revenue)"></div>
+            <div class="dash-stat-meta">
+                <template x-if="revDyn !== null">
+                    <span :style="'color:' + (revDyn >= 0 ? '#10b981' : '#ef4444')" x-text="(revDyn >= 0 ? '+' : '') + revDyn + '%'"></span>
+                </template>
+                ₽ за 7 дней
+            </div>
+        </a>
+        <a href="{{ url_for('analytics_page') }}" class="dash-stat">
+            <div class="dash-stat-label">Заказы</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : orders"></div>
+            <div class="dash-stat-meta">
+                <template x-if="ordDyn !== null">
+                    <span :style="'color:' + (ordDyn >= 0 ? '#10b981' : '#ef4444')" x-text="(ordDyn >= 0 ? '+' : '') + ordDyn + '%'"></span>
+                </template>
+                шт за 7 дней
+            </div>
+        </a>
         <a href="{{ url_for('finances_page') }}" class="dash-stat">
             <div class="dash-stat-label">К перечислению</div>
-            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.total)"></div>
-            <div class="dash-stat-meta">₽ итого за 30 дней</div>
-        </a>
-        <a href="{{ url_for('finances_page') }}" class="dash-stat">
-            <div class="dash-stat-label">Доход</div>
-            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.income)"></div>
-            <div class="dash-stat-meta">₽ до вычетов</div>
-        </a>
-        <a href="{{ url_for('finances_page') }}" class="dash-stat">
-            <div class="dash-stat-label">Расходы</div>
-            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.expenses)"></div>
-            <div class="dash-stat-meta">₽ логистика + хранение</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(payout)"></div>
+            <div class="dash-stat-meta">₽ по отчёту реализации</div>
         </a>
         <a href="{{ url_for('products_list') }}" class="dash-stat">
             <div class="dash-stat-label">Товары</div>
@@ -468,23 +478,34 @@
 
 {% if current_user.seller and current_user.seller.has_valid_api_key() %}
 <script>
-function dashFinance() {
+function dashMetrics() {
     return {
         loading: true,
-        balance: { total: 0, income: 0, expenses: 0 },
+        revenue: 0,
+        orders: 0,
+        payout: 0,
+        revDyn: null,
+        ordDyn: null,
         formatVal(v) {
             return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v || 0);
         },
         init() {
-            fetch('/api/finances/summary?period=30d')
-                .then(r => r.json())
-                .then(json => {
-                    if (json.success && json.data) {
-                        this.balance = json.data.balance || this.balance;
-                    }
-                })
-                .catch(() => {})
-                .finally(() => { this.loading = false; });
+            Promise.all([
+                fetch('/api/analytics/summary?period=7d').then(r => r.json()),
+                fetch('/api/finances/summary?period=7d').then(r => r.json()),
+            ]).then(([analytics, finances]) => {
+                if (analytics.success && analytics.data) {
+                    const kpi = analytics.data.kpi || {};
+                    const dyn = analytics.data.dynamics || {};
+                    this.revenue = kpi.revenue || 0;
+                    this.orders = kpi.orders || 0;
+                    this.revDyn = dyn.revenue != null ? dyn.revenue : null;
+                    this.ordDyn = dyn.orders != null ? dyn.orders : null;
+                }
+                if (finances.success && finances.data) {
+                    this.payout = (finances.data.balance || {}).total || 0;
+                }
+            }).catch(() => {}).finally(() => { this.loading = false; });
         }
     };
 }
