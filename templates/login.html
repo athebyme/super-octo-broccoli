@@ -117,6 +117,50 @@
         right: -100px;
     }
 
+    /* Floating particles */
+    .login-particles {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        overflow: hidden;
+        pointer-events: none;
+    }
+    .login-particle {
+        position: absolute;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: rgba(196, 93, 62, 0.4);
+        animation: particleFloat linear infinite;
+    }
+    .login-particle:nth-child(1) { left: 15%; animation-duration: 14s; animation-delay: 0s; width: 3px; height: 3px; }
+    .login-particle:nth-child(2) { left: 35%; animation-duration: 18s; animation-delay: -3s; width: 5px; height: 5px; opacity: 0.3; }
+    .login-particle:nth-child(3) { left: 55%; animation-duration: 12s; animation-delay: -6s; }
+    .login-particle:nth-child(4) { left: 75%; animation-duration: 16s; animation-delay: -2s; width: 3px; height: 3px; }
+    .login-particle:nth-child(5) { left: 90%; animation-duration: 20s; animation-delay: -8s; width: 6px; height: 6px; opacity: 0.2; }
+    .login-particle:nth-child(6) { left: 25%; animation-duration: 15s; animation-delay: -5s; width: 2px; height: 2px; background: rgba(255,255,255,0.1); }
+    .login-particle:nth-child(7) { left: 65%; animation-duration: 17s; animation-delay: -10s; width: 3px; height: 3px; background: rgba(255,255,255,0.08); }
+    .login-particle:nth-child(8) { left: 45%; animation-duration: 22s; animation-delay: -4s; width: 2px; height: 2px; }
+    @keyframes particleFloat {
+        0%   { transform: translateY(110vh) rotate(0deg); opacity: 0; }
+        10%  { opacity: 1; }
+        90%  { opacity: 1; }
+        100% { transform: translateY(-10vh) rotate(360deg); opacity: 0; }
+    }
+
+    /* Animated glow that follows mouse on left panel */
+    .login-brand-cursor-glow {
+        position: absolute;
+        width: 300px;
+        height: 300px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(196,93,62,0.12) 0%, transparent 70%);
+        pointer-events: none;
+        z-index: 1;
+        transform: translate(-50%, -50%);
+        transition: left 0.3s ease-out, top 0.3s ease-out;
+    }
+
     /* Right panel */
     .login-form-panel {
         width: 100%;
@@ -175,10 +219,13 @@
         background: var(--bg-card);
         color: var(--text);
         outline: none;
-        transition: border-color 0.2s;
+        transition: border-color 0.2s, box-shadow 0.2s;
     }
     .login-input::placeholder { color: var(--text-muted); }
-    .login-input:focus { border-color: var(--text); }
+    .login-input:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(196, 93, 62, 0.1);
+    }
 
     .login-remember {
         display: flex;
@@ -210,9 +257,18 @@
         border: none;
         border-radius: 6px;
         cursor: pointer;
-        transition: opacity 0.2s;
+        transition: all 0.25s ease;
+        position: relative;
+        overflow: hidden;
     }
-    .login-button:hover { opacity: 0.85; }
+    .login-button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    }
+    .login-button:active {
+        transform: translateY(0);
+        box-shadow: none;
+    }
 
     .login-footer {
         margin-top: 48px;
@@ -240,6 +296,11 @@
         font-size: 12px;
         font-weight: 500;
         color: var(--text-secondary);
+        transition: border-color 0.2s, transform 0.2s;
+    }
+    .login-mp:hover {
+        border-color: var(--text-muted);
+        transform: translateY(-1px);
     }
     .login-mp-dot {
         width: 6px;
@@ -252,6 +313,88 @@
         font-size: 11px;
         color: var(--text-muted);
     }
+
+    /* Entrance animations */
+    @keyframes fadeSlideUp {
+        from { opacity: 0; transform: translateY(24px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeSlideRight {
+        from { opacity: 0; transform: translateX(-32px); }
+        to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+    }
+    @keyframes scaleIn {
+        from { opacity: 0; transform: scale(0.8); }
+        to   { opacity: 1; transform: scale(1); }
+    }
+    @keyframes glowPulse {
+        0%, 100% { opacity: 0.06; transform: scale(1); }
+        50%      { opacity: 0.1; transform: scale(1.1); }
+    }
+
+    .anim-fade-up {
+        opacity: 0;
+        animation: fadeSlideUp 0.7s ease-out forwards;
+    }
+    .anim-fade-right {
+        opacity: 0;
+        animation: fadeSlideRight 0.7s ease-out forwards;
+    }
+    .anim-fade-in {
+        opacity: 0;
+        animation: fadeIn 0.8s ease-out forwards;
+    }
+    .anim-scale-in {
+        opacity: 0;
+        animation: scaleIn 0.5s ease-out forwards;
+    }
+    .anim-delay-1 { animation-delay: 0.1s; }
+    .anim-delay-2 { animation-delay: 0.2s; }
+    .anim-delay-3 { animation-delay: 0.35s; }
+    .anim-delay-4 { animation-delay: 0.5s; }
+    .anim-delay-5 { animation-delay: 0.65s; }
+    .anim-delay-6 { animation-delay: 0.8s; }
+    .anim-delay-7 { animation-delay: 0.95s; }
+    .anim-delay-8 { animation-delay: 1.1s; }
+
+    .login-brand-glow {
+        animation: glowPulse 6s ease-in-out infinite;
+    }
+
+    /* Stagger stats */
+    .login-brand-stat {
+        opacity: 0;
+        animation: fadeSlideUp 0.6s ease-out forwards;
+    }
+    .login-brand-stat:nth-child(1) { animation-delay: 0.7s; }
+    .login-brand-stat:nth-child(2) { animation-delay: 0.85s; }
+    .login-brand-stat:nth-child(3) { animation-delay: 1.0s; }
+
+    /* Subtle line across brand panel */
+    .login-brand-line {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(196,93,62,0.3), transparent);
+        z-index: 2;
+    }
+    @keyframes lineSweep {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+    }
+    .login-brand-line::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(196,93,62,0.6), transparent);
+        animation: lineSweep 4s ease-in-out infinite;
+    }
 </style>
 {% endblock %}
 
@@ -259,22 +402,36 @@
 <div class="login-page">
 
     <!-- Left: Brand -->
-    <div class="login-brand">
+    <div class="login-brand" x-data="{ mx: 0, my: 0 }" @mousemove.throttle.100ms="mx = $event.clientX; my = $event.clientY">
         <div class="login-brand-grid"></div>
         <div class="login-brand-glow"></div>
+        <div class="login-brand-cursor-glow" :style="`left:${mx}px;top:${my}px`"></div>
+        <div class="login-brand-line"></div>
+
+        <!-- Floating particles -->
+        <div class="login-particles">
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+            <div class="login-particle"></div>
+        </div>
 
         <div class="login-brand-top">
-            <div class="login-brand-logo">
+            <div class="login-brand-logo anim-fade-right anim-delay-1">
                 <div class="login-brand-logo-mark">S</div>
                 <span class="login-brand-logo-text">Seller Hub</span>
             </div>
 
-            <h1>
+            <h1 class="anim-fade-right anim-delay-2">
                 Управляйте<br>
                 продажами<br>
                 <em>эффективно</em>
             </h1>
-            <p>
+            <p class="anim-fade-right anim-delay-3">
                 Единая платформа для аналитики, ценообразования и управления товарами на маркетплейсах. Wildberries, Ozon, Яндекс Маркет.
             </p>
         </div>
@@ -299,33 +456,33 @@
     <div class="login-form-panel">
         <div class="login-form-wrapper">
 
-            <div class="login-form-mobile-logo">
+            <div class="login-form-mobile-logo anim-scale-in anim-delay-1">
                 <div class="login-brand-logo-mark">S</div>
                 <span style="font-family:var(--font-display);font-style:italic;font-size:20px;color:var(--text)">Seller Hub</span>
             </div>
 
-            <h2 class="login-form-title">Войти</h2>
-            <p class="login-form-subtitle">Введите данные для входа в систему</p>
+            <h2 class="login-form-title anim-fade-up anim-delay-2">Войти</h2>
+            <p class="login-form-subtitle anim-fade-up anim-delay-3">Введите данные для входа в систему</p>
 
             <form method="POST" action="{{ url_for('login') }}">
-                <div class="login-field">
+                <div class="login-field anim-fade-up anim-delay-4">
                     <label for="username" class="login-label">Имя пользователя</label>
                     <input id="username" name="username" type="text" required class="login-input" placeholder="username" autocomplete="username">
                 </div>
-                <div class="login-field">
+                <div class="login-field anim-fade-up anim-delay-5">
                     <label for="password" class="login-label">Пароль</label>
                     <input id="password" name="password" type="password" required class="login-input" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="current-password">
                 </div>
 
-                <div class="login-remember">
+                <div class="login-remember anim-fade-up anim-delay-6">
                     <input id="remember" name="remember" type="checkbox">
                     <label for="remember">Запомнить меня</label>
                 </div>
 
-                <button type="submit" class="login-button">Войти</button>
+                <button type="submit" class="login-button anim-fade-up anim-delay-7">Войти</button>
             </form>
 
-            <div class="login-footer">
+            <div class="login-footer anim-fade-in anim-delay-8">
                 <div class="login-footer-label">Маркетплейсы</div>
                 <div class="login-marketplaces">
                     <span class="login-mp">
@@ -343,7 +500,7 @@
                 </div>
             </div>
 
-            <p class="login-copyright">&copy; 2026 Seller Hub</p>
+            <p class="login-copyright anim-fade-in anim-delay-8">&copy; 2026 Seller Hub</p>
         </div>
     </div>
 </div>
