@@ -3230,24 +3230,31 @@ class FinanceSnapshot(db.Model):
     )
 
     def to_dict(self):
-        income = self.for_pay_total or 0
+        # ppvz_for_pay уже рассчитан WB за вычетом комиссии,
+        # поэтому commission НЕ включаем в expenses (иначе двойной учёт).
+        income = self.for_pay_total or 0          # положительные ppvz_for_pay
+        returns = abs(self.returns_total or 0)     # отрицательные ppvz_for_pay (возвраты)
+
+        # Доп. расходы, которые WB вычитает отдельно от ppvz_for_pay
         expenses = (
-            (self.commission_total or 0) +
             (self.logistics_total or 0) +
             (self.storage_total or 0) +
             (self.penalties_total or 0) +
             (self.deductions_total or 0) +
             (self.acceptance_total or 0)
         )
-        balance = income - abs(self.returns_total or 0)
+
+        # Итого к перечислению = доход − возвраты − доп.расходы
+        net_payout = income - returns - expenses
 
         return {
             'period_start': self.period_start.isoformat() if self.period_start else None,
             'period_end': self.period_end.isoformat() if self.period_end else None,
             'balance': {
-                'total': round(balance - expenses, 2),
+                'total': round(net_payout, 2),
                 'income': round(income, 2),
                 'expenses': round(expenses, 2),
+                'returns': round(returns, 2),
             },
             'breakdown': {
                 'salesTotal': round(self.sales_total or 0, 2),

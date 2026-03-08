@@ -306,7 +306,7 @@ class FinanceService:
         return {
             'period_start': period_start.isoformat(),
             'period_end': period_end.isoformat(),
-            'balance': {'total': 0, 'income': 0, 'expenses': 0},
+            'balance': {'total': 0, 'income': 0, 'expenses': 0, 'returns': 0},
             'breakdown': {
                 'salesTotal': 0, 'forPayTotal': 0, 'returnsTotal': 0,
                 'commission': 0, 'logistics': 0, 'storage': 0,

@@ -264,18 +264,18 @@
     <div class="dash-stats" x-data="dashFinance()">
         <a href="{{ url_for('finances_page') }}" class="dash-stat">
             <div class="dash-stat-label">К перечислению</div>
-            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.income)"></div>
-            <div class="dash-stat-meta">₽ за 7 дней</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.total)"></div>
+            <div class="dash-stat-meta">₽ итого за 7 дней</div>
         </a>
         <a href="{{ url_for('finances_page') }}" class="dash-stat">
-            <div class="dash-stat-label">Баланс</div>
-            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.total)"></div>
-            <div class="dash-stat-meta">₽ доход − расходы</div>
+            <div class="dash-stat-label">Доход</div>
+            <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.income)"></div>
+            <div class="dash-stat-meta">₽ до вычетов</div>
         </a>
         <a href="{{ url_for('finances_page') }}" class="dash-stat">
             <div class="dash-stat-label">Расходы</div>
             <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.expenses)"></div>
-            <div class="dash-stat-meta">₽ комиссия + логистика</div>
+            <div class="dash-stat-meta">₽ логистика + хранение</div>
         </a>
         <a href="{{ url_for('products_list') }}" class="dash-stat">
             <div class="dash-stat-label">Товары</div>

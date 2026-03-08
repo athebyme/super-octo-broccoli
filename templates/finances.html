@@ -86,7 +86,7 @@
                 <circle cx="40" cy="40" r="28" stroke="white" stroke-width="1.5"/>
                 <text x="40" y="48" text-anchor="middle" fill="white" font-size="28" font-weight="bold">₽</text>
             </svg>
-            <p class="text-indigo-200 text-sm font-medium mb-2">Баланс (к перечислению − расходы)</p>
+            <p class="text-indigo-200 text-sm font-medium mb-2">Итого к перечислению</p>
             <p class="text-3xl font-bold mb-3" x-text="formatMoney(balance.total)"></p>
             <div class="text-sm text-indigo-200">
                 <span x-text="'Строк в отчёте: ' + reportRowsCount.toLocaleString('ru-RU')"></span>
@@ -100,7 +100,7 @@
                 <div class="w-10 h-10 bg-gradient-to-br from-emerald-400 to-green-500 rounded-xl flex items-center justify-center">
                     <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/></svg>
                 </div>
-                <p class="text-sm text-gray-500 font-medium">К перечислению</p>
+                <p class="text-sm text-gray-500 font-medium">Доход (ppvz)</p>
             </div>
             <p class="text-2xl font-bold text-gray-900 mb-2" x-text="formatMoney(balance.income)"></p>
             <template x-if="breakdown.returnsTotal > 0">
@@ -120,7 +120,7 @@
                 <p class="text-sm text-gray-500 font-medium">Расходы</p>
             </div>
             <p class="text-2xl font-bold text-gray-900 mb-2" x-text="formatMoney(balance.expenses)"></p>
-            <span class="text-xs text-gray-400">Комиссия + Логистика + Хранение + Штрафы</span>
+            <span class="text-xs text-gray-400">Логистика + Хранение + Штрафы + Удержания</span>
         </div>
     </div>
 
@@ -383,7 +383,7 @@ function financesPage() {
             });
 
             const expensesData = this.weeklyData.map(w =>
-                (w.commission || 0) + (w.logistics || 0) + (w.storage || 0) + (w.penalties || 0)
+                (w.logistics || 0) + (w.storage || 0) + (w.penalties || 0)
             );
 
             this.revenueChart = new Chart(this.$refs.revenueChart, {
