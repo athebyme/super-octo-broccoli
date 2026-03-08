@@ -1563,6 +1563,12 @@ class SupplierService:
                     SupplierProduct.title.ilike(search_term),
                     SupplierProduct.external_id.ilike(search_term),
                     SupplierProduct.brand.ilike(search_term),
+                    SupplierProduct.vendor_code.ilike(search_term),
+                    SupplierProduct.barcode.ilike(search_term),
+                    SupplierProduct.additional_vendor_code.ilike(search_term),
+                    SupplierProduct.category.ilike(search_term),
+                    SupplierProduct.wb_category_name.ilike(search_term),
+                    SupplierProduct.wb_subject_name.ilike(search_term),
                 )
             )
 

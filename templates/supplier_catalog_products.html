@@ -23,20 +23,32 @@
     </div>
 
     <!-- Поиск и фильтры -->
-    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end">
-        <div class="flex-1 min-w-[200px]">
-            <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, ID, бренду..."
-                   class="w-full rounded-md border-gray-300 text-sm border px-3 py-2">
+    <form method="GET" id="search-form" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end">
+        <div class="flex-1 min-w-[250px] relative">
+            <div class="relative">
+                <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input type="text" name="search" id="search-input" value="{{ search }}"
+                       placeholder="Название, бренд, артикул, штрихкод, категория..."
+                       class="w-full rounded-md border-gray-300 text-sm border pl-9 pr-8 py-2"
+                       autocomplete="off">
+                {% if search %}
+                <button type="button" onclick="document.getElementById('search-input').value='';document.getElementById('search-form').submit()"
+                        class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+                {% endif %}
+            </div>
+            <div class="mt-1 text-[11px] text-gray-400">ID, артикул, штрихкод, бренд, категория WB</div>
         </div>
         <div>
-            <select name="stock_status" class="rounded-md border-gray-300 text-sm border px-3 py-2">
+            <select name="stock_status" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
                 <option value="in_stock" {{ 'selected' if stock_status == 'in_stock' }}>В наличии</option>
                 <option value="all" {{ 'selected' if stock_status == 'all' }}>Все товары</option>
                 <option value="out_of_stock" {{ 'selected' if stock_status == 'out_of_stock' }}>Нет в наличии</option>
             </select>
         </div>
         <div>
-            <select name="wb_filter" class="rounded-md border-gray-300 text-sm border px-3 py-2">
+            <select name="wb_filter" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
                 <option value="" {{ 'selected' if not wb_filter }}>Все</option>
                 <option value="not_on_wb" {{ 'selected' if wb_filter == 'not_on_wb' }}>Нет на WB</option>
                 <option value="on_wb" {{ 'selected' if wb_filter == 'on_wb' }}>Уже на WB</option>
@@ -44,11 +56,30 @@
         </div>
         <label class="flex items-center gap-2">
             <input type="checkbox" name="show_imported" value="1" {{ 'checked' if show_imported }}
-                   class="rounded border-gray-300 text-gray-900">
+                   class="rounded border-gray-300 text-gray-900" onchange="this.form.submit()">
             <span class="text-sm text-gray-600">Показать импортированные</span>
         </label>
         <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
     </form>
+    <script>
+    (function(){
+        var timer, input = document.getElementById('search-input');
+        if (!input) return;
+        input.addEventListener('keyup', function(e){
+            if (e.key === 'Enter') return;
+            clearTimeout(timer);
+            timer = setTimeout(function(){ document.getElementById('search-form').submit(); }, 600);
+        });
+    })();
+    </script>
+
+    {% if search %}
+    <div class="mb-3 px-1 flex items-center gap-2 text-sm text-gray-600">
+        <span>Результаты по запросу «<strong class="text-gray-900">{{ search }}</strong>»:</span>
+        <span class="font-medium">{{ pagination.total }}</span>
+        <span>{{ 'товар' if pagination.total % 10 == 1 and pagination.total % 100 != 11 else ('товара' if pagination.total % 10 in [2,3,4] and pagination.total % 100 not in [12,13,14] else 'товаров') }}</span>
+    </div>
+    {% endif %}
 
     <!-- Товары -->
     <form method="POST" action="{{ url_for('supplier_catalog_import') }}" id="import-form"
@@ -114,9 +145,12 @@
                                 {{ product.title or 'Без названия' }}
                             </a>
 
-                            <div class="mt-1 flex items-center gap-2 text-xs text-gray-500">
-                                {% if product.brand %}<span>{{ product.brand }}</span>{% endif %}
-                                {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:20] }}</span>{% endif %}
+                            <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
+                                {% if product.brand %}<span class="font-medium text-gray-700">{{ product.brand }}</span>{% endif %}
+                                {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:25] }}</span>{% endif %}
+                                {% if product.vendor_code %}<span class="text-gray-300">|</span><span title="Артикул">{{ product.vendor_code }}</span>{% endif %}
+                                {% if product.barcode %}<span class="text-gray-300">|</span><span title="Штрихкод" class="font-mono text-[10px]">{{ product.barcode }}</span>{% endif %}
+                                {% if product.external_id %}<span class="text-gray-300">|</span><span title="ID поставщика" class="text-gray-400">{{ product.external_id }}</span>{% endif %}
                                 {% if product.id in wb_existing_sp_ids %}
                                 <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide" style="background:#ece0f8;color:#7c3aed" title="Товар уже на Wildberries">
                                     <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.5 5.3l-4 5.5a.75.75 0 0 1-1.1.1L4.2 8.7a.75.75 0 1 1 1.1-1.1l1.6 1.6 3.5-4.8a.75.75 0 1 1 1.2.9z"/></svg>
