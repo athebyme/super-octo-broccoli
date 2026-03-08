@@ -16,7 +16,7 @@ from flask_login import login_required, current_user
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
-    ImportedProduct, Seller, AIHistory, log_admin_action
+    ImportedProduct, Seller, AIHistory, log_admin_action, Product
 )
 from services.supplier_service import SupplierService
 
@@ -1286,6 +1286,35 @@ def register_supplier_routes(app):
                 ImportedProduct.product_id.isnot(None)
             ).all()
         )
+
+        # Дополнительно: определяем товары на WB по совпадению артикула
+        # (для товаров, загруженных напрямую, без ImportedProduct.product_id)
+        if pagination.items:
+            settings = seller.auto_import_settings
+            # Вычисляем vendor_code для каждого товара на странице
+            sp_vendor_codes = {}
+            for sp in pagination.items:
+                if sp.id in wb_existing_sp_ids:
+                    continue
+                if settings and settings.vendor_code_pattern:
+                    vc = settings.vendor_code_pattern.replace('{product_id}', str(sp.external_id or ''))
+                    vc = vc.replace('{supplier_code}', settings.supplier_code or '')
+                else:
+                    vc = sp.vendor_code
+                if vc:
+                    sp_vendor_codes[sp.id] = vc
+
+            if sp_vendor_codes:
+                # Проверяем какие артикулы уже есть в карточках продавца на WB
+                existing_vc = set(
+                    row[0] for row in db.session.query(Product.vendor_code).filter(
+                        Product.seller_id == seller.id,
+                        Product.vendor_code.in_(list(sp_vendor_codes.values()))
+                    ).all()
+                )
+                for sp_id, vc in sp_vendor_codes.items():
+                    if vc in existing_vc:
+                        wb_existing_sp_ids.add(sp_id)
 
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)

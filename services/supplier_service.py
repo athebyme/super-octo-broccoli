@@ -1527,25 +1527,12 @@ class SupplierService:
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
 
         if not show_imported:
-            # Исключаем импортированные, НО оставляем те что уже на WB (есть product_id)
-            # чтобы продавец видел плашку WB и не пытался импортировать повторно
-            all_imported = set(
-                row[0] for row in db.session.query(ImportedProduct.supplier_product_id).filter(
-                    ImportedProduct.seller_id == seller_id,
-                    ImportedProduct.supplier_product_id.isnot(None)
-                ).all()
-            )
-            on_wb = set(
-                row[0] for row in db.session.query(ImportedProduct.supplier_product_id).filter(
-                    ImportedProduct.seller_id == seller_id,
-                    ImportedProduct.supplier_product_id.isnot(None),
-                    ImportedProduct.product_id.isnot(None)
-                ).all()
-            )
-            # Скрываем только импортированные без карточки WB
-            exclude_ids = all_imported - on_wb
-            if exclude_ids:
-                q = q.filter(~SupplierProduct.id.in_(exclude_ids))
+            # Исключаем уже импортированные
+            imported_sp_ids = db.session.query(ImportedProduct.supplier_product_id).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_product_id.isnot(None)
+            ).subquery()
+            q = q.filter(~SupplierProduct.id.in_(imported_sp_ids))
 
         # Фильтр по наличию
         if stock_status == 'in_stock':

@@ -79,9 +79,12 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-0 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
                 {% for product in pagination.items %}
                 {% set is_imported = product.id in imported_sp_ids %}
-                <div class="p-4 {{ 'bg-gray-50/50' if is_imported else '' }} hover:bg-gray-50 transition-colors border-b border-gray-100">
+                {% set is_on_wb = product.id in wb_existing_sp_ids %}
+                <div class="p-4 {{ 'bg-purple-50/50' if is_on_wb else ('bg-gray-50/50' if is_imported else '') }} hover:bg-gray-50 transition-colors border-b border-gray-100">
                     <div class="flex items-start gap-3">
-                        {% if not is_imported %}
+                        {% if is_on_wb %}
+                        <span class="mt-1 text-purple-500 text-sm" title="Уже на Wildberries">&#10003;</span>
+                        {% elif not is_imported %}
                         <input type="checkbox" name="product_ids" value="{{ product.id }}"
                                :checked="selected.includes('{{ product.id }}')"
                                @change="selected = $event.target.checked ? [...selected, '{{ product.id }}'] : selected.filter(id => id !== '{{ product.id }}')"
