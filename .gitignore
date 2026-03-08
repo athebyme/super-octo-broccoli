@@ -54,3 +54,4 @@ processed/*
 .DS_Store
 Thumbs.db
 *.log
+seller_platform.log
