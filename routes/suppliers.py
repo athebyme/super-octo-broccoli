@@ -1436,6 +1436,13 @@ def register_supplier_routes(app):
             'failed': base_q.filter_by(import_status='failed').count(),
         }
 
+        # Недавние загрузки (последние 10 импортированных или с ошибкой)
+        recent_imports = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status.in_(['imported', 'failed']),
+            ImportedProduct.updated_at.isnot(None)
+        ).order_by(ImportedProduct.updated_at.desc()).limit(10).all()
+
         return render_template(
             'seller_my_products.html',
             pagination=pagination,
@@ -1443,6 +1450,7 @@ def register_supplier_routes(app):
             status=status,
             search=search,
             has_wb_key=seller.has_valid_api_key(),
+            recent_imports=recent_imports,
         )
 
     # -------------------------------------------------------------------
@@ -1493,25 +1501,52 @@ def register_supplier_routes(app):
             return jsonify({'error': str(e)}), 500
 
     # -------------------------------------------------------------------
-    # Push to WB — единичный импорт товара на WB
+    # Push to WB — единичный импорт товара на WB (AJAX)
     # -------------------------------------------------------------------
     @app.route('/my-products/<int:product_id>/push-to-wb', methods=['POST'])
     @login_required
     @seller_required
     def seller_push_to_wb(product_id):
-        """Импорт одного товара в магазин WB продавца."""
+        """Импорт одного товара в магазин WB продавца.
+        Поддерживает как AJAX (JSON), так и обычный form POST (redirect)."""
         seller = current_user.seller
         product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first_or_404()
 
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.accept_mimetypes.best == 'application/json'
+
         if not seller.has_valid_api_key():
+            if is_ajax:
+                return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
             flash('API ключ WB не настроен', 'danger')
             return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+        # Авто-валидация если товар не validated
+        if product.import_status not in ('validated', 'imported'):
+            from services.upload_readiness_validator import validate_product_upload_readiness
+            vr = validate_product_upload_readiness(product, seller=seller)
+            if vr['is_ready']:
+                product.import_status = 'validated'
+                db.session.commit()
+            else:
+                error_msgs = [i['message'] for i in vr['issues'] if i['level'] == 'error']
+                err = f"Товар не прошёл валидацию: {'; '.join(error_msgs[:3])}"
+                if is_ajax:
+                    return jsonify({'success': False, 'error': err}), 400
+                flash(err, 'danger')
+                return redirect(url_for('seller_product_wb_preview', product_id=product_id))
 
         from services.wb_product_importer import WBProductImporter
         importer = WBProductImporter(seller)
         success, error, created = importer.import_product_to_wb(product)
+
+        if is_ajax:
+            return jsonify({
+                'success': success,
+                'error': error,
+                'product_id': created.id if hasattr(created, 'id') else created,
+            })
 
         if success:
             flash(f'Товар "{product.title}" отправлен на WB', 'success')
@@ -1521,13 +1556,14 @@ def register_supplier_routes(app):
         return redirect(url_for('seller_product_wb_preview', product_id=product_id))
 
     # -------------------------------------------------------------------
-    # Push to WB — массовый импорт товаров на WB
+    # Push to WB — массовый импорт товаров на WB (SSE streaming)
     # -------------------------------------------------------------------
     @app.route('/my-products/push-to-wb-bulk', methods=['POST'])
     @login_required
     @seller_required
     def seller_push_to_wb_bulk():
-        """Массовый импорт товаров в магазин WB."""
+        """Массовый импорт товаров в магазин WB.
+        Поддерживает SSE (Accept: text/event-stream) и обычный JSON."""
         seller = current_user.seller
 
         if not seller.has_valid_api_key():
@@ -1539,14 +1575,99 @@ def register_supplier_routes(app):
         if not product_ids:
             return jsonify({'error': 'Не выбраны товары'}), 400
 
-        try:
+        use_sse = 'text/event-stream' in request.headers.get('Accept', '')
+
+        if use_sse:
+            return _stream_bulk_import(seller, product_ids)
+
+        # Fallback: обычный JSON ответ (синхронный)
+        from services.wb_product_importer import WBProductImporter
+        importer = WBProductImporter(seller)
+
+        # Авто-валидация pending/failed товаров перед импортом
+        _auto_validate_products(seller, product_ids)
+
+        result = importer.import_multiple_products(product_ids)
+        result['success'] = True
+        return jsonify(result)
+
+    def _auto_validate_products(seller, product_ids):
+        """Авто-валидация: переводит pending/failed в validated если проходят проверку."""
+        from services.upload_readiness_validator import validate_product_upload_readiness
+        products = ImportedProduct.query.filter(
+            ImportedProduct.id.in_(product_ids),
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status.in_(['pending', 'failed'])
+        ).all()
+        for p in products:
+            try:
+                vr = validate_product_upload_readiness(p, seller=seller)
+                if vr['is_ready']:
+                    p.import_status = 'validated'
+            except Exception:
+                pass
+        if products:
+            db.session.commit()
+
+    def _stream_bulk_import(seller, product_ids):
+        """SSE-стриминг прогресса массового импорта."""
+        import json as _json
+
+        def generate():
             from services.wb_product_importer import WBProductImporter
+            from services.upload_readiness_validator import validate_product_upload_readiness
+
             importer = WBProductImporter(seller)
-            result = importer.import_multiple_products(product_ids)
-            result['success'] = True
-            return jsonify(result)
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+            total = len(product_ids)
+            stats = {'imported': 0, 'failed': 0, 'skipped': 0, 'errors': []}
+
+            for idx, pid in enumerate(product_ids):
+                product = ImportedProduct.query.get(pid)
+                if not product or product.seller_id != seller.id:
+                    stats['skipped'] += 1
+                    yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': f'ID {pid}', 'status': 'skipped', 'reason': 'Не найден', **stats})}\n\n"
+                    continue
+
+                title_short = (product.title or 'Без названия')[:40]
+
+                # Авто-валидация
+                if product.import_status in ('pending', 'failed'):
+                    try:
+                        vr = validate_product_upload_readiness(product, seller=seller)
+                        if vr['is_ready']:
+                            product.import_status = 'validated'
+                            db.session.commit()
+                        else:
+                            error_msgs = [i['message'] for i in vr['issues'] if i['level'] == 'error']
+                            err = '; '.join(error_msgs[:2])
+                            stats['failed'] += 1
+                            stats['errors'].append(f"{title_short}: {err}")
+                            yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'validation_failed', 'reason': err, **stats})}\n\n"
+                            continue
+                    except Exception as e:
+                        stats['failed'] += 1
+                        stats['errors'].append(f"{title_short}: Ошибка валидации: {e}")
+                        yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'error', 'reason': str(e), **stats})}\n\n"
+                        continue
+
+                # Импорт
+                yield f"data: {_json.dumps({'type': 'importing', 'current': idx + 1, 'total': total, 'product': title_short})}\n\n"
+
+                success, error, created = importer.import_product_to_wb(product)
+
+                if success:
+                    stats['imported'] += 1
+                    yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'ok', **stats})}\n\n"
+                else:
+                    stats['failed'] += 1
+                    stats['errors'].append(f"{title_short}: {error}")
+                    yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'error', 'reason': error, **stats})}\n\n"
+
+            # Финальное событие
+            yield f"data: {_json.dumps({'type': 'done', **stats})}\n\n"
+
+        return app.response_class(generate(), mimetype='text/event-stream',
+                                   headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
     # -------------------------------------------------------------------
     # Validate product for WB — пометить как валидированный

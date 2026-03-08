@@ -23,28 +23,40 @@
                     {% endif %}
                 </p>
             </div>
-            <div class="flex gap-2">
-                {% if preview.is_ready and has_wb_key %}
+            <div class="flex gap-2" x-data="{ pushing: false, pushResult: null }">
+                {% if has_wb_key %}
                     {% if product.import_status == 'imported' %}
                     <span class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium">
                         Уже на WB
                     </span>
-                    {% elif product.import_status == 'validated' %}
-                    <form method="POST" action="{{ url_for('seller_push_to_wb', product_id=product.id) }}">
-                        <button type="submit" onclick="return confirm('Отправить товар на Wildberries?')"
-                                class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md text-sm font-bold hover:bg-gray-100">
-                            Отправить на WB
-                        </button>
-                    </form>
                     {% else %}
-                    <form method="POST" action="{{ url_for('seller_validate_product', product_id=product.id) }}">
-                        <button type="submit"
-                                class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md text-sm font-bold hover:bg-gray-100">
-                            Подтвердить готовность
-                        </button>
-                    </form>
+                    <button @click="
+                        if (!confirm('Отправить товар на Wildberries?')) return;
+                        pushing = true;
+                        pushResult = null;
+                        fetch('{{ url_for('seller_push_to_wb', product_id=product.id) }}', {
+                            method: 'POST',
+                            headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json'}
+                        })
+                        .then(r => r.json())
+                        .then(data => {
+                            pushing = false;
+                            pushResult = data;
+                            if (data.success) setTimeout(() => location.reload(), 1500);
+                        })
+                        .catch(e => {
+                            pushing = false;
+                            pushResult = {success: false, error: e.message};
+                        });
+                    " :disabled="pushing"
+                       class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md text-sm font-bold hover:bg-gray-100 disabled:opacity-50 flex items-center gap-2">
+                        <template x-if="pushing">
+                            <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </template>
+                        <span x-text="pushing ? 'Отправка на WB...' : 'Отправить на WB'"></span>
+                    </button>
                     {% endif %}
-                {% elif not has_wb_key %}
+                {% else %}
                 <span class="px-4 py-2 bg-white/10 text-white rounded-md text-sm">
                     Настройте API ключ WB
                 </span>
@@ -53,6 +65,12 @@
                    class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20">
                     Назад
                 </a>
+                <!-- Inline result -->
+                <template x-if="pushResult">
+                    <span class="px-3 py-2 rounded-md text-sm"
+                          :class="pushResult.success ? 'bg-green-500/20 text-green-200' : 'bg-red-500/20 text-red-200'"
+                          x-text="pushResult.success ? 'Отправлено!' : pushResult.error"></span>
+                </template>
             </div>
         </div>
     </div>

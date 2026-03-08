@@ -24,9 +24,7 @@
         position: relative;
     }
     .my-stat-card:hover { background: var(--bg); }
-    .my-stat-card.active {
-        background: var(--bg);
-    }
+    .my-stat-card.active { background: var(--bg); }
     .my-stat-card.active::after {
         content: '';
         position: absolute;
@@ -51,6 +49,12 @@
         font-style: italic;
         color: var(--text);
     }
+    /* Progress bar animation */
+    @keyframes progress-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+    .progress-pulse { animation: progress-pulse 1.5s ease-in-out infinite; }
 </style>
 {% endblock %}
 
@@ -60,28 +64,69 @@
         selectedAll: false,
         selected: [],
         bulkRunning: false,
+        bulkProgress: null,
         bulkResult: null,
+        notification: null,
+
         pushBulkToWB() {
             if (!this.selected.length) return;
-            if (!confirm('Отправить ' + this.selected.length + ' товаров на WB?')) return;
+            if (!confirm('Отправить ' + this.selected.length + ' товаров на WB?\nТовары будут автоматически провалидированы.')) return;
             this.bulkRunning = true;
             this.bulkResult = null;
+            this.bulkProgress = { current: 0, total: this.selected.length, product: 'Подготовка...', status: '', imported: 0, failed: 0, skipped: 0 };
+
+            // SSE streaming для прогресса
+            const body = JSON.stringify({product_ids: this.selected});
             fetch('{{ url_for("seller_push_to_wb_bulk") }}', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({product_ids: this.selected})
-            })
-            .then(r => r.json())
-            .then(data => {
-                this.bulkResult = data;
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                },
+                body: body
+            }).then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                const processStream = () => {
+                    reader.read().then(({done, value}) => {
+                        if (done) {
+                            this.bulkRunning = false;
+                            if (this.bulkResult && this.bulkResult.imported > 0) {
+                                setTimeout(() => location.reload(), 1500);
+                            }
+                            return;
+                        }
+                        buffer += decoder.decode(value, {stream: true});
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop();
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
+                                    if (data.type === 'done') {
+                                        this.bulkResult = data;
+                                        this.bulkProgress = null;
+                                    } else if (data.type === 'importing') {
+                                        this.bulkProgress = {...this.bulkProgress, ...data, status: 'importing'};
+                                    } else if (data.type === 'progress') {
+                                        this.bulkProgress = data;
+                                    }
+                                } catch(e) {}
+                            }
+                        }
+                        processStream();
+                    });
+                };
+                processStream();
+            }).catch(e => {
+                this.showNotification('Ошибка: ' + e.message, 'error');
                 this.bulkRunning = false;
-                if (data.imported > 0) setTimeout(() => location.reload(), 2000);
-            })
-            .catch(e => {
-                alert('Ошибка: ' + e.message);
-                this.bulkRunning = false;
+                this.bulkProgress = null;
             });
         },
+
         deleteBulk() {
             if (!this.selected.length) return;
             if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
@@ -94,11 +139,27 @@
             .then(r => r.json())
             .then(() => location.reload())
             .catch(e => {
-                alert('Ошибка: ' + e.message);
+                this.showNotification('Ошибка: ' + e.message, 'error');
                 this.bulkRunning = false;
             });
+        },
+
+        showNotification(msg, type) {
+            this.notification = {msg, type};
+            setTimeout(() => this.notification = null, 5000);
         }
      }">
+
+    <!-- Inline notification (replaces flash) -->
+    <template x-if="notification">
+        <div x-transition class="mb-4 px-4 py-3 rounded-lg text-sm font-medium"
+             :class="notification.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-green-50 text-green-800 border border-green-200'">
+            <div class="flex items-center justify-between">
+                <span x-text="notification.msg"></span>
+                <button @click="notification = null" class="ml-4 text-current opacity-50 hover:opacity-100">&times;</button>
+            </div>
+        </div>
+    </template>
 
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
         <div class="relative">
@@ -162,7 +223,10 @@
             <button @click="pushBulkToWB()" :disabled="selected.length === 0 || bulkRunning"
                     class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40">
                 <span x-show="!bulkRunning">Отправить на WB</span>
-                <span x-show="bulkRunning">Отправка...</span>
+                <span x-show="bulkRunning" class="flex items-center gap-2">
+                    <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Отправка...
+                </span>
             </button>
             {% endif %}
             <button @click="deleteBulk()" :disabled="selected.length === 0 || bulkRunning"
@@ -172,24 +236,49 @@
         </div>
     </div>
 
-    <!-- Bulk result -->
-    <div x-show="bulkResult" x-cloak class="bg-white border-x border-gray-200 px-4 py-3">
-        <div class="flex items-center gap-4 text-sm">
-            <span class="text-gray-900 font-medium" x-text="'Отправлено: ' + (bulkResult?.imported || 0)"></span>
-            <span class="text-gray-500" x-text="'Ошибок: ' + (bulkResult?.failed || 0)"></span>
-            <span class="text-gray-400" x-text="'Пропущено: ' + (bulkResult?.skipped || 0)"></span>
-        </div>
-        <template x-if="bulkResult?.errors?.length > 0">
-            <div class="mt-2 text-xs text-red-600 space-y-0.5 max-h-40 overflow-y-auto">
-                <template x-for="err in bulkResult.errors.slice(0, 10)" :key="err">
-                    <div x-text="err"></div>
-                </template>
-                <template x-if="bulkResult.errors.length > 10">
-                    <div class="text-gray-400" x-text="'... и ещё ' + (bulkResult.errors.length - 10) + ' ошибок'"></div>
-                </template>
+    <!-- Progress bar (SSE streaming) -->
+    <template x-if="bulkProgress">
+        <div class="bg-white border-x border-gray-200 px-4 py-3">
+            <div class="flex items-center justify-between text-sm mb-2">
+                <span class="text-gray-700 font-medium" x-text="bulkProgress.product || 'Обработка...'"></span>
+                <span class="text-gray-400" x-text="bulkProgress.current + ' / ' + bulkProgress.total"></span>
             </div>
-        </template>
-    </div>
+            <div class="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                <div class="h-full rounded-full transition-all duration-300"
+                     :class="bulkProgress.status === 'importing' ? 'bg-yellow-400 progress-pulse' : 'bg-gray-900'"
+                     :style="'width: ' + Math.round((bulkProgress.current / bulkProgress.total) * 100) + '%'"></div>
+            </div>
+            <div class="flex items-center gap-4 text-xs mt-2 text-gray-500">
+                <span x-show="bulkProgress.imported > 0" class="text-green-600" x-text="'OK: ' + bulkProgress.imported"></span>
+                <span x-show="bulkProgress.failed > 0" class="text-red-600" x-text="'Ошибок: ' + bulkProgress.failed"></span>
+                <span x-show="bulkProgress.skipped > 0" class="text-gray-400" x-text="'Пропущено: ' + bulkProgress.skipped"></span>
+                <span x-show="bulkProgress.status === 'importing'" class="text-yellow-600">Отправляется на WB...</span>
+                <span x-show="bulkProgress.status === 'validation_failed'" class="text-red-500">Не прошёл валидацию</span>
+            </div>
+        </div>
+    </template>
+
+    <!-- Bulk result (final) -->
+    <template x-if="bulkResult && !bulkProgress">
+        <div class="bg-white border-x border-gray-200 px-4 py-3">
+            <div class="flex items-center gap-4 text-sm">
+                <span class="text-green-700 font-medium" x-text="'Отправлено: ' + (bulkResult.imported || 0)"></span>
+                <span class="text-red-600" x-text="'Ошибок: ' + (bulkResult.failed || 0)"></span>
+                <span class="text-gray-400" x-text="'Пропущено: ' + (bulkResult.skipped || 0)"></span>
+                <span x-show="bulkResult.imported > 0" class="text-xs text-gray-400">Страница обновится...</span>
+            </div>
+            <template x-if="bulkResult.errors && bulkResult.errors.length > 0">
+                <div class="mt-2 text-xs text-red-600 space-y-0.5 max-h-40 overflow-y-auto">
+                    <template x-for="(err, i) in bulkResult.errors.slice(0, 10)" :key="i">
+                        <div x-text="err"></div>
+                    </template>
+                    <template x-if="bulkResult.errors.length > 10">
+                        <div class="text-gray-400" x-text="'... и ещё ' + (bulkResult.errors.length - 10) + ' ошибок'"></div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </template>
 
     <!-- Products list -->
     <div class="bg-white border border-gray-200 rounded-b-lg overflow-hidden">
@@ -220,13 +309,12 @@
                     <td class="px-3 py-2">
                         {% set photos = p.photo_urls %}
                         {% if photos and photos != '[]' %}
-                        <div class="w-10 h-10 rounded bg-gray-100 overflow-hidden">
-                            {% set first_photo = (photos | tojson if photos is string else photos) %}
+                        <div class="w-10 h-10 rounded bg-gray-100 overflow-hidden flex-shrink-0">
                             <img src="{{ url_for('serve_imported_product_photo', product_id=p.id, photo_idx=0) }}"
                                  class="w-full h-full object-cover" onerror="this.style.display='none'" alt="">
                         </div>
                         {% else %}
-                        <div class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300">
+                        <div class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300 flex-shrink-0">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         </div>
                         {% endif %}
@@ -273,7 +361,7 @@
                         {% elif p.import_status == 'validated' %}
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Готов</span>
                         {% elif p.import_status == 'failed' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fef2f2;color:#991b1b">Ошибка</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fef2f2;color:#991b1b" title="{{ p.import_error or '' }}">Ошибка</span>
                         {% else %}
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fffbeb;color:#92400e">Ожидает</span>
                         {% endif %}
@@ -329,6 +417,61 @@
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>
+    </div>
+    {% endif %}
+
+    <!-- Import History -->
+    {% if recent_imports %}
+    <div class="mt-8">
+        <h2 class="text-lg font-medium text-gray-900 mb-3">История загрузок</h2>
+        <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Товар</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Дата</th>
+                        <th class="px-4 py-2 text-center text-xs font-medium text-gray-500">Результат</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Детали</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for imp in recent_imports %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-2">
+                            <a href="{{ url_for('seller_product_wb_preview', product_id=imp.id) }}"
+                               class="text-sm text-gray-900 hover:text-gray-600">
+                                {{ (imp.title or 'Без названия')[:40] }}
+                            </a>
+                            <span class="text-xs text-gray-400 ml-1">#{{ imp.external_id }}</span>
+                        </td>
+                        <td class="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">
+                            {% if imp.imported_at %}
+                            {{ imp.imported_at.strftime('%d.%m %H:%M') }}
+                            {% elif imp.updated_at %}
+                            {{ imp.updated_at.strftime('%d.%m %H:%M') }}
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-center">
+                            {% if imp.import_status == 'imported' %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">OK</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700">Ошибка</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-2 text-xs text-gray-500 max-w-xs truncate" title="{{ imp.import_error or 'Успешно загружен на WB' }}">
+                            {% if imp.import_error %}
+                            {{ imp.import_error[:80] }}
+                            {% elif imp.wb_nm_id %}
+                            nmID: {{ imp.wb_nm_id }}
+                            {% else %}
+                            Успешно
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
     {% endif %}
 </div>
