@@ -1262,12 +1262,20 @@ def register_supplier_routes(app):
         if stock_status not in ('in_stock', 'out_of_stock', 'all'):
             stock_status = 'in_stock'
         effective_stock = stock_status if stock_status != 'all' else None
+        # Фильтр по WB: on_wb / not_on_wb / all
+        wb_filter = request.args.get('wb_filter', '').strip()
+        if wb_filter not in ('on_wb', 'not_on_wb'):
+            wb_filter = None
+
+        # wb_filter подразумевает show_imported=True
+        effective_show_imported = show_imported or wb_filter is not None
 
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,
             page=page, per_page=50,
-            search=search, show_imported=show_imported,
-            stock_status=effective_stock
+            search=search, show_imported=effective_show_imported,
+            stock_status=effective_stock,
+            wb_filter=wb_filter
         )
 
         # Получаем ID уже импортированных товаров
@@ -1331,6 +1339,7 @@ def register_supplier_routes(app):
                                stats=stats, search=search,
                                show_imported=show_imported,
                                stock_status=stock_status,
+                               wb_filter=wb_filter or '',
                                price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
                                wb_existing_sp_ids=wb_existing_sp_ids,
