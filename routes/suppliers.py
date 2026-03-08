@@ -492,47 +492,6 @@ def register_supplier_routes(app):
             'errors': validation_result['errors']
         })
 
-    @app.route('/admin/suppliers/<int:supplier_id>/marketplace_bulk_validate', methods=['POST'])
-    @login_required
-    @admin_required
-    def admin_supplier_marketplace_bulk_validate(supplier_id):
-        """Bulk auto-map and validation of marketplace fields for supplier products"""
-        product_ids_raw = request.form.getlist('product_ids')
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
-
-        if not product_ids:
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'error': 'Не указаны товары'}), 400
-            flash('Не указаны товары', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        result = SupplierService.start_bulk_marketplace_validation(
-            supplier_id, product_ids,
-            admin_user_id=current_user.id
-        )
-
-        if result.get('error'):
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'error': result['error']}), 400
-            flash(result['error'], 'danger')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        log_admin_action(
-            admin_user_id=current_user.id,
-            action='start_marketplace_bulk_validation',
-            target_type='supplier',
-            target_id=supplier_id,
-            details={'job_id': result['job_id'], 'count': result['total']},
-            request=request
-        )
-
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return jsonify(result)
-
-        flash(f'Bulk marketplace mapping & validation started in background ({result["total"]} products)', 'success')
-        return redirect(url_for('admin_supplier_ai_parser', supplier_id=supplier_id))
-
-
     @app.route('/admin/suppliers/<int:supplier_id>/ai/validate', methods=['POST'])
     @login_required
     @admin_required
