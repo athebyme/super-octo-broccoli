@@ -12,7 +12,7 @@
                 Дефолты товаров
             </h1>
             <p class="mt-2 text-sm text-gray-400">
-                Задайте габариты и вес по умолчанию, а также общие фото/видео для всех карточек
+                Задайте габариты, характеристики и вес по умолчанию, а также общие фото/видео для всех карточек
             </p>
         </div>
     </div>
@@ -27,6 +27,16 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
                 </svg>
                 Габариты и вес
+            </span>
+        </button>
+        <button @click="tab = 'characteristics'"
+                :class="tab === 'characteristics' ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:text-gray-700'"
+                class="flex-1 py-2.5 px-4 text-sm font-medium rounded-md transition-all">
+            <span class="flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+                </svg>
+                Характеристики
             </span>
         </button>
         <button @click="tab = 'media'"
@@ -274,6 +284,219 @@
         </div>
     </div>
 
+    <!-- ============== ТАБ: ХАРАКТЕРИСТИКИ ============== -->
+    <div x-show="tab === 'characteristics'" x-cloak>
+
+        <!-- Глобальные дефолтные характеристики -->
+        <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6 mb-6">
+            <div class="flex items-center justify-between mb-5">
+                <div>
+                    <h3 class="text-lg font-medium text-gray-900">Глобальные характеристики</h3>
+                    <p class="text-sm text-gray-500 mt-1">Подставляются во все товары при импорте, если данные не заданы поставщиком</p>
+                </div>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    По умолчанию
+                </span>
+            </div>
+
+            <!-- Предустановленные поля -->
+            <div class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1.5">Страна производства</label>
+                        <input type="text" x-model="globalChars['Страна производства']"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm"
+                               placeholder="Китай">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1.5">Цвет</label>
+                        <input type="text" x-model="globalChars['Цвет']"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm"
+                               placeholder="черный">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1.5">Материал изделия</label>
+                        <input type="text" x-model="globalChars['Материал изделия']"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm"
+                               placeholder="силикон">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1.5">Пол</label>
+                        <select x-model="globalChars['Пол']"
+                                class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm">
+                            <option value="">— не задано —</option>
+                            <option value="Унисекс">Унисекс</option>
+                            <option value="Женский">Женский</option>
+                            <option value="Мужской">Мужской</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1.5">Комплектация</label>
+                        <input type="text" x-model="globalChars['Комплектация']"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm"
+                               placeholder="Изделие">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1.5">Упаковка</label>
+                        <input type="text" x-model="globalChars['Упаковка']"
+                               class="block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#c45d3e] focus:ring-[#c45d3e] text-sm"
+                               placeholder="Коробка">
+                    </div>
+                </div>
+
+                <!-- Произвольные характеристики -->
+                <div class="border-t border-gray-100 pt-4 mt-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <p class="text-xs font-medium text-gray-500">Дополнительные характеристики</p>
+                        <button @click="addGlobalCustomChar()"
+                                class="text-xs text-[#c45d3e] hover:text-[#a34a2f] font-medium">
+                            + Добавить
+                        </button>
+                    </div>
+                    <template x-for="(item, idx) in globalCustomChars" :key="idx">
+                        <div class="flex gap-2 mb-2">
+                            <input type="text" x-model="item.name"
+                                   class="flex-1 rounded-lg border-gray-300 text-sm"
+                                   placeholder="Название характеристики">
+                            <input type="text" x-model="item.value"
+                                   class="flex-1 rounded-lg border-gray-300 text-sm"
+                                   placeholder="Значение">
+                            <button @click="globalCustomChars.splice(idx, 1)"
+                                    class="p-2 text-gray-400 hover:text-red-500">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <div class="mt-5 flex justify-end">
+                <button @click="saveGlobalChars()" :disabled="saving"
+                        class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-[#0a0a0a] rounded-lg hover:bg-gray-800 transition disabled:opacity-50">
+                    <svg x-show="saving" class="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span x-text="saving ? 'Сохраняю...' : 'Сохранить'"></span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Характеристики по категориям -->
+        <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
+            <div class="flex items-center justify-between mb-5">
+                <div>
+                    <h3 class="text-lg font-medium text-gray-900">Характеристики по категориям</h3>
+                    <p class="text-sm text-gray-500 mt-1">
+                        Переопределяют глобальные характеристики для конкретных категорий WB
+                    </p>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+                {% if category_rules %}
+                    {% for rule in category_rules %}
+                    <div class="bg-gray-50 rounded-lg border border-gray-100 p-4"
+                         x-data="categoryCharsEditor({{ rule.id }}, {{ (category_chars.get(rule.id, {}) or {}) | tojson }})">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="font-medium text-sm text-gray-900">{{ rule.wb_category_name or 'Без названия' }}</span>
+                                <span class="text-xs text-gray-400">ID: {{ rule.wb_subject_id }}</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span x-show="charCount > 0" x-text="charCount + ' хар.'" class="text-xs text-green-600 font-medium"></span>
+                                <button @click="expanded = !expanded"
+                                        class="text-xs text-[#c45d3e] hover:text-[#a34a2f] font-medium"
+                                        x-text="expanded ? 'Свернуть' : 'Настроить'">
+                                </button>
+                            </div>
+                        </div>
+
+                        <div x-show="expanded" x-collapse x-cloak>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">Страна производства</label>
+                                    <input type="text" x-model="chars['Страна производства']"
+                                           class="block w-full rounded-lg border-gray-300 text-sm" placeholder="Китай">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">Цвет</label>
+                                    <input type="text" x-model="chars['Цвет']"
+                                           class="block w-full rounded-lg border-gray-300 text-sm" placeholder="черный">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">Материал изделия</label>
+                                    <input type="text" x-model="chars['Материал изделия']"
+                                           class="block w-full rounded-lg border-gray-300 text-sm" placeholder="силикон">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 mb-1">Упаковка</label>
+                                    <input type="text" x-model="chars['Упаковка']"
+                                           class="block w-full rounded-lg border-gray-300 text-sm" placeholder="Коробка">
+                                </div>
+                            </div>
+
+                            <!-- Произвольные характеристики категории -->
+                            <div class="border-t border-gray-200 pt-3 mt-3">
+                                <div class="flex items-center justify-between mb-2">
+                                    <p class="text-xs text-gray-500">Дополнительные</p>
+                                    <button @click="addCustomChar()"
+                                            class="text-xs text-[#c45d3e] hover:text-[#a34a2f]">
+                                        + Добавить
+                                    </button>
+                                </div>
+                                <template x-for="(item, idx) in customChars" :key="idx">
+                                    <div class="flex gap-2 mb-2">
+                                        <input type="text" x-model="item.name"
+                                               class="flex-1 rounded border-gray-300 text-xs py-1.5" placeholder="Название">
+                                        <input type="text" x-model="item.value"
+                                               class="flex-1 rounded border-gray-300 text-xs py-1.5" placeholder="Значение">
+                                        <button @click="customChars.splice(idx, 1)" class="text-gray-400 hover:text-red-500">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <div class="mt-3 flex justify-end">
+                                <button @click="saveCategoryChars()" :disabled="saving"
+                                        class="px-3 py-1.5 text-xs font-medium text-white bg-[#0a0a0a] rounded-lg hover:bg-gray-800 disabled:opacity-50">
+                                    <span x-text="saving ? 'Сохраняю...' : 'Сохранить'"></span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-center py-8 text-gray-400">
+                        <svg class="mx-auto h-10 w-10 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                        </svg>
+                        <p class="text-sm">Нет категорийных правил</p>
+                        <p class="text-xs mt-1">Сначала добавьте категории на вкладке "Габариты и вес"</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Подсказка -->
+        <div class="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+            <div class="flex gap-3">
+                <svg class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+                <div class="text-sm text-amber-800">
+                    <p class="font-medium">Приоритет применения характеристик</p>
+                    <p class="mt-1 text-amber-700">Данные от поставщика / AI-парсер > Правило категории > Глобальные дефолты > Системные дефолты</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ============== ТАБ: МЕДИА ============== -->
     <div x-show="tab === 'media'" x-cloak>
 
@@ -411,6 +634,16 @@ function productDefaults() {
             weight_kg: {{ (global_rule.weight_kg if global_rule and global_rule.weight_kg) or 'null' }}
         },
 
+        // Глобальные характеристики
+        globalChars: {{ global_chars | tojson }},
+        globalCustomChars: [
+            {% for key, val in global_chars.items() %}
+                {% if key not in ['Страна производства', 'Цвет', 'Материал изделия', 'Пол', 'Комплектация', 'Упаковка'] %}
+                    { name: {{ key | tojson }}, value: {{ val | tojson }} },
+                {% endif %}
+            {% endfor %}
+        ],
+
         // Добавление категории
         showAddCategory: false,
         newCatSearch: '',
@@ -540,6 +773,44 @@ function productDefaults() {
             if (data.success) location.reload();
         },
 
+        addGlobalCustomChar() {
+            this.globalCustomChars.push({ name: '', value: '' });
+        },
+
+        async saveGlobalChars() {
+            this.saving = true;
+            try {
+                // Собираем все характеристики: предустановленные + кастомные
+                const chars = {};
+                const presetKeys = ['Страна производства', 'Цвет', 'Материал изделия', 'Пол', 'Комплектация', 'Упаковка'];
+                for (const key of presetKeys) {
+                    if (this.globalChars[key]) {
+                        chars[key] = this.globalChars[key];
+                    }
+                }
+                for (const item of this.globalCustomChars) {
+                    if (item.name && item.value) {
+                        chars[item.name] = item.value;
+                    }
+                }
+
+                const resp = await fetch('{{ url_for("product_defaults_save_characteristics") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ characteristics: chars })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.showToast(`Сохранено характеристик: ${data.count}`, 'success');
+                } else {
+                    this.showToast(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                this.showToast('Ошибка сети', 'error');
+            }
+            this.saving = false;
+        },
+
         async uploadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -587,7 +858,67 @@ function productDefaults() {
             if (type === 'error') {
                 alert(message);
             }
-            // For success we rely on flash messages after reload
+            // For success — small inline notification
+            if (type === 'success') {
+                // Try to use notification center if available
+                if (typeof window.showNotification === 'function') {
+                    window.showNotification(message, 'success');
+                }
+            }
+        }
+    };
+}
+
+function categoryCharsEditor(ruleId, initialChars) {
+    const presetKeys = ['Страна производства', 'Цвет', 'Материал изделия', 'Упаковка'];
+    const customEntries = [];
+    for (const [key, val] of Object.entries(initialChars || {})) {
+        if (!presetKeys.includes(key)) {
+            customEntries.push({ name: key, value: val });
+        }
+    }
+    return {
+        ruleId: ruleId,
+        chars: Object.assign({}, initialChars || {}),
+        customChars: customEntries,
+        expanded: false,
+        saving: false,
+        get charCount() {
+            let count = 0;
+            for (const key of presetKeys) {
+                if (this.chars[key]) count++;
+            }
+            count += this.customChars.filter(c => c.name && c.value).length;
+            return count;
+        },
+        addCustomChar() {
+            this.customChars.push({ name: '', value: '' });
+        },
+        async saveCategoryChars() {
+            this.saving = true;
+            try {
+                const chars = {};
+                for (const key of presetKeys) {
+                    if (this.chars[key]) chars[key] = this.chars[key];
+                }
+                for (const item of this.customChars) {
+                    if (item.name && item.value) chars[item.name] = item.value;
+                }
+                const resp = await fetch('{{ url_for("product_defaults_save_category_characteristics") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rule_id: this.ruleId, characteristics: chars })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('Характеристики категории сохранены (' + data.count + ')');
+                } else {
+                    alert(data.error || 'Ошибка');
+                }
+            } catch(e) {
+                alert('Ошибка сети');
+            }
+            this.saving = false;
         }
     };
 }

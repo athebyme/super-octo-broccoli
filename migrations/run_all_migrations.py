@@ -350,6 +350,43 @@ def migrate(db_path):
             print("  ⏭️  Таблица уже существует")
 
         # ============================================================
+        # Создание/обновление таблицы product_defaults
+        # ============================================================
+        print("\n📋 Таблица: product_defaults")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='product_defaults'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE product_defaults (
+                    id INTEGER PRIMARY KEY,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    rule_type VARCHAR(20) NOT NULL DEFAULT 'global',
+                    wb_subject_id INTEGER,
+                    wb_category_name VARCHAR(300),
+                    length_cm FLOAT,
+                    width_cm FLOAT,
+                    height_cm FLOAT,
+                    weight_kg FLOAT,
+                    default_characteristics TEXT,
+                    global_media TEXT,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(seller_id, rule_type, wb_subject_id)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_defaults_seller ON product_defaults(seller_id)")
+            print("  ✅ Таблица product_defaults создана")
+            total_added += 1
+        else:
+            print("  ⏭️  Таблица уже существует")
+            existing_pdc = get_existing_columns(cursor, 'product_defaults')
+            if add_column_if_missing(cursor, 'product_defaults', 'default_characteristics', 'TEXT', existing_pdc):
+                total_added += 1
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()

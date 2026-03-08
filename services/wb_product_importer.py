@@ -1004,7 +1004,21 @@ class WBProductImporter:
             if key not in product_chars:
                 product_chars[key] = val
 
-        # Дополняем дефолтными характеристиками для категории (только если не заданы)
+        # Дополняем дефолтными характеристиками из настроек продавца (только если не заданы)
+        # Приоритет: данные поставщика > AI > настройки продавца > захардкоженные дефолты
+        try:
+            from routes.product_defaults import get_defaults_for_product
+            _defaults = get_defaults_for_product(self.seller.id, imported_product.wb_subject_id)
+            seller_default_chars = _defaults.get('default_characteristics', {})
+            if seller_default_chars:
+                for key, val in seller_default_chars.items():
+                    if key not in product_chars:
+                        product_chars[key] = val
+                        logger.debug(f"Товар {imported_product.external_id}: дефолт из настроек '{key}'='{val}'")
+        except Exception as e:
+            logger.warning(f"Не удалось получить дефолтные характеристики продавца: {e}")
+
+        # Дополняем захардкоженными дефолтами для категории (самый низкий приоритет)
         category_defaults = self._get_category_default_chars(
             imported_product.wb_subject_id, imported_product
         )

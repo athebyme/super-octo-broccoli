@@ -65,10 +65,20 @@ def register_product_defaults_routes(app):
             is_enabled=True
         ).order_by(MarketplaceCategory.subject_name).all()
 
+        # Глобальные дефолтные характеристики
+        global_chars = global_rule.get_default_characteristics() if global_rule else {}
+
+        # Категорийные характеристики
+        category_chars = {}
+        for rule in category_rules:
+            category_chars[rule.id] = rule.get_default_characteristics()
+
         return render_template('product_defaults.html',
                                global_rule=global_rule,
                                category_rules=category_rules,
-                               wb_categories=wb_categories)
+                               wb_categories=wb_categories,
+                               global_chars=global_chars,
+                               category_chars=category_chars)
 
     @app.route('/settings/product-defaults/save-global', methods=['POST'])
     @login_required
@@ -171,6 +181,87 @@ def register_product_defaults_routes(app):
         db.session.commit()
         flash('Правило удалено', 'success')
         return jsonify({'success': True})
+
+    # ==================== ДЕФОЛТНЫЕ ХАРАКТЕРИСТИКИ ====================
+
+    @app.route('/settings/product-defaults/save-characteristics', methods=['POST'])
+    @login_required
+    def product_defaults_save_characteristics():
+        """Сохранить дефолтные характеристики (глобальные)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Forbidden'}), 403
+
+        seller = current_user.seller
+
+        rule = ProductDefaults.query.filter_by(
+            seller_id=seller.id, rule_type='global'
+        ).first()
+
+        if not rule:
+            rule = ProductDefaults(seller_id=seller.id, rule_type='global', wb_subject_id=None)
+            db.session.add(rule)
+
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'error': 'Нет данных'}), 400
+
+            chars = data.get('characteristics', {})
+            # Очищаем пустые значения
+            clean_chars = {}
+            for key, val in chars.items():
+                key = key.strip()
+                if isinstance(val, str):
+                    val = val.strip()
+                if key and val:
+                    clean_chars[key] = val
+            rule.set_default_characteristics(clean_chars)
+            db.session.commit()
+            return jsonify({'success': True, 'count': len(clean_chars)})
+        except Exception as e:
+            logger.error(f"Ошибка сохранения характеристик: {e}")
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/settings/product-defaults/save-category-characteristics', methods=['POST'])
+    @login_required
+    def product_defaults_save_category_characteristics():
+        """Сохранить дефолтные характеристики для категории"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Forbidden'}), 403
+
+        seller = current_user.seller
+
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({'success': False, 'error': 'Нет данных'}), 400
+
+            rule_id = data.get('rule_id')
+            if not rule_id:
+                return jsonify({'success': False, 'error': 'rule_id обязателен'}), 400
+
+            rule = ProductDefaults.query.filter_by(
+                id=int(rule_id), seller_id=seller.id, rule_type='category'
+            ).first()
+            if not rule:
+                return jsonify({'success': False, 'error': 'Правило не найдено'}), 404
+
+            chars = data.get('characteristics', {})
+            clean_chars = {}
+            for key, val in chars.items():
+                key = key.strip()
+                if isinstance(val, str):
+                    val = val.strip()
+                if key and val:
+                    clean_chars[key] = val
+            rule.set_default_characteristics(clean_chars)
+            db.session.commit()
+            return jsonify({'success': True, 'count': len(clean_chars)})
+        except Exception as e:
+            logger.error(f"Ошибка сохранения характеристик категории: {e}")
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
 
     # ==================== ГЛОБАЛЬНОЕ МЕДИА ====================
 
@@ -304,7 +395,7 @@ def get_defaults_for_product(seller_id, wb_subject_id=None):
     Приоритет: категорийное правило > глобальное правило > захардкоженные дефолты.
 
     Returns:
-        dict с ключами: length, width, height, weightBrutto, global_media
+        dict с ключами: length, width, height, weightBrutto, global_media, default_characteristics
     """
     result = {
         'length': 10,
@@ -313,6 +404,7 @@ def get_defaults_for_product(seller_id, wb_subject_id=None):
         'weightBrutto': 0.1
     }
     global_media = []
+    default_chars = {}
 
     # 1. Глобальное правило
     global_rule = ProductDefaults.query.filter_by(
@@ -323,16 +415,23 @@ def get_defaults_for_product(seller_id, wb_subject_id=None):
         dims = global_rule.get_dimensions_dict()
         result.update(dims)
         global_media = global_rule.get_global_media_list()
+        default_chars = global_rule.get_default_characteristics()
 
-    # 2. Категорийное правило (перезаписывает глобальные габариты)
+    # 2. Категорийное правило (перезаписывает глобальные)
     if wb_subject_id:
         cat_rule = ProductDefaults.query.filter_by(
             seller_id=seller_id, rule_type='category',
             wb_subject_id=wb_subject_id, is_active=True
         ).first()
-        if cat_rule and cat_rule.has_dimensions():
-            dims = cat_rule.get_dimensions_dict()
-            result.update(dims)
+        if cat_rule:
+            if cat_rule.has_dimensions():
+                dims = cat_rule.get_dimensions_dict()
+                result.update(dims)
+            # Категорийные характеристики перезаписывают глобальные
+            cat_chars = cat_rule.get_default_characteristics()
+            if cat_chars:
+                default_chars.update(cat_chars)
 
     result['global_media'] = global_media
+    result['default_characteristics'] = default_chars
     return result

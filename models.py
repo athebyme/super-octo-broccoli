@@ -895,6 +895,10 @@ class ProductDefaults(db.Model):
     # Дефолтный вес брутто (кг)
     weight_kg = db.Column(db.Float, nullable=True)
 
+    # Дефолтные характеристики товаров
+    # JSON: {"Страна производства": "Китай", "Цвет": "Черный", ...}
+    default_characteristics = db.Column(db.Text, nullable=True)
+
     # Глобальное медиа — файлы, добавляемые ко всем карточкам продавца
     # JSON: [{"filename": "...", "original_name": "...", "type": "photo|video", "size": 12345}]
     global_media = db.Column(db.Text, nullable=True)
@@ -934,6 +938,19 @@ class ProductDefaults(db.Model):
         if self.weight_kg is not None:
             d['weightBrutto'] = self.weight_kg
         return d
+
+    def get_default_characteristics(self):
+        """Вернуть словарь дефолтных характеристик"""
+        if not self.default_characteristics:
+            return {}
+        try:
+            return json.loads(self.default_characteristics)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_default_characteristics(self, chars_dict):
+        """Установить дефолтные характеристики"""
+        self.default_characteristics = json.dumps(chars_dict, ensure_ascii=False) if chars_dict else None
 
     def get_global_media_list(self):
         """Вернуть список глобальных медиа"""
