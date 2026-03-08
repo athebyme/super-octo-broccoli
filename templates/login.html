@@ -307,12 +307,17 @@
         box-shadow: 0 4px 12px rgba(0,0,0,0.06);
     }
     .login-mp-icon {
-        width: 20px;
-        height: 20px;
+        width: 18px;
+        height: 18px;
         flex-shrink: 0;
         display: flex;
         align-items: center;
         justify-content: center;
+        color: var(--accent);
+        opacity: 0.85;
+    }
+    .login-mp:hover .login-mp-icon {
+        opacity: 1;
     }
     .login-mp-icon svg {
         width: 100%;
@@ -530,29 +535,34 @@
                 <div class="login-marketplaces">
                     <span class="login-mp">
                         <span class="login-mp-icon">
-                            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <rect width="24" height="24" rx="6" fill="#CB11AB" fill-opacity="0.12"/>
-                                <path d="M7 6L10.5 17.5L12 12L13.5 17.5L17 6" stroke="#CB11AB" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            <!-- WB: стилизованная корзина/сумка -->
+                            <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M3.5 5.5L2 15.5H16L14.5 5.5H3.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                                <path d="M6.5 5.5V4C6.5 2.9 7.4 2 8.5 2H9.5C10.6 2 11.5 2.9 11.5 4V5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <circle cx="9" cy="10.5" r="1" fill="currentColor"/>
                             </svg>
                         </span>
                         Wildberries
                     </span>
                     <span class="login-mp">
                         <span class="login-mp-icon">
-                            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <rect width="24" height="24" rx="6" fill="#005BFF" fill-opacity="0.12"/>
-                                <circle cx="12" cy="12" r="4.5" stroke="#005BFF" stroke-width="1.8"/>
-                                <path d="M12 7.5V5M12 19v-2.5M16.5 12H19M5 12h2.5" stroke="#005BFF" stroke-width="1.5" stroke-linecap="round"/>
+                            <!-- Ozon: стилизованная коробка/посылка -->
+                            <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M2 6L9 2.5L16 6V12L9 15.5L2 12V6Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                                <path d="M2 6L9 9.5L16 6" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                                <path d="M9 9.5V15.5" stroke="currentColor" stroke-width="1.3"/>
                             </svg>
                         </span>
                         Ozon
                     </span>
                     <span class="login-mp">
                         <span class="login-mp-icon">
-                            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <rect width="24" height="24" rx="6" fill="#FFCC00" fill-opacity="0.15"/>
-                                <path d="M6 12L12 6L18 12L12 18Z" stroke="#E6B800" stroke-width="1.8" stroke-linejoin="round"/>
-                                <path d="M12 9.5V14.5M9.5 12H14.5" stroke="#E6B800" stroke-width="1.5" stroke-linecap="round"/>
+                            <!-- Яндекс Маркет: стилизованная витрина/маркет -->
+                            <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M2.5 7.5L4 3H14L15.5 7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M2.5 7.5V15H15.5V7.5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                                <path d="M2.5 7.5H15.5" stroke="currentColor" stroke-width="1.3"/>
+                                <path d="M7 15V11H11V15" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
                             </svg>
                         </span>
                         Яндекс
