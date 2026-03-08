@@ -44,7 +44,12 @@ from services.wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthE
 
 # Настройка приложения
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'wb-seller-platform-secret-key-change-in-production')
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    import secrets as _secrets
+    _secret_key = _secrets.token_hex(32)
+    print("⚠️  WARNING: SECRET_KEY not set in environment! Using random key (sessions won't persist across restarts)")
+app.config['SECRET_KEY'] = _secret_key
 BASE_DIR = Path(__file__).resolve().parent
 DATA_ROOT = BASE_DIR / 'data'
 DEFAULT_DB_PATH = DATA_ROOT / 'seller_platform.db'
@@ -54,21 +59,25 @@ DEFAULT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 # ВАЖНО: для абсолютного пути в SQLite используем 4 слеша: sqlite:////path
 database_url_from_env = os.environ.get('DATABASE_URL')
 
-print(f"🔧 DEBUG: DATABASE_URL from env = {database_url_from_env}")
-print(f"🔧 DEBUG: DEFAULT_DB_PATH = {DEFAULT_DB_PATH}")
-print(f"🔧 DEBUG: DEFAULT_DB_PATH.absolute() = {DEFAULT_DB_PATH.absolute()}")
-
 if database_url_from_env:
     database_url = database_url_from_env
-    print(f"✅ Using DATABASE_URL from environment")
+    app.logger.info("Using DATABASE_URL from environment")
 else:
     # Создаем URI с АБСОЛЮТНЫМ путем
     abs_path = DEFAULT_DB_PATH.absolute()
     database_url = f"sqlite:///{abs_path}"
-    print(f"⚠️ DATABASE_URL not set, using generated: {database_url}")
+    app.logger.info("DATABASE_URL not set, using default SQLite")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Безопасность сессий
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# Включаем Secure cookie если работаем за HTTPS
+if os.environ.get('HTTPS_ENABLED', '').lower() in ('1', 'true'):
+    app.config['SESSION_COOKIE_SECURE'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
 
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
@@ -208,9 +217,22 @@ def ensure_storage_roots() -> None:
 
 @app.after_request
 def after_request(response):
-    """Устанавливаем правильную кодировку UTF-8 для всех ответов"""
+    """Устанавливаем кодировку и заголовки безопасности для всех ответов."""
     if response.content_type and response.content_type.startswith('text/html'):
         response.content_type = 'text/html; charset=utf-8'
+
+    # Заголовки безопасности
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+
+    # Запрещаем кэширование для аутентифицированных страниц
+    if hasattr(response, 'cache_control'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+
     return response
 
 
@@ -247,6 +269,31 @@ def admin_required(f):
 
 # ============= МАРШРУТЫ АВТОРИЗАЦИИ =============
 
+# ============= RATE LIMITING ДЛЯ ЛОГИНА =============
+
+_login_attempts: Dict[str, List[float]] = {}
+_LOGIN_MAX_ATTEMPTS = 5  # макс. попыток
+_LOGIN_WINDOW_SECONDS = 300  # за 5 минут
+
+
+def _check_login_rate_limit(ip: str) -> bool:
+    """Проверка rate limit для логина. Возвращает True если лимит превышен."""
+    now = time.time()
+    attempts = _login_attempts.get(ip, [])
+    # Убираем старые попытки
+    attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
+    _login_attempts[ip] = attempts
+    return len(attempts) >= _LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_attempt(ip: str) -> None:
+    """Записать попытку входа."""
+    now = time.time()
+    if ip not in _login_attempts:
+        _login_attempts[ip] = []
+    _login_attempts[ip].append(now)
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Страница входа в систему"""
@@ -254,6 +301,13 @@ def login():
         return redirect(url_for('dashboard'))
 
     if request.method == 'POST':
+        client_ip = request.remote_addr or '0.0.0.0'
+
+        # Проверяем rate limit
+        if _check_login_rate_limit(client_ip):
+            flash('Слишком много попыток входа. Попробуйте через 5 минут.', 'danger')
+            return render_template('login.html'), 429
+
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         remember = request.form.get('remember', False)
@@ -299,11 +353,17 @@ def login():
             flash(f'Добро пожаловать, {user.username}!', 'success')
 
             # Перенаправление на запрошенную страницу или на дашборд
+            # Защита от open redirect: разрешаем только относительные пути
             next_page = request.args.get('next')
-            if next_page and next_page.startswith('/'):
-                return redirect(next_page)
+            if next_page:
+                from urllib.parse import urlparse
+                parsed = urlparse(next_page)
+                # Разрешаем только относительные URL без netloc (домена)
+                if not parsed.netloc and not parsed.scheme and next_page.startswith('/'):
+                    return redirect(next_page)
             return redirect(url_for('dashboard'))
         else:
+            _record_login_attempt(client_ip)
             flash('Неверное имя пользователя или пароль', 'danger')
 
     return render_template('login.html')
@@ -5901,4 +5961,4 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         _run_startup_migrations()
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))
+    app.run(debug=os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true'), host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))

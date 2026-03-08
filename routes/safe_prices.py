@@ -21,7 +21,9 @@ API Endpoints:
 - GET  /api/prices/batch/<id>/status - статус батча
 """
 
+import ast
 import logging
+import operator
 import re
 import math
 from datetime import datetime
@@ -64,6 +66,8 @@ class FormulaEvaluator:
     """
     Безопасный вычислитель формул для расчета цен.
 
+    Использует AST-парсер вместо eval() для безопасного вычисления.
+
     Поддерживаемые переменные:
     - P: закупочная цена (price)
     - Q: желаемая прибыль (profit)
@@ -74,47 +78,154 @@ class FormulaEvaluator:
     - X: премиум цена
     - Y: завышенная цена
 
-    Поддерживаемые операции: +, -, *, /, (), min(), max(), if условия
+    Поддерживаемые операции: +, -, *, /, (), min(), max(), abs(), round()
     """
 
-    ALLOWED_NAMES = {
+    ALLOWED_FUNCTIONS = {
         'min': min,
         'max': max,
         'abs': abs,
         'round': round,
     }
 
+    # Допустимые бинарные операторы
+    _BINARY_OPS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+    }
+
+    # Допустимые унарные операторы
+    _UNARY_OPS = {
+        ast.UAdd: operator.pos,
+        ast.USub: operator.neg,
+    }
+
+    # Допустимые операторы сравнения
+    _CMP_OPS = {
+        ast.Gt: operator.gt,
+        ast.GtE: operator.ge,
+        ast.Lt: operator.lt,
+        ast.LtE: operator.le,
+        ast.Eq: operator.eq,
+        ast.NotEq: operator.ne,
+    }
+
+    # Максимальная длина формулы
+    MAX_FORMULA_LENGTH = 500
+
     def __init__(self, formula: str, variables: Dict[str, float] = None):
         self.formula = formula
         self.variables = variables or {}
 
+    def _eval_node(self, node: ast.AST) -> float:
+        """Рекурсивно вычисляет AST-узел безопасным способом."""
+        if isinstance(node, ast.Expression):
+            return self._eval_node(node.body)
+
+        # Числовые литералы
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+
+        # Бинарные операции: a + b, a * b, ...
+        if isinstance(node, ast.BinOp):
+            op_func = self._BINARY_OPS.get(type(node.op))
+            if op_func is None:
+                raise ValueError(f"Недопустимый оператор: {type(node.op).__name__}")
+            left = self._eval_node(node.left)
+            right = self._eval_node(node.right)
+            if isinstance(node.op, ast.Pow) and right > 10:
+                raise ValueError("Степень не может быть больше 10")
+            if isinstance(node.op, (ast.Div, ast.FloorDiv)) and right == 0:
+                raise ValueError("Деление на ноль")
+            return float(op_func(left, right))
+
+        # Унарные операции: -a, +a
+        if isinstance(node, ast.UnaryOp):
+            op_func = self._UNARY_OPS.get(type(node.op))
+            if op_func is None:
+                raise ValueError(f"Недопустимый унарный оператор: {type(node.op).__name__}")
+            return float(op_func(self._eval_node(node.operand)))
+
+        # Вызовы функций: min(), max(), abs(), round()
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError("Вызовы методов не разрешены")
+            func_name = node.func.id
+            func = self.ALLOWED_FUNCTIONS.get(func_name)
+            if func is None:
+                raise ValueError(f"Функция '{func_name}' не разрешена")
+            args = [self._eval_node(arg) for arg in node.args]
+            return float(func(*args))
+
+        # Тернарный оператор: a if condition else b
+        if isinstance(node, ast.IfExp):
+            test_val = self._eval_node(node.test)
+            if test_val:
+                return self._eval_node(node.body)
+            return self._eval_node(node.orelse)
+
+        # Сравнения: a > b, a <= b, ...
+        if isinstance(node, ast.Compare):
+            left = self._eval_node(node.left)
+            for op, comparator in zip(node.ops, node.comparators):
+                op_func = self._CMP_OPS.get(type(op))
+                if op_func is None:
+                    raise ValueError(f"Недопустимый оператор сравнения: {type(op).__name__}")
+                right = self._eval_node(comparator)
+                if not op_func(left, right):
+                    return 0.0
+                left = right
+            return 1.0
+
+        # Булевы операции: and, or
+        if isinstance(node, ast.BoolOp):
+            if isinstance(node.op, ast.And):
+                result = 1.0
+                for value in node.values:
+                    result = self._eval_node(value)
+                    if not result:
+                        return 0.0
+                return result
+            elif isinstance(node.op, ast.Or):
+                for value in node.values:
+                    result = self._eval_node(value)
+                    if result:
+                        return result
+                return 0.0
+
+        # Имена переменных (уже подставлены как числа, но на всякий случай)
+        if isinstance(node, ast.Name):
+            raise ValueError(f"Неизвестная переменная: {node.id}")
+
+        raise ValueError(f"Недопустимая конструкция в формуле: {type(node).__name__}")
+
     def evaluate(self) -> float:
-        """Безопасно вычислить формулу"""
+        """Безопасно вычислить формулу через AST-парсер."""
         try:
+            if len(self.formula) > self.MAX_FORMULA_LENGTH:
+                raise ValueError("Формула слишком длинная")
+
             # Заменяем переменные на значения
             expr = self.formula
             for var, value in self.variables.items():
-                expr = re.sub(rf'\b{var}\b', str(value), expr)
+                expr = re.sub(rf'\b{re.escape(var)}\b', str(value), expr)
 
-            # Проверяем на безопасность - только разрешенные символы
-            allowed_chars = set('0123456789.+-*/() ,<>=!')
-            allowed_words = {'min', 'max', 'abs', 'round', 'if', 'else', 'and', 'or'}
+            # Парсим выражение в AST
+            tree = ast.parse(expr, mode='eval')
 
-            # Удаляем разрешенные слова для проверки
-            check_expr = expr
-            for word in allowed_words:
-                check_expr = re.sub(rf'\b{word}\b', '', check_expr)
-
-            # Проверяем что остались только разрешенные символы
-            remaining = set(check_expr.replace(' ', ''))
-            if not remaining.issubset(allowed_chars):
-                raise ValueError(f"Недопустимые символы в формуле: {remaining - allowed_chars}")
-
-            # Вычисляем
-            result = eval(expr, {"__builtins__": {}}, self.ALLOWED_NAMES)
+            # Вычисляем через безопасный обход дерева
+            result = self._eval_node(tree)
             return float(result)
-        except Exception as e:
-            logger.error(f"Formula evaluation error: {e}, formula: {self.formula}")
+        except (ValueError, TypeError, SyntaxError, ZeroDivisionError) as e:
+            logger.warning(f"Formula evaluation error: {type(e).__name__}: {e}")
+            return 0.0
+        except Exception:
+            logger.warning("Unexpected formula evaluation error")
             return 0.0
 
 
