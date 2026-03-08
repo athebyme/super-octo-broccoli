@@ -257,7 +257,7 @@
 
     <!-- Key metrics -->
     <div class="dash-section-header">
-        <span class="dash-section-title">Показатели за неделю</span>
+        <span class="dash-section-title">Показатели за 30 дней</span>
         <div class="dash-section-line"></div>
     </div>
 
@@ -265,7 +265,7 @@
         <a href="{{ url_for('finances_page') }}" class="dash-stat">
             <div class="dash-stat-label">К перечислению</div>
             <div class="dash-stat-value" x-text="loading ? '...' : formatVal(balance.total)"></div>
-            <div class="dash-stat-meta">₽ итого за 7 дней</div>
+            <div class="dash-stat-meta">₽ итого за 30 дней</div>
         </a>
         <a href="{{ url_for('finances_page') }}" class="dash-stat">
             <div class="dash-stat-label">Доход</div>
@@ -476,7 +476,7 @@ function dashFinance() {
             return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v || 0);
         },
         init() {
-            fetch('/api/finances/summary?period=7d')
+            fetch('/api/finances/summary?period=30d')
                 .then(r => r.json())
                 .then(json => {
                     if (json.success && json.data) {
