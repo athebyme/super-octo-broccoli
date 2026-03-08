@@ -165,14 +165,12 @@ class WBProductImporter:
                 'weightBrutto': 0.1  # кг
             }
 
-            # Формируем бренд - используем безопасный fallback
-            # Некоторые бренды могут не существовать на WB
-            # В таком случае WB вернет ошибку: "Бренда «XXX» пока нет на WB"
-            # Используем бренд из товара, но если он пустой - используем общий
-            product_brand = imported_product.brand if imported_product.brand else 'NoName'
+            # Формируем бренд — используем систему резолва брендов
+            # Pipeline: resolved_brand_id → MarketplaceBrand → BrandEngine.resolve() → raw brand fallback
+            product_brand = self._resolve_brand_for_wb(imported_product)
 
             # Логируем бренд для отладки
-            logger.info(f"Товар {imported_product.external_id}: бренд = {product_brand}")
+            logger.info(f"Товар {imported_product.external_id}: бренд = {product_brand} (исходный: {imported_product.brand})")
 
             # Фильтрация запрещённых слов WB перед отправкой (финальная страховка)
             safe_title = filter_prohibited_words(
@@ -672,6 +670,94 @@ class WBProductImporter:
             logger.info(f"Товар {imported_product.external_id}: собрано {len(chars)} AI-характеристик")
 
         return chars
+
+    def _resolve_brand_for_wb(self, imported_product: ImportedProduct) -> str:
+        """
+        Резолвит бренд для отправки в WB, используя систему брендов.
+
+        Приоритет:
+        1. Если есть resolved_brand_id — берём MarketplaceBrand.marketplace_brand_name для WB
+        2. Если нет resolved_brand_id — запускаем BrandEngine.resolve()
+        3. Fallback — сырое имя бренда из imported_product.brand
+        """
+        raw_brand = (imported_product.brand or '').strip()
+        if not raw_brand:
+            return 'NoName'
+
+        # Step 1: Если бренд уже зарезолвлен (resolved_brand_id установлен)
+        if imported_product.resolved_brand_id:
+            try:
+                from models import Brand, MarketplaceBrand, Marketplace
+                brand = Brand.query.get(imported_product.resolved_brand_id)
+                if brand and brand.status != 'rejected':
+                    # Ищем маркетплейс-специфичное имя для WB
+                    wb_mp = Marketplace.query.filter_by(code='wb').first()
+                    if wb_mp:
+                        mp_brand = MarketplaceBrand.query.filter_by(
+                            brand_id=brand.id,
+                            marketplace_id=wb_mp.id
+                        ).first()
+                        if mp_brand and mp_brand.status != 'rejected' and mp_brand.marketplace_brand_name:
+                            logger.info(
+                                f"Бренд '{raw_brand}' → MarketplaceBrand: '{mp_brand.marketplace_brand_name}' "
+                                f"(brand_id={brand.id}, mp_brand_id={mp_brand.marketplace_brand_id})"
+                            )
+                            return mp_brand.marketplace_brand_name
+                    # Нет MarketplaceBrand для WB — используем каноническое имя
+                    logger.info(
+                        f"Бренд '{raw_brand}' → каноническое имя: '{brand.name}' (brand_id={brand.id})"
+                    )
+                    return brand.name
+                elif brand and brand.status == 'rejected':
+                    logger.warning(
+                        f"Бренд '{raw_brand}' (brand_id={brand.id}) отклонён, используем сырое имя"
+                    )
+            except Exception as e:
+                logger.warning(f"Ошибка при поиске resolved бренда: {e}")
+
+        # Step 2: Пробуем BrandEngine.resolve()
+        try:
+            from services.brand_engine import get_brand_engine
+            from models import Marketplace
+            engine = get_brand_engine()
+
+            wb_mp = Marketplace.query.filter_by(code='wb').first()
+            mp_id = wb_mp.id if wb_mp else None
+
+            resolution = engine.resolve(
+                raw_brand,
+                marketplace_id=mp_id,
+                category_id=imported_product.wb_subject_id,
+                marketplace_client=self.api_client,
+            )
+
+            if resolution.status in ('exact', 'confident'):
+                # Используем маркетплейс-специфичное имя если есть, иначе каноническое
+                resolved_name = resolution.marketplace_brand_name or resolution.canonical_name
+                if resolved_name:
+                    logger.info(
+                        f"BrandEngine: '{raw_brand}' → '{resolved_name}' "
+                        f"(status={resolution.status}, confidence={resolution.confidence})"
+                    )
+                    # Обновляем resolved_brand_id в ImportedProduct для будущих запросов
+                    if resolution.brand_id and not imported_product.resolved_brand_id:
+                        imported_product.resolved_brand_id = resolution.brand_id
+                        imported_product.brand_status = resolution.status
+                        try:
+                            db.session.commit()
+                        except Exception:
+                            db.session.rollback()
+                    return resolved_name
+
+            logger.info(
+                f"BrandEngine: '{raw_brand}' не резолвлен (status={resolution.status}), "
+                f"используем сырое имя"
+            )
+        except Exception as e:
+            logger.warning(f"BrandEngine недоступен: {e}, используем сырое имя")
+
+        # Step 3: Fallback — сырой бренд
+        return raw_brand
 
     def _build_wb_characteristics(self, imported_product: ImportedProduct) -> List[Dict]:
         """
