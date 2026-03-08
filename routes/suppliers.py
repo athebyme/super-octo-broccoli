@@ -1288,19 +1288,26 @@ def register_supplier_routes(app):
         )
 
         # Дополнительно: определяем товары на WB по совпадению артикула
-        # (для товаров, загруженных напрямую, без ImportedProduct.product_id)
+        # Используем ту же логику что и wb_product_importer для формирования vendor_code
         if pagination.items:
             settings = seller.auto_import_settings
+            if settings and settings.vendor_code_pattern:
+                vc_pattern = settings.vendor_code_pattern
+                vc_supplier_code = settings.supplier_code or ''
+            elif conn.vendor_code_pattern:
+                vc_pattern = conn.vendor_code_pattern
+                vc_supplier_code = conn.supplier_code or ''
+            else:
+                vc_pattern = 'id-{product_id}-{supplier_code}'
+                vc_supplier_code = conn.supplier_code or ''
+
             # Вычисляем vendor_code для каждого товара на странице
             sp_vendor_codes = {}
             for sp in pagination.items:
                 if sp.id in wb_existing_sp_ids:
                     continue
-                if settings and settings.vendor_code_pattern:
-                    vc = settings.vendor_code_pattern.replace('{product_id}', str(sp.external_id or ''))
-                    vc = vc.replace('{supplier_code}', settings.supplier_code or '')
-                else:
-                    vc = sp.vendor_code
+                vc = vc_pattern.replace('{product_id}', str(sp.external_id or ''))
+                vc = vc.replace('{supplier_code}', vc_supplier_code)
                 if vc:
                     sp_vendor_codes[sp.id] = vc
 
@@ -1315,6 +1322,16 @@ def register_supplier_routes(app):
                 for sp_id, vc in sp_vendor_codes.items():
                     if vc in existing_vc:
                         wb_existing_sp_ids.add(sp_id)
+
+        # DEBUG: временное сообщение для проверки vendor_code маппинга
+        if pagination.items:
+            sample_sp = pagination.items[0]
+            sample_vc = sp_vendor_codes.get(sample_sp.id, 'N/A') if sp_vendor_codes else 'N/A'
+            total_products = db.session.query(Product).filter(Product.seller_id == seller.id).count()
+            flash(f'[DEBUG] Паттерн: {vc_pattern} | supplier_code: "{vc_supplier_code}" | '
+                  f'Пример: external_id={sample_sp.external_id} → vc={sample_vc} | '
+                  f'Всего карточек на WB: {total_products} | '
+                  f'WB-совпадений: {len(wb_existing_sp_ids)}', 'info')
 
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
