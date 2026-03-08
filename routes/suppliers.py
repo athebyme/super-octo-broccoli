@@ -1278,6 +1278,15 @@ def register_supplier_routes(app):
             ).all()
         )
 
+        # Получаем ID товаров, которые уже созданы на WB (есть product_id → есть nm_id)
+        wb_existing_sp_ids = set(
+            row[0] for row in db.session.query(ImportedProduct.supplier_product_id).filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.supplier_product_id.isnot(None),
+                ImportedProduct.product_id.isnot(None)
+            ).all()
+        )
+
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
@@ -1288,6 +1297,7 @@ def register_supplier_routes(app):
                                stock_status=stock_status,
                                price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
+                               wb_existing_sp_ids=wb_existing_sp_ids,
                                connection=conn)
 
     @app.route('/supplier-catalog/<int:supplier_id>/products/<int:product_id>')

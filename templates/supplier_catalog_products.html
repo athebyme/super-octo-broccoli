@@ -106,6 +106,12 @@
                             <div class="mt-1 flex items-center gap-2 text-xs text-gray-500">
                                 {% if product.brand %}<span>{{ product.brand }}</span>{% endif %}
                                 {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:20] }}</span>{% endif %}
+                                {% if product.id in wb_existing_sp_ids %}
+                                <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide" style="background:#ece0f8;color:#7c3aed" title="Товар уже на Wildberries">
+                                    <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 16 16"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.5 5.3l-4 5.5a.75.75 0 0 1-1.1.1L4.2 8.7a.75.75 0 1 1 1.1-1.1l1.6 1.6 3.5-4.8a.75.75 0 1 1 1.2.9z"/></svg>
+                                    WB
+                                </span>
+                                {% endif %}
                                 {% if product.ai_parsed_at %}
                                 <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide" style="background:var(--accent-light,#f0e0da);color:var(--accent,#c45d3e)" title="AI-обработано {{ product.ai_parsed_at.strftime('%d.%m.%Y') }}">
                                     <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1l2.2 4.4L15 6.3l-3.5 3.4.8 4.8L8 12.2 3.7 14.5l.8-4.8L1 6.3l4.8-.9L8 1z"/></svg>
@@ -130,7 +136,9 @@
                                     <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-400">Нет</span>
                                     {% endif %}
 
-                                    {% if is_imported %}
+                                    {% if product.id in wb_existing_sp_ids %}
+                                    <span class="text-xs text-purple-600 font-medium">На WB</span>
+                                    {% elif is_imported %}
                                     <span class="text-xs text-gray-500 font-medium">Импортирован</span>
                                     {% endif %}
                                 </div>
