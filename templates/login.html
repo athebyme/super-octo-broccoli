@@ -561,7 +561,34 @@
         'с умом', 'креативно', 'технологично', 'амбициозно',
         'с первого дня', 'в плюс', 'на 100%', 'без границ',
     ];
-    let idx = 0;
+    // Fisher-Yates shuffle — перемешиваем массив на месте
+    function shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }
+
+    // Очередь: показываем все слова из перемешанного массива,
+    // потом перемешиваем заново (гарантируя что последнее != первое)
+    let queue = shuffle(words.slice());
+    let queueIdx = 0;
+
+    function nextWord() {
+        if (queueIdx >= queue.length) {
+            const lastShown = queue[queue.length - 1];
+            queue = shuffle(words.slice());
+            // Если первое слово новой очереди совпало с последним — меняем местами с рандомным
+            if (queue[0] === lastShown && queue.length > 1) {
+                const swap = 1 + Math.floor(Math.random() * (queue.length - 1));
+                [queue[0], queue[swap]] = [queue[swap], queue[0]];
+            }
+            queueIdx = 0;
+        }
+        return queue[queueIdx++];
+    }
+
     const el = document.getElementById('word-rotator');
     if (!el) return;
 
@@ -591,12 +618,11 @@
 
     function next() {
         fadeOut(() => {
-            idx = (idx + 1) % words.length;
-            renderWord(words[idx], true);
+            renderWord(nextWord(), true);
         });
     }
 
-    renderWord(words[0], true);
+    renderWord(nextWord(), true);
     setInterval(next, 3500);
 })();
 </script>
