@@ -308,6 +308,13 @@ class WBProductImporter:
                                 db.session.commit()
                                 logger.info(f"Создана Product запись для nmID={existing_nm_id}")
 
+                            # Загружаем фото в существующую карточку
+                            try:
+                                self._upload_photos_for_card(existing_nm_id, imported_product)
+                                logger.info(f"Фото загружены в существующую карточку nmID={existing_nm_id}")
+                            except Exception as photo_err:
+                                logger.warning(f"Не удалось загрузить фото в существующую карточку: {photo_err}")
+
                             return (True,
                                     f"Карточка уже существовала на WB (nmID={existing_nm_id}). Привязана к импорту.",
                                     existing_nm_id)
