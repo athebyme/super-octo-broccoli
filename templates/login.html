@@ -501,6 +501,7 @@
             <p class="login-form-subtitle anim-fade-up anim-delay-3">Введите данные для входа в систему</p>
 
             <form method="POST" action="{{ url_for('login') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="login-field anim-fade-up anim-delay-4">
                     <label for="username" class="login-label">Имя пользователя</label>
                     <input id="username" name="username" type="text" required class="login-input" placeholder="username" autocomplete="username">

@@ -25,14 +25,14 @@ services:
     environment:
       - APP_MODULE=seller_platform:app
       - PORT=${SELLER_PORT:-5001}
-      - SECRET_KEY=${SECRET_KEY:-wb-seller-platform-secret-key-change-in-production}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env file}
       # ЖЁСТКО ПРОПИСЫВАЕМ DATABASE_URL - НЕ полагаемся на .env
       - DATABASE_URL=sqlite:////app/data/seller_platform.db
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       # Credentials для первого администратора (создается автоматически при первом запуске)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env file}
       # SSL/HTTPS (оставьте пустыми для авто-генерации self-signed)
       - SSL_CERT_PATH=${SSL_CERT_PATH:-}
       - SSL_KEY_PATH=${SSL_KEY_PATH:-}
@@ -57,7 +57,7 @@ services:
     environment:
       - APP_MODULE=app:app
       - PORT=${CALCULATOR_PORT:-5000}
-      - APP_SECRET_KEY=${APP_SECRET_KEY:-wb-calculator-secret}
+      - APP_SECRET_KEY=${APP_SECRET_KEY:?APP_SECRET_KEY must be set in .env file}
     ports:
       - "${CALCULATOR_PORT:-5000}:5000"
     volumes:

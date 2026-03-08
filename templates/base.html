@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}Seller Hub{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1105,6 +1106,57 @@
         {% block login_content %}{% endblock %}
     </main>
     {% endif %}
+<script>
+// Автоматическая вставка CSRF-токена во все AJAX-запросы и формы
+(function() {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    if (!csrfToken) return;
+
+    // Вставляем скрытое поле csrf_token во все формы с method=POST
+    document.querySelectorAll('form[method="POST"], form[method="post"]').forEach(function(form) {
+        if (!form.querySelector('input[name="csrf_token"]')) {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'csrf_token';
+            input.value = csrfToken;
+            form.appendChild(input);
+        }
+    });
+
+    // Перехватываем fetch для добавления CSRF-заголовка
+    const originalFetch = window.fetch;
+    window.fetch = function(url, options) {
+        options = options || {};
+        if (options.method && options.method.toUpperCase() !== 'GET') {
+            options.headers = options.headers || {};
+            if (options.headers instanceof Headers) {
+                if (!options.headers.has('X-CSRFToken')) {
+                    options.headers.set('X-CSRFToken', csrfToken);
+                }
+            } else {
+                if (!options.headers['X-CSRFToken']) {
+                    options.headers['X-CSRFToken'] = csrfToken;
+                }
+            }
+        }
+        return originalFetch.call(this, url, options);
+    };
+
+    // Перехватываем XMLHttpRequest
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method) {
+        this._csrfMethod = method;
+        return originalOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function() {
+        if (this._csrfMethod && this._csrfMethod.toUpperCase() !== 'GET') {
+            this.setRequestHeader('X-CSRFToken', csrfToken);
+        }
+        return originalSend.apply(this, arguments);
+    };
+})();
+</script>
 </body>
 
 </html>

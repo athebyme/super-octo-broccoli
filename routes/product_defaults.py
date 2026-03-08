@@ -348,8 +348,15 @@ def register_product_defaults_routes(app):
         rule.global_media = json.dumps(media_list, ensure_ascii=False)
         db.session.commit()
 
-        # Удаляем файл с диска
-        filepath = os.path.join(_get_media_dir(seller.id), filename)
+        # Удаляем файл с диска (защита от path traversal)
+        safe_name = secure_filename(filename)
+        if not safe_name:
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+        media_dir = _get_media_dir(seller.id)
+        filepath = os.path.join(media_dir, safe_name)
+        # Проверяем что путь не выходит за пределы media_dir
+        if not os.path.abspath(filepath).startswith(os.path.abspath(media_dir)):
+            return jsonify({'success': False, 'error': 'Invalid filename'}), 400
         if os.path.exists(filepath):
             os.remove(filepath)
 

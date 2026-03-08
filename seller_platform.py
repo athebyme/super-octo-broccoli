@@ -74,9 +74,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Безопасность сессий
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-# Включаем Secure cookie если работаем за HTTPS
-if os.environ.get('HTTPS_ENABLED', '').lower() in ('1', 'true'):
-    app.config['SESSION_COOKIE_SECURE'] = True
+# Secure cookie включён по умолчанию (HTTPS используется всегда через gunicorn --certfile)
+# Отключите только если HTTPS не используется (небезопасно для продакшена)
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
 
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
@@ -201,6 +201,11 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
 
+# CSRF защита
+from flask_wtf.csrf import CSRFProtect
+csrf = CSRFProtect(app)
+app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 час
+
 # Инициализация планировщика автоматической синхронизации
 from services.product_sync_scheduler import init_scheduler
 init_scheduler(app)
@@ -227,6 +232,7 @@ def after_request(response):
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
 
     # Запрещаем кэширование для аутентифицированных страниц
     if hasattr(response, 'cache_control'):
@@ -265,6 +271,22 @@ def admin_required(f):
             return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
     return decorated_function
+
+
+# ============= ВАЛИДАЦИЯ ПАРОЛЕЙ =============
+
+_WEAK_PASSWORDS = {'admin123', 'password', '123456', 'qwerty', 'admin', 'letmein', '12345678', 'password1'}
+
+
+def validate_password(password: str) -> Optional[str]:
+    """Проверяет надёжность пароля. Возвращает текст ошибки или None если пароль валиден."""
+    if len(password) < 8:
+        return 'Пароль должен содержать не менее 8 символов'
+    if password.lower() in _WEAK_PASSWORDS:
+        return 'Этот пароль слишком простой. Выберите более надёжный пароль'
+    if password.isdigit():
+        return 'Пароль не может состоять только из цифр'
+    return None
 
 
 # ============= МАРШРУТЫ АВТОРИЗАЦИИ =============
@@ -461,6 +483,12 @@ def add_seller():
             flash('Заполните все обязательные поля', 'warning')
             return render_template('add_seller.html')
 
+        # Проверка надёжности пароля
+        password_error = validate_password(password)
+        if password_error:
+            flash(password_error, 'danger')
+            return render_template('add_seller.html')
+
         # Проверка на существующего пользователя
         if User.query.filter_by(username=username).first():
             flash(f'Пользователь с именем "{username}" уже существует', 'danger')
@@ -572,6 +600,10 @@ def edit_seller(seller_id):
             seller.user.is_active = is_active
 
             if new_password:
+                password_error = validate_password(new_password)
+                if password_error:
+                    flash(password_error, 'danger')
+                    return render_template('edit_seller.html', seller=seller)
                 seller.user.set_password(new_password)
 
             # Обновляем данные продавца
@@ -728,7 +760,7 @@ def admin_activity_logs():
     if user_id:
         query = query.filter_by(user_id=user_id)
     if action:
-        query = query.filter(UserActivity.action.like(f'%{action}%'))
+        query = query.filter(UserActivity.action.like('%' + action.replace('%', '').replace('_', '') + '%'))
 
     # Сортировка и пагинация
     activities = query.order_by(UserActivity.created_at.desc()).paginate(
@@ -768,7 +800,7 @@ def admin_audit_logs():
     if admin_id:
         query = query.filter_by(admin_user_id=admin_id)
     if action:
-        query = query.filter(AdminAuditLog.action.like(f'%{action}%'))
+        query = query.filter(AdminAuditLog.action.like('%' + action.replace('%', '').replace('_', '') + '%'))
     if target_type:
         query = query.filter_by(target_type=target_type)
 
@@ -867,11 +899,31 @@ def admin_api_debug_proxy():
     if not seller or not seller.wb_api_key:
         return {'error': 'No WB API key configured', 'response': None, 'status_code': 0}, 200
 
+    # Валидация метода HTTP
+    allowed_methods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
+    if method.upper() not in allowed_methods:
+        return {'error': f'Invalid method: {method}', 'response': None, 'status_code': 0}, 400
+
+    # Валидация api_base
+    allowed_bases = {'content', 'statistics', 'marketplace', 'discounts', 'analytics'}
+    if api_base not in allowed_bases:
+        return {'error': f'Invalid api_base: {api_base}', 'response': None, 'status_code': 0}, 400
+
+    # Защита от SSRF: endpoint не должен содержать полный URL
+    if endpoint and ('://' in endpoint or endpoint.startswith('//')):
+        return {'error': 'Endpoint must be a relative path', 'response': None, 'status_code': 0}, 400
+
     try:
         with WildberriesAPIClient(seller.wb_api_key) as client:
-            from urllib.parse import urljoin
+            from urllib.parse import urljoin, urlparse
             base_url = client._get_base_url(api_base)
             url = urljoin(base_url, endpoint)
+
+            # Проверяем что итоговый URL остался в домене WB API
+            parsed_base = urlparse(base_url)
+            parsed_url = urlparse(url)
+            if parsed_url.netloc != parsed_base.netloc:
+                return {'error': 'URL must point to WB API domain', 'response': None, 'status_code': 0}, 400
 
             # Для GET не отправляем json body
             kwargs = {
@@ -889,14 +941,11 @@ def admin_api_debug_proxy():
                 resp_json = {'raw_text': response.text[:5000]}
 
             # Вставляем debug прямо в response чтобы было видно в UI
-            api_key_preview = seller.wb_api_key[:20] + '...' if seller.wb_api_key else 'N/A'
             debug_info = {
                 '__debug_url': url,
                 '__debug_method': method,
                 '__debug_params': params if params else None,
-                '__debug_api_key_preview': api_key_preview,
                 '__debug_seller_id': seller.id,
-                '__debug_resp_headers': dict(list(response.headers.items())[:5]),
             }
             if isinstance(resp_json, dict):
                 resp_json.update(debug_info)
@@ -907,9 +956,9 @@ def admin_api_debug_proxy():
                 'status_code': response.status_code,
             }
     except Exception as e:
-        import traceback
+        app.logger.error(f"API debug proxy error: {e}", exc_info=True)
         return {
-            'response': {'error': str(e), 'traceback': traceback.format_exc()},
+            'response': {'error': str(e)},
             'status_code': 0
         }
 

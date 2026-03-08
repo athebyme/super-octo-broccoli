@@ -301,8 +301,19 @@ def _simple_md_to_html(md_text: str) -> str:
     return '\n'.join(html_lines)
 
 
+def _escape_html(text: str) -> str:
+    """Экранирует HTML-спецсимволы для защиты от XSS"""
+    return (text
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;'))
+
+
 def _inline_format(text: str) -> str:
     """Форматирование инлайновых элементов: жирный, курсив, код, ссылки"""
+    # Экранируем HTML перед применением markdown-форматирования
+    text = _escape_html(text)
     # Код (backticks)
     text = re.sub(r'`([^`]+)`', r'<code class="inline-code">\1</code>', text)
     # Жирный + курсив
