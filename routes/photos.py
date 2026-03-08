@@ -30,6 +30,13 @@ def _sign_photo_token(secret_key: str, sp_id: int, photo_idx: int) -> str:
     return sig
 
 
+def _sign_imported_photo_token(secret_key: str, ip_id: int, photo_idx: int) -> str:
+    """Подписывает параметры фото ImportedProduct HMAC-токеном."""
+    msg = f'ip:{ip_id}:{photo_idx}'
+    sig = hmac.new(secret_key.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
+    return sig
+
+
 def _build_public_photo_url(sp_id: int, photo_idx: int) -> str:
     """
     Строит публичный URL для фото, доступный извне (для WB media/save).
@@ -61,6 +68,7 @@ def generate_public_photo_urls(imported_product) -> list:
     """
     Генерирует список публичных URL для всех фото ImportedProduct.
     Если есть связь с SupplierProduct — использует её.
+    Если нет — генерирует URL через imported-product маршрут.
     """
     import json as _json
 
@@ -76,10 +84,27 @@ def generate_public_photo_urls(imported_product) -> list:
 
     # Предпочитаем supplier_product_id для эффективного кэширования
     sp_id = imported_product.supplier_product_id
-    if not sp_id:
-        return []
+    if sp_id:
+        return [_build_public_photo_url(sp_id, idx) for idx in range(len(photo_urls))]
 
-    return [_build_public_photo_url(sp_id, idx) for idx in range(len(photo_urls))]
+    # Фолбэк: генерируем URL через imported-product маршрут
+    return [_build_imported_photo_url(imported_product.id, idx) for idx in range(len(photo_urls))]
+
+
+def _build_imported_photo_url(ip_id: int, photo_idx: int) -> str:
+    """
+    Строит публичный URL для фото ImportedProduct (без SupplierProduct).
+    Используется как фолбэк, когда supplier_product_id = None.
+    """
+    from flask import current_app
+    secret = current_app.config['SECRET_KEY']
+    sig = _sign_imported_photo_token(secret, ip_id, photo_idx)
+
+    public_base = current_app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
+    if public_base:
+        return f"{public_base}/photos/imported/{ip_id}/{photo_idx}.jpg?sig={sig}"
+
+    return url_for('serve_imported_public_photo', ip=ip_id, idx=photo_idx, sig=sig, _external=True)
 
 
 def register_photo_routes(app):
@@ -449,6 +474,118 @@ def register_photo_routes(app):
 
             except Exception as e:
                 logger.debug(f"[PublicPhoto] Failed {current_url[:60]}: {e}")
+                continue
+
+        return _generate_placeholder_image()
+
+    # ==========================================================================
+    # Публичный маршрут для фото ImportedProduct (без SupplierProduct)
+    # ==========================================================================
+
+    @app.route('/photos/imported/<int:ip>/<int:idx>.jpg')
+    def serve_imported_public_photo(ip, idx):
+        """
+        Публичный маршрут для фото ImportedProduct напрямую.
+        Используется как фолбэк, когда нет привязки к SupplierProduct.
+        НЕ требует авторизации — для WB и внешних сервисов.
+        Защищён HMAC-подписью.
+        """
+        from flask import request as _req
+        import requests as _requests
+        from PIL import Image as _Image
+
+        sig = _req.args.get('sig', '')
+        expected = _sign_imported_photo_token(app.config['SECRET_KEY'], ip, idx)
+        if not hmac.compare_digest(sig, expected):
+            abort(403)
+
+        from models import ImportedProduct as _IP
+        product = _IP.query.get(ip)
+        if not product or not product.photo_urls:
+            abort(404)
+
+        try:
+            photos = json.loads(product.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            abort(404)
+
+        if idx < 0 or idx >= len(photos):
+            abort(404)
+
+        ph = photos[idx]
+
+        # Определяем URL — поддерживаем dict и строку
+        if isinstance(ph, dict):
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+        elif isinstance(ph, str):
+            url = ph
+        else:
+            abort(404)
+
+        if not url:
+            abort(404)
+
+        # Пробуем отдать из кэша (если товар привязан к поставщику)
+        from services.photo_cache import get_photo_cache
+        cache = get_photo_cache()
+        cache_supplier_type = 'imported'
+        cache_external_id = str(product.external_id or product.id)
+
+        if cache.is_cached(cache_supplier_type, cache_external_id, url):
+            cache_path = cache.get_cache_path(cache_supplier_type, cache_external_id, url)
+            response = send_file(cache_path, mimetype='image/jpeg', conditional=True)
+            response.cache_control.max_age = 86400
+            response.cache_control.public = True
+            return response
+
+        # Собираем auth cookies если есть supplier
+        auth_cookies = {}
+        if product.supplier:
+            auth_cookies = _get_supplier_auth_cookies(product.supplier)
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+        }
+        if 'sexoptovik.ru' in url:
+            headers['Referer'] = 'https://sexoptovik.ru/admin/'
+
+        # Фолбэк URLs
+        fallbacks = []
+        if isinstance(ph, dict):
+            if ph.get('blur') and ph['blur'] != url:
+                fallbacks.append(ph['blur'])
+            if ph.get('original') and ph['original'] != url:
+                fallbacks.append(ph['original'])
+
+        for current_url in [url] + fallbacks:
+            try:
+                resp = _requests.get(
+                    current_url, headers=headers, cookies=auth_cookies,
+                    timeout=15, allow_redirects=True
+                )
+                resp.raise_for_status()
+
+                content_type = resp.headers.get('Content-Type', '')
+                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                    continue
+
+                img = _Image.open(BytesIO(resp.content))
+                output = BytesIO()
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img.save(output, format='JPEG', quality=95)
+                image_bytes = output.getvalue()
+
+                cache.save_to_cache(cache_supplier_type, cache_external_id, url, image_bytes)
+
+                response = Response(image_bytes, mimetype='image/jpeg')
+                response.cache_control.max_age = 86400
+                response.cache_control.public = True
+                return response
+
+            except Exception as e:
+                logger.debug(f"[ImportedPublicPhoto] Failed {current_url[:60]}: {e}")
                 continue
 
         return _generate_placeholder_image()

@@ -221,21 +221,38 @@ class WBProductImporter:
                 # Или через проверку списка несозданных карточек (errors list)
 
                 # Пытаемся найти созданную карточку по vendorCode
-                # WB обрабатывает создание асинхронно, поэтому пробуем несколько раз
+                # WB обрабатывает создание асинхронно — нужно больше попыток с паузами
                 import time as _time
                 nm_id = None
-                for attempt in range(3):
+                retry_delays = [2, 4, 6, 10, 15]  # 5 попыток: 2s, 4s, 6s, 10s, 15s = до 37с ожидания
+                for attempt in range(len(retry_delays)):
                     try:
-                        if attempt > 0:
-                            _time.sleep(2 * attempt)  # 0s, 2s, 4s
+                        _time.sleep(retry_delays[attempt])
                         created_card = self.api_client.get_card_by_vendor_code(vendor_code)
                         nm_id = created_card.get('nmID')
                         if nm_id:
-                            logger.info(f"Карточка создана с nmID: {nm_id} (попытка {attempt+1})")
+                            logger.info(f"Карточка создана с nmID: {nm_id} (попытка {attempt+1}/{len(retry_delays)})")
                             break
                     except Exception as e:
-                        logger.warning(f"Попытка {attempt+1}/3 получить nmID: {e}")
+                        logger.warning(f"Попытка {attempt+1}/{len(retry_delays)} получить nmID: {e}")
                         nm_id = None
+
+                if not nm_id:
+                    # Последняя попытка: проверяем список ошибок создания
+                    try:
+                        errors_resp = self.api_client.get_cards_errors_list(
+                            log_to_db=True,
+                            seller_id=self.seller.id
+                        )
+                        error_cards = errors_resp.get('data', [])
+                        for ec in (error_cards or []):
+                            if ec.get('vendorCode') == vendor_code:
+                                err_detail = ec.get('errors', [])
+                                raise Exception(f"WB отклонил карточку: {err_detail}")
+                    except Exception as err_check:
+                        if 'отклонил' in str(err_check):
+                            raise
+                        logger.debug(f"Не удалось проверить ошибки создания: {err_check}")
 
             except Exception as e:
                 error_msg = str(e)
@@ -704,6 +721,60 @@ class WBProductImporter:
 
                 wb_chars_by_name[char_name.lower()] = char
 
+        # Словарь алиасов: наши названия характеристик -> WB названия
+        # Решает проблему несовпадения имён между данными поставщика и WB API
+        _CHAR_ALIASES = {
+            'цвет товара': 'цвет',
+            'цвета': 'цвет',
+            'основной цвет': 'цвет',
+            'материал товара': 'материал',
+            'основной материал': 'материал',
+            'материал изделия': 'материал',
+            'состав': 'материал',
+            'состав материала': 'материал',
+            'страна': 'страна производства',
+            'страна-производитель': 'страна производства',
+            'страна изготовления': 'страна производства',
+            'страна изготовитель': 'страна производства',
+            'производство': 'страна производства',
+            'made in': 'страна производства',
+            'пол товара': 'пол',
+            'назначение': 'пол',
+            'для кого': 'пол',
+            'целевой пол': 'пол',
+            'комплектация товара': 'комплектация',
+            'в комплекте': 'комплектация',
+            'длина товара': 'длина',
+            'длина изделия': 'длина',
+            'общая длина': 'длина',
+            'рабочая длина': 'рабочая длина',
+            'диаметр товара': 'диаметр',
+            'вес товара': 'вес',
+            'масса': 'вес',
+            'вес изделия': 'вес',
+            'вес нетто': 'вес',
+            'объем товара': 'объем',
+            'объём': 'объем',
+            'количество в упаковке': 'количество в упаковке',
+            'кол-во в упаковке': 'количество в упаковке',
+            'кол-во': 'количество в упаковке',
+            'количество штук': 'количество в упаковке',
+            'количество скоростей': 'количество режимов',
+            'кол-во режимов': 'количество режимов',
+            'количество режимов вибрации': 'количество режимов',
+            'тип питания': 'тип элемента питания',
+            'питание': 'тип элемента питания',
+            'батарейки': 'тип элемента питания',
+            'элемент питания': 'тип элемента питания',
+            'особенности товара': 'особенности',
+            'feature': 'особенности',
+            'описание особенностей': 'особенности',
+            'упаковка': 'тип упаковки',
+            'вид упаковки': 'тип упаковки',
+            'водонепроницаемость': 'водонепроницаемый',
+            'защита от воды': 'водонепроницаемый',
+        }
+
         result_characteristics = []
 
         for char_name, char_value in product_chars.items():
@@ -720,28 +791,57 @@ class WBProductImporter:
             char_name_lower = char_name.lower().strip()
             wb_char = wb_chars_by_name.get(char_name_lower)
 
+            # Шаг 1: Проверяем алиасы
             if not wb_char:
-                # Пробуем частичное совпадение по полным именам
+                alias = _CHAR_ALIASES.get(char_name_lower)
+                if alias:
+                    wb_char = wb_chars_by_name.get(alias)
+                    if wb_char:
+                        logger.debug(f"Характеристика '{char_name}' -> алиас '{alias}'")
+
+            # Шаг 2: Частичное совпадение
+            if not wb_char:
                 for wb_name, wb_data in wb_chars_by_name.items():
                     if char_name_lower in wb_name or wb_name in char_name_lower:
                         wb_char = wb_data
                         break
 
+            # Шаг 3: Нормализация единиц измерения
             if not wb_char:
-                # Нормализуем: убираем единицы измерения и скобки для fuzzy-матча
-                # "Диаметр, см" → "диаметр", "Вес товара, г" → "вес товара"
-                # "Диаметр секс игрушки (см)" → "диаметр секс игрушки"
                 _UNIT_RE = re.compile(r'[,(]\s*(?:см|мм|г|гр|кг|мл|л|шт|м)\s*\)?$', re.IGNORECASE)
                 char_norm = _UNIT_RE.sub('', char_name_lower).strip()
                 if char_norm:
+                    # Сначала пробуем алиас нормализованного имени
+                    alias = _CHAR_ALIASES.get(char_norm)
+                    if alias:
+                        wb_char = wb_chars_by_name.get(alias)
+
+                    if not wb_char:
+                        for wb_name, wb_data in wb_chars_by_name.items():
+                            wb_norm = _UNIT_RE.sub('', wb_name).strip()
+                            if char_norm == wb_norm:
+                                wb_char = wb_data
+                                break
+
+                    if not wb_char and char_norm:
+                        for wb_name, wb_data in wb_chars_by_name.items():
+                            wb_norm = _UNIT_RE.sub('', wb_name).strip()
+                            if char_norm in wb_norm or wb_norm in char_norm:
+                                wb_char = wb_data
+                                break
+
+            # Шаг 4: Пробуем по первому слову (для длинных названий)
+            if not wb_char and ' ' in char_name_lower:
+                first_word = char_name_lower.split()[0]
+                if len(first_word) >= 4:  # Минимум 4 символа чтобы не ловить "тип", "вид" и т.д.
                     for wb_name, wb_data in wb_chars_by_name.items():
-                        wb_norm = _UNIT_RE.sub('', wb_name).strip()
-                        if char_norm in wb_norm or wb_norm in char_norm:
+                        if wb_name.startswith(first_word):
                             wb_char = wb_data
+                            logger.debug(f"Характеристика '{char_name}' -> совпадение по первому слову с '{wb_name}'")
                             break
 
             if not wb_char:
-                logger.debug(f"Характеристика '{char_name}' не найдена в WB конфиге")
+                logger.debug(f"Характеристика '{char_name}' не найдена в WB конфиге (subject_id={imported_product.wb_subject_id})")
                 continue
 
             char_id = wb_char.get('charcID') or wb_char.get('id')
@@ -931,7 +1031,7 @@ class WBProductImporter:
         if not pricing_settings or not pricing_settings.is_enabled:
             logger.info(f"Ценообразование не настроено/отключено для продавца {self.seller.id}")
             # Даже без формулы, если есть рассчитанные цены в ImportedProduct - используем их
-            if imported_product.calculated_price:
+            if imported_product.calculated_price and imported_product.calculated_price > 0:
                 final_price = int(imported_product.calculated_price)
                 price_before = int(imported_product.calculated_price_before_discount or final_price * 1.55)
                 discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
@@ -948,7 +1048,36 @@ class WBProductImporter:
                 )
                 logger.info(f"Цена установлена для nmID={nm_id}: price={price_before}, discount={discount_pct}% (final~{final_price})")
                 return final_price, imported_product.calculated_discount_price, price_before
-            return None, None, None
+
+            # Фолбэк: рассчитываем минимальную цену из supplier_price
+            # Используем стандартную наценку x2.5 от закупки, скидка 35%
+            logger.warning(f"Ценообразование не настроено — используем фолбэк наценку для товара {imported_product.external_id}")
+            final_price = int(supplier_price * 2.5)
+            price_before = int(final_price * 1.55)
+            discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
+
+            prices_data = [{
+                'nmID': nm_id,
+                'price': price_before,
+                'discount': discount_pct
+            }]
+            try:
+                self.api_client.upload_prices_v2(
+                    prices=prices_data,
+                    log_to_db=True,
+                    seller_id=self.seller.id
+                )
+                logger.info(
+                    f"Фолбэк-цена установлена для nmID={nm_id}: "
+                    f"supplier_price={supplier_price}, price_before={price_before}, "
+                    f"discount={discount_pct}%, final~{final_price}"
+                )
+                imported_product.calculated_price = final_price
+                imported_product.calculated_price_before_discount = price_before
+                return final_price, 0, price_before
+            except Exception as e:
+                logger.error(f"Не удалось установить фолбэк-цену для nmID={nm_id}: {e}")
+                return None, None, None
 
         # Рассчитываем цену по формуле
         price_result = calculate_price(
@@ -1040,11 +1169,14 @@ class WBProductImporter:
         from flask import current_app
         public_base_url = current_app.config.get('PUBLIC_BASE_URL', '')
 
-        if public_base_url and sp:
-            # Сначала убеждаемся что фото есть в кэше (чтобы serve_public_photo отдал их)
-            self._ensure_photos_cached(photo_urls_raw, sp)
+        if public_base_url:
+            # Кэшируем фото перед отправкой URL
+            if sp:
+                self._ensure_photos_cached(photo_urls_raw, sp)
+            else:
+                self._ensure_photos_cached_direct(photo_urls_raw, imported_product)
 
-            # Формируем публичные URL
+            # Формируем публичные URL (теперь работает и без supplier_product_id)
             from routes.photos import generate_public_photo_urls
             public_urls = generate_public_photo_urls(imported_product)
 
@@ -1069,11 +1201,11 @@ class WBProductImporter:
         # Стратегия 2: File-based upload (media/file)
         # Загружаем файлы напрямую через multipart
         # =============================================
-        if not sp:
-            logger.warning(f"Товар {imported_product.external_id}: нет SupplierProduct, фото не загружены")
-            return
-
-        cached_photo_paths = self._ensure_photos_cached(photo_urls_raw, sp)
+        if sp:
+            cached_photo_paths = self._ensure_photos_cached(photo_urls_raw, sp)
+        else:
+            # Фолбэк: скачиваем напрямую по URL из photo_urls
+            cached_photo_paths = self._ensure_photos_cached_direct(photo_urls_raw, imported_product)
 
         if not cached_photo_paths:
             logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для file upload")
@@ -1122,6 +1254,47 @@ class WBProductImporter:
                         cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
                 except Exception as dl_err:
                     logger.debug(f"Не удалось скачать фото {url[:60]}: {dl_err}")
+
+        return cached_paths
+
+    def _ensure_photos_cached_direct(self, photo_urls_raw: list, imported_product) -> list:
+        """
+        Фолбэк: скачивает фото напрямую из URL без SupplierProduct.
+        Используется когда supplier_product_id = None.
+        """
+        from services.photo_cache import get_photo_cache
+        cache = get_photo_cache()
+
+        supplier_type = 'imported'
+        external_id = str(imported_product.external_id or imported_product.id)
+
+        # Получаем supplier для auth cookies (если есть)
+        supplier = None
+        if imported_product.supplier:
+            supplier = imported_product.supplier
+
+        cached_paths = []
+        for idx, ph in enumerate(photo_urls_raw):
+            if isinstance(ph, dict):
+                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            elif isinstance(ph, str):
+                url = ph
+            else:
+                continue
+
+            if not url:
+                continue
+
+            if cache.is_cached(supplier_type, external_id, url):
+                cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+            else:
+                try:
+                    photo_bytes = self._download_photo(url, ph, supplier)
+                    if photo_bytes:
+                        cache.save_to_cache(supplier_type, external_id, url, photo_bytes)
+                        cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                except Exception as dl_err:
+                    logger.debug(f"Не удалось скачать фото напрямую {url[:60]}: {dl_err}")
 
         return cached_paths
 
