@@ -1556,118 +1556,62 @@ def register_supplier_routes(app):
         return redirect(url_for('seller_product_wb_preview', product_id=product_id))
 
     # -------------------------------------------------------------------
-    # Push to WB — массовый импорт товаров на WB (SSE streaming)
+    # Push to WB — массовый импорт товаров на WB
     # -------------------------------------------------------------------
     @app.route('/my-products/push-to-wb-bulk', methods=['POST'])
     @login_required
     @seller_required
     def seller_push_to_wb_bulk():
-        """Массовый импорт товаров в магазин WB.
-        Поддерживает SSE (Accept: text/event-stream) и обычный JSON."""
+        """Массовый импорт товаров в магазин WB с авто-валидацией."""
         seller = current_user.seller
 
         if not seller.has_valid_api_key():
-            return jsonify({'error': 'API ключ WB не настроен'}), 400
+            return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
 
         data = request.get_json(silent=True) or {}
         product_ids = data.get('product_ids', [])
 
         if not product_ids:
-            return jsonify({'error': 'Не выбраны товары'}), 400
+            return jsonify({'success': False, 'error': 'Не выбраны товары'}), 400
 
-        use_sse = 'text/event-stream' in request.headers.get('Accept', '')
-
-        if use_sse:
-            return _stream_bulk_import(seller, product_ids)
-
-        # Fallback: обычный JSON ответ (синхронный)
-        from services.wb_product_importer import WBProductImporter
-        importer = WBProductImporter(seller)
-
-        # Авто-валидация pending/failed товаров перед импортом
-        _auto_validate_products(seller, product_ids)
-
-        result = importer.import_multiple_products(product_ids)
-        result['success'] = True
-        return jsonify(result)
-
-    def _auto_validate_products(seller, product_ids):
-        """Авто-валидация: переводит pending/failed в validated если проходят проверку."""
-        from services.upload_readiness_validator import validate_product_upload_readiness
-        products = ImportedProduct.query.filter(
-            ImportedProduct.id.in_(product_ids),
-            ImportedProduct.seller_id == seller.id,
-            ImportedProduct.import_status.in_(['pending', 'failed'])
-        ).all()
-        for p in products:
-            try:
-                vr = validate_product_upload_readiness(p, seller=seller)
-                if vr['is_ready']:
-                    p.import_status = 'validated'
-            except Exception:
-                pass
-        if products:
-            db.session.commit()
-
-    def _stream_bulk_import(seller, product_ids):
-        """SSE-стриминг прогресса массового импорта."""
-        import json as _json
-
-        def generate():
+        try:
             from services.wb_product_importer import WBProductImporter
             from services.upload_readiness_validator import validate_product_upload_readiness
 
             importer = WBProductImporter(seller)
-            total = len(product_ids)
-            stats = {'imported': 0, 'failed': 0, 'skipped': 0, 'errors': []}
 
-            for idx, pid in enumerate(product_ids):
-                product = ImportedProduct.query.get(pid)
-                if not product or product.seller_id != seller.id:
-                    stats['skipped'] += 1
-                    yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': f'ID {pid}', 'status': 'skipped', 'reason': 'Не найден', **stats})}\n\n"
-                    continue
+            # Авто-валидация pending/failed товаров перед импортом
+            products_to_validate = ImportedProduct.query.filter(
+                ImportedProduct.id.in_(product_ids),
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.import_status.in_(['pending', 'failed'])
+            ).all()
 
-                title_short = (product.title or 'Без названия')[:40]
+            validated_count = 0
+            validation_errors = []
+            for p in products_to_validate:
+                try:
+                    vr = validate_product_upload_readiness(p, seller=seller)
+                    if vr['is_ready']:
+                        p.import_status = 'validated'
+                        validated_count += 1
+                    else:
+                        error_msgs = [i['message'] for i in vr['issues'] if i['level'] == 'error']
+                        validation_errors.append(f"{(p.title or '')[:30]}: {'; '.join(error_msgs[:2])}")
+                except Exception as e:
+                    validation_errors.append(f"{(p.title or '')[:30]}: {e}")
+            if products_to_validate:
+                db.session.commit()
 
-                # Авто-валидация
-                if product.import_status in ('pending', 'failed'):
-                    try:
-                        vr = validate_product_upload_readiness(product, seller=seller)
-                        if vr['is_ready']:
-                            product.import_status = 'validated'
-                            db.session.commit()
-                        else:
-                            error_msgs = [i['message'] for i in vr['issues'] if i['level'] == 'error']
-                            err = '; '.join(error_msgs[:2])
-                            stats['failed'] += 1
-                            stats['errors'].append(f"{title_short}: {err}")
-                            yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'validation_failed', 'reason': err, **stats})}\n\n"
-                            continue
-                    except Exception as e:
-                        stats['failed'] += 1
-                        stats['errors'].append(f"{title_short}: Ошибка валидации: {e}")
-                        yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'error', 'reason': str(e), **stats})}\n\n"
-                        continue
-
-                # Импорт
-                yield f"data: {_json.dumps({'type': 'importing', 'current': idx + 1, 'total': total, 'product': title_short})}\n\n"
-
-                success, error, created = importer.import_product_to_wb(product)
-
-                if success:
-                    stats['imported'] += 1
-                    yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'ok', **stats})}\n\n"
-                else:
-                    stats['failed'] += 1
-                    stats['errors'].append(f"{title_short}: {error}")
-                    yield f"data: {_json.dumps({'type': 'progress', 'current': idx + 1, 'total': total, 'product': title_short, 'status': 'error', 'reason': error, **stats})}\n\n"
-
-            # Финальное событие
-            yield f"data: {_json.dumps({'type': 'done', **stats})}\n\n"
-
-        return app.response_class(generate(), mimetype='text/event-stream',
-                                   headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+            result = importer.import_multiple_products(product_ids)
+            result['success'] = True
+            result['auto_validated'] = validated_count
+            if validation_errors:
+                result['errors'] = validation_errors + result.get('errors', [])
+                result['failed'] = result.get('failed', 0) + len(validation_errors)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
 
     # -------------------------------------------------------------------
     # Validate product for WB — пометить как валидированный
