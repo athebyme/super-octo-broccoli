@@ -1323,16 +1323,6 @@ def register_supplier_routes(app):
                     if vc in existing_vc:
                         wb_existing_sp_ids.add(sp_id)
 
-        # DEBUG: временное сообщение для проверки vendor_code маппинга
-        if pagination.items:
-            sample_sp = pagination.items[0]
-            sample_vc = sp_vendor_codes.get(sample_sp.id, 'N/A') if sp_vendor_codes else 'N/A'
-            total_products = db.session.query(Product).filter(Product.seller_id == seller.id).count()
-            flash(f'[DEBUG] Паттерн: {vc_pattern} | supplier_code: "{vc_supplier_code}" | '
-                  f'Пример: external_id={sample_sp.external_id} → vc={sample_vc} | '
-                  f'Всего карточек на WB: {total_products} | '
-                  f'WB-совпадений: {len(wb_existing_sp_ids)}', 'info')
-
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
 
