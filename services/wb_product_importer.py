@@ -1884,7 +1884,7 @@ class WBProductImporter:
         """
         stats = {
             'total': len(imported_product_ids),
-            'success': 0,
+            'imported': 0,
             'failed': 0,
             'skipped': 0,
             'errors': []
@@ -1906,7 +1906,7 @@ class WBProductImporter:
             success, error, product = self.import_product_to_wb(imported_product)
 
             if success:
-                stats['success'] += 1
+                stats['imported'] += 1
             else:
                 stats['failed'] += 1
                 stats['errors'].append(f"Товар {imported_product.external_id}: {error}")

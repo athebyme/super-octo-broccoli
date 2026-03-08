@@ -698,7 +698,7 @@ def register_auto_import_routes(app):
         result = import_products_batch(seller.id, product_ids)
 
         if result.get('success'):
-            message = f"Импортировано: {result['success']}, Ошибок: {result['failed']}, Пропущено: {result['skipped']}"
+            message = f"Импортировано: {result['imported']}, Ошибок: {result['failed']}, Пропущено: {result['skipped']}"
             flash(message, 'success' if result['failed'] == 0 else 'warning')
             return jsonify(result)
         else:

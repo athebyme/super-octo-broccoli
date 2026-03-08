@@ -490,8 +490,8 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success || data.success > 0) {
-                    alert(`Импорт завершен!\nУспешно: ${data.success}\nОшибок: ${data.failed}\nПропущено: ${data.skipped}`);
+                if (data.success) {
+                    alert(`Импорт завершен!\nУспешно: ${data.imported}\nОшибок: ${data.failed}\nПропущено: ${data.skipped}`);
                     location.reload();
                 } else {
                     alert('Ошибка импорта: ' + (data.error || 'Неизвестная ошибка'));
