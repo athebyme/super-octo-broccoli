@@ -5957,8 +5957,34 @@ def create_notification(seller_id, category, title, message, link=None, metadata
     return n
 
 
+def _ensure_admin_from_env():
+    """Создаёт или обновляет админа из переменных окружения ADMIN_USERNAME/ADMIN_PASSWORD/ADMIN_EMAIL."""
+    username = os.environ.get('ADMIN_USERNAME')
+    password = os.environ.get('ADMIN_PASSWORD')
+    if not username or not password:
+        return
+
+    email = os.environ.get('ADMIN_EMAIL', f'{username}@example.com')
+
+    existing = User.query.filter_by(username=username).first()
+    if existing:
+        if not existing.check_password(password):
+            existing.set_password(password)
+            if email:
+                existing.email = email
+            db.session.commit()
+            app.logger.info(f"Admin '{username}' password updated from environment")
+    else:
+        admin = User(username=username, email=email, is_admin=True, is_active=True)
+        admin.set_password(password)
+        db.session.add(admin)
+        db.session.commit()
+        app.logger.info(f"Admin '{username}' created from environment")
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         _run_startup_migrations()
+        _ensure_admin_from_env()
     app.run(debug=os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true'), host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))

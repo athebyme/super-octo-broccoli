@@ -49,14 +49,14 @@ with app.app_context():
         print(f"⚠️  Не удалось настроить SQLite WAL mode: {e}")
 
     # Проверяем, есть ли администратор
-    admin_exists = User.query.filter_by(is_admin=True).first()
+    username = os.environ.get('ADMIN_USERNAME', 'admin')
+    email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
+    password = os.environ.get('ADMIN_PASSWORD', 'admin123')
+
+    admin_exists = User.query.filter_by(username=username).first()
 
     if not admin_exists:
         # Создаем дефолтного администратора
-        username = os.environ.get('ADMIN_USERNAME', 'admin')
-        email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
-        password = os.environ.get('ADMIN_PASSWORD', 'admin123')
-
         admin = User(
             username=username,
             email=email,
@@ -70,10 +70,24 @@ with app.app_context():
 
         print(f"✅ Создан администратор: {username}")
         print(f"   Email: {email}")
-        print(f"   Пароль: {password}")
         print(f"   ⚠️  ВАЖНО: Смените пароль после первого входа!")
     else:
-        print(f"✅ Администратор уже существует: {admin_exists.username}")
+        # Синхронизируем пароль и email из переменных окружения
+        updated = False
+        if not admin_exists.check_password(password):
+            admin_exists.set_password(password)
+            updated = True
+        if email and admin_exists.email != email:
+            admin_exists.email = email
+            updated = True
+        if not admin_exists.is_admin:
+            admin_exists.is_admin = True
+            updated = True
+        if updated:
+            db.session.commit()
+            print(f"✅ Администратор '{username}' обновлён из переменных окружения")
+        else:
+            print(f"✅ Администратор уже существует: {admin_exists.username}")
 PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
