@@ -490,22 +490,33 @@ function dashMetrics() {
             return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(v || 0);
         },
         init() {
-            Promise.all([
-                fetch('/api/analytics/summary?period=7d').then(r => r.json()),
-                fetch('/api/finances/summary?period=7d').then(r => r.json()),
-            ]).then(([analytics, finances]) => {
-                if (analytics.success && analytics.data) {
-                    const kpi = analytics.data.kpi || {};
-                    const dyn = analytics.data.dynamics || {};
-                    this.revenue = kpi.revenue || 0;
-                    this.orders = kpi.orders || 0;
-                    this.revDyn = dyn.revenue != null ? dyn.revenue : null;
-                    this.ordDyn = dyn.orders != null ? dyn.orders : null;
-                }
-                if (finances.success && finances.data) {
-                    this.payout = (finances.data.balance || {}).total || 0;
-                }
-            }).catch(() => {}).finally(() => { this.loading = false; });
+            let done = 0;
+            const check = () => { if (++done >= 2) this.loading = false; };
+
+            fetch('/api/analytics/summary?period=7d')
+                .then(r => r.json())
+                .then(json => {
+                    if (json.success && json.data) {
+                        const kpi = json.data.kpi || {};
+                        const dyn = json.data.dynamics || {};
+                        this.revenue = kpi.revenue || 0;
+                        this.orders = kpi.orders || 0;
+                        this.revDyn = dyn.revenue != null ? dyn.revenue : null;
+                        this.ordDyn = dyn.orders != null ? dyn.orders : null;
+                    }
+                })
+                .catch(e => console.warn('Dashboard analytics error:', e))
+                .finally(check);
+
+            fetch('/api/finances/summary?period=7d')
+                .then(r => r.json())
+                .then(json => {
+                    if (json.success && json.data) {
+                        this.payout = (json.data.balance || {}).total || 0;
+                    }
+                })
+                .catch(e => console.warn('Dashboard finances error:', e))
+                .finally(check);
         }
     };
 }
