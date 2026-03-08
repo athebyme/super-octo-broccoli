@@ -290,7 +290,23 @@ class WBProductImporter:
                 error_msg = str(e)
 
                 # Обрабатываем известные ошибки WB
-                if 'Бренда' in error_msg and 'пока нет на WB' in error_msg:
+                if 'bad request' in error_msg.lower() and 'возможные причины' not in error_msg:
+                    # WB вернул 400 без деталей — добавляем контекст товара
+                    context_parts = []
+                    if not barcodes or not any(b for b in barcodes if b):
+                        context_parts.append('нет баркодов')
+                    if not characteristics:
+                        context_parts.append('нет характеристик')
+                    if not product_brand:
+                        context_parts.append('нет бренда')
+                    country = imported_product.country or ''
+                    if country and country.lower() in ('англия', 'england'):
+                        context_parts.append(f'невалидная страна "{country}" (WB ожидает "Великобритания")')
+                    if context_parts:
+                        error_msg = f"bad request ({', '.join(context_parts)})"
+                    else:
+                        error_msg = f"bad request (проверьте данные: бренд='{product_brand}', категория={imported_product.wb_subject_id}, баркоды={barcodes})"
+                elif 'Бренда' in error_msg and 'пока нет на WB' in error_msg:
                     error_msg = f"Бренд '{product_brand}' не зарегистрирован на Wildberries. Необходимо сначала добавить бренд в личном кабинете WB или использовать существующий бренд."
                 elif 'повторяющиеся Баркоды' in error_msg:
                     error_msg = f"Баркод уже используется в другой карточке или дублируется в текущей. Баркоды: {barcodes}"
@@ -491,11 +507,55 @@ class WBProductImporter:
             # По умолчанию считаем безразмерной — безопаснее
             return False
 
+    # Маппинг неофициальных/альтернативных названий стран → WB-валидные названия
+    # WB использует справочник стран с конкретными названиями
+    COUNTRY_NORMALIZATION_MAP = {
+        # Англия / UK / England → Великобритания
+        'англия': 'Великобритания',
+        'england': 'Великобритания',
+        'uk': 'Великобритания',
+        'united kingdom': 'Великобритания',
+        'great britain': 'Великобритания',
+        'британия': 'Великобритания',
+        # США варианты
+        'usa': 'США',
+        'u.s.a.': 'США',
+        'united states': 'США',
+        'соединенные штаты': 'США',
+        'соединённые штаты': 'США',
+        'америка': 'США',
+        # Южная Корея
+        'korea': 'Южная Корея',
+        'south korea': 'Южная Корея',
+        'корея': 'Южная Корея',
+        # Прочие
+        'prc': 'Китай',
+        'china': 'Китай',
+        'japan': 'Япония',
+        'germany': 'Германия',
+        'france': 'Франция',
+        'italy': 'Италия',
+        'spain': 'Испания',
+        'sweden': 'Швеция',
+        'austria': 'Австрия',
+        'canada': 'Канада',
+        'hong kong': 'Гонконг',
+        'taiwan': 'Тайвань',
+        'thailand': 'Таиланд',
+        'india': 'Индия',
+        'holland': 'Нидерланды',
+        'голландия': 'Нидерланды',
+        'чехия': 'Чешская Республика',
+        'czech republic': 'Чешская Республика',
+        'белоруссия': 'Беларусь',
+    }
+
     @staticmethod
     def _sanitize_country(country: str) -> str:
         """
         Нормализует страну производства для WB API.
-        WB не принимает составные значения типа 'Россия-Китай'.
+        WB не принимает составные значения типа 'Россия-Китай',
+        а также неофициальные названия ('Англия' вместо 'Великобритания').
 
         Returns:
             Валидное название страны
@@ -512,7 +572,14 @@ class WBProductImporter:
             return country.strip()
 
         # Берём первую страну
-        return parts[0]
+        first_country = parts[0]
+
+        # Нормализуем через маппинг
+        normalized = WBProductImporter.COUNTRY_NORMALIZATION_MAP.get(first_country.lower())
+        if normalized:
+            return normalized
+
+        return first_country
 
     @staticmethod
     def _extract_dimensions_from_text(text: str) -> Dict:
@@ -744,6 +811,74 @@ class WBProductImporter:
 
         return chars
 
+    # Дефолтные характеристики по группам категорий WB
+    # Используются как fallback если данные не определены из AI-парсера или поставщика
+    # Группировка: sex_toys, lubricants, condoms, bdsm, lingerie
+    _CATEGORY_GROUPS = {
+        'sex_toys': {
+            5067, 5576, 5125, 5090, 5069, 5159, 5064, 5065, 5066, 5068,
+            5193, 5117, 5070, 5071, 5073, 5075, 5091, 5294, 6302, 5085,
+            5082, 5080, 6217, 6296, 6303, 6304, 5127, 5128, 5076, 5289,
+            5084, 5072, 5116, 5129, 5118, 5158, 5293, 5086, 7732,
+        },
+        'lubricants': {
+            2909, 5780, 5779, 5478, 5948, 5197, 5812,
+        },
+        'condoms': {2865},
+        'bdsm': {
+            5021, 5019, 5020, 5120, 5023, 5025, 5121, 5026,
+            5083, 5051, 5040, 5119,
+        },
+        'lingerie': {
+            2612, 2602, 2603, 2604, 2605, 2606, 2607, 2608,
+            2609, 2610, 2611, 2613, 5039, 5041, 5042, 5043,
+            5044, 5049, 5052,
+        },
+    }
+
+    @staticmethod
+    def _get_category_default_chars(wb_subject_id: int, imported_product) -> Dict:
+        """
+        Возвращает дефолтные характеристики для категории WB.
+        Используются как fallback если AI-парсер или данные поставщика не определили значение.
+        """
+        if not wb_subject_id:
+            return {}
+
+        defaults = {}
+
+        # Определяем группу категории
+        group = None
+        for grp, ids in WBProductImporter._CATEGORY_GROUPS.items():
+            if wb_subject_id in ids:
+                group = grp
+                break
+
+        if not group:
+            return defaults
+
+        # Общие для всех категорий взрослых
+        defaults.setdefault('Пол', 'Унисекс')
+
+        if group == 'sex_toys':
+            defaults['Комплектация'] = 'Изделие'
+            defaults['Упаковка'] = 'Коробка'
+
+        elif group == 'lubricants':
+            defaults['Упаковка'] = 'Коробка'
+
+        elif group == 'condoms':
+            defaults['Упаковка'] = 'Коробка'
+
+        elif group == 'bdsm':
+            defaults['Комплектация'] = 'Изделие'
+            defaults['Упаковка'] = 'Пакет'
+
+        elif group == 'lingerie':
+            defaults['Упаковка'] = 'Пакет'
+
+        return defaults
+
     def _resolve_brand_for_wb(self, imported_product: ImportedProduct) -> str:
         """
         Резолвит бренд для отправки в WB, используя систему брендов.
@@ -866,6 +1001,14 @@ class WBProductImporter:
         # Дополняем данными из AI-анализа (если есть)
         ai_chars = self._collect_ai_characteristics(imported_product)
         for key, val in ai_chars.items():
+            if key not in product_chars:
+                product_chars[key] = val
+
+        # Дополняем дефолтными характеристиками для категории (только если не заданы)
+        category_defaults = self._get_category_default_chars(
+            imported_product.wb_subject_id, imported_product
+        )
+        for key, val in category_defaults.items():
             if key not in product_chars:
                 product_chars[key] = val
 
@@ -1919,16 +2062,24 @@ class WBProductImporter:
             'pricing': pricing_data,
         }
 
-    def import_multiple_products(self, imported_product_ids: List[int]) -> Dict:
+    def import_multiple_products(self, imported_product_ids: List[int], max_workers: int = 3) -> Dict:
         """
-        Массовый импорт товаров в WB
+        Массовый импорт товаров в WB с параллельной обработкой.
+
+        Использует ThreadPoolExecutor для одновременной отправки нескольких
+        товаров. Каждый товар обрабатывается в отдельном потоке.
+        Ограничение воркеров (default=3) учитывает rate limits WB API.
 
         Args:
             imported_product_ids: Список ID товаров для импорта
+            max_workers: Максимум параллельных потоков (default=3)
 
         Returns:
             Статистика импорта
         """
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         stats = {
             'total': len(imported_product_ids),
             'imported': 0,
@@ -1936,27 +2087,66 @@ class WBProductImporter:
             'skipped': 0,
             'errors': []
         }
+        stats_lock = threading.Lock()
 
+        # Предварительная фильтрация — убираем невалидные ID (не требует API)
+        valid_products = []
         for product_id in imported_product_ids:
             imported_product = ImportedProduct.query.get(product_id)
-
             if not imported_product:
                 stats['skipped'] += 1
                 stats['errors'].append(f"Товар ID {product_id} не найден")
                 continue
-
             if imported_product.seller_id != self.seller.id:
                 stats['skipped'] += 1
                 stats['errors'].append(f"Товар {imported_product.external_id}: нет доступа")
                 continue
+            valid_products.append(imported_product)
 
-            success, error, product = self.import_product_to_wb(imported_product)
+        if not valid_products:
+            logger.info(f"Массовый импорт: нет валидных товаров для импорта")
+            return stats
 
-            if success:
-                stats['imported'] += 1
-            else:
-                stats['failed'] += 1
-                stats['errors'].append(f"Товар {imported_product.external_id}: {error}")
+        effective_workers = min(max_workers, len(valid_products))
+        logger.info(
+            f"Массовый импорт: {len(valid_products)} товаров, "
+            f"{effective_workers} параллельных потоков"
+        )
+
+        def _import_one(product):
+            """Импорт одного товара (выполняется в потоке)."""
+            from flask import current_app
+            app = current_app._get_current_object()
+            with app.app_context():
+                try:
+                    success, error, result_product = self.import_product_to_wb(product)
+                    with stats_lock:
+                        if success:
+                            stats['imported'] += 1
+                        else:
+                            stats['failed'] += 1
+                            stats['errors'].append(f"Товар {product.external_id}: {error}")
+                except Exception as e:
+                    logger.error(f"Необработанная ошибка импорта товара {product.external_id}: {e}", exc_info=True)
+                    with stats_lock:
+                        stats['failed'] += 1
+                        stats['errors'].append(f"Товар {product.external_id}: {str(e)}")
+
+        with ThreadPoolExecutor(
+            max_workers=effective_workers,
+            thread_name_prefix='WBImport'
+        ) as pool:
+            futures = {
+                pool.submit(_import_one, product): product
+                for product in valid_products
+            }
+            for future in as_completed(futures):
+                # Результаты уже записаны в stats через lock
+                try:
+                    future.result()
+                except Exception as e:
+                    product = futures[future]
+                    logger.error(f"Future exception для {product.external_id}: {e}")
 
         logger.info(f"Массовый импорт завершен: {stats}")
         return stats

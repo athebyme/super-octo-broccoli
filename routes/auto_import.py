@@ -12,7 +12,7 @@ import time
 import hashlib
 from datetime import datetime
 
-from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory, PricingSettings, Product
+from models import db, AutoImportSettings, ImportedProduct, CategoryMapping, AIHistory, PricingSettings, Product, Seller
 from services.auto_import_manager import AutoImportManager, ImageProcessor
 from services.pricing_engine import (
     SupplierPriceLoader, calculate_price, extract_supplier_product_id,
@@ -677,7 +677,7 @@ def register_auto_import_routes(app):
     @app.route('/auto-import/import-to-wb', methods=['POST'])
     @login_required
     def auto_import_to_wb():
-        """Массовый импорт товаров в WB"""
+        """Массовый импорт товаров в WB (фоновый с уведомлениями)"""
         if not current_user.seller:
             return jsonify({'success': False, 'error': 'Seller not found'}), 403
 
@@ -693,21 +693,95 @@ def register_auto_import_routes(app):
         except ValueError:
             return jsonify({'success': False, 'error': 'Invalid product IDs'}), 400
 
-        # Импортируем товары
-        from services.wb_product_importer import import_products_batch
-        result = import_products_batch(seller.id, product_ids)
+        # Для 1 товара — синхронно (быстро, не нужен фон)
+        if len(product_ids) == 1:
+            from services.wb_product_importer import import_products_batch
+            result = import_products_batch(seller.id, product_ids)
+            if result.get('success'):
+                message = f"Импортировано: {result['imported']}, Ошибок: {result['failed']}, Пропущено: {result['skipped']}"
+                flash(message, 'success' if result['failed'] == 0 else 'warning')
+                return jsonify(result)
+            else:
+                return jsonify(result), 500
 
-        if result.get('success'):
-            message = f"Импортировано: {result['imported']}, Ошибок: {result['failed']}, Пропущено: {result['skipped']}"
-            flash(message, 'success' if result['failed'] == 0 else 'warning')
-            return jsonify(result)
-        else:
-            return jsonify(result), 500
+        # Для нескольких товаров — фоновый поток с уведомлением по завершении
+        import threading
+        flask_app = app._get_current_object()
+        seller_id = seller.id
+
+        def _run_background_import():
+            with flask_app.app_context():
+                from services.wb_product_importer import import_products_batch
+                from models import Notification
+                try:
+                    result = import_products_batch(seller_id, product_ids)
+                    imported = result.get('imported', 0)
+                    failed = result.get('failed', 0)
+                    skipped = result.get('skipped', 0)
+                    errors = result.get('errors', [])
+
+                    if failed == 0:
+                        category = 'success'
+                        title = f'Импорт в WB завершён'
+                        message = f'Успешно импортировано {imported} товаров'
+                        if skipped:
+                            message += f', пропущено: {skipped}'
+                    else:
+                        category = 'warning'
+                        title = f'Импорт в WB завершён с ошибками'
+                        message = f'Импортировано: {imported}, ошибок: {failed}'
+                        if skipped:
+                            message += f', пропущено: {skipped}'
+                        if errors:
+                            # Показываем первые 3 ошибки
+                            message += '\n' + '\n'.join(errors[:3])
+                            if len(errors) > 3:
+                                message += f'\n... и ещё {len(errors) - 3} ошибок'
+
+                    notif = Notification(
+                        seller_id=seller_id,
+                        category=category,
+                        title=title,
+                        message=message,
+                        link='/auto-import'
+                    )
+                    db.session.add(notif)
+                    db.session.commit()
+
+                except Exception as e:
+                    logger.error(f"Фоновый импорт WB ошибка: {e}", exc_info=True)
+                    try:
+                        notif = Notification(
+                            seller_id=seller_id,
+                            category='error',
+                            title='Ошибка массового импорта WB',
+                            message=str(e)[:500],
+                            link='/auto-import'
+                        )
+                        db.session.add(notif)
+                        db.session.commit()
+                    except Exception:
+                        pass
+
+        thread = threading.Thread(
+            target=_run_background_import,
+            daemon=True,
+            name=f'WBImport-{seller_id}'
+        )
+        thread.start()
+
+        flash(f'Импорт {len(product_ids)} товаров запущен в фоне. Результат появится в уведомлениях.', 'info')
+        return jsonify({
+            'success': True,
+            'background': True,
+            'total': len(product_ids),
+            'message': f'Импорт {len(product_ids)} товаров запущен в фоне'
+        })
 
     @app.route('/auto-import/product/<int:product_id>/import', methods=['POST'])
     @login_required
     def auto_import_single_to_wb(product_id):
-        """Импорт одного товара в WB"""
+        """Импорт одного товара в WB (фоновый с уведомлением)"""
         if not current_user.seller:
             return jsonify({'success': False, 'error': 'Seller not found'}), 403
 
@@ -720,20 +794,69 @@ def register_auto_import_routes(app):
         if not imported_product:
             return jsonify({'success': False, 'error': 'Product not found'}), 404
 
-        # Импортируем товар
-        from services.wb_product_importer import WBProductImporter
-        importer = WBProductImporter(seller)
-        success, error, product = importer.import_product_to_wb(imported_product)
+        product_title = imported_product.title or f'#{imported_product.external_id}'
 
-        if success:
-            flash(f'Товар "{imported_product.title}" успешно импортирован в WB', 'success')
-            return jsonify({
-                'success': True,
-                'product_id': product.id if product else None
-            })
-        else:
-            flash(f'Ошибка импорта: {error}', 'danger')
-            return jsonify({'success': False, 'error': error}), 500
+        # Запускаем импорт в фоне
+        import threading
+        flask_app = app._get_current_object()
+        seller_id = seller.id
+
+        def _run_single_import():
+            with flask_app.app_context():
+                from services.wb_product_importer import WBProductImporter
+                from models import Notification
+                try:
+                    _seller = Seller.query.get(seller_id)
+                    importer = WBProductImporter(_seller)
+                    _product = ImportedProduct.query.get(product_id)
+                    success, error, result_product = importer.import_product_to_wb(_product)
+
+                    if success:
+                        notif = Notification(
+                            seller_id=seller_id,
+                            category='success',
+                            title=f'Товар импортирован в WB',
+                            message=f'"{product_title}" успешно создан на Wildberries',
+                            link='/auto-import'
+                        )
+                    else:
+                        notif = Notification(
+                            seller_id=seller_id,
+                            category='error',
+                            title=f'Ошибка импорта в WB',
+                            message=f'"{product_title}": {error}'[:500],
+                            link='/auto-import'
+                        )
+                    db.session.add(notif)
+                    db.session.commit()
+                except Exception as e:
+                    logger.error(f"Фоновый импорт товара {product_id} ошибка: {e}", exc_info=True)
+                    try:
+                        notif = Notification(
+                            seller_id=seller_id,
+                            category='error',
+                            title=f'Ошибка импорта в WB',
+                            message=f'"{product_title}": {str(e)}'[:500],
+                            link='/auto-import'
+                        )
+                        db.session.add(notif)
+                        db.session.commit()
+                    except Exception:
+                        pass
+
+        thread = threading.Thread(
+            target=_run_single_import,
+            daemon=True,
+            name=f'WBImport-{seller_id}-{product_id}'
+        )
+        thread.start()
+
+        flash(f'Импорт "{product_title}" запущен. Результат появится в уведомлениях.', 'info')
+        return jsonify({
+            'success': True,
+            'background': True,
+            'message': f'Импорт запущен в фоне'
+        })
 
     @app.route('/auto-import/product/<int:product_id>/delete', methods=['POST'])
     @login_required

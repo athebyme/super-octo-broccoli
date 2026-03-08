@@ -289,8 +289,45 @@ class WildberriesAPIClient:
                         error_msg = f"{wb_error} | Детали: {details}"
                     else:
                         error_msg = str(wb_error) if wb_error != error_msg else error_msg
+
+                    # Для 400 Bad Request без деталей — пытаемся дать подсказку
+                    if response.status_code == 400 and error_msg in ('bad request', 'Bad Request', 'API Error 400'):
+                        hints = []
+                        # Анализируем request body для подсказок
+                        if request_body_str:
+                            try:
+                                import json as _json
+                                req_data = _json.loads(request_body_str)
+                                if isinstance(req_data, list) and req_data:
+                                    card = req_data[0] if isinstance(req_data[0], dict) else {}
+                                    variants = card.get('variants', [])
+                                    if variants:
+                                        v = variants[0]
+                                        chars = v.get('characteristics', [])
+                                        if not chars:
+                                            hints.append('нет характеристик')
+                                        if not v.get('brand'):
+                                            hints.append('не указан бренд')
+                                        sizes = v.get('sizes', [])
+                                        if sizes:
+                                            for s in sizes:
+                                                if not s.get('skus') or not s['skus'][0]:
+                                                    hints.append('пустые баркоды (skus)')
+                                                    break
+                                        dims = v.get('dimensions', {})
+                                        if not dims or not dims.get('length'):
+                                            hints.append('не указаны габариты')
+                                    if not card.get('subjectID'):
+                                        hints.append('не указан subjectID (категория)')
+                            except Exception:
+                                pass
+                        if hints:
+                            error_msg = f"bad request (возможные причины: {', '.join(hints)})"
+
                     # Логируем полный ответ для отладки
                     logger.error(f"WB API {response.status_code} full response: {error_data}")
+                    if request_body_str:
+                        logger.error(f"WB API {response.status_code} request body: {request_body_str[:2000]}")
                 except Exception:
                     error_msg = response.text or error_msg
                 raise WBAPIException(error_msg)
