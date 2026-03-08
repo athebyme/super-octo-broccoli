@@ -49,14 +49,19 @@ with app.app_context():
         print(f"⚠️  Не удалось настроить SQLite WAL mode: {e}")
 
     # Проверяем, есть ли администратор
-    admin_exists = User.query.filter_by(is_admin=True).first()
+    username = os.environ.get('ADMIN_USERNAME', 'admin')
+    email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
+    password = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
-    if not admin_exists:
+    # Ищем по username, по email или первого админа
+    admin_user = (
+        User.query.filter_by(username=username).first()
+        or User.query.filter_by(email=email).first()
+        or User.query.filter_by(is_admin=True).first()
+    )
+
+    if not admin_user:
         # Создаем дефолтного администратора
-        username = os.environ.get('ADMIN_USERNAME', 'admin')
-        email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
-        password = os.environ.get('ADMIN_PASSWORD', 'admin123')
-
         admin = User(
             username=username,
             email=email,
@@ -70,10 +75,27 @@ with app.app_context():
 
         print(f"✅ Создан администратор: {username}")
         print(f"   Email: {email}")
-        print(f"   Пароль: {password}")
         print(f"   ⚠️  ВАЖНО: Смените пароль после первого входа!")
     else:
-        print(f"✅ Администратор уже существует: {admin_exists.username}")
+        # Синхронизируем username, пароль и email из переменных окружения
+        updated = False
+        if admin_user.username != username:
+            admin_user.username = username
+            updated = True
+        if not admin_user.check_password(password):
+            admin_user.set_password(password)
+            updated = True
+        if email and admin_user.email != email:
+            admin_user.email = email
+            updated = True
+        if not admin_user.is_admin:
+            admin_user.is_admin = True
+            updated = True
+        if updated:
+            db.session.commit()
+            print(f"✅ Администратор '{username}' обновлён из переменных окружения")
+        else:
+            print(f"✅ Администратор уже существует: {admin_user.username}")
 PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
