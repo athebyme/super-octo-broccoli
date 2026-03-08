@@ -276,11 +276,12 @@
         border-top: 1px solid var(--border);
     }
     .login-footer-label {
-        font-size: 11px;
+        font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.1em;
         color: var(--text-muted);
         margin-bottom: 12px;
+        font-weight: 600;
     }
     .login-marketplaces {
         display: flex;
@@ -289,29 +290,34 @@
     .login-mp {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
+        gap: 8px;
+        padding: 8px 14px;
+        background: var(--bg);
         border: 1px solid var(--border);
-        border-radius: 4px;
+        border-radius: 8px;
         font-size: 12px;
         font-weight: 500;
-        color: var(--text-secondary);
-        transition: border-color 0.2s, transform 0.2s;
+        color: var(--text);
+        transition: all 0.25s ease;
+        cursor: default;
     }
     .login-mp:hover {
         border-color: var(--text-muted);
-        transform: translateY(-1px);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.06);
     }
     .login-mp-dot {
-        width: 6px;
-        height: 6px;
+        width: 7px;
+        height: 7px;
         border-radius: 50%;
+        box-shadow: 0 0 6px currentColor;
     }
 
     .login-copyright {
-        margin-top: 32px;
+        margin-top: 24px;
         font-size: 11px;
         color: var(--text-muted);
+        letter-spacing: 0.02em;
     }
 
     /* Entrance animations */
@@ -395,6 +401,37 @@
         background: linear-gradient(90deg, transparent, rgba(196,93,62,0.6), transparent);
         animation: lineSweep 4s ease-in-out infinite;
     }
+
+    /* Rotating word */
+    .login-word-rotator {
+        display: inline-block;
+        position: relative;
+        overflow: hidden;
+        vertical-align: bottom;
+        height: 1.15em;
+    }
+    .login-word-rotator em {
+        display: block;
+        color: var(--accent);
+        font-style: italic;
+        transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        position: absolute;
+        left: 0;
+        white-space: nowrap;
+    }
+    .login-word-rotator em.word-enter {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+    .login-word-rotator em.word-active {
+        transform: translateY(0);
+        opacity: 1;
+        position: relative;
+    }
+    .login-word-rotator em.word-exit {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
 </style>
 {% endblock %}
 
@@ -429,7 +466,12 @@
             <h1 class="anim-fade-right anim-delay-2">
                 Управляйте<br>
                 продажами<br>
-                <em>эффективно</em>
+                <span class="login-word-rotator" x-data="wordRotator()" x-init="start()">
+                    <template x-for="(w, i) in words" :key="i">
+                        <em :class="{ 'word-active': i === current, 'word-exit': i === prev, 'word-enter': i !== current && i !== prev }"
+                            x-text="w" x-show="i === current || i === prev"></em>
+                    </template>
+                </span>
             </h1>
             <p class="anim-fade-right anim-delay-3">
                 Единая платформа для аналитики, ценообразования и управления товарами на маркетплейсах. Wildberries, Ozon, Яндекс Маркет.
@@ -486,15 +528,15 @@
                 <div class="login-footer-label">Маркетплейсы</div>
                 <div class="login-marketplaces">
                     <span class="login-mp">
-                        <span class="login-mp-dot" style="background:#CB11AB"></span>
+                        <span class="login-mp-dot" style="background:#CB11AB;color:#CB11AB"></span>
                         Wildberries
                     </span>
                     <span class="login-mp">
-                        <span class="login-mp-dot" style="background:#005BFF"></span>
+                        <span class="login-mp-dot" style="background:#005BFF;color:#005BFF"></span>
                         Ozon
                     </span>
                     <span class="login-mp">
-                        <span class="login-mp-dot" style="background:#FFCC00"></span>
+                        <span class="login-mp-dot" style="background:#FFCC00;color:#FFCC00"></span>
                         Яндекс
                     </span>
                 </div>
@@ -504,4 +546,28 @@
         </div>
     </div>
 </div>
+
+<script>
+function wordRotator() {
+    return {
+        words: [
+            'эффективно', 'прибыльно', 'умнее', 'быстрее', 'удобно',
+            'масштабно', 'точно', 'грамотно', 'стабильно', 'безопасно',
+            'наглядно', 'автоматически', 'легко', 'системно', 'гибко',
+            'прозрачно', 'надёжно', 'уверенно', 'разумно', 'продуктивно',
+            'стратегически', 'без стресса', 'с удовольствием', 'на максимум',
+            'без ошибок', 'с AI', 'круглосуточно', 'по-новому', 'комплексно',
+            'с аналитикой', 'профессионально', 'современно',
+        ],
+        current: 0,
+        prev: -1,
+        start() {
+            setInterval(() => {
+                this.prev = this.current;
+                this.current = (this.current + 1) % this.words.length;
+            }, 2500);
+        }
+    }
+}
+</script>
 {% endblock %}
