@@ -93,7 +93,7 @@ class WBProductImporter:
                 sizes_list = []
                 has_real_sizes = False
 
-            # Формируем артикул
+            # Формируем артикул: id-<айди товара в базе>-<айди продавца>
             from services.auto_import_manager import AutoImportManager
             settings = self.seller.auto_import_settings
             if settings and settings.vendor_code_pattern:
@@ -101,7 +101,7 @@ class WBProductImporter:
                 vendor_code = pattern.replace('{product_id}', str(imported_product.external_id))
                 vendor_code = vendor_code.replace('{supplier_code}', settings.supplier_code or '')
             else:
-                vendor_code = imported_product.external_vendor_code
+                vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 
             # Формируем sizes для WB API v2
             # WB различает:
@@ -1806,7 +1806,7 @@ class WBProductImporter:
                 issues.append({'field': 'barcodes', 'level': 'warning', 'message': 'Нет баркодов'})
 
         # --- Vendor code ---
-        vendor_code = imported_product.external_vendor_code or f'SP-{imported_product.id}'
+        vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 
         # --- Characteristics ---
         chars_dict = {}

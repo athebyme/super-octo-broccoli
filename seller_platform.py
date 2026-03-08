@@ -9,7 +9,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, render_template, redirect, url_for, flash, request, abort
+from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from sqlalchemy import or_
 
@@ -32,6 +32,7 @@ from models import (
     AnalyticsSnapshot, ProductAnalytics, FinanceSnapshot,
     CategoryMapping, ProductCategoryCorrection,
     CardMergeHistory, SellerReport,
+    BackgroundJob, Notification,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -5749,7 +5750,151 @@ def profile_page():
 @login_required
 def notifications_page():
     """Центр уведомлений"""
+    if not current_user.seller:
+        return redirect(url_for('index'))
     return render_template('notifications.html')
+
+
+# ============= API: Уведомления =============
+
+@app.route('/api/notifications')
+@login_required
+def api_notifications_list():
+    """Список уведомлений текущего продавца."""
+    if not current_user.seller:
+        return jsonify([]), 200
+    seller_id = current_user.seller.id
+    limit = request.args.get('limit', 50, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    category = request.args.get('category', '').strip()
+    unread_only = request.args.get('unread', '') == '1'
+
+    q = Notification.query.filter_by(seller_id=seller_id)
+    if unread_only:
+        q = q.filter_by(is_read=False)
+    if category and category in ('info', 'success', 'warning', 'error', 'promo'):
+        q = q.filter_by(category=category)
+    q = q.order_by(Notification.created_at.desc())
+    total = q.count()
+    items = q.offset(offset).limit(min(limit, 100)).all()
+    unread_count = Notification.query.filter_by(seller_id=seller_id, is_read=False).count()
+    return jsonify({
+        'items': [n.to_dict() for n in items],
+        'total': total,
+        'unread_count': unread_count,
+    })
+
+
+@app.route('/api/notifications/unread-count')
+@login_required
+def api_notifications_unread_count():
+    """Количество непрочитанных уведомлений."""
+    if not current_user.seller:
+        return jsonify({'unread_count': 0})
+    count = Notification.query.filter_by(seller_id=current_user.seller.id, is_read=False).count()
+    return jsonify({'unread_count': count})
+
+
+@app.route('/api/notifications/<int:notif_id>/read', methods=['POST'])
+@login_required
+def api_notification_mark_read(notif_id):
+    """Пометить уведомление как прочитанное."""
+    if not current_user.seller:
+        return jsonify({'error': 'forbidden'}), 403
+    n = Notification.query.filter_by(id=notif_id, seller_id=current_user.seller.id).first_or_404()
+    n.is_read = True
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/notifications/read-all', methods=['POST'])
+@login_required
+def api_notifications_read_all():
+    """Пометить все уведомления как прочитанные."""
+    if not current_user.seller:
+        return jsonify({'error': 'forbidden'}), 403
+    Notification.query.filter_by(seller_id=current_user.seller.id, is_read=False).update({'is_read': True})
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/notifications/<int:notif_id>', methods=['DELETE'])
+@login_required
+def api_notification_delete(notif_id):
+    """Удалить уведомление."""
+    if not current_user.seller:
+        return jsonify({'error': 'forbidden'}), 403
+    n = Notification.query.filter_by(id=notif_id, seller_id=current_user.seller.id).first_or_404()
+    db.session.delete(n)
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/notifications/clear', methods=['POST'])
+@login_required
+def api_notifications_clear():
+    """Удалить все прочитанные уведомления."""
+    if not current_user.seller:
+        return jsonify({'error': 'forbidden'}), 403
+    Notification.query.filter_by(seller_id=current_user.seller.id, is_read=True).delete()
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ============= API: Фоновые задачи =============
+
+@app.route('/api/jobs/<job_uid>')
+@login_required
+def api_job_status(job_uid):
+    """Статус фоновой задачи."""
+    if not current_user.seller:
+        return jsonify({'error': 'forbidden'}), 403
+    job = BackgroundJob.query.filter_by(
+        job_uid=job_uid, seller_id=current_user.seller.id
+    ).first_or_404()
+    return jsonify(job.to_dict())
+
+
+@app.route('/api/jobs/active')
+@login_required
+def api_jobs_active():
+    """Активные задачи текущего продавца."""
+    if not current_user.seller:
+        return jsonify({'jobs': []})
+    jobs = BackgroundJob.query.filter(
+        BackgroundJob.seller_id == current_user.seller.id,
+        BackgroundJob.status.in_(['pending', 'running'])
+    ).order_by(BackgroundJob.created_at.desc()).limit(10).all()
+    return jsonify({'jobs': [j.to_dict() for j in jobs]})
+
+
+@app.route('/api/jobs/recent')
+@login_required
+def api_jobs_recent():
+    """Недавние задачи (последние 20)."""
+    if not current_user.seller:
+        return jsonify({'jobs': []})
+    jobs = BackgroundJob.query.filter_by(
+        seller_id=current_user.seller.id
+    ).order_by(BackgroundJob.created_at.desc()).limit(20).all()
+    return jsonify({'jobs': [j.to_dict() for j in jobs]})
+
+
+# ============= Утилита: создание уведомления =============
+
+def create_notification(seller_id, category, title, message, link=None, metadata=None):
+    """Создать уведомление для продавца."""
+    n = Notification(
+        seller_id=seller_id,
+        category=category,
+        title=title,
+        message=message,
+        link=link,
+        metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+    )
+    db.session.add(n)
+    db.session.commit()
+    return n
 
 
 if __name__ == '__main__':
