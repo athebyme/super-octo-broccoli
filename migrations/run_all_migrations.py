@@ -204,6 +204,16 @@ def migrate(db_path):
             existing_sp = get_existing_columns(cursor, 'supplier_products')
             sp_columns = [
                 ("resolved_brand_id", "INTEGER REFERENCES brands(id)"),
+                # AI parser columns
+                ("ai_parsed_data_json", "TEXT"),
+                ("ai_parsed_at", "DATETIME"),
+                ("ai_model_used", "VARCHAR(100)"),
+                ("ai_marketplace_json", "TEXT"),
+                ("description_source", "VARCHAR(50)"),
+                # Marketplace columns
+                ("marketplace_fields_json", "TEXT"),
+                ("marketplace_validation_status", "VARCHAR(50)"),
+                ("marketplace_fill_pct", "FLOAT"),
             ]
             for col_name, col_type in sp_columns:
                 if add_column_if_missing(cursor, 'supplier_products', col_name, col_type, existing_sp):
@@ -212,6 +222,27 @@ def migrate(db_path):
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_sp_resolved_brand ON supplier_products(resolved_brand_id)')
             except sqlite3.OperationalError:
                 pass
+
+        # ============================================================
+        # Миграция suppliers (AI parser + description columns)
+        # ============================================================
+        print("\n📋 Таблица: suppliers (AI parser)")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='suppliers'")
+        if cursor.fetchone():
+            existing_sup = get_existing_columns(cursor, 'suppliers')
+            sup_columns = [
+                ("description_file_url", "VARCHAR(500)"),
+                ("description_file_delimiter", "VARCHAR(5) DEFAULT ';'"),
+                ("description_file_encoding", "VARCHAR(20) DEFAULT 'cp1251'"),
+                ("last_description_sync_at", "DATETIME"),
+                ("last_description_sync_status", "VARCHAR(50)"),
+                ("ai_parsing_instruction", "TEXT"),
+            ]
+            for col_name, col_type in sup_columns:
+                if add_column_if_missing(cursor, 'suppliers', col_name, col_type, existing_sup):
+                    total_added += 1
 
         # ============================================================
         # Миграция ai_history
@@ -249,6 +280,44 @@ def migrate(db_path):
                 print(f"  ⚠️  Индекс: {e}")
         else:
             print("   ⏭️  Таблица не существует (будет создана при первом использовании)")
+
+        # ============================================================
+        # Создание таблицы ai_parse_jobs (если не существует)
+        # ============================================================
+        print("\n📋 Таблица: ai_parse_jobs")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_parse_jobs'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE ai_parse_jobs (
+                    id VARCHAR(36) PRIMARY KEY,
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+                    admin_user_id INTEGER,
+                    job_type VARCHAR(30) DEFAULT 'parse',
+                    status VARCHAR(20) DEFAULT 'pending',
+                    total INTEGER DEFAULT 0,
+                    processed INTEGER DEFAULT 0,
+                    succeeded INTEGER DEFAULT 0,
+                    failed INTEGER DEFAULT 0,
+                    current_product_title VARCHAR(200),
+                    model_used VARCHAR(100),
+                    results TEXT,
+                    error_message TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ai_parse_jobs_supplier ON ai_parse_jobs(supplier_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ai_parse_jobs_status ON ai_parse_jobs(status)")
+            print("  ✅ Таблица ai_parse_jobs создана")
+            total_added += 1
+        else:
+            print("  ⏭️  Таблица уже существует")
+            # Добавляем model_used если нет
+            existing_ajc = get_existing_columns(cursor, 'ai_parse_jobs')
+            if add_column_if_missing(cursor, 'ai_parse_jobs', 'model_used', 'VARCHAR(100)', existing_ajc):
+                total_added += 1
 
         # ============================================================
         # Создание таблицы enrichment_jobs (если не существует)

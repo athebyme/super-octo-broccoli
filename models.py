@@ -3040,3 +3040,239 @@ class ProhibitedWord(db.Model):
 
     def __repr__(self):
         return f'<ProhibitedWord "{self.word}" → "{self.replacement}" ({self.scope})>'
+
+
+class AnalyticsSnapshot(db.Model):
+    """Снимок агрегированной аналитики продавца за период (кэш данных из WB Analytics API)"""
+    __tablename__ = 'analytics_snapshots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+
+    # KPI агрегаты
+    revenue = db.Column(db.Float, default=0)  # ordersSumRub / buyoutsSumRub
+    orders_count = db.Column(db.Integer, default=0)
+    buyouts_count = db.Column(db.Integer, default=0)
+    buyouts_sum = db.Column(db.Float, default=0)
+    cancel_count = db.Column(db.Integer, default=0)
+    cancel_sum = db.Column(db.Float, default=0)
+    open_card_count = db.Column(db.Integer, default=0)
+    add_to_cart_count = db.Column(db.Integer, default=0)
+
+    # Конверсии (средние)
+    avg_add_to_cart_percent = db.Column(db.Float)
+    avg_cart_to_order_percent = db.Column(db.Float)
+    avg_buyout_percent = db.Column(db.Float)
+
+    # Сравнение с предыдущим периодом (динамика в %)
+    revenue_dynamics = db.Column(db.Float)
+    orders_dynamics = db.Column(db.Float)
+    buyouts_dynamics = db.Column(db.Float)
+
+    # Данные для графиков (JSON массивы по дням)
+    daily_data = db.Column(db.JSON)  # [{date, orderSum, orderCount, buyoutSum, buyoutCount, openCount, cartCount}, ...]
+
+    # Топ товаров (JSON)
+    top_products = db.Column(db.JSON)  # [{nmId, title, vendorCode, brandName, orderSum, orderCount, buyoutSum}, ...]
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller', backref=db.backref('analytics_snapshots', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_analytics_snapshot_seller_period', 'seller_id', 'period_start', 'period_end'),
+    )
+
+    def to_dict(self):
+        avg_check = self.revenue / self.orders_count if self.orders_count else 0
+        return {
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'kpi': {
+                'revenue': self.revenue or 0,
+                'orders': self.orders_count or 0,
+                'avgCheck': round(avg_check, 2),
+                'buyouts': self.buyouts_count or 0,
+                'cancels': self.cancel_count or 0,
+                'openCardCount': self.open_card_count or 0,
+                'addToCartCount': self.add_to_cart_count or 0,
+            },
+            'conversions': {
+                'addToCartPercent': self.avg_add_to_cart_percent or 0,
+                'cartToOrderPercent': self.avg_cart_to_order_percent or 0,
+                'buyoutPercent': self.avg_buyout_percent or 0,
+            },
+            'dynamics': {
+                'revenue': self.revenue_dynamics or 0,
+                'orders': self.orders_dynamics or 0,
+                'buyouts': self.buyouts_dynamics or 0,
+            },
+            'dailyData': self.daily_data or [],
+            'topProducts': self.top_products or [],
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AnalyticsSnapshot seller={self.seller_id} {self.period_start}..{self.period_end}>'
+
+
+class ProductAnalytics(db.Model):
+    """Аналитика по отдельному товару из WB Sales Funnel API"""
+    __tablename__ = 'product_analytics'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    nm_id = db.Column(db.BigInteger, nullable=False, index=True)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+
+    # Продуктовые данные
+    title = db.Column(db.String(500))
+    vendor_code = db.Column(db.String(100))
+    brand_name = db.Column(db.String(200))
+    subject_name = db.Column(db.String(200))
+
+    # Статистика за период
+    open_card_count = db.Column(db.Integer, default=0)
+    add_to_cart_count = db.Column(db.Integer, default=0)
+    orders_count = db.Column(db.Integer, default=0)
+    orders_sum = db.Column(db.Float, default=0)
+    buyouts_count = db.Column(db.Integer, default=0)
+    buyouts_sum = db.Column(db.Float, default=0)
+    cancel_count = db.Column(db.Integer, default=0)
+    cancel_sum = db.Column(db.Float, default=0)
+
+    # Конверсии
+    add_to_cart_percent = db.Column(db.Float)
+    cart_to_order_percent = db.Column(db.Float)
+    buyout_percent = db.Column(db.Float)
+
+    # Остатки
+    stocks_wb = db.Column(db.Integer, default=0)
+    stocks_mp = db.Column(db.Integer, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller', backref=db.backref('product_analytics', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_product_analytics_seller_nm', 'seller_id', 'nm_id', 'period_start'),
+    )
+
+    def to_dict(self):
+        return {
+            'nmId': self.nm_id,
+            'title': self.title,
+            'vendorCode': self.vendor_code,
+            'brandName': self.brand_name,
+            'subjectName': self.subject_name,
+            'openCardCount': self.open_card_count or 0,
+            'addToCartCount': self.add_to_cart_count or 0,
+            'ordersCount': self.orders_count or 0,
+            'ordersSum': self.orders_sum or 0,
+            'buyoutsCount': self.buyouts_count or 0,
+            'buyoutsSum': self.buyouts_sum or 0,
+            'cancelCount': self.cancel_count or 0,
+            'cancelSum': self.cancel_sum or 0,
+            'conversions': {
+                'addToCartPercent': self.add_to_cart_percent or 0,
+                'cartToOrderPercent': self.cart_to_order_percent or 0,
+                'buyoutPercent': self.buyout_percent or 0,
+            },
+            'stocks': {
+                'wb': self.stocks_wb or 0,
+                'mp': self.stocks_mp or 0,
+            },
+        }
+
+    def __repr__(self):
+        return f'<ProductAnalytics nm={self.nm_id} seller={self.seller_id}>'
+
+
+class FinanceSnapshot(db.Model):
+    """Кэшированный снимок финансовых данных продавца из WB reportDetailByPeriod"""
+    __tablename__ = 'finance_snapshots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+
+    # Агрегаты
+    sales_total = db.Column(db.Float, default=0)          # Выручка (retail_price_withdisc_rub за продажи)
+    for_pay_total = db.Column(db.Float, default=0)         # К перечислению (ppvz_for_pay)
+    returns_total = db.Column(db.Float, default=0)          # Возвраты (ppvz_for_pay < 0)
+    commission_total = db.Column(db.Float, default=0)       # Комиссия WB
+    logistics_total = db.Column(db.Float, default=0)        # Логистика (delivery_rub + rebill_logistic_cost)
+    storage_total = db.Column(db.Float, default=0)          # Хранение
+    penalties_total = db.Column(db.Float, default=0)        # Штрафы
+    deductions_total = db.Column(db.Float, default=0)       # Удержания
+    acceptance_total = db.Column(db.Float, default=0)       # Приёмка
+    additional_payment_total = db.Column(db.Float, default=0)  # Доплаты
+
+    # Данные для графиков — по неделям [{week, forPay, commission, logistics, storage}, ...]
+    weekly_data = db.Column(db.JSON)
+
+    # Последние операции — [{date, type, description, amount, nmId}, ...]
+    recent_transactions = db.Column(db.JSON)
+
+    # Общее кол-во строк в отчёте
+    report_rows_count = db.Column(db.Integer, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller', backref=db.backref('finance_snapshots', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_finance_snapshot_seller_period', 'seller_id', 'period_start', 'period_end'),
+    )
+
+    def to_dict(self):
+        # ppvz_for_pay уже рассчитан WB за вычетом комиссии,
+        # поэтому commission НЕ включаем в expenses (иначе двойной учёт).
+        income = self.for_pay_total or 0          # положительные ppvz_for_pay
+        returns = abs(self.returns_total or 0)     # отрицательные ppvz_for_pay (возвраты)
+
+        # Доп. расходы, которые WB вычитает отдельно от ppvz_for_pay
+        expenses = (
+            (self.logistics_total or 0) +
+            (self.storage_total or 0) +
+            (self.penalties_total or 0) +
+            (self.deductions_total or 0) +
+            (self.acceptance_total or 0)
+        )
+
+        # Итого к перечислению = доход − возвраты − доп.расходы
+        net_payout = income - returns - expenses
+
+        return {
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'balance': {
+                'total': round(net_payout, 2),
+                'income': round(income, 2),
+                'expenses': round(expenses, 2),
+                'returns': round(returns, 2),
+            },
+            'breakdown': {
+                'salesTotal': round(self.sales_total or 0, 2),
+                'forPayTotal': round(self.for_pay_total or 0, 2),
+                'returnsTotal': round(abs(self.returns_total or 0), 2),
+                'commission': round(self.commission_total or 0, 2),
+                'logistics': round(self.logistics_total or 0, 2),
+                'storage': round(self.storage_total or 0, 2),
+                'penalties': round(self.penalties_total or 0, 2),
+                'deductions': round(self.deductions_total or 0, 2),
+                'acceptance': round(self.acceptance_total or 0, 2),
+                'additionalPayment': round(self.additional_payment_total or 0, 2),
+            },
+            'weeklyData': self.weekly_data or [],
+            'recentTransactions': self.recent_transactions or [],
+            'reportRowsCount': self.report_rows_count or 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<FinanceSnapshot seller={self.seller_id} {self.period_start}..{self.period_end}>'

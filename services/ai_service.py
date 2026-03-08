@@ -1557,11 +1557,26 @@ class AIClient:
             except requests.exceptions.HTTPError as e:
                 status = e.response.status_code
                 body = e.response.text[:300]
-                if status == 401 or status == 403:
+                if status in (401, 403):
+                    # Для Cloud.ru пробуем сбросить токен и повторить (токен мог протухнуть)
+                    if self._token_manager and attempt < max_retries:
+                        logger.warning(f"⚠️ HTTP {status} от {self.config.provider.value}, сбрасываем токен и пробуем снова...")
+                        self._token_manager._access_token = None
+                        self._token_manager._token_expires_at = 0
+                        import time
+                        time.sleep(2)
+                        # Получаем новый токен
+                        auth_header = self._get_auth_header()
+                        if auth_header:
+                            headers = {'Authorization': auth_header}
+                            continue
                     self.last_error = (
                         f"Ошибка авторизации AI (HTTP {status}): проверьте API-ключ "
                         f"для {self.config.provider.value}"
                     )
+                    # Добавляем тело ответа для отладки
+                    if body:
+                        self.last_error += f" (ответ: {body[:100]})"
                 elif status == 429:
                     self.last_error = (
                         f"Превышен лимит запросов AI (HTTP 429) — "

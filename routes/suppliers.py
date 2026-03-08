@@ -1107,13 +1107,21 @@ def register_supplier_routes(app):
 
         stats = SupplierService.get_product_stats(supplier_id)
 
-        parsed_count = SupplierProduct.query.filter(
-            SupplierProduct.supplier_id == supplier_id,
-            SupplierProduct.ai_parsed_data_json.isnot(None)
-        ).count()
+        try:
+            parsed_count = SupplierProduct.query.filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.ai_parsed_data_json.isnot(None)
+            ).count()
+        except Exception:
+            parsed_count = 0
 
-        active_jobs = SupplierService.get_active_ai_parse_jobs(supplier_id)
-        recent_jobs = SupplierService.get_recent_ai_parse_jobs(supplier_id, limit=5)
+        try:
+            active_jobs = SupplierService.get_active_ai_parse_jobs(supplier_id)
+            recent_jobs = SupplierService.get_recent_ai_parse_jobs(supplier_id, limit=5)
+        except Exception as e:
+            app.logger.warning(f"ai_parse_jobs query failed (table may not exist): {e}")
+            active_jobs = []
+            recent_jobs = []
 
         # Модели для выбора в парсере
         from services.ai_service import get_available_models

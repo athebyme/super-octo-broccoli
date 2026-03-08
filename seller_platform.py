@@ -9,20 +9,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, render_template, redirect, url_for, flash, request, send_file, abort
+from flask import Flask, render_template, redirect, url_for, flash, request, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from sqlalchemy import or_
 
-from app import (
-    DEFAULT_COLUMN_INDICES,
-    column_letters_to_indices,
-    compute_profit_table,
-    gather_columns,
-    read_statistics,
-    save_processed_report,
-)
 from models import (
-    db, User, Seller, SellerReport, Product, APILog, ProductStock,
+    db, User, Seller, Product, APILog, ProductStock,
     CardEditHistory, BulkEditHistory, PriceMonitorSettings,
     PriceHistory, SuspiciousPriceChange, ProductSyncSettings,
     UserActivity, AdminAuditLog, SystemSettings,
@@ -30,7 +22,16 @@ from models import (
     PricingSettings, AutoImportSettings,
     Supplier, SupplierProduct, SellerSupplier,
     Marketplace, MarketplaceDirectory, ImportedProduct,
-    log_admin_action, log_user_activity
+    log_admin_action, log_user_activity,
+    AIParseJob, EnrichmentJob, AIHistory,
+    BlockedCard, ShadowedCard, BlockedCardsSyncSettings,
+    MarketplaceCategory, MarketplaceCategoryCharacteristic,
+    MarketplaceConnection, MarketplaceSyncJob,
+    ParsingLog, Brand, BrandAlias, MarketplaceBrand,
+    BrandCategoryLink, ProhibitedWord,
+    AnalyticsSnapshot, ProductAnalytics, FinanceSnapshot,
+    CategoryMapping, ProductCategoryCorrection,
+    CardMergeHistory, SellerReport,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -204,60 +205,6 @@ def ensure_storage_roots() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
-def get_seller_storage_dirs(seller_id: int) -> tuple[Path, Path]:
-    ensure_storage_roots()
-    upload_dir = UPLOAD_ROOT / f'seller_{seller_id}'
-    processed_dir = PROCESSED_ROOT / f'seller_{seller_id}'
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir, processed_dir
-
-
-def save_uploaded_file(file_storage, destination: Path) -> Optional[Path]:
-    if not file_storage or not file_storage.filename:
-        return None
-    filename = Path(file_storage.filename).name
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-    safe_name = f'{timestamp}_{filename}'
-    target = destination / safe_name
-    file_storage.save(target)
-    return target
-
-
-def build_preview_data(
-    statistics_path: Optional[str],
-    selected_columns: Optional[List[str]],
-) -> tuple[List[str], List[dict], List[str], Optional[str]]:
-    if not statistics_path or not Path(statistics_path).exists():
-        return [], [], selected_columns or [], None
-    try:
-        df = read_statistics(Path(statistics_path))
-        available_columns = gather_columns(df)
-        resolved_columns = selected_columns or column_letters_to_indices(
-            df.columns,
-            DEFAULT_COLUMN_INDICES,
-        )
-        preview_rows: List[dict] = []
-        if resolved_columns:
-            preview_rows = (
-                df[resolved_columns]
-                .head(10)
-                .fillna('')
-                .to_dict(orient='records')
-            )
-        return available_columns, preview_rows, resolved_columns, None
-    except Exception as exc:
-        return [], [], selected_columns or [], str(exc)
-
-
-def get_latest_report(seller_id: int) -> Optional[SellerReport]:
-    return (
-        SellerReport.query.filter_by(seller_id=seller_id)
-        .order_by(SellerReport.created_at.desc())
-        .first()
-    )
-
-
 @app.after_request
 def after_request(response):
     """Устанавливаем правильную кодировку UTF-8 для всех ответов"""
@@ -274,59 +221,6 @@ def ensure_storage_roots() -> None:
     for folder in (UPLOAD_ROOT, PROCESSED_ROOT, DATA_ROOT):
         folder.mkdir(parents=True, exist_ok=True)
 
-
-def get_seller_storage_dirs(seller_id: int) -> tuple[Path, Path]:
-    ensure_storage_roots()
-    upload_dir = UPLOAD_ROOT / f'seller_{seller_id}'
-    processed_dir = PROCESSED_ROOT / f'seller_{seller_id}'
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    processed_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir, processed_dir
-
-
-def save_uploaded_file(file_storage, destination: Path) -> Optional[Path]:
-    if not file_storage or not file_storage.filename:
-        return None
-    filename = Path(file_storage.filename).name
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-    safe_name = f'{timestamp}_{filename}'
-    target = destination / safe_name
-    file_storage.save(target)
-    return target
-
-
-def build_preview_data(
-    statistics_path: Optional[str],
-    selected_columns: Optional[List[str]],
-) -> tuple[List[str], List[dict], List[str], Optional[str]]:
-    if not statistics_path or not Path(statistics_path).exists():
-        return [], [], selected_columns or [], None
-    try:
-        df = read_statistics(Path(statistics_path))
-        available_columns = gather_columns(df)
-        resolved_columns = selected_columns or column_letters_to_indices(
-            df.columns,
-            DEFAULT_COLUMN_INDICES,
-        )
-        preview_rows: List[dict] = []
-        if resolved_columns:
-            preview_rows = (
-                df[resolved_columns]
-                .head(10)
-                .fillna('')
-                .to_dict(orient='records')
-            )
-        return available_columns, preview_rows, resolved_columns, None
-    except Exception as exc:
-        return [], [], selected_columns or [], str(exc)
-
-
-def get_latest_report(seller_id: int) -> Optional[SellerReport]:
-    return (
-        SellerReport.query.filter_by(seller_id=seller_id)
-        .order_by(SellerReport.created_at.desc())
-        .first()
-    )
 
 
 # УДАЛЕНО: Функция summarise_card использовалась только в старом роуте /cards
@@ -437,153 +331,23 @@ def logout():
 @login_required
 def dashboard():
     """Главная страница - дашборд продавца"""
-    latest_report = None
-    summary = None
-    latest_filename = None
     products_count = 0
     api_logs_count = 0
     if current_user.seller:
-        latest_report = get_latest_report(current_user.seller.id)
-        if latest_report:
-            summary = latest_report.summary or {}
-            processed_path = Path(latest_report.processed_path)
-            latest_filename = processed_path.name if processed_path.exists() else None
         products_count = Product.query.filter_by(seller_id=current_user.seller.id).count()
         api_logs_count = APILog.query.filter_by(seller_id=current_user.seller.id).count()
 
     return render_template(
         'dashboard.html',
         user=current_user,
-        latest_report=latest_report,
-        summary=summary,
-        latest_filename=latest_filename,
         products_count=products_count,
         api_logs_count=api_logs_count,
     )
 
 
-@app.route('/reports', methods=['GET', 'POST'])
-@login_required
-def reports():
-    if not current_user.seller:
-        if current_user.is_admin:
-            flash('Создайте продавца в админ-панели и войдите под его учётной записью, чтобы работать с отчётами.', 'info')
-            return redirect(url_for('admin_panel'))
-        flash('Для работы с отчётами обратитесь к администратору.', 'warning')
-        return redirect(url_for('dashboard'))
-
-    seller = current_user.seller
-    upload_dir, processed_dir = get_seller_storage_dirs(seller.id)
-
-    latest_report = get_latest_report(seller.id)
-    statistics_path = latest_report.statistics_path if latest_report else None
-    price_path = latest_report.price_path if latest_report else None
-    selected_columns: List[str] = list(latest_report.selected_columns or []) if latest_report else []
-
-    if request.method == 'POST':
-        selected_columns = request.form.getlist('columns') or selected_columns
-        stat_file = request.files.get('statistics')
-        price_file = request.files.get('prices')
-
-        new_stat_path = save_uploaded_file(stat_file, upload_dir)
-        new_price_path = save_uploaded_file(price_file, upload_dir)
-
-        stat_path = new_stat_path or statistics_path
-        price_path_effective = new_price_path or price_path
-
-        if not stat_path or not Path(stat_path).exists():
-            flash('Загрузите отчёт Wildberries (xlsx).', 'warning')
-            return redirect(url_for('reports'))
-
-        if not price_path_effective or not Path(price_path_effective).exists():
-            flash('Загрузите прайс поставщика (csv).', 'warning')
-            return redirect(url_for('reports'))
-
-        try:
-            df, _, summary = compute_profit_table(
-                Path(stat_path),
-                Path(price_path_effective),
-                selected_columns or None,
-            )
-        except Exception as exc:
-            flash(f'Ошибка обработки: {exc}', 'danger')
-            return redirect(url_for('reports'))
-
-        try:
-            processed_path = save_processed_report(
-                df,
-                summary,
-                output_dir=processed_dir,
-            )
-            report = SellerReport(
-                seller_id=seller.id,
-                statistics_path=str(stat_path),
-                price_path=str(price_path_effective),
-                processed_path=str(processed_path),
-                selected_columns=selected_columns or [],
-                summary=summary,
-            )
-            db.session.add(report)
-            db.session.commit()
-        except Exception as exc:
-            db.session.rollback()
-            flash(f'Не удалось сохранить отчёт: {exc}', 'danger')
-            return redirect(url_for('reports'))
-
-        flash('Отчёт обновлён.', 'success')
-        return redirect(url_for('reports'))
-
-    available_columns, preview_rows, selected_columns, preview_error = build_preview_data(
-        statistics_path,
-        selected_columns,
-    )
-    if preview_error:
-        flash(f'Не удалось подготовить предпросмотр: {preview_error}', 'warning')
-
-    reports_history = (
-        SellerReport.query.filter_by(seller_id=seller.id)
-        .order_by(SellerReport.created_at.desc())
-        .limit(10)
-        .all()
-    )
-
-    return render_template(
-        'reports.html',
-        seller=seller,
-        latest_report=latest_report,
-        reports=reports_history,
-        available_columns=available_columns,
-        selected_columns=selected_columns,
-        preview_rows=preview_rows,
-        statistics_ready=bool(statistics_path and Path(statistics_path).exists()),
-        price_ready=bool(price_path and Path(price_path).exists()),
-        statistics_path=statistics_path,
-        price_path=price_path,
-    )
-
-
-
 
 # УДАЛЕНО: Старый роут /cards заменен на /products (products_list)
-# Новая функциональность находится в products_list() с улучшенными фильтрами и пагинацией
-
-@app.route('/reports/<int:report_id>/download')
-@login_required
-def download_report(report_id: int):
-    if not current_user.seller:
-        flash('Недостаточно прав для скачивания отчёта.', 'warning')
-        return redirect(url_for('dashboard'))
-
-    report = SellerReport.query.get_or_404(report_id)
-    if report.seller_id != current_user.seller.id:
-        abort(404)
-
-    path = Path(report.processed_path)
-    if not path.exists():
-        flash('Файл отчёта не найден. Сформируйте новый отчёт.', 'warning')
-        return redirect(url_for('reports'))
-
-    return send_file(path, as_attachment=True, download_name=path.name)
+# УДАЛЕНО: Роуты /reports и /reports/<id>/download — заменены разделом Финансы
 
 
 # ============= БЕЗОПАСНАЯ РАЗДАЧА ФОТО ПОСТАВЩИКА =============
@@ -5764,6 +5528,14 @@ register_brand_routes(app)
 from routes.prohibited_words import register_prohibited_words_routes
 register_prohibited_words_routes(app)
 
+# ============= РОУТЫ АНАЛИТИКИ =============
+from routes.analytics import register_analytics_routes
+register_analytics_routes(app)
+
+# ============= РОУТЫ ФИНАНСОВ =============
+from routes.finances import register_finance_routes
+register_finance_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5834,21 +5606,119 @@ def _run_startup_migrations():
             db.session.rollback()
             logger.warning(f"Could not create prohibited_words table: {e}")
 
+    # Создаём таблицы аналитики если их нет
+    for tbl_name, tbl_sql in [
+        ('analytics_snapshots', '''
+            CREATE TABLE analytics_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                revenue FLOAT DEFAULT 0,
+                orders_count INTEGER DEFAULT 0,
+                buyouts_count INTEGER DEFAULT 0,
+                buyouts_sum FLOAT DEFAULT 0,
+                cancel_count INTEGER DEFAULT 0,
+                cancel_sum FLOAT DEFAULT 0,
+                open_card_count INTEGER DEFAULT 0,
+                add_to_cart_count INTEGER DEFAULT 0,
+                avg_add_to_cart_percent FLOAT,
+                avg_cart_to_order_percent FLOAT,
+                avg_buyout_percent FLOAT,
+                revenue_dynamics FLOAT,
+                orders_dynamics FLOAT,
+                buyouts_dynamics FLOAT,
+                daily_data JSON,
+                top_products JSON,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        '''),
+        ('product_analytics', '''
+            CREATE TABLE product_analytics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                nm_id BIGINT NOT NULL,
+                period_start DATE NOT NULL,
+                period_end DATE NOT NULL,
+                title VARCHAR(500),
+                vendor_code VARCHAR(100),
+                brand_name VARCHAR(200),
+                subject_name VARCHAR(200),
+                open_card_count INTEGER DEFAULT 0,
+                add_to_cart_count INTEGER DEFAULT 0,
+                orders_count INTEGER DEFAULT 0,
+                orders_sum FLOAT DEFAULT 0,
+                buyouts_count INTEGER DEFAULT 0,
+                buyouts_sum FLOAT DEFAULT 0,
+                cancel_count INTEGER DEFAULT 0,
+                cancel_sum FLOAT DEFAULT 0,
+                add_to_cart_percent FLOAT,
+                cart_to_order_percent FLOAT,
+                buyout_percent FLOAT,
+                stocks_wb INTEGER DEFAULT 0,
+                stocks_mp INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+        '''),
+    ]:
+        if tbl_name not in insp.get_table_names():
+            try:
+                db.session.execute(db.text(tbl_sql))
+                db.session.commit()
+                logger.info(f"Created table '{tbl_name}'")
+            except Exception as e:
+                db.session.rollback()
+                logger.warning(f"Could not create {tbl_name} table: {e}")
+
+    # Создаём таблицу finance_snapshots если её нет
+    if 'finance_snapshots' not in insp.get_table_names():
+        try:
+            db.session.execute(db.text('''
+                CREATE TABLE finance_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    period_start DATE NOT NULL,
+                    period_end DATE NOT NULL,
+                    sales_total FLOAT DEFAULT 0,
+                    for_pay_total FLOAT DEFAULT 0,
+                    returns_total FLOAT DEFAULT 0,
+                    commission_total FLOAT DEFAULT 0,
+                    logistics_total FLOAT DEFAULT 0,
+                    storage_total FLOAT DEFAULT 0,
+                    penalties_total FLOAT DEFAULT 0,
+                    deductions_total FLOAT DEFAULT 0,
+                    acceptance_total FLOAT DEFAULT 0,
+                    additional_payment_total FLOAT DEFAULT 0,
+                    weekly_data JSON,
+                    recent_transactions JSON,
+                    report_rows_count INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            '''))
+            db.session.commit()
+            logger.info("Created table 'finance_snapshots'")
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"Could not create finance_snapshots table: {e}")
+
+    # Индексы для таблиц аналитики и финансов
+    analytics_indexes = [
+        ('idx_analytics_snapshot_seller_period', 'analytics_snapshots', 'seller_id, period_start, period_end'),
+        ('idx_product_analytics_seller_nm', 'product_analytics', 'seller_id, nm_id, period_start'),
+        ('idx_finance_snapshot_seller_period', 'finance_snapshots', 'seller_id, period_start, period_end'),
+    ]
+    for idx_name, table, columns in analytics_indexes:
+        if table in insp.get_table_names():
+            try:
+                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============
 
-@app.route('/analytics')
-@login_required
-def analytics_page():
-    """Страница аналитики продаж по всем маркетплейсам"""
-    return render_template('analytics.html')
-
-
-@app.route('/finances')
-@login_required
-def finances_page():
-    """Финансовый обзор: доходы, расходы, баланс"""
-    return render_template('finances.html')
+# Роуты /analytics и /finances зарегистрированы в routes/
 
 
 @app.route('/profile', methods=['GET', 'POST'])
