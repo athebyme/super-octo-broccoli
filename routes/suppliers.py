@@ -1508,29 +1508,48 @@ def register_supplier_routes(app):
     @login_required
     @seller_required
     def seller_validate_product(product_id):
-        """Пометить товар как validated (готов к пушу на WB)."""
+        """Пометить товар как validated (готов к пушу на WB).
+        Использует глубокую валидацию: цены, фото, характеристики, баркоды."""
         seller = current_user.seller
         product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
         ).first_or_404()
 
-        # Проверяем минимальные требования
-        issues = []
-        if not product.title:
-            issues.append('Нет названия')
-        if not product.brand:
-            issues.append('Нет бренда')
-        if not product.wb_subject_id:
-            issues.append('Нет категории WB')
+        from services.upload_readiness_validator import validate_product_upload_readiness
+        result = validate_product_upload_readiness(product, seller=seller)
 
-        if issues:
-            flash(f'Невозможно валидировать: {", ".join(issues)}', 'danger')
+        if not result['is_ready']:
+            error_msgs = [i['message'] for i in result['issues'] if i['level'] == 'error']
+            flash(f'Невозможно валидировать: {"; ".join(error_msgs[:5])}', 'danger')
         else:
             product.import_status = 'validated'
             db.session.commit()
-            flash('Товар готов к импорту на WB', 'success')
+            if result['warnings_count'] > 0:
+                warn_msgs = [i['message'] for i in result['issues'] if i['level'] == 'warning']
+                flash(f'Товар готов к импорту на WB (предупреждений: {len(warn_msgs)})', 'warning')
+            else:
+                flash('Товар готов к импорту на WB', 'success')
 
         return redirect(url_for('seller_product_wb_preview', product_id=product_id))
+
+    # -------------------------------------------------------------------
+    # Deep validation API (JSON) — полная проверка готовности
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/check-readiness')
+    @login_required
+    @seller_required
+    def seller_check_readiness(product_id):
+        """API: глубокая проверка готовности товара к загрузке на WB."""
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+        if not product:
+            return jsonify({'error': 'Товар не найден'}), 404
+
+        from services.upload_readiness_validator import validate_product_upload_readiness
+        result = validate_product_upload_readiness(product, seller=seller)
+        return jsonify(result)
 
     # -------------------------------------------------------------------
     # Удалить импортированный товар — сбросить для повторного импорта
