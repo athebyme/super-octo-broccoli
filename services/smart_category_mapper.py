@@ -9,9 +9,8 @@
 - Fuzzy matching: нечёткое сравнение для похожих категорий
 """
 import logging
-import re
 from difflib import SequenceMatcher
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +54,6 @@ class SmartCategoryMapper:
         from services.wb_categories_mapping import (
             get_best_category_match,
             WB_ADULT_CATEGORIES,
-            CATEGORY_KEYWORDS_MAPPING,
         )
 
         # 1. Сначала пробуем базовый маппер (он уже проверяет ручные исправления)
@@ -108,73 +106,8 @@ class SmartCategoryMapper:
         description: str,
         all_categories: list = None,
     ) -> Optional[Tuple[int, str, float]]:
-        """Контекстный поиск категории используя все доступные данные."""
-        from services.wb_categories_mapping import (
-            WB_ADULT_CATEGORIES,
-            CATEGORY_KEYWORDS_MAPPING,
-        )
-
-        # Собираем контекст: title + category + all_categories + description (первые 200 символов)
-        context_parts = []
-        if product_title:
-            context_parts.append(product_title.lower())
-        if csv_category:
-            context_parts.append(csv_category.lower())
-        if all_categories:
-            context_parts.extend(c.lower() for c in all_categories if c)
-        if description:
-            context_parts.append(description[:200].lower())
-
-        context = ' '.join(context_parts)
-        if not context:
-            return None
-
-        # Бренд-хинты: некоторые бренды почти всегда принадлежат одной категории
-        if brand:
-            brand_lower = brand.lower().strip()
-            hint_id = cls.BRAND_CATEGORY_HINTS.get(brand_lower)
-            if hint_id:
-                # Проверяем что это не противоречит категории
-                cat_lower = csv_category.lower() if csv_category else ''
-                # Если категория явно не указывает на другое — используем бренд-хинт
-                if not any(
-                    kw in cat_lower
-                    for kw in ('лубрикант', 'смазк', 'презерватив', 'белье', 'костюм')
-                    if hint_id not in (2909, 2865)
-                ):
-                    return (
-                        hint_id,
-                        WB_ADULT_CATEGORIES.get(hint_id, 'Unknown'),
-                        0.7,
-                    )
-
-        # Мульти-keyword скоринг: ищем все совпадения и выбираем лучшее
-        scores: Dict[int, float] = {}
-        for keyword, subj_id in CATEGORY_KEYWORDS_MAPPING.items():
-            if keyword in context:
-                # Длина совпадения / длина контекста + бонус за точность
-                base_score = len(keyword) / max(len(context), 1)
-                # Бонус если keyword найден в title (более релевантно)
-                if product_title and keyword in product_title.lower():
-                    base_score += 0.15
-                # Бонус если keyword найден в category
-                if csv_category and keyword in csv_category.lower():
-                    base_score += 0.2
-                # Накапливаем баллы для одной категории (несколько keywords -> одна категория)
-                scores[subj_id] = scores.get(subj_id, 0) + base_score
-
-        if scores:
-            best_id = max(scores, key=scores.get)
-            best_score = min(scores[best_id], 1.0)
-            # Нормализуем confidence в диапазон 0.6-0.85
-            confidence = 0.6 + best_score * 0.25
-            confidence = min(confidence, 0.85)
-            return (
-                best_id,
-                WB_ADULT_CATEGORIES.get(best_id, 'Unknown'),
-                round(confidence, 3),
-            )
-
+        """Контекстный поиск удалён — категория определяется через точный
+        CSV-маппинг и AI. Keyword-угадывание приводило к ошибкам."""
         return None
 
     @classmethod
