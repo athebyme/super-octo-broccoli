@@ -2014,7 +2014,10 @@ class SupplierService:
 
             # Обновляем поля товара из результатов парсинга если они были пустые
             _apply_parsed_data_to_product(product, result)
-            
+
+            # Верификация категории (отдельный этап — до marketplace parse)
+            _verify_and_fix_category(product, result, ai_svc)
+
             # Интеграция с MarketplaceAwareParsingTask
             _run_marketplace_aware_parse(product, result, ai_svc)
 
@@ -2314,6 +2317,9 @@ class SupplierService:
 
                                 _apply_parsed_data_to_product(product, result)
 
+                                # Верификация категории (отдельный этап — до marketplace parse)
+                                _verify_and_fix_category(product, result, worker_svc)
+
                                 # Интеграция с MarketplaceAwareParsingTask
                                 _run_marketplace_aware_parse(product, result, worker_svc)
 
@@ -2466,6 +2472,9 @@ class SupplierService:
                     marketplace_data = _build_marketplace_data(product, result)
                     product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                     _apply_parsed_data_to_product(product, result)
+
+                    # Верификация категории (отдельный этап — до marketplace parse)
+                    _verify_and_fix_category(product, result, ai_svc)
 
                     # Интеграция с MarketplaceAwareParsingTask
                     _run_marketplace_aware_parse(product, result, ai_svc)
@@ -3081,9 +3090,6 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     from services.marketplace_ai_parser import MarketplaceAwareParsingTask
     from services.marketplace_validator import MarketplaceValidator
 
-    # Верификация категории через новый механизм
-    _verify_and_fix_category(product, parsed_data, ai_svc)
-
     # 1. Пытаемся определить subject_id
     subject_id = product.wb_subject_id
     if not subject_id:
@@ -3396,6 +3402,44 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
         sp.wb_subject_name = subj_name
         sp.wb_category_name = subj_name
         sp.category_confidence = cat_conf
+
+        # Валидация: убеждаемся что категория существует в БД маркетплейса
+        if subj_id and cat_conf < 0.9:
+            try:
+                from models import MarketplaceCategory, Marketplace
+                wb_mp = Marketplace.query.filter_by(code='wb').first()
+                if wb_mp:
+                    db_cat = MarketplaceCategory.query.filter_by(
+                        marketplace_id=wb_mp.id,
+                        subject_id=subj_id,
+                        is_enabled=True,
+                    ).first()
+                    if not db_cat:
+                        # Категория не найдена в БД — ищем ближайшую по имени
+                        from difflib import SequenceMatcher
+                        if subj_name:
+                            best_match = None
+                            best_ratio = 0.0
+                            for c in MarketplaceCategory.query.filter_by(
+                                marketplace_id=wb_mp.id, is_enabled=True
+                            ).all():
+                                ratio = SequenceMatcher(
+                                    None, subj_name.lower(), c.subject_name.lower()
+                                ).ratio()
+                                if ratio > best_ratio and ratio >= 0.7:
+                                    best_ratio = ratio
+                                    best_match = c
+                            if best_match:
+                                sp.wb_subject_id = best_match.subject_id
+                                sp.wb_subject_name = best_match.subject_name
+                                sp.wb_category_name = best_match.subject_name
+                                sp.category_confidence = round(cat_conf * best_ratio, 3)
+                                logger.debug(
+                                    f"Import category fix: {subj_name} → "
+                                    f"{best_match.subject_name} (ratio={best_ratio:.2f})"
+                                )
+            except Exception as e:
+                logger.debug(f"Category DB validation during import failed: {e}")
     except Exception as e:
         logger.debug(f"SmartCategoryMapper failed: {e}")
 
