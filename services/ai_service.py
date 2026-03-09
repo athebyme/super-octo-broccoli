@@ -1480,11 +1480,16 @@ class AIClient:
                 logger.info(f"📍 URL: {url}")
                 logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
+                # Разделяем таймаут: connect быстро, read — по настройке.
+                # Tuple (connect_timeout, read_timeout) предотвращает зависание
+                # на медленных моделях (GLM-4.7-Flash и др.)
+                connect_timeout = min(self.config.timeout, 30)
+                read_timeout = self.config.timeout
                 response = self._session.post(
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=self.config.timeout
+                    timeout=(connect_timeout, read_timeout)
                 )
 
                 # Логируем ответ для отладки
@@ -1539,14 +1544,11 @@ class AIClient:
             except requests.exceptions.Timeout:
                 self.last_error = (
                     f"Таймаут {self.config.timeout}с — AI не ответил вовремя "
-                    f"(провайдер: {self.config.provider.value}, модель: {self.config.model}, "
-                    f"попытка {attempt}/{max_retries})"
+                    f"(провайдер: {self.config.provider.value}, модель: {self.config.model})"
                 )
                 logger.error(f"⏱️ {self.last_error}")
-                if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
+                # Таймауты не ретраим: если модель зависла, повтор тоже зависнет.
+                # Лучше быстро вернуть ошибку и перейти к следующему товару.
                 return None
             except requests.exceptions.ConnectionError as e:
                 self.last_error = (

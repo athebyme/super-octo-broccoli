@@ -472,9 +472,9 @@ class MarketplaceService:
         lines.append("")
 
         current_parent = None
-        # Ограничиваем количество категорий в промпте чтобы не превысить контекст модели.
-        # ~500 категорий ≈ 10-15к символов — безопасный размер для любой модели.
-        MAX_CATEGORIES_IN_PROMPT = 500
+        # Страховка: если включено слишком много категорий, обрезаем.
+        # Обычно 50-200, но на всякий случай лимит 1000 (~30к символов).
+        MAX_CATEGORIES_IN_PROMPT = 1000
         truncated = len(categories) > MAX_CATEGORIES_IN_PROMPT
         cats_for_prompt = categories[:MAX_CATEGORIES_IN_PROMPT]
 
