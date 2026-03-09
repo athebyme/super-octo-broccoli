@@ -177,9 +177,16 @@ function notificationsPage() {
                 if (this.activeFilter === 'success') url += '&category=success';
                 if (this.activeFilter === 'system') url += '&category=info';
                 const r = await fetch(url);
+                if (!r.ok) {
+                    console.error('Notifications API error:', r.status, r.statusText);
+                    this.notifications = [];
+                    this.loading = false;
+                    return;
+                }
                 const d = await r.json();
                 this.notifications = d.items || [];
             } catch(e) {
+                console.error('Notifications load error:', e);
                 this.notifications = [];
             }
             this.loading = false;
