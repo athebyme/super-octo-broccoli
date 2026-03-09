@@ -1439,11 +1439,16 @@ class AIClient:
         """
         url = f"{self.config.api_base_url}/chat/completions"
 
+        # Ограничиваем max_tokens разумным потолком (16k достаточно для любого ответа).
+        # Слишком большое значение (100k+) вызывает 400 "exceeds model context length"
+        # т.к. API проверяет prompt_tokens + max_tokens ≤ context_window.
+        effective_max_tokens = min(max_tokens or self.config.max_tokens, 16384)
+
         payload = {
             "model": self.config.model,
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
-            "max_tokens": max_tokens or self.config.max_tokens,
+            "max_tokens": effective_max_tokens,
             "top_p": self.config.top_p,
             "presence_penalty": self.config.presence_penalty,
             "frequency_penalty": self.config.frequency_penalty
