@@ -484,45 +484,32 @@ function mergeApp() {
             });
         },
 
-        // Автовыбор из рекомендаций
+        // Автовыбор из рекомендаций (данные приходят с сервера)
         handleAutoSelect() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const autoNmIds = urlParams.get('auto_select_nm_ids');
-            const autoTarget = urlParams.get('auto_target_nm_id');
-
-            if (autoNmIds && autoTarget) {
+            {% if auto_selection %}
+            const autoData = {{ auto_selection | tojson }};
+            if (autoData && autoData.target) {
                 // Очищаем старый выбор
                 this.clearAllSelection();
 
-                // Устанавливаем target
-                const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${autoTarget}"]`);
-                if (targetRadio) {
-                    targetRadio.checked = true;
-                    this.selectedTarget = autoTarget;
-                    this.selectedTargetSubject = targetRadio.dataset.subject;
-                }
-
-                // Выбираем карточки
-                autoNmIds.split(',').forEach(nmId => {
-                    nmId = nmId.trim();
-                    if (nmId && nmId !== autoTarget) {
-                        const checkbox = document.querySelector(`input[name="merge_checkbox"][value="${nmId}"]`);
-                        if (checkbox) {
-                            checkbox.checked = true;
-                            this.selectedCards[nmId] = {
-                                subject: checkbox.dataset.subject,
-                                vendor: checkbox.dataset.vendor,
-                                title: checkbox.dataset.title
-                            };
-                        }
-                    }
-                });
+                // Устанавливаем target и карточки из серверных данных
+                // (не зависим от наличия DOM-элементов на текущей странице)
+                this.selectedTarget = autoData.target;
+                this.selectedTargetSubject = autoData.targetSubject;
+                this.selectedCards = autoData.cards || {};
 
                 this.saveToStorage();
 
-                // Уведомление
-                this.showNotification('Карточки из рекомендации выбраны автоматически', 'success');
+                // Проставляем radio/checkbox для карточек, видимых на текущей странице
+                this.restoreUIState();
+
+                const totalSelected = Object.keys(this.selectedCards).length;
+                this.showNotification(
+                    `Выбрано ${totalSelected} карточек из рекомендации. Нажмите "Объединить" внизу страницы.`,
+                    'success'
+                );
             }
+            {% endif %}
         },
 
         // Установить главную карточку

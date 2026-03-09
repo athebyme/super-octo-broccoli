@@ -132,6 +132,36 @@ def register_merge_routes(app):
         ).distinct().order_by(Product.brand).all()
         brands_list = [b[0] for b in brands if b[0]]
 
+        # Автовыбор из рекомендаций — подготовка серверных данных
+        auto_selection = None
+        auto_target_nm_id = request.args.get('auto_target_nm_id', type=int)
+        auto_select_nm_ids_str = request.args.get('auto_select_nm_ids', '')
+        if auto_target_nm_id and auto_select_nm_ids_str:
+            auto_nm_ids = [int(x.strip()) for x in auto_select_nm_ids_str.split(',') if x.strip().isdigit()]
+            if auto_nm_ids:
+                auto_products = Product.query.filter(
+                    Product.nm_id.in_(auto_nm_ids + [auto_target_nm_id]),
+                    Product.seller_id == current_user.seller.id
+                ).all()
+                auto_products_map = {p.nm_id: p for p in auto_products}
+
+                target_p = auto_products_map.get(auto_target_nm_id)
+                if target_p:
+                    cards_data = {}
+                    for nm_id in auto_nm_ids:
+                        if nm_id != auto_target_nm_id and nm_id in auto_products_map:
+                            p = auto_products_map[nm_id]
+                            cards_data[str(nm_id)] = {
+                                'subject': str(p.subject_id) if p.subject_id else '',
+                                'vendor': p.vendor_code or '',
+                                'title': p.title or ''
+                            }
+                    auto_selection = {
+                        'target': str(auto_target_nm_id),
+                        'targetSubject': str(target_p.subject_id) if target_p.subject_id else '',
+                        'cards': cards_data
+                    }
+
         return render_template(
             'products_merge.html',
             imt_groups=paginated_groups,
@@ -144,7 +174,8 @@ def register_merge_routes(app):
             per_page=per_page,
             total_groups=total_groups,
             total_pages=total_pages,
-            total_cards=len(all_products)
+            total_cards=len(all_products),
+            auto_selection=auto_selection
         )
 
     @app.route('/products/merge/execute', methods=['POST'])
