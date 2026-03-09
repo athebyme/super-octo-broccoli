@@ -1653,6 +1653,11 @@ class AITask(ABC):
             ]
 
             prompt_len = len(system_prompt) + len(user_prompt)
+            task_name = getattr(self, 'task_name', self.__class__.__name__)
+            logger.info(
+                f"[{task_name}] Промпт: system={len(system_prompt)} + user={len(user_prompt)} "
+                f"= {prompt_len} символов (~{prompt_len // 3} токенов)"
+            )
             response = self.client.chat_completion(messages)
 
             if not response:
