@@ -2111,10 +2111,9 @@ class SupplierService:
             if not connections:
                 return
 
-            # Общее количество активных товаров поставщика
+            # Общее количество товаров поставщика
             total_supplier_products = SupplierProduct.query.filter_by(
-                supplier_id=supplier_id,
-                is_active=True
+                supplier_id=supplier_id
             ).count()
 
             for conn in connections:

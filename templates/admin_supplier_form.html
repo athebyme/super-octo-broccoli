@@ -25,7 +25,43 @@
 
             <form method="POST"
                 action="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) if mode == 'edit' else url_for('admin_supplier_add') }}"
-                x-data="{ tab: 'basic' }">
+                x-data="{
+                    tab: 'basic',
+                    aiProvider: '{{ supplier.ai_provider if supplier and supplier.ai_provider else 'openai' }}',
+                    aiModel: '{{ supplier.ai_model if supplier and supplier.ai_model else '' }}',
+                    customModel: '',
+                    models: {
+                        cloudru: [
+                            {id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B', rec: true},
+                            {id: 'deepseek/DeepSeek-R1-Distill-Llama-70B', name: 'DeepSeek R1 Distill 70B', rec: true},
+                            {id: 'deepseek/DeepSeek-V3', name: 'DeepSeek V3'},
+                            {id: 'qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B'},
+                            {id: 'meta-llama/Llama-3.3-70B-Instruct', name: 'Llama 3.3 70B'},
+                        ],
+                        openai: [
+                            {id: 'gpt-4o-mini', name: 'GPT-4o Mini', rec: true},
+                            {id: 'gpt-4o', name: 'GPT-4o'},
+                            {id: 'gpt-4-turbo', name: 'GPT-4 Turbo'},
+                        ],
+                        custom: []
+                    },
+                    get currentModels() {
+                        return this.models[this.aiProvider] || [];
+                    },
+                    get isCustomModel() {
+                        if (!this.aiModel) return false;
+                        return !this.currentModels.some(m => m.id === this.aiModel);
+                    },
+                    init() {
+                        if (this.isCustomModel && this.aiModel) {
+                            this.customModel = this.aiModel;
+                            this.aiModel = '__custom__';
+                        }
+                    },
+                    get effectiveModel() {
+                        return this.aiModel === '__custom__' ? this.customModel : this.aiModel;
+                    }
+                }">
 
                 <!-- Табы -->
                 <div class="border-b border-gray-200 mb-6">
@@ -246,28 +282,41 @@
                     <div class="grid grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Провайдер</label>
-                            <select name="ai_provider"
+                            <select name="ai_provider" x-model="aiProvider"
+                                @change="aiModel = ''; customModel = ''"
                                 class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
-                                <option value="openai" {{ 'selected' if supplier and supplier.ai_provider=='openai'
-                                    else '' }}>OpenAI</option>
-                                <option value="cloudru" {{ 'selected' if supplier and supplier.ai_provider=='cloudru'
-                                    else '' }}>Cloud.ru</option>
-                                <option value="custom" {{ 'selected' if supplier and supplier.ai_provider=='custom'
-                                    else '' }}>Кастомный API</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="cloudru">Cloud.ru</option>
+                                <option value="custom">Кастомный API</option>
                             </select>
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Модель</label>
-                            <input type="text" name="ai_model"
-                                value="{{ supplier.ai_model if supplier and supplier.ai_model else 'gpt-4o-mini' }}"
+                            <input type="hidden" name="ai_model" :value="effectiveModel">
+                            <select x-show="aiProvider !== 'custom'" x-model="aiModel"
                                 class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                                <option value="">— выберите модель —</option>
+                                <template x-for="m in currentModels" :key="m.id">
+                                    <option :value="m.id" x-text="m.name + (m.rec ? ' ★' : '')"></option>
+                                </template>
+                                <option value="__custom__">Другая (ввести вручную)...</option>
+                            </select>
+                            <input x-show="aiProvider === 'custom' || aiModel === '__custom__'"
+                                x-model="customModel"
+                                type="text" placeholder="Например: zai-org/GLM-4.7-Flash"
+                                class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2"
+                                :class="{'mt-2': aiModel === '__custom__' && aiProvider !== 'custom'}">
                         </div>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">API ключ</label>
                         <input type="password" name="ai_api_key"
+                            autocomplete="new-password"
                             placeholder="{{ '********' if mode == 'edit' else '' }}"
                             class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                        {% if mode == 'edit' and supplier and supplier._ai_api_key_encrypted %}
+                        <p class="text-xs text-green-600 mt-1">Ключ сохранён. Оставьте поле пустым, чтобы не менять.</p>
+                        {% endif %}
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Base URL API (для
