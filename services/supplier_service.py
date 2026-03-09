@@ -2497,6 +2497,15 @@ class SupplierService:
         job.updated_at = datetime.utcnow()
         _commit_with_retry(db.session)
 
+        # Уведомляем продавцов (аналогично batch-парсингу)
+        if job.succeeded and job.succeeded > 0:
+            try:
+                SupplierService._notify_sellers_new_cards(
+                    supplier_id, job.succeeded
+                )
+            except Exception as e:
+                logger.warning(f"[AI Parse] Single parse notification error: {e}")
+
     @staticmethod
     def start_description_sync_job(supplier_id: int, admin_user_id: int = None) -> dict:
         """
