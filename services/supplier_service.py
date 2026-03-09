@@ -28,7 +28,7 @@ import requests
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, CategoryMapping,
-    log_admin_action
+    Notification, log_admin_action
 )
 
 logger = logging.getLogger(__name__)
@@ -2089,6 +2089,79 @@ class SupplierService:
         return {'job_id': job_id, 'total': len(product_ids)}
 
     @staticmethod
+    def _notify_sellers_new_cards(supplier_id: int, succeeded_count: int):
+        """
+        Уведомить всех продавцов, подключённых к поставщику,
+        о новых обработанных карточках.
+
+        Проверяет, какие карточки ещё не импортированы продавцом,
+        и создаёт уведомление только если есть новые.
+        """
+        try:
+            supplier = Supplier.query.get(supplier_id)
+            if not supplier:
+                return
+
+            # Получаем всех активных продавцов этого поставщика
+            connections = SellerSupplier.query.filter_by(
+                supplier_id=supplier_id,
+                is_active=True
+            ).all()
+
+            if not connections:
+                return
+
+            # Общее количество активных товаров поставщика
+            total_supplier_products = SupplierProduct.query.filter_by(
+                supplier_id=supplier_id,
+                is_active=True
+            ).count()
+
+            for conn in connections:
+                try:
+                    # Сколько товаров уже импортировано у этого продавца
+                    imported_count = ImportedProduct.query.filter_by(
+                        seller_id=conn.seller_id,
+                        supplier_id=supplier_id
+                    ).count()
+
+                    # Сколько новых (не импортированных) товаров
+                    new_count = total_supplier_products - imported_count
+                    if new_count <= 0:
+                        continue
+
+                    # Создаём уведомление
+                    n = Notification(
+                        seller_id=conn.seller_id,
+                        category='info',
+                        title=f'Доступно {new_count} новых карточек',
+                        message=(
+                            f'У поставщика «{supplier.name}» обработано {succeeded_count} карточек. '
+                            f'Доступно {new_count} новых товаров для импорта.'
+                        ),
+                        link='/auto-import/products',
+                        metadata_json=json.dumps({
+                            'type': 'new_supplier_cards',
+                            'supplier_id': supplier_id,
+                            'supplier_name': supplier.name,
+                            'new_count': new_count,
+                            'succeeded_count': succeeded_count,
+                        }, ensure_ascii=False),
+                    )
+                    db.session.add(n)
+                except Exception as e:
+                    logger.warning(f"Failed to create notification for seller {conn.seller_id}: {e}")
+
+            _commit_with_retry(db.session)
+            logger.info(
+                f"[AI Parse] Notifications sent to {len(connections)} sellers "
+                f"for supplier {supplier_id}"
+            )
+        except Exception as e:
+            logger.error(f"[AI Parse] Error sending notifications: {e}")
+            db.session.rollback()
+
+    @staticmethod
     def _run_ai_parse_job(job_id: str, supplier_id: int, product_ids: List[int],
                           max_workers: int = 4, model_override: str = None):
         """
@@ -2333,6 +2406,15 @@ class SupplierService:
                 f"{counters['succeeded']} ok, {counters['failed']} fail "
                 f"out of {len(product_ids)} ({effective_workers} workers)"
             )
+
+            # Уведомляем продавцов о новых обработанных карточках
+            if counters['succeeded'] > 0:
+                try:
+                    SupplierService._notify_sellers_new_cards(
+                        supplier_id, counters['succeeded']
+                    )
+                except Exception as e:
+                    logger.warning(f"[AI Parse] Notification error: {e}")
 
     @staticmethod
     def _parse_single_in_job(job_id: str, supplier_id: int, product_id: int, ai_svc):
