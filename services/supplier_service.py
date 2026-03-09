@@ -3017,6 +3017,13 @@ def _verify_and_fix_category(product: SupplierProduct, parsed_data: dict, ai_svc
             original_categories = getattr(ai_svc, '_categories', None)
             ai_svc.set_categories(db_cat_map)
 
+            from services.wb_categories_mapping import get_keyword_hints
+            hints = get_keyword_hints(
+                product_title=product.title or '',
+                csv_category=product.category or '',
+                description=(product.description or '')[:300],
+            )
+
             cat_id, cat_name, cat_conf, cat_reason = ai_svc.detect_category(
                 product_title=product.title or '',
                 source_category=product.category or '',
@@ -3030,6 +3037,7 @@ def _verify_and_fix_category(product: SupplierProduct, parsed_data: dict, ai_svc
                 ],
                 brand=product.brand or '',
                 description=(product.description or '')[:500],
+                keyword_hints=hints,
             )
 
             # Возвращаем оригинальные категории

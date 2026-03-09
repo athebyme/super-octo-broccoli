@@ -1722,6 +1722,7 @@ class CategoryDetectionTask(AITask):
         all_categories = kwargs.get('all_categories', [])
         brand = kwargs.get('brand', '')
         description = kwargs.get('description', '')
+        keyword_hints = kwargs.get('keyword_hints', [])
 
         prompt = f"""Определи категорию WB для товара:
 
@@ -1732,6 +1733,16 @@ class CategoryDetectionTask(AITask):
 """
         if description:
             prompt += f"ОПИСАНИЕ: {description[:500]}\n"
+
+        if keyword_hints:
+            hints_text = ', '.join(
+                f'"{h["keyword"]}" → {h["suggested_category"]} (ID {h["suggested_id"]})'
+                for h in keyword_hints[:5]
+            )
+            prompt += (
+                f"\nПОДСКАЗКИ ПО КЛЮЧЕВЫМ СЛОВАМ (могут быть неточными, "
+                f"учитывай контекст): {hints_text}\n"
+            )
 
         return prompt
 
@@ -3048,10 +3059,16 @@ class AIService:
         source_category: str,
         all_categories: Optional[List[str]] = None,
         brand: str = '',
-        description: str = ''
+        description: str = '',
+        keyword_hints: Optional[list] = None,
     ) -> Tuple[Optional[int], Optional[str], float, str]:
         """
         Определяет категорию товара с помощью AI
+
+        Args:
+            keyword_hints: Подсказки из CATEGORY_KEYWORDS_MAPPING
+                (список dict с keyword/suggested_category/suggested_id).
+                AI использует их как контекст, но принимает решение самостоятельно.
 
         Returns:
             Tuple[category_id, category_name, confidence, reasoning]
@@ -3070,7 +3087,8 @@ class AIService:
             source_category=source_category,
             all_categories=all_categories or [],
             brand=brand,
-            description=description
+            description=description,
+            keyword_hints=keyword_hints or [],
         )
 
         if success and result:
