@@ -349,7 +349,16 @@ def register_merge_routes(app):
                     product.imt_id = None
                     product.last_sync = datetime.utcnow()
 
-                unmerge_history.snapshot_after = snapshot_before.copy()
+                # Снимок ПОСЛЕ — imt_id сброшен в None
+                snapshot_after = {
+                    str(p.nm_id): {
+                        'imt_id': None,
+                        'vendor_code': p.vendor_code,
+                        'title': p.title,
+                        'subject_id': p.subject_id
+                    } for p in products
+                }
+                unmerge_history.snapshot_after = snapshot_after
                 unmerge_history.status = 'completed'
                 unmerge_history.wb_synced = True
                 unmerge_history.wb_sync_status = 'success'
@@ -384,7 +393,7 @@ def register_merge_routes(app):
             flash('Произошла ошибка при разъединении карточек', 'danger')
             return redirect(url_for('products_merge'))
 
-    @app.route('/products/merge/unmerge-single/<int:nm_id>', methods=['GET', 'POST'])
+    @app.route('/products/merge/unmerge-single/<int:nm_id>', methods=['POST'])
     @login_required
     def products_merge_unmerge_single(nm_id):
         """Разъединить одну карточку из группы"""
@@ -461,7 +470,14 @@ def register_merge_routes(app):
             product.imt_id = None
             product.last_sync = datetime.utcnow()
 
-            unmerge_history.snapshot_after = snapshot_before.copy()
+            unmerge_history.snapshot_after = {
+                str(product.nm_id): {
+                    'imt_id': None,
+                    'vendor_code': product.vendor_code,
+                    'title': product.title,
+                    'subject_id': product.subject_id
+                }
+            }
             unmerge_history.status = 'completed'
             unmerge_history.wb_synced = not bool(wb_error)
             unmerge_history.wb_sync_status = 'failed' if wb_error else 'success'
@@ -589,14 +605,35 @@ def register_merge_routes(app):
             # Получаем все nmID из snapshot_after - там все карточки с одинаковым imt_id
             all_nm_ids = [int(nm_id) for nm_id in merge.snapshot_after.keys()]
 
-            app.logger.info(f"🔓 Unmerging {len(all_nm_ids)} cards: {all_nm_ids}")
+            app.logger.info(f"Unmerging {len(all_nm_ids)} cards: {all_nm_ids}")
+
+            import time
+            api_errors = []
 
             try:
-                result = client.unmerge_cards(
-                    nm_ids=all_nm_ids,
-                    log_to_db=True,
-                    seller_id=current_user.seller.id
-                )
+                # ВАЖНО: отправляем каждую карточку отдельным запросом,
+                # иначе WB объединит их в новую группу с новым imtID
+                for nm_id in all_nm_ids[:-1]:
+                    try:
+                        client.unmerge_cards(
+                            nm_ids=[nm_id],
+                            log_to_db=True,
+                            seller_id=current_user.seller.id
+                        )
+                    except WBAPIException as e:
+                        err_str = str(e)
+                        app.logger.warning(f"revert unmerge nm_id={nm_id}: {err_str}")
+                        api_errors.append(err_str)
+                    time.sleep(0.3)
+
+                # Сбрасываем imt_id в локальной БД
+                products_to_reset = Product.query.filter(
+                    Product.nm_id.in_(all_nm_ids),
+                    Product.seller_id == current_user.seller.id
+                ).all()
+                for product in products_to_reset:
+                    product.imt_id = None
+                    product.last_sync = datetime.utcnow()
 
                 # Отмечаем оригинальную операцию как откаченную
                 merge.reverted = True
@@ -607,12 +644,16 @@ def register_merge_routes(app):
                 revert_history.status = 'completed'
                 revert_history.wb_synced = True
                 revert_history.wb_sync_status = 'success'
+                revert_history.wb_error_message = '; '.join(api_errors) if api_errors else None
                 revert_history.completed_at = datetime.utcnow()
                 revert_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
 
                 db.session.commit()
 
-                flash(f'Объединение успешно отменено. Карточки разъединены.', 'success')
+                if api_errors:
+                    flash(f'Объединение отменено. Часть карточек уже была разъединена на WB ранее.', 'success')
+                else:
+                    flash(f'Объединение успешно отменено. Карточки разъединены.', 'success')
                 return redirect(url_for('products_merge_history', id=revert_history.id))
 
             except WBAPIException as e:
