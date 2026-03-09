@@ -708,8 +708,8 @@ def register_supplier_routes(app):
             flash('Не указаны товары', 'warning')
             return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
-        max_workers = request.form.get('max_workers', 4, type=int)
-        max_workers = max(1, min(max_workers, 8))
+        max_workers = request.form.get('max_workers', 8, type=int)
+        max_workers = max(1, min(max_workers, 16))
         model_override = request.form.get('model_override', '').strip() or None
 
         result = SupplierService.start_ai_parse_job(
@@ -773,8 +773,8 @@ def register_supplier_routes(app):
         parse_status = request.form.get('parse_status', '').strip()
         fill_max = request.form.get('fill_max', '').strip()
         limit = request.form.get('limit', 0, type=int)  # 0 = без лимита
-        max_workers = request.form.get('max_workers', 4, type=int)
-        max_workers = max(1, min(max_workers, 8))
+        max_workers = request.form.get('max_workers', 8, type=int)
+        max_workers = max(1, min(max_workers, 16))
         model_override = request.form.get('model_override', '').strip() or None
 
         # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)

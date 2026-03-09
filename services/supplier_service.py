@@ -2039,7 +2039,7 @@ class SupplierService:
     @staticmethod
     def start_ai_parse_job(supplier_id: int, product_ids: List[int],
                            admin_user_id: int = None,
-                           max_workers: int = 4,
+                           max_workers: int = 8,
                            model_override: str = None) -> dict:
         """
         Запускает фоновый AI парсинг товаров.
@@ -2072,7 +2072,7 @@ class SupplierService:
         db.session.add(job)
         db.session.commit()
 
-        effective_workers = max(1, min(max_workers, 8, len(product_ids)))
+        effective_workers = max(1, min(max_workers, 16, len(product_ids)))
 
         thread = threading.Thread(
             target=SupplierService._run_ai_parse_job,
