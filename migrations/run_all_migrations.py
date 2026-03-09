@@ -387,6 +387,48 @@ def migrate(db_path):
                 total_added += 1
 
         # ============================================================
+        # Таблица card_merge_history (история объединений карточек)
+        # ============================================================
+        print("\n📋 Таблица: card_merge_history")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='card_merge_history'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE card_merge_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    operation_type VARCHAR(20) NOT NULL,
+                    target_imt_id BIGINT,
+                    merged_nm_ids JSON NOT NULL,
+                    snapshot_before JSON,
+                    snapshot_after JSON,
+                    status VARCHAR(50) DEFAULT 'pending',
+                    wb_synced BOOLEAN DEFAULT 0,
+                    wb_sync_status VARCHAR(50),
+                    wb_error_message TEXT,
+                    reverted BOOLEAN DEFAULT 0,
+                    reverted_at DATETIME,
+                    reverted_by_user_id INTEGER,
+                    revert_operation_id INTEGER,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME,
+                    duration_seconds REAL,
+                    user_comment TEXT,
+                    FOREIGN KEY (seller_id) REFERENCES sellers(id),
+                    FOREIGN KEY (reverted_by_user_id) REFERENCES users(id),
+                    FOREIGN KEY (revert_operation_id) REFERENCES card_merge_history(id)
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_merge_seller_created ON card_merge_history(seller_id, created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_merge_operation ON card_merge_history(operation_type, status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_merge_target_imt ON card_merge_history(target_imt_id)")
+            print("  ✅ Таблица card_merge_history создана")
+            total_added += 1
+        else:
+            print("  ⏭️  Таблица уже существует")
+
+        # ============================================================
         # Дедупликация Product по (seller_id, nm_id)
         # и создание уникального индекса
         # ============================================================

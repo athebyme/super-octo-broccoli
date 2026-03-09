@@ -6,10 +6,18 @@ from flask_login import login_required, current_user
 from datetime import datetime
 import json
 
-from models import db, Product, CardMergeHistory
+from models import db, Product, CardMergeHistory, APILog
 from services.wb_api_client import WildberriesAPIClient, WBAPIException
 from sqlalchemy import or_
 from services.merge_recommendations import get_merge_recommendations_for_seller
+
+
+def _get_wb_client(seller):
+    """Создать WB API клиент с логированием для merge-операций."""
+    return WildberriesAPIClient(
+        api_key=seller.wb_api_key,
+        db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
+    )
 
 
 def register_merge_routes(app):
@@ -200,7 +208,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Выполняем объединение через API
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             try:
                 result = client.merge_cards(
@@ -247,8 +255,14 @@ def register_merge_routes(app):
                 return redirect(url_for('products_merge'))
 
         except Exception as e:
-            app.logger.error(f"Error in products_merge_execute: {str(e)}")
-            flash('Произошла ошибка при объединении карточек', 'danger')
+            app.logger.error(f"Error in products_merge_execute: {str(e)}", exc_info=True)
+            error_msg = str(e)
+            if 'no such table' in error_msg.lower():
+                flash('Таблица истории объединений не найдена. Запустите миграцию: python migrations/run_all_migrations.py', 'danger')
+            elif 'operational' in error_msg.lower():
+                flash(f'Ошибка базы данных: {error_msg[:200]}', 'danger')
+            else:
+                flash(f'Ошибка при объединении карточек: {error_msg[:200]}', 'danger')
             return redirect(url_for('products_merge'))
 
     @app.route('/products/merge/unmerge/<int:imt_id>', methods=['POST'])
@@ -302,7 +316,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             import time
             api_errors = []
@@ -425,7 +439,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API (только одну карточку)
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             wb_error = None
             try:
@@ -564,7 +578,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             # ВАЖНО: Нужно передать ВСЕ nmID которые объединены, включая target
             # merged_nm_ids содержит только те, что были в чекбоксах (без target)
