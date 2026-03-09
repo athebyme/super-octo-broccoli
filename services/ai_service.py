@@ -395,6 +395,7 @@ DEFAULT_INSTRUCTIONS = {
 5. Избегай повторений слов
 6. Не используй: "лучший", "топ", "хит", "№1", "качественный"
 7. Каждое слово должно нести смысл - нет "воды"
+8. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА
 
 ПРИМЕРЫ ХОРОШИХ ЗАГОЛОВКОВ (до 60 символов):
 - "Вибратор силиконовый с 10 режимами розовый" (43 символа)
@@ -479,6 +480,7 @@ DEFAULT_INSTRUCTIONS = {
 5. Используй ключевые слова естественно
 6. Максимум 2000 символов (ограничение Wildberries API)
 7. Без воды и пустых фраз
+8. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА
 
 ФОРМАТ ОТВЕТА (СТРОГО JSON):
 {
@@ -1149,6 +1151,8 @@ Rich-контент на WB - это визуальные блоки (слайд
 6. НЕ придумывай данных — только из текста. Если не ясно — не включай
 7. Вес ВСЕГДА в граммах, длины в см, объём в мл
 8. Для WB цветов используй стандартные: белый, чёрный, красный, синий, зелёный, розовый, фиолетовый, серый, бежевый, коричневый, оранжевый, жёлтый, голубой, бордовый, золотой, серебристый, телесный, прозрачный, мультиколор
+9. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА в текстовых полях
+10. wb_subject ДОЛЖЕН точно совпадать с одной из ДОСТУПНЫХ КАТЕГОРИЙ МАРКЕТПЛЕЙСА (если список предоставлен ниже)
 
 ══════════════════════════════════════════════════════════════
 ФОРМАТ ОТВЕТА (СТРОГО JSON):
@@ -3132,6 +3136,7 @@ class AIService:
             # Очищаем заголовок от HTML тегов и делаем первую букву большой
             if result.get('title'):
                 title_clean = strip_html_tags(result['title']).strip()
+                title_clean = re.sub(r'[™®©℠℗⁺]', '', title_clean).strip()
                 if title_clean:
                     # КРИТИЧНО: Обрезаем до 60 символов (ограничение WB API)
                     if len(title_clean) > 60:
@@ -3213,9 +3218,11 @@ class AIService:
             category=category
         )
         if success and result:
-            # Очищаем описание от HTML тегов
+            # Очищаем описание от HTML тегов и запрещённых символов WB
             if result.get('description'):
-                result['description'] = strip_html_tags(result['description'])
+                cleaned = strip_html_tags(result['description'])
+                cleaned = re.sub(r'[™®©℠℗⁺]', '', cleaned)
+                result['description'] = cleaned.strip()
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
@@ -3635,12 +3642,36 @@ def get_ai_service(settings=None) -> Optional[AIService]:
 
     if _ai_service_instance is None:
         _ai_service_instance = AIService(config)
-        # Загружаем категории WB
+        # Загружаем категории WB: сначала из БД, потом дополняем хардкодом
+        categories = {}
+        try:
+            from models import MarketplaceCategory, Marketplace
+            wb_mp = Marketplace.query.filter_by(code='wb').first()
+            if wb_mp:
+                db_cats = MarketplaceCategory.query.filter_by(
+                    marketplace_id=wb_mp.id,
+                    is_enabled=True,
+                ).all()
+                categories = {c.subject_id: c.subject_name for c in db_cats}
+                if categories:
+                    logger.info(f"Loaded {len(categories)} categories from DB for AI service")
+        except Exception as e:
+            logger.debug(f"Could not load DB categories: {e}")
+
+        # Дополняем хардкодом (не перезаписываем то, что есть из БД)
         try:
             from services.wb_categories_mapping import WB_ADULT_CATEGORIES
-            _ai_service_instance.set_categories(WB_ADULT_CATEGORIES)
+            for cat_id, cat_name in WB_ADULT_CATEGORIES.items():
+                if cat_id not in categories:
+                    categories[cat_id] = cat_name
         except ImportError:
             logger.warning("Не удалось загрузить WB_ADULT_CATEGORIES")
+
+        if categories:
+            _ai_service_instance.set_categories(categories)
+            logger.info(f"AI service initialized with {len(categories)} total categories")
+        else:
+            logger.warning("No categories available for AI service")
 
     return _ai_service_instance
 

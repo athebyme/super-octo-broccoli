@@ -33,6 +33,16 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
+# Символы, запрещённые WB в описаниях и заголовках
+_WB_FORBIDDEN_CHARS = re.compile(r'[™®©℠℗⁺]')
+
+
+def _sanitize_wb_text(text: str) -> str:
+    """Удаляет запрещённые WB символы (™, ®, © и т.д.) из текста."""
+    if not text:
+        return text
+    return _WB_FORBIDDEN_CHARS.sub('', text).strip()
+
 
 def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
     """Коммит с retry для SQLite (database is locked)."""
@@ -1705,10 +1715,11 @@ class SupplierService:
         )
 
         if success and result:
-            product.ai_seo_title = result.get('title', '')
+            title = _sanitize_wb_text(result.get('title', ''))
+            product.ai_seo_title = title
             product.updated_at = datetime.utcnow()
             db.session.commit()
-            return {'success': True, 'title': result.get('title', ''), 'keywords_used': result.get('keywords_used', [])}
+            return {'success': True, 'title': title, 'keywords_used': result.get('keywords_used', [])}
 
         return {'success': False, 'error': error or 'Ошибка AI'}
 
@@ -1739,10 +1750,11 @@ class SupplierService:
         )
 
         if success and result:
-            product.ai_description = result.get('description', '')
+            desc = _sanitize_wb_text(result.get('description', ''))
+            product.ai_description = desc
             product.updated_at = datetime.utcnow()
             db.session.commit()
-            return {'success': True, 'description': result.get('description', '')}
+            return {'success': True, 'description': desc}
 
         return {'success': False, 'error': error or 'Ошибка AI'}
 
@@ -2860,10 +2872,10 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
     # Маркетплейс-ready данные
     mp = parsed.get('marketplace_ready', {})
     if not product.ai_seo_title and mp.get('wb_title_suggestion'):
-        product.ai_seo_title = mp['wb_title_suggestion'][:60]
+        product.ai_seo_title = _sanitize_wb_text(mp['wb_title_suggestion'][:60])
 
     if not product.ai_description and mp.get('wb_description_short'):
-        product.ai_description = mp['wb_description_short']
+        product.ai_description = _sanitize_wb_text(mp['wb_description_short'])
 
     if not product.ai_keywords_json and mp.get('search_keywords'):
         product.ai_keywords_json = json.dumps(mp['search_keywords'], ensure_ascii=False)
@@ -2901,12 +2913,177 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
             product.characteristics_json = json.dumps(chars, ensure_ascii=False)
 
 
+def _verify_and_fix_category(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
+    """
+    Пост-проверка категории после AI парсинга.
+
+    Использует ВСЕ категории из БД (MarketplaceCategory) вместо хардкода.
+    Многоуровневый подход:
+      1. Точное совпадение wb_subject из AI-ответа с БД
+      2. Fuzzy-match по имени категории
+      3. AI detect_category с полным списком из БД
+      4. SmartCategoryMapper как фоллбэк
+    """
+    from models import MarketplaceCategory, MarketplaceConnection, Marketplace
+    from difflib import SequenceMatcher
+
+    identity = parsed_data.get('product_identity', {})
+    ai_wb_subject = (identity.get('wb_subject') or '').strip()
+    ai_wb_category = (identity.get('wb_category') or '').strip()
+
+    # Загружаем все включённые категории из БД
+    wb_marketplace = Marketplace.query.filter_by(code='wb').first()
+    if not wb_marketplace:
+        return
+
+    db_categories = MarketplaceCategory.query.filter_by(
+        marketplace_id=wb_marketplace.id,
+        is_enabled=True,
+    ).all()
+    if not db_categories:
+        return
+
+    # Словарь {subject_id: subject_name} из БД
+    db_cat_map = {c.subject_id: c.subject_name for c in db_categories}
+    # Обратный словарь {name_lower: subject_id}
+    name_to_id = {c.subject_name.lower(): c.subject_id for c in db_categories}
+
+    current_id = product.wb_subject_id
+    current_confidence = getattr(product, 'category_confidence', 0) or 0
+
+    best_id = None
+    best_name = None
+    best_confidence = 0.0
+    method = None
+
+    # --- 1. Если текущая категория уже есть в БД и confidence высок — оставляем ---
+    if current_id and current_id in db_cat_map and current_confidence >= 0.9:
+        logger.debug(
+            f"[CategoryVerify] Product {product.id}: keeping current "
+            f"category {current_id} (confidence={current_confidence})"
+        )
+        return
+
+    # --- 2. Точное совпадение AI wb_subject с БД ---
+    if ai_wb_subject:
+        ai_lower = ai_wb_subject.lower()
+        if ai_lower in name_to_id:
+            best_id = name_to_id[ai_lower]
+            best_name = db_cat_map[best_id]
+            best_confidence = 0.92
+            method = 'exact_match'
+
+    # --- 3. Fuzzy-match AI wb_subject по БД ---
+    if not best_id and ai_wb_subject:
+        ai_lower = ai_wb_subject.lower()
+        top_ratio = 0.0
+        for cat in db_categories:
+            ratio = SequenceMatcher(None, ai_lower, cat.subject_name.lower()).ratio()
+            if ratio > top_ratio:
+                top_ratio = ratio
+                if ratio >= 0.78:
+                    best_id = cat.subject_id
+                    best_name = cat.subject_name
+                    best_confidence = round(ratio * 0.9, 3)
+                    method = 'fuzzy_match'
+
+    # --- 4. Fuzzy-match по ai_wb_category (может быть более общим) ---
+    if not best_id and ai_wb_category:
+        ai_lower = ai_wb_category.lower()
+        top_ratio = 0.0
+        for cat in db_categories:
+            ratio = SequenceMatcher(None, ai_lower, cat.subject_name.lower()).ratio()
+            if ratio > top_ratio:
+                top_ratio = ratio
+                if ratio >= 0.78:
+                    best_id = cat.subject_id
+                    best_name = cat.subject_name
+                    best_confidence = round(ratio * 0.85, 3)
+                    method = 'fuzzy_wb_category'
+
+    # --- 5. AI detect_category с полным списком из БД ---
+    if not best_id or best_confidence < 0.8:
+        try:
+            # Подставляем в AI-сервис категории из БД
+            original_categories = getattr(ai_svc, '_categories', None)
+            ai_svc.set_categories(db_cat_map)
+
+            cat_id, cat_name, cat_conf, cat_reason = ai_svc.detect_category(
+                product_title=product.title or '',
+                source_category=product.category or '',
+                all_categories=[
+                    c for c in [
+                        identity.get('wb_category'),
+                        identity.get('product_type'),
+                        identity.get('product_subtype'),
+                        product.category,
+                    ] if c
+                ],
+                brand=product.brand or '',
+                description=(product.description or '')[:500],
+            )
+
+            # Возвращаем оригинальные категории
+            if original_categories is not None:
+                ai_svc.set_categories(original_categories)
+
+            if cat_id and cat_id in db_cat_map:
+                # AI дал результат лучше текущего?
+                if cat_conf > best_confidence:
+                    best_id = cat_id
+                    best_name = cat_name
+                    best_confidence = cat_conf
+                    method = 'ai_detect'
+        except Exception as e:
+            logger.warning(f"[CategoryVerify] AI detect_category failed for {product.id}: {e}")
+
+    # --- 6. SmartCategoryMapper как фоллбэк ---
+    if not best_id or best_confidence < 0.6:
+        try:
+            from services.smart_category_mapper import SmartCategoryMapper
+            sm_id, sm_name, sm_conf = SmartCategoryMapper.map_category(
+                csv_category=product.category or '',
+                product_title=product.title or '',
+                brand=product.brand or '',
+                description=(product.description or '')[:300],
+                all_categories=None,
+                source_type='sexoptovik',
+            )
+            if sm_id and sm_id in db_cat_map and sm_conf > best_confidence:
+                best_id = sm_id
+                best_name = db_cat_map.get(sm_id, sm_name)
+                best_confidence = sm_conf
+                method = 'smart_mapper'
+        except Exception as e:
+            logger.debug(f"[CategoryVerify] SmartCategoryMapper fallback failed: {e}")
+
+    # --- Применяем результат ---
+    if best_id and (best_confidence > current_confidence or current_id not in db_cat_map):
+        product.wb_subject_id = best_id
+        product.wb_subject_name = best_name
+        product.wb_category_name = best_name
+        product.category_confidence = best_confidence
+        logger.info(
+            f"[CategoryVerify] Product {product.id}: "
+            f"category updated → {best_name} ({best_id}), "
+            f"confidence={best_confidence}, method={method}"
+        )
+    elif best_id:
+        logger.debug(
+            f"[CategoryVerify] Product {product.id}: "
+            f"keeping {current_id} (current_conf={current_confidence} >= new {best_confidence})"
+        )
+
+
 def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai_svc) -> None:
     """Запускает MarketplaceAwareParsingTask если удалось определить категорию WB."""
     from models import MarketplaceCategory, MarketplaceCategoryCharacteristic, MarketplaceConnection, Marketplace
     from services.marketplace_ai_parser import MarketplaceAwareParsingTask
     from services.marketplace_validator import MarketplaceValidator
-    
+
+    # Верификация категории через новый механизм
+    _verify_and_fix_category(product, parsed_data, ai_svc)
+
     # 1. Пытаемся определить subject_id
     subject_id = product.wb_subject_id
     if not subject_id:
