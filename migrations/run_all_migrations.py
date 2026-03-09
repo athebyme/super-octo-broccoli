@@ -387,6 +387,61 @@ def migrate(db_path):
                 total_added += 1
 
         # ============================================================
+        # Дедупликация Product по (seller_id, nm_id)
+        # и создание уникального индекса
+        # ============================================================
+        print("\n📋 Дедупликация products (seller_id, nm_id)")
+        print("-" * 40)
+
+        # Находим дубликаты
+        cursor.execute("""
+            SELECT seller_id, nm_id, COUNT(*) as cnt, GROUP_CONCAT(id) as ids
+            FROM products
+            WHERE nm_id > 0
+            GROUP BY seller_id, nm_id
+            HAVING cnt > 1
+        """)
+        duplicates = cursor.fetchall()
+
+        if duplicates:
+            dedup_deleted = 0
+            for seller_id, nm_id, count, ids_str in duplicates:
+                ids = [int(x) for x in ids_str.split(',')]
+                keep_id = min(ids)
+                delete_ids = [x for x in ids if x != keep_id]
+
+                # Переносим ссылки ImportedProduct
+                for del_id in delete_ids:
+                    cursor.execute(
+                        "UPDATE imported_products SET product_id = ? WHERE product_id = ?",
+                        (keep_id, del_id)
+                    )
+
+                # Удаляем дубли
+                cursor.execute(
+                    f"DELETE FROM products WHERE id IN ({','.join('?' * len(delete_ids))})",
+                    delete_ids
+                )
+                dedup_deleted += cursor.rowcount
+
+            print(f"  ✅ Удалено {dedup_deleted} дублей Product")
+            total_added += 1
+        else:
+            print("  ⏭️  Дубликатов нет")
+
+        # Заменяем обычный индекс на уникальный
+        try:
+            cursor.execute("DROP INDEX IF EXISTS idx_seller_nm_id")
+            cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_seller_nm_id
+                ON products (seller_id, nm_id)
+                WHERE nm_id > 0
+            """)
+            print("  ✅ Создан уникальный индекс uq_seller_nm_id")
+        except sqlite3.OperationalError as e:
+            print(f"  ⚠️  Индекс: {e}")
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()
