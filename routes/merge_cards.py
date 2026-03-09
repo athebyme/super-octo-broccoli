@@ -76,7 +76,11 @@ def register_merge_routes(app):
         # Группировка по imtID
         imt_groups = {}
         for product in all_products:
-            imt_id = product.imt_id or f"single_{product.nm_id}"
+            # Карточки с nm_id=0 — nmID не получен от WB, каждая уникальна
+            if not product.nm_id or product.nm_id == 0:
+                imt_id = f"single_noid_{product.id}"
+            else:
+                imt_id = product.imt_id or f"single_{product.nm_id}"
             if imt_id not in imt_groups:
                 imt_groups[imt_id] = {
                     'imt_id': product.imt_id,
