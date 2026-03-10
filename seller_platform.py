@@ -1359,6 +1359,19 @@ def products_list():
         except Exception:
             pass  # Таблицы могут не существовать при первом запуске
 
+        # Проверяем доступность обогащения для текущей страницы
+        enrichment_map = {}
+        try:
+            from services.supplier_enrichment import get_enrichment_service
+            enrich_svc = get_enrichment_service()
+            product_ids = [p.id for p in products]
+            if product_ids:
+                enrichment_map = enrich_svc.check_enrichment_availability(
+                    product_ids, current_user.seller.id
+                )
+        except Exception as e:
+            app.logger.debug(f"Enrichment availability check failed: {e}")
+
         return render_template(
             'products.html',
             products=products,
@@ -1378,6 +1391,7 @@ def products_list():
             blocked_nm_ids=blocked_nm_ids,
             shadowed_nm_ids=shadowed_nm_ids,
             filter_block_status=filter_block_status,
+            enrichment_map=enrichment_map,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -1854,6 +1868,66 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                 )
 
                 app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
+
+                # Уведомляем только если появились НОВЫЕ товары (не рутинное обновление)
+                if created_count > 0:
+                    create_notification(
+                        seller_id=seller.id,
+                        category='success',
+                        title=f'Синхронизация: +{created_count} новых товаров',
+                        message=(
+                            f'Загружено {len(all_cards)} товаров с WB: '
+                            f'+{created_count} новых, ~{updated_count} обновлено.'
+                        ),
+                        link='/products',
+                    )
+
+                # Проверяем товары без фотографий — не чаще 1 раза в 24ч
+                try:
+                    no_photo_products = Product.query.filter(
+                        Product.seller_id == seller.id,
+                        Product.is_active == True,
+                        db.or_(
+                            Product.photos_json.is_(None),
+                            Product.photos_json == '',
+                            Product.photos_json == 'null',
+                            Product.photos_json == '[]',
+                        )
+                    ).all()
+
+                    if no_photo_products:
+                        count = len(no_photo_products)
+
+                        # Дедупликация: проверяем, не слали ли уже такое за последние 24ч
+                        from datetime import timedelta
+                        recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+                        already_sent = Notification.query.filter(
+                            Notification.seller_id == seller.id,
+                            Notification.title.like('%без фотографий%'),
+                            Notification.created_at >= recent_cutoff,
+                        ).first()
+
+                        if not already_sent:
+                            examples = [p.title or p.vendor_code or f"nmID {p.nm_id}" for p in no_photo_products[:5]]
+                            examples_text = ", ".join(f'"{e}"' for e in examples)
+                            if count > 5:
+                                examples_text += f" и ещё {count - 5}"
+
+                            create_notification(
+                                seller_id=seller.id,
+                                category='warning',
+                                title=f'{count} товар(ов) без фотографий',
+                                message=(
+                                    f'После синхронизации обнаружены товары без фото: {examples_text}. '
+                                    f'Добавьте фотографии к этим товарам для лучших продаж.'
+                                ),
+                                link='/products?filter=no_photos',
+                                metadata={'no_photo_count': count,
+                                      'no_photo_nm_ids': [p.nm_id for p in no_photo_products[:20]]},
+                        )
+                        app.logger.info(f"⚠️ {count} products without photos for seller_id={seller_id}")
+                except Exception as photo_check_error:
+                    app.logger.warning(f"⚠️ Photo check failed: {photo_check_error}")
 
         except WBAuthException as e:
             with flask_app.app_context():

@@ -112,7 +112,161 @@ class EnrichmentService:
                         )
                         return imp
 
+        # 4. Поиск через SupplierProduct (централизованный каталог)
+        try:
+            from models import SupplierProduct
+            sp = self._find_supplier_product(product, seller_id)
+            if sp:
+                # Ищем ImportedProduct привязанный к этому SupplierProduct
+                imp = ImportedProduct.query.filter_by(
+                    supplier_product_id=sp.id, seller_id=seller_id
+                ).first()
+                if not imp:
+                    imp = ImportedProduct.query.filter_by(
+                        supplier_product_id=sp.id
+                    ).first()
+                if imp:
+                    logger.debug(f"[Enrich] Match via SupplierProduct: sp={sp.id} → imp={imp.id}")
+                    return imp
+        except Exception as e:
+            logger.debug(f"[Enrich] SupplierProduct search failed: {e}")
+
         return None
+
+    def _find_supplier_product(self, product, seller_id: int):
+        """
+        Находит SupplierProduct для WB-карточки по vendor_code, barcode или title.
+        """
+        from models import SupplierProduct, SellerSupplier
+        from services.pricing_engine import extract_supplier_product_id
+
+        # Получаем supplier_ids для данного продавца
+        seller_suppliers = SellerSupplier.query.filter_by(seller_id=seller_id).all()
+        supplier_ids = [ss.supplier_id for ss in seller_suppliers] if seller_suppliers else []
+
+        base_query = SupplierProduct.query
+        if supplier_ids:
+            base_query = base_query.filter(SupplierProduct.supplier_id.in_(supplier_ids))
+
+        # По vendor_code
+        if product.vendor_code:
+            numeric_pid = extract_supplier_product_id(product.vendor_code)
+            if numeric_pid:
+                candidates = [str(numeric_pid), f'id-{numeric_pid}']
+                for ext_id in candidates:
+                    sp = base_query.filter_by(external_id=ext_id).first()
+                    if sp:
+                        return sp
+
+        # По supplier_vendor_code
+        if product.supplier_vendor_code:
+            sp = base_query.filter_by(vendor_code=product.supplier_vendor_code).first()
+            if sp:
+                return sp
+
+        return None
+
+    def find_supplier_data_with_source(self, product, seller_id: int) -> Dict[str, Any]:
+        """
+        Расширенный поиск данных поставщика с информацией об источнике.
+        Возвращает и ImportedProduct и SupplierProduct (если найден).
+        """
+        from models import ImportedProduct, SupplierProduct
+
+        imp = self.find_supplier_data(product, seller_id)
+        sp = None
+
+        # Пытаемся найти SupplierProduct для дополнительных данных
+        if imp and imp.supplier_product_id:
+            sp = SupplierProduct.query.get(imp.supplier_product_id)
+        elif not sp:
+            try:
+                sp = self._find_supplier_product(product, seller_id)
+            except Exception:
+                pass
+
+        return {
+            'imported_product': imp,
+            'supplier_product': sp,
+            'has_data': imp is not None,
+            'has_supplier_product': sp is not None,
+        }
+
+    # =========================================================================
+    # BATCH: проверка доступности обогащения для списка карточек
+    # =========================================================================
+
+    def check_enrichment_availability(self, product_ids: List[int], seller_id: int) -> Dict[int, Dict]:
+        """
+        Быстрая проверка наличия данных поставщика для списка карточек.
+        Используется для отображения индикаторов в списке товаров.
+
+        Returns:
+            {product_id: {'available': bool, 'imp_id': int|None, 'photo_count': int, 'has_description': bool}}
+        """
+        from models import Product, ImportedProduct
+
+        result = {}
+
+        # Оптимизация: сначала ищем по FK за один запрос
+        fk_matches = ImportedProduct.query.filter(
+            ImportedProduct.product_id.in_(product_ids),
+        ).all()
+        fk_map = {}
+        for imp in fk_matches:
+            if imp.product_id not in fk_map:
+                fk_map[imp.product_id] = imp
+
+        for pid in product_ids:
+            if pid in fk_map:
+                imp = fk_map[pid]
+                photo_count = 0
+                if imp.photo_urls:
+                    try:
+                        photo_count = len(json.loads(imp.photo_urls))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                result[pid] = {
+                    'available': True,
+                    'imp_id': imp.id,
+                    'photo_count': photo_count,
+                    'has_description': bool(imp.description),
+                    'has_title': bool(imp.ai_seo_title or imp.title),
+                    'has_characteristics': bool(imp.characteristics and imp.characteristics not in ('{}', '[]', 'null')),
+                }
+            else:
+                result[pid] = {
+                    'available': False,
+                    'imp_id': None,
+                    'photo_count': 0,
+                    'has_description': False,
+                    'has_title': False,
+                    'has_characteristics': False,
+                }
+
+        # Для карточек без FK-связи — пытаемся найти по vendor_code (дорого, но точечно)
+        missing = [pid for pid in product_ids if not result[pid]['available']]
+        if missing and len(missing) <= 50:  # Ограничиваем для производительности
+            products = Product.query.filter(Product.id.in_(missing)).all()
+            for product in products:
+                imp = self.find_supplier_data(product, seller_id)
+                if imp:
+                    photo_count = 0
+                    if imp.photo_urls:
+                        try:
+                            photo_count = len(json.loads(imp.photo_urls))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    result[product.id] = {
+                        'available': True,
+                        'imp_id': imp.id,
+                        'photo_count': photo_count,
+                        'has_description': bool(imp.description),
+                        'has_title': bool(imp.ai_seo_title or imp.title),
+                        'has_characteristics': bool(imp.characteristics and imp.characteristics not in ('{}', '[]', 'null')),
+                    }
+
+        return result
 
     # =========================================================================
     # PREVIEW: формирование diff между WB и поставщиком
@@ -492,6 +646,126 @@ class EnrichmentService:
 
         return []
 
+    def apply_selective_photos(
+        self,
+        product,
+        imp,
+        photo_indices: List[int],
+        strategy: str,
+        seller,
+        wb_client,
+    ) -> Dict:
+        """
+        Применяет выборочные фото от поставщика к WB-карточке.
+
+        Args:
+            product: Product ORM объект
+            imp: ImportedProduct ORM объект
+            photo_indices: список индексов фото поставщика для применения
+            strategy: 'replace' | 'append' | 'only_if_empty'
+            seller: Seller ORM объект
+            wb_client: WildberriesAPIClient экземпляр
+
+        Returns:
+            {'success': bool, 'uploaded': int, 'failed': int, 'error': str|None}
+        """
+        from models import db, CardEditHistory
+        from services.photo_cache import get_photo_cache
+
+        if not imp.photo_urls:
+            return {'success': False, 'error': 'Нет фото у поставщика'}
+
+        try:
+            all_photos = json.loads(imp.photo_urls)
+        except (json.JSONDecodeError, TypeError):
+            return {'success': False, 'error': 'Ошибка данных фото'}
+
+        # Фильтруем только запрошенные индексы
+        selected_photos = []
+        for idx in photo_indices:
+            if 0 <= idx < len(all_photos):
+                selected_photos.append(all_photos[idx])
+
+        if not selected_photos:
+            return {'success': False, 'error': 'Нет валидных фото по указанным индексам'}
+
+        # Проверка стратегии
+        current_photos = json.loads(product.photos_json or '[]')
+        if strategy == 'only_if_empty' and current_photos:
+            return {'success': True, 'uploaded': 0, 'skipped': True, 'reason': 'already_has_photos'}
+
+        cache = get_photo_cache()
+        supplier_type = imp.source_type or 'unknown'
+        external_id = imp.external_id or ''
+
+        # Получаем auth cookies
+        auth_cookies = None
+        if supplier_type == 'sexoptovik':
+            auth_cookies = self._get_sexoptovik_auth(seller)
+
+        # Загружаем выбранные фото в кэш
+        for ph in selected_photos:
+            if not isinstance(ph, dict):
+                continue
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            if url and not cache.is_cached(supplier_type, external_id, url):
+                fallbacks = []
+                if ph.get('blur') and ph['blur'] != url:
+                    fallbacks.append(ph['blur'])
+                if ph.get('original') and ph['original'] != url:
+                    fallbacks.append(ph['original'])
+                cache.queue_download(supplier_type, external_id, url,
+                                     auth_cookies=auth_cookies,
+                                     fallback_urls=fallbacks)
+
+        # Ждём кэширования
+        cached_paths = self._wait_for_cached_photos(selected_photos, supplier_type, external_id, cache, timeout=60)
+
+        if not cached_paths:
+            return {'success': False, 'error': 'Не удалось загрузить фото поставщика'}
+
+        # Снапшот для истории
+        snapshot_before = _create_product_snapshot(product)
+
+        # Загружаем в WB
+        try:
+            upload_results = wb_client.upload_photos_to_card(
+                product.nm_id,
+                cached_paths,
+                seller_id=seller.id
+            )
+            uploaded_count = sum(1 for r in upload_results if r.get('success'))
+            failed_count = len(upload_results) - uploaded_count
+
+            product.updated_at = datetime.utcnow()
+
+            # История
+            snapshot_after = _create_product_snapshot(product)
+            history = CardEditHistory(
+                product_id=product.id,
+                seller_id=seller.id,
+                action='update',
+                changed_fields=['photos'],
+                snapshot_before=snapshot_before,
+                snapshot_after=snapshot_after,
+                wb_synced=uploaded_count > 0,
+                wb_sync_status='success' if uploaded_count > 0 else 'failed',
+                user_comment=f'Выборочное обогащение фото ({len(photo_indices)} шт, стратегия: {strategy})'
+            )
+            db.session.add(history)
+            db.session.commit()
+
+            return {
+                'success': uploaded_count > 0,
+                'uploaded': uploaded_count,
+                'failed': failed_count,
+                'total': len(cached_paths),
+                'strategy': strategy,
+            }
+        except Exception as e:
+            logger.error(f"[Enrich] Selective photo upload error for nmID={product.nm_id}: {e}")
+            return {'success': False, 'uploaded': 0, 'error': str(e)}
+
     def _apply_photos(self, product, imp, strategy: str, seller, wb_client) -> Dict:
         """
         Скачивает фото поставщика (через кэш) и загружает в карточку WB.
@@ -500,8 +774,14 @@ class EnrichmentService:
             'replace'      - заменить все фото
             'append'       - добавить в конец
             'only_if_empty' - только если у карточки нет фото
+            'selective'    - пропустить (фото обрабатываются через apply_selective_photos)
         """
         from services.photo_cache import get_photo_cache, PhotoCacheManager
+
+        # Стратегия selective — фото обрабатываются отдельно
+        if strategy == 'selective':
+            logger.info(f"[Enrich] Photos skipped (strategy=selective, handled separately)")
+            return {'skipped': True, 'reason': 'selective_mode'}
 
         # Проверка стратегии
         current_photos = json.loads(product.photos_json or '[]')
@@ -714,7 +994,7 @@ class EnrichmentService:
 
             # Создаём WB клиент
             try:
-                wb_client = WildberriesAPIClient(seller.get_wb_api_key())
+                wb_client = WildberriesAPIClient(seller.wb_api_key)
             except Exception as e:
                 job.status = 'failed'
                 db.session.commit()

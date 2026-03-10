@@ -419,6 +419,43 @@
         }
         .flash-close:hover { opacity: 1; }
 
+        /* Notification bell animation */
+        @keyframes bell-ring {
+            0%   { transform: rotate(0deg); }
+            10%  { transform: rotate(14deg); }
+            20%  { transform: rotate(-12deg); }
+            30%  { transform: rotate(10deg); }
+            40%  { transform: rotate(-8deg); }
+            50%  { transform: rotate(6deg); }
+            60%  { transform: rotate(-4deg); }
+            70%  { transform: rotate(2deg); }
+            80%  { transform: rotate(-1deg); }
+            100% { transform: rotate(0deg); }
+        }
+        @keyframes bell-glow {
+            0%, 100% { filter: drop-shadow(0 0 0px transparent); }
+            50%      { filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.6)); }
+        }
+        .notif-bell-active svg {
+            animation: bell-ring 1s ease-in-out infinite;
+            transform-origin: 50% 0%;
+            color: #f87171;
+        }
+        .notif-bell-active .notif-badge {
+            animation: bell-glow 2s ease-in-out infinite;
+        }
+        .notif-bell-active::after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 8px;
+            height: 8px;
+            background: #ef4444;
+            border-radius: 50%;
+            animation: bell-glow 2s ease-in-out infinite;
+        }
+
         /* =========================================
            GLOBAL TAILWIND OVERRIDES — Editorial Style
            ========================================= */
@@ -903,6 +940,24 @@
 
         </nav>
 
+        <!-- Notifications bell (always visible) -->
+        <div class="sidebar-section" style="padding: 4px 8px; margin-bottom: 4px;">
+            <a href="{{ url_for('notifications_page') }}"
+               class="sidebar-link {% if request.endpoint == 'notifications_page' %}active{% endif %}"
+               :class="{ 'notif-bell-active': $store.notif.unread > 0 }"
+               style="position:relative">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                <span x-show="sidebarOpen" x-cloak>Уведомления</span>
+                <span x-show="$store.notif.unread > 0"
+                      x-text="$store.notif.unread > 99 ? '99+' : $store.notif.unread"
+                      class="notif-badge absolute inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
+                      :style="sidebarOpen ? 'right: 8px; top: 50%; transform: translateY(-50%)' : 'top: 2px; right: 2px'"
+                      x-cloak></span>
+            </a>
+        </div>
+
         <!-- User -->
         <div class="sidebar-footer">
             <div x-data="{ userMenuOpen: false }" style="position:relative">
@@ -1004,8 +1059,58 @@
         </template>
     </div>
 
-    <!-- Notification sound (subtle chime) -->
-    <audio id="notif-sound" preload="auto" src="data:audio/wav;base64,UklGRl4AAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YToAAAD/////AAAA//8BAP////8AAAABAP///wEA//8AAAEAAAD//wAAAQAAAP//AQAAAP//AQD//w=="></audio>
+    <!-- Notification sound (Web Audio API chime) -->
+    <script>
+    window._notifChime = {
+        _ctx: null,
+        _getCtx() {
+            if (!this._ctx) {
+                this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (this._ctx.state === 'suspended') {
+                this._ctx.resume();
+            }
+            return this._ctx;
+        },
+        play(type) {
+            try {
+                const ctx = this._getCtx();
+                const now = ctx.currentTime;
+                const vol = 0.15;
+
+                if (type === 'warning') {
+                    // Warning: два коротких тона пониже
+                    this._tone(ctx, now, 440, 0.12, vol);
+                    this._tone(ctx, now + 0.15, 392, 0.15, vol);
+                } else if (type === 'danger') {
+                    // Danger: тройной нисходящий
+                    this._tone(ctx, now, 523, 0.1, vol);
+                    this._tone(ctx, now + 0.12, 440, 0.1, vol);
+                    this._tone(ctx, now + 0.24, 349, 0.15, vol);
+                } else {
+                    // Default (info/success): мягкий восходящий chime
+                    this._tone(ctx, now, 587, 0.12, vol);         // D5
+                    this._tone(ctx, now + 0.12, 784, 0.12, vol);  // G5
+                    this._tone(ctx, now + 0.24, 880, 0.25, vol);  // A5
+                }
+            } catch(e) {}
+        },
+        _tone(ctx, when, freq, dur, vol) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            // Мягкая атака и затухание
+            gain.gain.setValueAtTime(0, when);
+            gain.gain.linearRampToValueAtTime(vol, when + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(when);
+            osc.stop(when + dur + 0.05);
+        }
+    };
+    </script>
 
     <!-- Global notification store -->
     <script>
@@ -1027,12 +1132,28 @@
                     const d = await r.json();
                     const prev = this.unread;
                     this.unread = d.unread_count || 0;
-                    // If new notifications appeared, fetch the latest and show toast
-                    if (this.unread > prev && prev >= 0 && this._lastCheck > 0) {
+
+                    // Первый запуск: если есть непрочитанные — показать сводку
+                    if (this._lastCheck === 0 && this.unread > 0) {
+                        this.showToast('info',
+                            `У вас ${this.unread} ${this._pluralNotif(this.unread)}`,
+                            'Нажмите чтобы посмотреть',
+                            '/notifications');
+                    }
+                    // Последующие опросы: если появились новые — показать последнее
+                    else if (this.unread > prev && prev >= 0 && this._lastCheck > 0) {
                         this.fetchLatestAndToast();
                     }
                     this._lastCheck = Date.now();
                 } catch(e) {}
+            },
+
+            _pluralNotif(n) {
+                const mod = n % 10;
+                const mod100 = n % 100;
+                if (mod === 1 && mod100 !== 11) return 'непрочитанное уведомление';
+                if (mod >= 2 && mod <= 4 && (mod100 < 12 || mod100 > 14)) return 'непрочитанных уведомления';
+                return 'непрочитанных уведомлений';
             },
 
             async fetchLatestAndToast() {
@@ -1049,11 +1170,8 @@
             showToast(category, title, message, link) {
                 const id = ++this._toastId;
                 this.toasts.push({id, category, title, message, link, visible: true});
-                // Play sound
-                try {
-                    const audio = document.getElementById('notif-sound');
-                    if (audio) { audio.currentTime = 0; audio.volume = 0.3; audio.play().catch(()=>{}); }
-                } catch(e) {}
+                // Play chime sound matching notification type
+                if (window._notifChime) window._notifChime.play(category);
                 // Auto-dismiss after 6s
                 setTimeout(() => this.dismissToast(id), 6000);
                 // Keep max 5 toasts

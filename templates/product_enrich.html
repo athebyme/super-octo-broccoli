@@ -166,7 +166,7 @@ function supplierSearchApp(suggestedId, productId) {
       <div class="flex items-center gap-2">
         <button @click="selectAllChanged()" type="button"
                 class="px-3 py-2 text-xs font-medium bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors">
-          <span x-text="allSelected ? 'Снять всё' : 'Выбрать всё'"></span>
+          <span x-text="allSelected ? 'Снять все' : 'Выбрать все'"></span>
         </button>
         <button @click="applyEnrichment()" :disabled="loading || selectedCount === 0"
                 :class="{'opacity-50 cursor-not-allowed': loading || selectedCount === 0}"
@@ -228,9 +228,10 @@ function supplierSearchApp(suggestedId, productId) {
           </div>
         </div>
         <div x-show="selected.photos" x-transition class="flex items-center gap-2">
-          <span class="text-xs text-gray-500">Стратегия:</span>
+          <span class="text-xs text-gray-500">Режим:</span>
           <select x-model="photoStrategy"
                   class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+            <option value="selective">Выборочно</option>
             <option value="replace">Заменить все</option>
             <option value="append">Добавить к текущим</option>
             <option value="only_if_empty">Только если нет фото</option>
@@ -239,10 +240,37 @@ function supplierSearchApp(suggestedId, productId) {
       </div>
 
       <div class="p-5">
+        <!-- Подсказка по стратегии -->
+        <div x-show="selected.photos" class="mb-4">
+          <div x-show="photoStrategy === 'selective'" class="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-blue-700">
+              <span class="font-semibold">Выборочный режим:</span> Отметьте галочками фото поставщика, которые хотите добавить к карточке WB. Текущие фото на WB не будут удалены.
+            </p>
+          </div>
+          <div x-show="photoStrategy === 'replace'" class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-amber-700">
+              <span class="font-semibold">Замена:</span> Все текущие фото на WB будут заменены фотографиями поставщика. Будьте осторожны, если загружали фото вручную!
+            </p>
+          </div>
+          <div x-show="photoStrategy === 'append'" class="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-green-700">
+              <span class="font-semibold">Добавление:</span> Фото поставщика будут добавлены после текущих фото карточки.
+            </p>
+          </div>
+          <div x-show="photoStrategy === 'only_if_empty'" class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-gray-600">
+              <span class="font-semibold">Только если нет фото:</span> Фото будут загружены только если у карточки WB ещё нет фотографий.
+              {% if preview.photos.current_count > 0 %}
+              <span class="text-amber-600 font-semibold">У карточки уже {{ preview.photos.current_count }} фото — этот режим пропустит загрузку.</span>
+              {% endif %}
+            </p>
+          </div>
+        </div>
+
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <!-- Текущие фото WB -->
           <div>
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Текущие фото WB</p>
+            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Текущие фото WB ({{ preview.photos.current_count }} шт)</p>
             <div class="grid grid-cols-4 gap-2">
               {% for i in range(1, 8) %}
                 <div class="aspect-square rounded-lg bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center relative group">
@@ -267,14 +295,43 @@ function supplierSearchApp(suggestedId, productId) {
             </div>
           </div>
 
-          <!-- Фото от поставщика -->
+          <!-- Фото от поставщика с чекбоксами -->
           <div>
-            <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">Фото поставщика</p>
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-xs font-semibold text-indigo-600 uppercase tracking-wide">Фото поставщика</p>
+              <template x-if="photoStrategy === 'selective' && selected.photos">
+                <div class="flex items-center gap-2">
+                  <button @click="selectAllPhotos()"
+                          class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                    <span x-text="allPhotosSelected ? 'Снять все' : 'Выбрать все'"></span>
+                  </button>
+                  <span class="text-xs text-gray-400" x-text="`(${selectedPhotoCount} из {{ preview.photos.supplier_photos | length }})`"></span>
+                </div>
+              </template>
+            </div>
             {% if preview.photos.supplier_photos %}
               <div class="grid grid-cols-4 gap-2">
                 {% for photo in preview.photos.supplier_photos %}
-                  <div class="aspect-square rounded-lg overflow-hidden border border-gray-200 bg-gray-100 relative group cursor-pointer"
-                       @click="openLightbox('/api/enrich/photo-proxy/{{ imported_product.id }}/{{ loop.index0 }}')">
+                  <div class="aspect-square rounded-lg overflow-hidden border relative group cursor-pointer transition-all"
+                       :class="photoStrategy === 'selective' && selected.photos
+                         ? (selectedPhotos[{{ loop.index0 }}]
+                           ? 'border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50'
+                           : 'border-gray-200 bg-gray-100 hover:border-indigo-300')
+                         : 'border-gray-200 bg-gray-100'"
+                       @click="photoStrategy === 'selective' && selected.photos ? togglePhoto({{ loop.index0 }}) : openLightbox('/api/enrich/photo-proxy/{{ imported_product.id }}/{{ loop.index0 }}')">
+
+                    {# Чекбокс для выборочного режима #}
+                    <template x-if="photoStrategy === 'selective' && selected.photos">
+                      <div class="absolute top-1.5 left-1.5 z-10">
+                        <div class="w-5 h-5 rounded border-2 flex items-center justify-center transition-colors"
+                             :class="selectedPhotos[{{ loop.index0 }}] ? 'bg-indigo-600 border-indigo-600' : 'bg-white/90 border-gray-300'">
+                          <svg x-show="selectedPhotos[{{ loop.index0 }}]" class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+                          </svg>
+                        </div>
+                      </div>
+                    </template>
+
                     <img src="/api/enrich/photo-proxy/{{ imported_product.id }}/{{ loop.index0 }}"
                          class="w-full h-full object-cover transition-transform group-hover:scale-105"
                          loading="lazy"
@@ -287,18 +344,31 @@ function supplierSearchApp(suggestedId, productId) {
                         <span class="text-[10px] text-gray-400 mt-0.5 block">Загрузка...</span>
                       </div>
                     </div>
-                    <!-- Оверлей с зумом -->
-                    <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                      <svg class="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
-                      </svg>
-                    </div>
+                    <!-- Zoom overlay (non-selective mode) -->
+                    <template x-if="photoStrategy !== 'selective' || !selected.photos">
+                      <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center"
+                           @click.stop="openLightbox('/api/enrich/photo-proxy/{{ imported_product.id }}/{{ loop.index0 }}')">
+                        <svg class="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
+                        </svg>
+                      </div>
+                    </template>
                     <span class="absolute bottom-0.5 right-0.5 text-[10px] text-white bg-black/50 px-1 rounded">{{ loop.index }}</span>
                     {% if photo.cached %}
-                    <span class="absolute top-0.5 left-0.5 w-2 h-2 bg-green-400 rounded-full" title="Закэшировано"></span>
+                    <span class="absolute top-0.5 right-0.5 w-2 h-2 bg-green-400 rounded-full" title="Закэшировано"></span>
                     {% endif %}
                   </div>
                 {% endfor %}
+              </div>
+
+              <!-- Подсчет выбранных фото -->
+              <div x-show="photoStrategy === 'selective' && selected.photos && selectedPhotoCount > 0"
+                   x-transition
+                   class="mt-3 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
+                <p class="text-xs text-indigo-700">
+                  Выбрано <span class="font-bold" x-text="selectedPhotoCount"></span> фото для добавления к карточке WB.
+                  Они будут загружены в дополнение к текущим {{ preview.photos.current_count }} фото.
+                </p>
               </div>
             {% else %}
               <div class="flex items-center justify-center h-20 bg-gray-50 rounded-lg border border-dashed border-gray-300">
@@ -497,6 +567,8 @@ function supplierSearchApp(suggestedId, productId) {
   <div class="sticky bottom-0 mt-6 bg-white/95 backdrop-blur-sm border-t border-gray-200 px-6 py-4 flex items-center justify-between shadow-lg rounded-t-xl -mx-4 sm:-mx-6 lg:-mx-8">
     <div class="text-sm text-gray-500">
       Выбрано: <span class="font-semibold text-gray-900" x-text="selectedCount"></span> поля(ей)
+      <span x-show="photoStrategy === 'selective' && selected.photos && selectedPhotoCount > 0"
+            class="ml-2 text-indigo-600 font-medium" x-text="`(${selectedPhotoCount} фото)`"></span>
       <span x-show="lastResult" class="ml-3 text-green-600 font-medium" x-text="lastResult"></span>
     </div>
     <div class="flex items-center gap-3">
@@ -535,9 +607,18 @@ function supplierSearchApp(suggestedId, productId) {
 
 <script>
 function enrichApp() {
+    const totalSupplierPhotos = {{ preview.photos.supplier_photos | length }};
+
+    // Инициализация: все фото выбраны по умолчанию
+    const initialPhotos = {};
+    for (let i = 0; i < totalSupplierPhotos; i++) {
+        initialPhotos[i] = true;
+    }
+
     return {
         loading: false,
-        photoStrategy: 'replace',
+        photoStrategy: 'selective',
+        selectedPhotos: initialPhotos,
         selected: {
             photos: {{ 'true' if preview.photos.has_change else 'false' }},
             title: {{ 'true' if preview.title.has_change else 'false' }},
@@ -558,9 +639,28 @@ function enrichApp() {
             return Object.values(this.selected).every(Boolean);
         },
 
+        get selectedPhotoCount() {
+            return Object.values(this.selectedPhotos).filter(Boolean).length;
+        },
+
+        get allPhotosSelected() {
+            return this.selectedPhotoCount === totalSupplierPhotos;
+        },
+
         selectAllChanged() {
             const newVal = !this.allSelected;
             Object.keys(this.selected).forEach(k => this.selected[k] = newVal);
+        },
+
+        togglePhoto(index) {
+            this.selectedPhotos[index] = !this.selectedPhotos[index];
+        },
+
+        selectAllPhotos() {
+            const newVal = !this.allPhotosSelected;
+            for (let i = 0; i < totalSupplierPhotos; i++) {
+                this.selectedPhotos[i] = newVal;
+            }
         },
 
         openLightbox(url) {
@@ -580,22 +680,47 @@ function enrichApp() {
                 .filter(([k, v]) => v)
                 .map(([k]) => k);
 
+            // Собираем выбранные индексы фото
+            let photoIndices = null;
+            if (this.photoStrategy === 'selective' && this.selected.photos) {
+                photoIndices = [];
+                for (let i = 0; i < totalSupplierPhotos; i++) {
+                    if (this.selectedPhotos[i]) {
+                        photoIndices.push(i);
+                    }
+                }
+                if (photoIndices.length === 0 && fields.includes('photos')) {
+                    this.showToast(false, 'Выберите хотя бы одно фото поставщика или смените стратегию');
+                    this.loading = false;
+                    return;
+                }
+            }
+
             try {
+                const body = {
+                    fields,
+                    photo_strategy: this.photoStrategy === 'selective' ? 'append' : this.photoStrategy,
+                    supplier_id: {{ imported_product.id }}
+                };
+                if (photoIndices !== null) {
+                    body.photo_indices = photoIndices;
+                }
+
                 const resp = await fetch('/api/products/{{ product.id }}/enrich/apply', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        fields,
-                        photo_strategy: this.photoStrategy,
-                        supplier_id: {{ imported_product.id }}
-                    })
+                    body: JSON.stringify(body)
                 });
 
                 const data = await resp.json();
 
                 if (resp.ok && data.success) {
                     const applied = (data.fields_applied || []).join(', ');
-                    this.showToast(true, `Обогащение применено: ${applied || 'без изменений'}`);
+                    let msg = `Обогащение применено: ${applied || 'без изменений'}`;
+                    if (data.photos && data.photos.uploaded) {
+                        msg += ` (фото: ${data.photos.uploaded} загружено)`;
+                    }
+                    this.showToast(true, msg);
                     this.lastResult = `Обогащено: ${applied}`;
 
                     setTimeout(() => {

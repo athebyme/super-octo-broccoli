@@ -67,10 +67,33 @@
           <div x-show="fields.photos" x-transition class="flex items-center gap-2 ml-4">
             <select x-model="photoStrategy"
                     class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-500">
-              <option value="replace">Заменить все</option>
-              <option value="append">Добавить в конец</option>
               <option value="only_if_empty">Только если нет фото</option>
+              <option value="append">Добавить в конец</option>
+              <option value="replace">Заменить все</option>
             </select>
+          </div>
+        </div>
+
+        <!-- Пояснение по стратегии фото -->
+        <div x-show="fields.photos" x-transition class="py-2 px-3 -mt-1 mb-1">
+          <div x-show="photoStrategy === 'only_if_empty'" class="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-green-700">
+              <span class="font-semibold">Безопасный режим:</span> Фото будут загружены только для карточек, у которых ещё нет фотографий на WB.
+              Это рекомендуемый вариант для массовых операций — ваши вручную загруженные фото не пострадают.
+            </p>
+          </div>
+          <div x-show="photoStrategy === 'append'" class="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-blue-700">
+              <span class="font-semibold">Добавление:</span> Фото поставщика будут добавлены после текущих фото каждой карточки.
+              Это может привести к дублированию, если фото поставщика уже были загружены ранее.
+            </p>
+          </div>
+          <div x-show="photoStrategy === 'replace'" class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            <p class="text-xs text-amber-700">
+              <span class="font-semibold">Замена:</span> Все текущие фото карточек будут заменены фотографиями поставщика.
+              <span class="font-bold">Осторожно!</span> Если вы загружали фото вручную на WB, они будут потеряны.
+              Для точечной работы с фото используйте обогащение каждой карточки отдельно.
+            </p>
           </div>
         </div>
 

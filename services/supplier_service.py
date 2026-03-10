@@ -1480,6 +1480,13 @@ class SupplierService:
 
         db.session.commit()
 
+        # Проверяем товары без фотографий и уведомляем продавца
+        if result.imported > 0:
+            try:
+                _notify_products_without_photos(seller_id, result.imported_product_ids)
+            except Exception as e:
+                logger.warning(f"Ошибка при проверке фотографий: {e}")
+
         logger.info(
             f"Импорт к продавцу {seller_id}: "
             f"+{result.imported} / skip={result.skipped} / err={result.errors}"
@@ -3550,3 +3557,65 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
         imp.ai_bullets = sp.ai_bullets_json
 
     imp.updated_at = datetime.utcnow()
+
+
+def _notify_products_without_photos(seller_id: int, product_ids: List[int]) -> None:
+    """Проверить импортированные товары на наличие фотографий и уведомить продавца.
+
+    Дедупликация: не чаще 1 раза в час для одного продавца.
+    """
+    if not product_ids:
+        return
+
+    # Дедупликация — не спамим
+    from models import Notification
+    from datetime import timedelta
+    recent_cutoff = datetime.utcnow() - timedelta(hours=1)
+    already_sent = Notification.query.filter(
+        Notification.seller_id == seller_id,
+        Notification.title.like('%без фотографий%'),
+        Notification.created_at >= recent_cutoff,
+    ).first()
+    if already_sent:
+        return
+
+    products = ImportedProduct.query.filter(
+        ImportedProduct.id.in_(product_ids),
+        ImportedProduct.seller_id == seller_id,
+    ).all()
+
+    no_photo_products = []
+    for p in products:
+        has_photos = False
+        if p.photo_urls:
+            try:
+                urls = json.loads(p.photo_urls) if isinstance(p.photo_urls, str) else p.photo_urls
+                if isinstance(urls, list) and len(urls) > 0:
+                    has_photos = True
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if not has_photos:
+            no_photo_products.append(p)
+
+    if not no_photo_products:
+        return
+
+    count = len(no_photo_products)
+    examples = [p.title or p.external_id or f"ID {p.id}" for p in no_photo_products[:5]]
+    examples_text = ", ".join(f'"{e}"' for e in examples)
+    if count > 5:
+        examples_text += f" и ещё {count - 5}"
+
+    from seller_platform import create_notification
+    create_notification(
+        seller_id=seller_id,
+        category='warning',
+        title=f'{count} товар(ов) без фотографий',
+        message=(
+            f'После импорта обнаружены товары без фото: {examples_text}. '
+            f'Товары без фотографий не могут быть загружены на Wildberries. '
+            f'Перейдите в «Мои товары» чтобы загрузить фотографии.'
+        ),
+        link='/my-products?status=pending',
+        metadata={'no_photo_product_ids': [p.id for p in no_photo_products]},
+    )
