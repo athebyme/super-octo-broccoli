@@ -903,6 +903,23 @@
 
         </nav>
 
+        <!-- Notifications bell (always visible) -->
+        <div class="sidebar-section" style="padding: 4px 8px; margin-bottom: 4px;">
+            <a href="{{ url_for('notifications_page') }}"
+               class="sidebar-link {% if request.endpoint == 'notifications_page' %}active{% endif %}"
+               style="position:relative">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                </svg>
+                <span x-show="sidebarOpen" x-cloak>Уведомления</span>
+                <span x-show="$store.notif.unread > 0"
+                      x-text="$store.notif.unread > 99 ? '99+' : $store.notif.unread"
+                      class="absolute inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
+                      :style="sidebarOpen ? 'right: 8px; top: 50%; transform: translateY(-50%)' : 'top: 2px; right: 2px'"
+                      x-cloak></span>
+            </a>
+        </div>
+
         <!-- User -->
         <div class="sidebar-footer">
             <div x-data="{ userMenuOpen: false }" style="position:relative">
@@ -1027,12 +1044,28 @@
                     const d = await r.json();
                     const prev = this.unread;
                     this.unread = d.unread_count || 0;
-                    // If new notifications appeared, fetch the latest and show toast
-                    if (this.unread > prev && prev >= 0 && this._lastCheck > 0) {
+
+                    // Первый запуск: если есть непрочитанные — показать сводку
+                    if (this._lastCheck === 0 && this.unread > 0) {
+                        this.showToast('info',
+                            `У вас ${this.unread} ${this._pluralNotif(this.unread)}`,
+                            'Нажмите чтобы посмотреть',
+                            '/notifications');
+                    }
+                    // Последующие опросы: если появились новые — показать последнее
+                    else if (this.unread > prev && prev >= 0 && this._lastCheck > 0) {
                         this.fetchLatestAndToast();
                     }
                     this._lastCheck = Date.now();
                 } catch(e) {}
+            },
+
+            _pluralNotif(n) {
+                const mod = n % 10;
+                const mod100 = n % 100;
+                if (mod === 1 && mod100 !== 11) return 'непрочитанное уведомление';
+                if (mod >= 2 && mod <= 4 && (mod100 < 12 || mod100 > 14)) return 'непрочитанных уведомления';
+                return 'непрочитанных уведомлений';
             },
 
             async fetchLatestAndToast() {
