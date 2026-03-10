@@ -135,7 +135,12 @@ WB_ADULT_CATEGORIES = {
     2865: "Презервативы",
 }
 
-# Расширенный маппинг: ключевые слова -> WB category
+
+# Справочник ключевых слов -> WB category ID.
+# НЕ используется для прямого назначения категории (это приводило к ошибкам,
+# например "комплект" мог быть БДСМ или бельём). Используется ТОЛЬКО как
+# подсказка для AI — функция get_keyword_hints() собирает совпадения
+# и передаёт их в промпт, а AI решает с учётом полного контекста.
 CATEGORY_KEYWORDS_MAPPING = {
     # Анальные игрушки
     'анальные бусы': 5065,
@@ -155,7 +160,7 @@ CATEGORY_KEYWORDS_MAPPING = {
     'вибраторы': 5067,
     'вибропуля': 5116,
     'вибропули': 5116,
-    'виброкольцо': 5067,  # Может быть отдельная категория
+    'виброкольцо': 5067,
     'вибротрусики': 5129,
     'виброяйцо': 5118,
     'виброяйца': 5118,
@@ -222,10 +227,15 @@ CATEGORY_KEYWORDS_MAPPING = {
     'мастурбатор': 5070,
     'мастурбаторы': 5070,
     'мастурбатор мужской': 5070,
+    'влагалище': 5070,
+    'вагина': 5070,
+    'анус': 5070,
     'насадка на мастурбатор': 6302,
     'насадки на мастурбатор': 6302,
 
     # Белье дополнительное
+    'комплект': 2607,
+    'комплект эротик': 2607,
     'колготки': 2605,
     'комбинезон': 2606,
     'корсет': 2608,
@@ -235,9 +245,12 @@ CATEGORY_KEYWORDS_MAPPING = {
     'чулки': 2616,
     'топ': 2615,
     'юбка': 2618,
+    'юбочка': 2618,
     'шорты': 2617,
     'пеньюар': 2612,
+    'платье': 2613,
     'пояс': 2614,
+    'сорочка': 2611,
 
     # БДСМ дополнительно
     'кляп': 5025,
@@ -343,6 +356,21 @@ CATEGORY_KEYWORDS_MAPPING = {
 
 # Маппинг по точным совпадениям категорий из CSV (sexoptovik)
 CSV_TO_WB_EXACT_MAPPING = {
+    # Мастурбаторы и вагины (категории Sexoptovik)
+    'Мастурбаторы и вагины': 5070,
+    'Мастурбаторы и вагины > Вагины с вибрацией': 5070,
+    'Мастурбаторы и вагины > Вагины без вибрации': 5070,
+    'Мастурбаторы и вагины > Мастурбаторы': 5070,
+    'Мастурбаторы и вагины > Мастурбаторы с вибрацией': 5070,
+    'Вагины с вибрацией': 5070,
+    'Вагины без вибрации': 5070,
+
+    # Насадки и кольца (категория Sexoptovik — эрекционные кольца + насадки)
+    'Насадки и кольца': 5090,  # Эрекционные кольца как основной тип
+    'Насадки и кольца > Эрекционные кольца': 5090,
+    'Насадки и кольца > Насадки на член': 5091,
+    'Насадки и кольца > Насадки': 5091,
+
     # Анальные
     'Анальные стимуляторы и пробки': 5064,
     'Анальные стимуляторы': 5064,  # Добавлено
@@ -550,9 +578,10 @@ def get_best_category_match(csv_category: str, product_title: str = '', all_cate
     2. Ручные исправления для категории
     3. Точное совпадение с CSV категориями
     4. Проверка всех категорий из цепочки
-    5. Поиск по ключевым словам в категории
-    6. Поиск по ключевым словам в названии товара
-    7. Дефолт - общая категория "Товары для взрослых"
+    5. Дефолт - общая категория "Товары для взрослых" (confidence 0.3)
+
+    Keyword-подсказки НЕ назначают категорию напрямую —
+    они передаются в AI через get_keyword_hints() → detect_category().
 
     Args:
         csv_category: Основная категория из CSV
@@ -615,37 +644,56 @@ def get_best_category_match(csv_category: str, product_title: str = '', all_cate
                 subject_id = CSV_TO_WB_EXACT_MAPPING[cat]
                 return subject_id, WB_ADULT_CATEGORIES[subject_id], 0.90
 
-    # 4. Поиск по ключевым словам в категории
-    csv_lower = csv_category.lower() if csv_category else ''
-    best_match = None
-    best_score = 0.0
-
-    for keyword, subject_id in CATEGORY_KEYWORDS_MAPPING.items():
-        if keyword in csv_lower:
-            # Чем длиннее совпадение, тем выше score
-            score = len(keyword) / len(csv_lower) if len(csv_lower) > 0 else 0
-            if score > best_score:
-                best_score = score
-                best_match = (subject_id, WB_ADULT_CATEGORIES.get(subject_id, 'Unknown'), min(score * 0.85, 0.85))
-
-    if best_match and best_score > 0.3:
-        return best_match
-
-    # 5. Поиск по ключевым словам в названии товара
-    if product_title:
-        title_lower = product_title.lower()
-        title_match = None
-        title_score = 0.0
-
-        for keyword, subject_id in CATEGORY_KEYWORDS_MAPPING.items():
-            if keyword in title_lower:
-                score = 0.75  # Ниже уверенность при определении по названию
-                if score > title_score:
-                    title_score = score
-                    title_match = (subject_id, WB_ADULT_CATEGORIES.get(subject_id, 'Unknown'), score)
-
-        if title_match and title_score > 0.5:
-            return title_match
-
-    # 6. Дефолт - общая категория "Товары для взрослых" (низкая уверенность)
+    # 4. Дефолт - общая категория "Товары для взрослых" (низкая уверенность)
+    # AI-парсинг определит точную категорию на следующем этапе
     return 5038, 'Товары для взрослых', 0.3
+
+
+def get_keyword_hints(
+    product_title: str = '',
+    csv_category: str = '',
+    description: str = '',
+) -> list:
+    """
+    Собирает keyword-подсказки из названия/категории/описания.
+
+    НЕ назначает категорию — возвращает список подсказок вида
+    [{"keyword": "вибратор", "suggested_category": "Вибраторы", "suggested_id": 5067}, ...]
+    для передачи в AI промпт.
+
+    Более длинные keyword-совпадения идут первыми (они точнее).
+    """
+    context_parts = []
+    if product_title:
+        context_parts.append(product_title.lower())
+    if csv_category:
+        context_parts.append(csv_category.lower())
+    if description:
+        context_parts.append(description[:300].lower())
+
+    context = ' '.join(context_parts)
+    if not context:
+        return []
+
+    matches = []
+    seen_ids = set()
+    for keyword, subject_id in CATEGORY_KEYWORDS_MAPPING.items():
+        if keyword in context:
+            matches.append((len(keyword), keyword, subject_id))
+
+    # Сортируем по длине keyword (длинные = точнее → первыми)
+    matches.sort(key=lambda x: -x[0])
+
+    hints = []
+    for _, keyword, subject_id in matches:
+        if subject_id in seen_ids:
+            continue
+        seen_ids.add(subject_id)
+        cat_name = WB_ADULT_CATEGORIES.get(subject_id, 'Unknown')
+        hints.append({
+            'keyword': keyword,
+            'suggested_category': cat_name,
+            'suggested_id': subject_id,
+        })
+
+    return hints

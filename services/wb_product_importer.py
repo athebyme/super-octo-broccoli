@@ -429,27 +429,54 @@ class WBProductImporter:
                             logger.error(f"Не удалось загрузить фото для nmID={nm_id} после {len(photo_retries)} попыток", exc_info=True)
                             post_create_warnings.append(f"Ошибка загрузки фото: {photo_err}")
 
-            # Создаем запись Product в БД
-            product = Product(
-                seller_id=self.seller.id,
-                nm_id=nm_id or 0,  # nm_id от WB или 0 если не удалось получить
-                vendor_code=vendor_code,
-                title=imported_product.title,
-                brand=imported_product.brand,
-                subject_id=imported_product.wb_subject_id,
-                object_name=imported_product.mapped_wb_category,
-                description=imported_product.description,
-                photos_json=json.dumps(media_urls, ensure_ascii=False),
-                sizes_json=json.dumps(wb_sizes, ensure_ascii=False),
-                characteristics_json=json.dumps(characteristics, ensure_ascii=False),
-                price=calculated_price_before_discount,
-                discount_price=calculated_price_value,
-                supplier_price=imported_product.supplier_price,
-                is_active=True,
-                last_sync=datetime.utcnow()
-            )
+            # Создаем или обновляем запись Product в БД
+            # Проверяем, нет ли уже Product с таким (seller_id, nm_id) —
+            # например, если карточка попала в систему через общую синхронизацию раньше
+            product = None
+            if nm_id:
+                product = Product.query.filter_by(
+                    seller_id=self.seller.id,
+                    nm_id=nm_id
+                ).first()
 
-            db.session.add(product)
+            if product:
+                # Обновляем существующую запись вместо создания дубля
+                product.vendor_code = vendor_code
+                product.title = imported_product.title
+                product.brand = imported_product.brand
+                product.subject_id = imported_product.wb_subject_id
+                product.object_name = imported_product.mapped_wb_category
+                product.description = imported_product.description
+                product.photos_json = json.dumps(media_urls, ensure_ascii=False)
+                product.sizes_json = json.dumps(wb_sizes, ensure_ascii=False)
+                product.characteristics_json = json.dumps(characteristics, ensure_ascii=False)
+                product.price = calculated_price_before_discount
+                product.discount_price = calculated_price_value
+                product.supplier_price = imported_product.supplier_price
+                product.is_active = True
+                product.last_sync = datetime.utcnow()
+                logger.info(f"Обновлена существующая запись Product ID={product.id} для nmID={nm_id} (без дублирования)")
+            else:
+                product = Product(
+                    seller_id=self.seller.id,
+                    nm_id=nm_id or 0,
+                    vendor_code=vendor_code,
+                    title=imported_product.title,
+                    brand=imported_product.brand,
+                    subject_id=imported_product.wb_subject_id,
+                    object_name=imported_product.mapped_wb_category,
+                    description=imported_product.description,
+                    photos_json=json.dumps(media_urls, ensure_ascii=False),
+                    sizes_json=json.dumps(wb_sizes, ensure_ascii=False),
+                    characteristics_json=json.dumps(characteristics, ensure_ascii=False),
+                    price=calculated_price_before_discount,
+                    discount_price=calculated_price_value,
+                    supplier_price=imported_product.supplier_price,
+                    is_active=True,
+                    last_sync=datetime.utcnow()
+                )
+                db.session.add(product)
+
             db.session.flush()  # Получить ID
 
             # Обновляем ImportedProduct

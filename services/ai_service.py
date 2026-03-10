@@ -395,6 +395,7 @@ DEFAULT_INSTRUCTIONS = {
 5. Избегай повторений слов
 6. Не используй: "лучший", "топ", "хит", "№1", "качественный"
 7. Каждое слово должно нести смысл - нет "воды"
+8. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА
 
 ПРИМЕРЫ ХОРОШИХ ЗАГОЛОВКОВ (до 60 символов):
 - "Вибратор силиконовый с 10 режимами розовый" (43 символа)
@@ -479,6 +480,7 @@ DEFAULT_INSTRUCTIONS = {
 5. Используй ключевые слова естественно
 6. Максимум 2000 символов (ограничение Wildberries API)
 7. Без воды и пустых фраз
+8. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА
 
 ФОРМАТ ОТВЕТА (СТРОГО JSON):
 {
@@ -1149,6 +1151,8 @@ Rich-контент на WB - это визуальные блоки (слайд
 6. НЕ придумывай данных — только из текста. Если не ясно — не включай
 7. Вес ВСЕГДА в граммах, длины в см, объём в мл
 8. Для WB цветов используй стандартные: белый, чёрный, красный, синий, зелёный, розовый, фиолетовый, серый, бежевый, коричневый, оранжевый, жёлтый, голубой, бордовый, золотой, серебристый, телесный, прозрачный, мультиколор
+9. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА в текстовых полях
+10. wb_subject ДОЛЖЕН точно совпадать с одной из ДОСТУПНЫХ КАТЕГОРИЙ МАРКЕТПЛЕЙСА (если список предоставлен ниже)
 
 ══════════════════════════════════════════════════════════════
 ФОРМАТ ОТВЕТА (СТРОГО JSON):
@@ -1439,11 +1443,16 @@ class AIClient:
         """
         url = f"{self.config.api_base_url}/chat/completions"
 
+        # Ограничиваем max_tokens разумным потолком (16k достаточно для любого ответа).
+        # Слишком большое значение (100k+) вызывает 400 "exceeds model context length"
+        # т.к. API проверяет prompt_tokens + max_tokens ≤ context_window.
+        effective_max_tokens = min(max_tokens or self.config.max_tokens, 16384)
+
         payload = {
             "model": self.config.model,
             "messages": messages,
             "temperature": temperature if temperature is not None else self.config.temperature,
-            "max_tokens": max_tokens or self.config.max_tokens,
+            "max_tokens": effective_max_tokens,
             "top_p": self.config.top_p,
             "presence_penalty": self.config.presence_penalty,
             "frequency_penalty": self.config.frequency_penalty
@@ -1475,11 +1484,16 @@ class AIClient:
                 logger.info(f"📍 URL: {url}")
                 logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
+                # Разделяем таймаут: connect быстро, read — по настройке.
+                # Tuple (connect_timeout, read_timeout) предотвращает зависание
+                # на медленных моделях (GLM-4.7-Flash и др.)
+                connect_timeout = min(self.config.timeout, 30)
+                read_timeout = self.config.timeout
                 response = self._session.post(
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=self.config.timeout
+                    timeout=(connect_timeout, read_timeout)
                 )
 
                 # Логируем ответ для отладки
@@ -1534,14 +1548,11 @@ class AIClient:
             except requests.exceptions.Timeout:
                 self.last_error = (
                     f"Таймаут {self.config.timeout}с — AI не ответил вовремя "
-                    f"(провайдер: {self.config.provider.value}, модель: {self.config.model}, "
-                    f"попытка {attempt}/{max_retries})"
+                    f"(провайдер: {self.config.provider.value}, модель: {self.config.model})"
                 )
                 logger.error(f"⏱️ {self.last_error}")
-                if attempt < max_retries:
-                    import time
-                    time.sleep(2 ** attempt)
-                    continue
+                # Таймауты не ретраим: если модель зависла, повтор тоже зависнет.
+                # Лучше быстро вернуть ошибку и перейти к следующему товару.
                 return None
             except requests.exceptions.ConnectionError as e:
                 self.last_error = (
@@ -1648,6 +1659,11 @@ class AITask(ABC):
             ]
 
             prompt_len = len(system_prompt) + len(user_prompt)
+            task_name = getattr(self, 'task_name', self.__class__.__name__)
+            logger.info(
+                f"[{task_name}] Промпт: system={len(system_prompt)} + user={len(user_prompt)} "
+                f"= {prompt_len} символов (~{prompt_len // 3} токенов)"
+            )
             response = self.client.chat_completion(messages)
 
             if not response:
@@ -1706,6 +1722,7 @@ class CategoryDetectionTask(AITask):
         all_categories = kwargs.get('all_categories', [])
         brand = kwargs.get('brand', '')
         description = kwargs.get('description', '')
+        keyword_hints = kwargs.get('keyword_hints', [])
 
         prompt = f"""Определи категорию WB для товара:
 
@@ -1716,6 +1733,16 @@ class CategoryDetectionTask(AITask):
 """
         if description:
             prompt += f"ОПИСАНИЕ: {description[:500]}\n"
+
+        if keyword_hints:
+            hints_text = ', '.join(
+                f'"{h["keyword"]}" → {h["suggested_category"]} (ID {h["suggested_id"]})'
+                for h in keyword_hints[:5]
+            )
+            prompt += (
+                f"\nПОДСКАЗКИ ПО КЛЮЧЕВЫМ СЛОВАМ (могут быть неточными, "
+                f"учитывай контекст): {hints_text}\n"
+            )
 
         return prompt
 
@@ -3032,10 +3059,16 @@ class AIService:
         source_category: str,
         all_categories: Optional[List[str]] = None,
         brand: str = '',
-        description: str = ''
+        description: str = '',
+        keyword_hints: Optional[list] = None,
     ) -> Tuple[Optional[int], Optional[str], float, str]:
         """
         Определяет категорию товара с помощью AI
+
+        Args:
+            keyword_hints: Подсказки из CATEGORY_KEYWORDS_MAPPING
+                (список dict с keyword/suggested_category/suggested_id).
+                AI использует их как контекст, но принимает решение самостоятельно.
 
         Returns:
             Tuple[category_id, category_name, confidence, reasoning]
@@ -3054,7 +3087,8 @@ class AIService:
             source_category=source_category,
             all_categories=all_categories or [],
             brand=brand,
-            description=description
+            description=description,
+            keyword_hints=keyword_hints or [],
         )
 
         if success and result:
@@ -3120,6 +3154,7 @@ class AIService:
             # Очищаем заголовок от HTML тегов и делаем первую букву большой
             if result.get('title'):
                 title_clean = strip_html_tags(result['title']).strip()
+                title_clean = re.sub(r'[™®©℠℗⁺]', '', title_clean).strip()
                 if title_clean:
                     # КРИТИЧНО: Обрезаем до 60 символов (ограничение WB API)
                     if len(title_clean) > 60:
@@ -3201,9 +3236,11 @@ class AIService:
             category=category
         )
         if success and result:
-            # Очищаем описание от HTML тегов
+            # Очищаем описание от HTML тегов и запрещённых символов WB
             if result.get('description'):
-                result['description'] = strip_html_tags(result['description'])
+                cleaned = strip_html_tags(result['description'])
+                cleaned = re.sub(r'[™®©℠℗⁺]', '', cleaned)
+                result['description'] = cleaned.strip()
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
@@ -3623,12 +3660,36 @@ def get_ai_service(settings=None) -> Optional[AIService]:
 
     if _ai_service_instance is None:
         _ai_service_instance = AIService(config)
-        # Загружаем категории WB
+        # Загружаем категории WB: сначала из БД, потом дополняем хардкодом
+        categories = {}
+        try:
+            from models import MarketplaceCategory, Marketplace
+            wb_mp = Marketplace.query.filter_by(code='wb').first()
+            if wb_mp:
+                db_cats = MarketplaceCategory.query.filter_by(
+                    marketplace_id=wb_mp.id,
+                    is_enabled=True,
+                ).all()
+                categories = {c.subject_id: c.subject_name for c in db_cats}
+                if categories:
+                    logger.info(f"Loaded {len(categories)} categories from DB for AI service")
+        except Exception as e:
+            logger.debug(f"Could not load DB categories: {e}")
+
+        # Дополняем хардкодом (не перезаписываем то, что есть из БД)
         try:
             from services.wb_categories_mapping import WB_ADULT_CATEGORIES
-            _ai_service_instance.set_categories(WB_ADULT_CATEGORIES)
+            for cat_id, cat_name in WB_ADULT_CATEGORIES.items():
+                if cat_id not in categories:
+                    categories[cat_id] = cat_name
         except ImportError:
             logger.warning("Не удалось загрузить WB_ADULT_CATEGORIES")
+
+        if categories:
+            _ai_service_instance.set_categories(categories)
+            logger.info(f"AI service initialized with {len(categories)} total categories")
+        else:
+            logger.warning("No categories available for AI service")
 
     return _ai_service_instance
 

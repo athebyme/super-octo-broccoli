@@ -6,10 +6,18 @@ from flask_login import login_required, current_user
 from datetime import datetime
 import json
 
-from models import db, Product, CardMergeHistory
+from models import db, Product, CardMergeHistory, APILog
 from services.wb_api_client import WildberriesAPIClient, WBAPIException
 from sqlalchemy import or_
 from services.merge_recommendations import get_merge_recommendations_for_seller
+
+
+def _get_wb_client(seller):
+    """Создать WB API клиент с логированием для merge-операций."""
+    return WildberriesAPIClient(
+        api_key=seller.wb_api_key,
+        db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
+    )
 
 
 def register_merge_routes(app):
@@ -68,7 +76,11 @@ def register_merge_routes(app):
         # Группировка по imtID
         imt_groups = {}
         for product in all_products:
-            imt_id = product.imt_id or f"single_{product.nm_id}"
+            # Карточки с nm_id=0 — nmID не получен от WB, каждая уникальна
+            if not product.nm_id or product.nm_id == 0:
+                imt_id = f"single_noid_{product.id}"
+            else:
+                imt_id = product.imt_id or f"single_{product.nm_id}"
             if imt_id not in imt_groups:
                 imt_groups[imt_id] = {
                     'imt_id': product.imt_id,
@@ -120,6 +132,36 @@ def register_merge_routes(app):
         ).distinct().order_by(Product.brand).all()
         brands_list = [b[0] for b in brands if b[0]]
 
+        # Автовыбор из рекомендаций — подготовка серверных данных
+        auto_selection = None
+        auto_target_nm_id = request.args.get('auto_target_nm_id', type=int)
+        auto_select_nm_ids_str = request.args.get('auto_select_nm_ids', '')
+        if auto_target_nm_id and auto_select_nm_ids_str:
+            auto_nm_ids = [int(x.strip()) for x in auto_select_nm_ids_str.split(',') if x.strip().isdigit()]
+            if auto_nm_ids:
+                auto_products = Product.query.filter(
+                    Product.nm_id.in_(auto_nm_ids + [auto_target_nm_id]),
+                    Product.seller_id == current_user.seller.id
+                ).all()
+                auto_products_map = {p.nm_id: p for p in auto_products}
+
+                target_p = auto_products_map.get(auto_target_nm_id)
+                if target_p:
+                    cards_data = {}
+                    for nm_id in auto_nm_ids:
+                        if nm_id != auto_target_nm_id and nm_id in auto_products_map:
+                            p = auto_products_map[nm_id]
+                            cards_data[str(nm_id)] = {
+                                'subject': str(p.subject_id) if p.subject_id else '',
+                                'vendor': p.vendor_code or '',
+                                'title': p.title or ''
+                            }
+                    auto_selection = {
+                        'target': str(auto_target_nm_id),
+                        'targetSubject': str(target_p.subject_id) if target_p.subject_id else '',
+                        'cards': cards_data
+                    }
+
         return render_template(
             'products_merge.html',
             imt_groups=paginated_groups,
@@ -132,7 +174,8 @@ def register_merge_routes(app):
             per_page=per_page,
             total_groups=total_groups,
             total_pages=total_pages,
-            total_cards=len(all_products)
+            total_cards=len(all_products),
+            auto_selection=auto_selection
         )
 
     @app.route('/products/merge/execute', methods=['POST'])
@@ -200,7 +243,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Выполняем объединение через API
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             try:
                 result = client.merge_cards(
@@ -247,8 +290,14 @@ def register_merge_routes(app):
                 return redirect(url_for('products_merge'))
 
         except Exception as e:
-            app.logger.error(f"Error in products_merge_execute: {str(e)}")
-            flash('Произошла ошибка при объединении карточек', 'danger')
+            app.logger.error(f"Error in products_merge_execute: {str(e)}", exc_info=True)
+            error_msg = str(e)
+            if 'no such table' in error_msg.lower():
+                flash('Таблица истории объединений не найдена. Запустите миграцию: python migrations/run_all_migrations.py', 'danger')
+            elif 'operational' in error_msg.lower():
+                flash(f'Ошибка базы данных: {error_msg[:200]}', 'danger')
+            else:
+                flash(f'Ошибка при объединении карточек: {error_msg[:200]}', 'danger')
             return redirect(url_for('products_merge'))
 
     @app.route('/products/merge/unmerge/<int:imt_id>', methods=['POST'])
@@ -302,7 +351,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             import time
             api_errors = []
@@ -331,7 +380,16 @@ def register_merge_routes(app):
                     product.imt_id = None
                     product.last_sync = datetime.utcnow()
 
-                unmerge_history.snapshot_after = snapshot_before.copy()
+                # Снимок ПОСЛЕ — imt_id сброшен в None
+                snapshot_after = {
+                    str(p.nm_id): {
+                        'imt_id': None,
+                        'vendor_code': p.vendor_code,
+                        'title': p.title,
+                        'subject_id': p.subject_id
+                    } for p in products
+                }
+                unmerge_history.snapshot_after = snapshot_after
                 unmerge_history.status = 'completed'
                 unmerge_history.wb_synced = True
                 unmerge_history.wb_sync_status = 'success'
@@ -366,7 +424,7 @@ def register_merge_routes(app):
             flash('Произошла ошибка при разъединении карточек', 'danger')
             return redirect(url_for('products_merge'))
 
-    @app.route('/products/merge/unmerge-single/<int:nm_id>', methods=['GET', 'POST'])
+    @app.route('/products/merge/unmerge-single/<int:nm_id>', methods=['POST'])
     @login_required
     def products_merge_unmerge_single(nm_id):
         """Разъединить одну карточку из группы"""
@@ -425,7 +483,7 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API (только одну карточку)
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             wb_error = None
             try:
@@ -443,7 +501,14 @@ def register_merge_routes(app):
             product.imt_id = None
             product.last_sync = datetime.utcnow()
 
-            unmerge_history.snapshot_after = snapshot_before.copy()
+            unmerge_history.snapshot_after = {
+                str(product.nm_id): {
+                    'imt_id': None,
+                    'vendor_code': product.vendor_code,
+                    'title': product.title,
+                    'subject_id': product.subject_id
+                }
+            }
             unmerge_history.status = 'completed'
             unmerge_history.wb_synced = not bool(wb_error)
             unmerge_history.wb_sync_status = 'failed' if wb_error else 'success'
@@ -564,21 +629,42 @@ def register_merge_routes(app):
             db.session.commit()
 
             # Разъединяем через API
-            client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            client = _get_wb_client(current_user.seller)
 
             # ВАЖНО: Нужно передать ВСЕ nmID которые объединены, включая target
             # merged_nm_ids содержит только те, что были в чекбоксах (без target)
             # Получаем все nmID из snapshot_after - там все карточки с одинаковым imt_id
             all_nm_ids = [int(nm_id) for nm_id in merge.snapshot_after.keys()]
 
-            app.logger.info(f"🔓 Unmerging {len(all_nm_ids)} cards: {all_nm_ids}")
+            app.logger.info(f"Unmerging {len(all_nm_ids)} cards: {all_nm_ids}")
+
+            import time
+            api_errors = []
 
             try:
-                result = client.unmerge_cards(
-                    nm_ids=all_nm_ids,
-                    log_to_db=True,
-                    seller_id=current_user.seller.id
-                )
+                # ВАЖНО: отправляем каждую карточку отдельным запросом,
+                # иначе WB объединит их в новую группу с новым imtID
+                for nm_id in all_nm_ids[:-1]:
+                    try:
+                        client.unmerge_cards(
+                            nm_ids=[nm_id],
+                            log_to_db=True,
+                            seller_id=current_user.seller.id
+                        )
+                    except WBAPIException as e:
+                        err_str = str(e)
+                        app.logger.warning(f"revert unmerge nm_id={nm_id}: {err_str}")
+                        api_errors.append(err_str)
+                    time.sleep(0.3)
+
+                # Сбрасываем imt_id в локальной БД
+                products_to_reset = Product.query.filter(
+                    Product.nm_id.in_(all_nm_ids),
+                    Product.seller_id == current_user.seller.id
+                ).all()
+                for product in products_to_reset:
+                    product.imt_id = None
+                    product.last_sync = datetime.utcnow()
 
                 # Отмечаем оригинальную операцию как откаченную
                 merge.reverted = True
@@ -589,12 +675,16 @@ def register_merge_routes(app):
                 revert_history.status = 'completed'
                 revert_history.wb_synced = True
                 revert_history.wb_sync_status = 'success'
+                revert_history.wb_error_message = '; '.join(api_errors) if api_errors else None
                 revert_history.completed_at = datetime.utcnow()
                 revert_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
 
                 db.session.commit()
 
-                flash(f'Объединение успешно отменено. Карточки разъединены.', 'success')
+                if api_errors:
+                    flash(f'Объединение отменено. Часть карточек уже была разъединена на WB ранее.', 'success')
+                else:
+                    flash(f'Объединение успешно отменено. Карточки разъединены.', 'success')
                 return redirect(url_for('products_merge_history', id=revert_history.id))
 
             except WBAPIException as e:

@@ -213,7 +213,7 @@ class Product(db.Model):
 
     # Индексы для быстрых запросов
     __table_args__ = (
-        db.Index('idx_seller_nm_id', 'seller_id', 'nm_id'),
+        db.UniqueConstraint('seller_id', 'nm_id', name='uq_seller_nm_id'),
         db.Index('idx_seller_vendor_code', 'seller_id', 'vendor_code'),
         db.Index('idx_seller_active', 'seller_id', 'is_active'),
     )

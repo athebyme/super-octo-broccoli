@@ -66,7 +66,7 @@
     <!-- Inline notification (replaces flash) -->
     <template x-if="notification">
         <div x-transition class="mb-4 px-4 py-3 rounded-lg text-sm font-medium"
-             :class="notification.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : 'bg-green-50 text-green-800 border border-green-200'">
+             :class="notification.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : notification.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-green-50 text-green-800 border border-green-200'">
             <div class="flex items-center justify-between">
                 <span x-text="notification.msg"></span>
                 <button @click="notification = null" class="ml-4 text-current opacity-50 hover:opacity-100">&times;</button>
@@ -141,6 +141,14 @@
                     Отправка...
                 </span>
             </button>
+            <button @click="checkBulk()" :disabled="selected.length === 0 || bulkChecking"
+                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50 disabled:opacity-40">
+                <span x-show="!bulkChecking">Проверить на WB</span>
+                <span x-show="bulkChecking" class="flex items-center gap-2">
+                    <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Проверка...
+                </span>
+            </button>
             {% endif %}
             <button @click="deleteBulk()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
                     class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-red-300 hover:text-red-600 disabled:opacity-40">
@@ -188,6 +196,85 @@
                     </template>
                     <template x-if="activeJob.error_message">
                         <div class="mt-2 text-xs text-red-600" x-text="activeJob.error_message"></div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <!-- WB Check Results Panel -->
+    <template x-if="checkResults">
+        <div class="bg-white border-x border-gray-200 px-4 py-3">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm font-medium text-gray-900">Результаты проверки на WB</h3>
+                <button @click="checkResults = null" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+            </div>
+            <div class="flex items-center gap-4 text-sm mb-2">
+                <span class="text-gray-600" x-text="'Всего: ' + checkResults.total"></span>
+                <span class="text-red-600" x-text="'Без фото: ' + checkResults.no_photos"></span>
+                <span class="text-orange-600" x-text="'Без цены: ' + checkResults.no_price"></span>
+                <span class="text-green-600" x-text="'OK: ' + (checkResults.total - checkResults.with_issues)"></span>
+            </div>
+            <template x-if="checkResults.results && checkResults.results.length > 0">
+                <div class="max-h-60 overflow-y-auto space-y-1">
+                    <template x-for="(item, i) in checkResults.results" :key="i">
+                        <div class="flex items-center justify-between py-1 px-2 rounded text-xs"
+                             :class="item.issues.length > 0 ? 'bg-red-50' : 'bg-green-50'">
+                            <div class="flex items-center gap-2">
+                                <span class="text-gray-500" x-text="'nmID: ' + item.nm_id"></span>
+                                <span class="text-gray-700 truncate max-w-xs" x-text="item.title"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <template x-if="item.issues.length > 0">
+                                    <span class="text-red-600" x-text="item.issues.join(', ')"></span>
+                                </template>
+                                <template x-if="item.issues.length === 0">
+                                    <span class="text-green-600">OK</span>
+                                </template>
+                                <template x-if="item.has_photos === false">
+                                    <button @click="reuploadPhotos(item.product_id)"
+                                            class="px-2 py-0.5 bg-gray-900 text-white rounded text-xs hover:opacity-80">Фото</button>
+                                </template>
+                                <template x-if="item.has_price === false">
+                                    <button @click="reuploadPrice(item.product_id)"
+                                            class="px-2 py-0.5 bg-gray-900 text-white rounded text-xs hover:opacity-80">Цена</button>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <!-- Single Card Check Result -->
+    <template x-if="singleCheckResult">
+        <div class="bg-white border-x border-gray-200 px-4 py-3">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm font-medium text-gray-900" x-text="'Проверка: ' + (singleCheckResult.title || 'nmID ' + singleCheckResult.nm_id)"></h3>
+                <button @click="singleCheckResult = null" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full" :class="singleCheckResult.has_photos ? 'bg-green-500' : 'bg-red-500'"></span>
+                    <span x-text="'Фото: ' + singleCheckResult.photos_count"></span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full" :class="singleCheckResult.has_price ? 'bg-green-500' : 'bg-red-500'"></span>
+                    <span x-text="singleCheckResult.has_price ? 'Цена: ' + singleCheckResult.price + ' руб.' : 'Цена: нет'"></span>
+                </div>
+                <div class="flex items-center gap-2" x-show="singleCheckResult.characteristics_count !== undefined">
+                    <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                    <span x-text="'Хар-ки: ' + singleCheckResult.characteristics_count"></span>
+                </div>
+            </div>
+            <template x-if="singleCheckResult.issues && singleCheckResult.issues.length > 0">
+                <div class="mt-2 space-y-1">
+                    <template x-for="(issue, i) in singleCheckResult.issues" :key="i">
+                        <div class="text-xs text-red-600 flex items-center gap-1">
+                            <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+                            <span x-text="issue"></span>
+                        </div>
                     </template>
                 </div>
             </template>
@@ -285,6 +372,40 @@
                            class="inline-flex items-center px-2.5 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium hover:bg-gray-200">
                             WB карточка
                         </a>
+                        {% if p.import_status == 'imported' and p.product_id %}
+                        <div class="relative inline-flex items-center ml-1" x-data="{open: false}" @click.away="open = false">
+                            <button @click="open = !open"
+                                    class="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-medium hover:bg-gray-200"
+                                    title="Действия с карточкой WB">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01"/></svg>
+                            </button>
+                            <div x-show="open" x-transition
+                                 class="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1"
+                                 style="display:none;">
+                                <button @click="open=false; checkCard({{ p.id }})"
+                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    Проверить на WB
+                                </button>
+                                <button @click="open=false; reuploadPhotos({{ p.id }})"
+                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                    Перезалить фото
+                                </button>
+                                <button @click="open=false; reuploadPrice({{ p.id }})"
+                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    Перезалить цену
+                                </button>
+                                <hr class="my-1 border-gray-100">
+                                <button @click="open=false; enrichCard({{ p.id }})"
+                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                    Обогатить из AI
+                                </button>
+                            </div>
+                        </div>
+                        {% endif %}
                         <form method="POST" action="{{ url_for('seller_delete_imported_product', product_id=p.id) }}"
                               class="inline" onsubmit="return confirm('Удалить товар? Он станет доступен для повторного импорта.')">
                             <button type="submit"
@@ -398,6 +519,9 @@ function myProductsPage() {
         activeJob: null,
         bulkElapsed: 0,
         notification: null,
+        checkResults: null,
+        singleCheckResult: null,
+        bulkChecking: false,
         _pollTimer: null,
         _elapsedTimer: null,
 
@@ -524,9 +648,97 @@ function myProductsPage() {
             });
         },
 
+        async checkCard(productId) {
+            this.singleCheckResult = null;
+            this.showNotification('Проверяем карточку на WB...', 'info');
+            try {
+                const r = await fetch('/my-products/' + productId + '/wb-check', {method: 'POST'});
+                const data = await r.json();
+                if (r.ok) {
+                    this.singleCheckResult = data;
+                    this.notification = null;
+                } else {
+                    this.showNotification(data.error || 'Ошибка проверки', 'error');
+                }
+            } catch(e) {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            }
+        },
+
+        async reuploadPhotos(productId) {
+            if (!confirm('Повторно загрузить фотографии на WB?')) return;
+            this.showNotification('Загружаем фото на WB...', 'info');
+            try {
+                const r = await fetch('/my-products/' + productId + '/wb-reupload-photos', {method: 'POST'});
+                const data = await r.json();
+                if (data.success) {
+                    this.showNotification(data.message, 'success');
+                } else {
+                    this.showNotification(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            }
+        },
+
+        async reuploadPrice(productId) {
+            if (!confirm('Повторно установить цену на WB?')) return;
+            this.showNotification('Устанавливаем цену...', 'info');
+            try {
+                const r = await fetch('/my-products/' + productId + '/wb-reupload-price', {method: 'POST'});
+                const data = await r.json();
+                if (data.success) {
+                    this.showNotification(data.message, 'success');
+                } else {
+                    this.showNotification(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            }
+        },
+
+        async enrichCard(productId) {
+            if (!confirm('Обогатить карточку WB данными из AI-парсинга поставщика?\nБудут обновлены: название, описание, характеристики, габариты.')) return;
+            this.showNotification('Обогащаем карточку...', 'info');
+            try {
+                const r = await fetch('/my-products/' + productId + '/wb-enrich', {method: 'POST'});
+                const data = await r.json();
+                if (data.success) {
+                    this.showNotification(data.message, 'success');
+                } else {
+                    this.showNotification(data.error || 'Ошибка', 'error');
+                }
+            } catch(e) {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            }
+        },
+
+        async checkBulk() {
+            if (!this.selected.length) return;
+            this.bulkChecking = true;
+            this.checkResults = null;
+            try {
+                const r = await fetch('/my-products/wb-check-bulk', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({product_ids: this.selected})
+                });
+                const data = await r.json();
+                if (r.ok) {
+                    this.checkResults = data;
+                } else {
+                    this.showNotification(data.error || 'Ошибка проверки', 'error');
+                }
+            } catch(e) {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            } finally {
+                this.bulkChecking = false;
+            }
+        },
+
         showNotification(msg, type) {
             this.notification = {msg, type};
-            setTimeout(() => this.notification = null, 5000);
+            if (type !== 'info') setTimeout(() => this.notification = null, 5000);
         }
     };
 }

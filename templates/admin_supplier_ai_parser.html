@@ -165,10 +165,10 @@
     <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
         <h3 class="text-indigo-900 font-semibold text-sm mb-2">Как работает</h3>
         <ol class="text-indigo-700 text-sm space-y-1 list-decimal list-inside">
-            <li>Выберите товары галочками</li>
-            <li>Выберите кол-во потоков (параллельных AI-запросов) и нажмите "AI Парсинг выбранных"</li>
-            <li>Прогресс отобразится в панели вверху — страница не зависает, обработка идёт параллельно</li>
-            <li>AI извлечёт 50+ характеристик в формате WB/Ozon</li>
+            <li>Выберите товары галочками или настройте фильтры</li>
+            <li>Нажмите "AI Парсинг" — выбранные товары обработаются, или все по фильтру</li>
+            <li>AI извлечёт характеристики, замаппит на схему WB и провалидирует</li>
+            <li>Прогресс отобразится в панели вверху — страница не зависает</li>
         </ol>
     </div>
 
@@ -275,23 +275,16 @@
                         class="rounded border-gray-300 text-xs border px-2 py-1.5 w-16 focus:border-indigo-500 focus:ring-indigo-500">
                         <option value="1">1</option>
                         <option value="2">2</option>
-                        <option value="4" selected>4</option>
-                        <option value="6">6</option>
-                        <option value="8">8</option>
+                        <option value="4">4</option>
+                        <option value="8" selected>8</option>
+                        <option value="12">12</option>
+                        <option value="16">16</option>
                     </select>
                 </label>
-                <button type="button" id="bulkParseBtn" disabled onclick="startBulkParse()"
-                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
-                    AI Парсинг выбранных
-                </button>
-                <button type="button" id="bulkValidateBtn" disabled onclick="startBulkValidate()"
-                    class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
-                    Маппинг & Валидация
-                </button>
-                <button type="button" id="bulkFilterParseBtn" onclick="startFilterParse()"
-                    class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-all"
-                    title="Запустить AI парсинг для ВСЕХ товаров по текущим фильтрам (не только на странице)">
-                    Спарсить все по фильтру
+                <button type="button" id="smartParseBtn" onclick="startSmartParse()"
+                    class="px-4 py-2 bg-[#0a0a0a] text-white rounded-lg text-sm font-medium hover:bg-[#1a1a1a] transition-all"
+                    title="Выбраны товары → парсит их. Не выбраны → парсит все по текущим фильтрам.">
+                    <span id="smartParseBtnLabel">AI Парсинг по фильтру</span>
                 </button>
             </div>
         </div>
@@ -416,21 +409,21 @@
 
     // ===== Чекбоксы =====
     const selectAll = document.getElementById('selectAll');
-    const bulkBtn = document.getElementById('bulkParseBtn');
-    const bulkValBtn = document.getElementById('bulkValidateBtn');
+    const smartBtn = document.getElementById('smartParseBtn');
+    const smartLabel = document.getElementById('smartParseBtnLabel');
     const selectedCount = document.getElementById('selectedCount');
 
     function getCheckboxes() { return document.querySelectorAll('.product-checkbox'); }
 
     function updateSelection() {
         const checked = document.querySelectorAll('.product-checkbox:checked').length;
-        if (bulkBtn) bulkBtn.disabled = checked === 0;
-        if (bulkValBtn) bulkValBtn.disabled = checked === 0;
         if (checked > 0) {
             selectedCount.classList.remove('hidden');
             selectedCount.querySelector('span').textContent = checked;
+            smartLabel.textContent = `AI Парсинг (${checked} шт.)`;
         } else {
             selectedCount.classList.add('hidden');
+            smartLabel.textContent = 'AI Парсинг по фильтру';
         }
     }
 
@@ -575,137 +568,69 @@
 
     // ===== Запуск задач =====
 
-    function startBulkParse() {
+    function startSmartParse() {
         const ids = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.dataset.productId);
-        if (!ids.length) return;
-        if (!confirm(`Запустить AI парсинг для ${ids.length} товаров?`)) return;
+        const hasSelected = ids.length > 0;
 
-        bulkBtn.disabled = true;
-        bulkBtn.textContent = 'Запуск...';
+        let url, form;
 
-        const form = new FormData();
-        ids.forEach(id => form.append('product_ids', id));
-        form.append('max_workers', document.getElementById('maxWorkers').value);
-        const modelVal = document.getElementById('modelOverride').value;
-        if (modelVal) form.append('model_override', modelVal);
+        if (hasSelected) {
+            // Режим: парсинг выбранных
+            if (!confirm(`Запустить AI парсинг для ${ids.length} товаров?\n(включая маппинг и валидацию)`)) return;
 
-        fetch(PARSE_URL, {
-            method: 'POST',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            body: form
-        })
-            .then(r => r.json())
-            .then(data => {
-                bulkBtn.textContent = 'AI Парсинг выбранных';
-                updateSelection();
+            form = new FormData();
+            ids.forEach(id => form.append('product_ids', id));
+            form.append('max_workers', document.getElementById('maxWorkers').value);
+            const modelVal = document.getElementById('modelOverride').value;
+            if (modelVal) form.append('model_override', modelVal);
+            url = PARSE_URL;
+        } else {
+            // Режим: парсинг по фильтру
+            const params = new URLSearchParams(window.location.search);
+            const search = params.get('search') || '';
+            const stockStatus = params.get('stock_status') || '';
+            const parseStatus = params.get('parse_status') || '';
+            const fillMax = params.get('fill_max') || '';
 
-                if (data.error) {
-                    alert('Ошибка: ' + data.error);
-                    return;
-                }
-                if (data.job_id) {
-                    activeJobIds.add(data.job_id);
-                    pollJob(data.job_id);
-                    // Сбросить чекбоксы
-                    getCheckboxes().forEach(cb => cb.checked = false);
-                    if (selectAll) selectAll.checked = false;
-                    updateSelection();
-                }
-            })
-            .catch(err => {
-                bulkBtn.textContent = 'AI Парсинг выбранных';
-                updateSelection();
-                alert('Ошибка сети: ' + err.message);
-            });
-    }
+            const filterParts = [];
+            if (search) filterParts.push(`поиск: "${search}"`);
+            if (stockStatus) filterParts.push(`наличие: ${stockStatus}`);
+            if (parseStatus) filterParts.push(`AI: ${parseStatus}`);
+            if (fillMax) filterParts.push(`заполнение < ${fillMax}%`);
+            const filterDesc = filterParts.length > 0 ? filterParts.join(', ') : 'без фильтров (ВСЕ товары!)';
 
-    function startFilterParse() {
-        // Собираем текущие фильтры с URL
-        const params = new URLSearchParams(window.location.search);
-        const search = params.get('search') || '';
-        const stockStatus = params.get('stock_status') || '';
-        const parseStatus = params.get('parse_status') || '';
-        const fillMax = params.get('fill_max') || '';
+            const limitStr = prompt(
+                `Фильтры: ${filterDesc}\n\nСколько товаров обработать?\n(0 или пустое = все подходящие, макс. 10000)`,
+                '0'
+            );
+            if (limitStr === null) return;
+            const limit = parseInt(limitStr) || 0;
 
-        // Описание фильтров для confirm
-        const filterParts = [];
-        if (search) filterParts.push(`поиск: "${search}"`);
-        if (stockStatus) filterParts.push(`наличие: ${stockStatus}`);
-        if (parseStatus) filterParts.push(`AI: ${parseStatus}`);
-        if (fillMax) filterParts.push(`заполнение < ${fillMax}%`);
-        const filterDesc = filterParts.length > 0 ? filterParts.join(', ') : 'без фильтров (ВСЕ товары!)';
+            if (!confirm(`AI парсинг + маппинг + валидация для ${limit > 0 ? limit : 'ВСЕХ'} товаров по фильтру?\n${filterDesc}`)) return;
 
-        // Спрашиваем лимит
-        const limitStr = prompt(
-            `Фильтры: ${filterDesc}\n\nСколько товаров обработать?\n(0 или пустое = все подходящие, макс. 10000)`,
-            '0'
-        );
-        if (limitStr === null) return;  // отмена
-        const limit = parseInt(limitStr) || 0;
-
-        if (!confirm(`Запустить AI парсинг для ${limit > 0 ? limit : 'ВСЕХ'} товаров по фильтру?\n${filterDesc}`)) return;
-
-        const btn = document.getElementById('bulkFilterParseBtn');
-        btn.disabled = true;
-        btn.textContent = 'Запуск...';
-
-        const form = new FormData();
-        form.append('search', search);
-        form.append('stock_status', stockStatus);
-        form.append('parse_status', parseStatus);
-        form.append('fill_max', fillMax);
-        if (limit > 0) form.append('limit', limit);
-        form.append('max_workers', document.getElementById('maxWorkers').value);
-        const modelVal = document.getElementById('modelOverride').value;
-        if (modelVal) form.append('model_override', modelVal);
-
-        fetch(PARSE_BY_FILTER_URL, {
-            method: 'POST',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            body: form
-        })
-            .then(r => r.json())
-            .then(data => {
-                btn.disabled = false;
-                btn.textContent = 'Спарсить все по фильтру';
-
-                if (data.error) {
-                    alert('Ошибка: ' + data.error);
-                    return;
-                }
-                if (data.job_id) {
-                    activeJobIds.add(data.job_id);
-                    pollJob(data.job_id);
-                }
-            })
-            .catch(err => {
-                btn.disabled = false;
-                btn.textContent = 'Спарсить все по фильтру';
-                alert('Ошибка сети: ' + err.message);
-            });
-    }
-
-    function startBulkValidate() {
-        const ids = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.dataset.productId);
-        if (!ids.length) return;
-        if (!confirm(`Запустить авто-маппинг/валидацию для ${ids.length} товаров?`)) return;
-
-        if (bulkValBtn) {
-            bulkValBtn.disabled = true;
-            bulkValBtn.textContent = 'Запуск...';
+            form = new FormData();
+            form.append('search', search);
+            form.append('stock_status', stockStatus);
+            form.append('parse_status', parseStatus);
+            form.append('fill_max', fillMax);
+            if (limit > 0) form.append('limit', limit);
+            form.append('max_workers', document.getElementById('maxWorkers').value);
+            const modelVal = document.getElementById('modelOverride').value;
+            if (modelVal) form.append('model_override', modelVal);
+            url = PARSE_BY_FILTER_URL;
         }
 
-        const form = new FormData();
-        ids.forEach(id => form.append('product_ids', id));
+        smartBtn.disabled = true;
+        smartLabel.textContent = 'Запуск...';
 
-        fetch('{{ url_for("admin_supplier_marketplace_bulk_validate", supplier_id=supplier.id) }}', {
+        fetch(url, {
             method: 'POST',
             headers: { 'X-Requested-With': 'XMLHttpRequest' },
             body: form
         })
             .then(r => r.json())
             .then(data => {
-                if (bulkValBtn) bulkValBtn.textContent = 'Маппинг & Валидация';
+                smartBtn.disabled = false;
                 updateSelection();
 
                 if (data.error) {
@@ -715,13 +640,15 @@
                 if (data.job_id) {
                     activeJobIds.add(data.job_id);
                     pollJob(data.job_id);
-                    getCheckboxes().forEach(cb => cb.checked = false);
-                    if (selectAll) selectAll.checked = false;
-                    updateSelection();
+                    if (hasSelected) {
+                        getCheckboxes().forEach(cb => cb.checked = false);
+                        if (selectAll) selectAll.checked = false;
+                        updateSelection();
+                    }
                 }
             })
             .catch(err => {
-                if (bulkValBtn) bulkValBtn.textContent = 'Маппинг & Валидация';
+                smartBtn.disabled = false;
                 updateSelection();
                 alert('Ошибка сети: ' + err.message);
             });

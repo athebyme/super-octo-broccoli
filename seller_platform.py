@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from flask import Flask, render_template, redirect, url_for, flash, request, abort, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import or_
 
 from models import (
@@ -44,6 +45,9 @@ from services.wb_api_client import WildberriesAPIClient, WBAPIException, WBAuthE
 
 # Настройка приложения
 app = Flask(__name__)
+# Поддержка работы за reverse proxy (Caddy/nginx):
+# ProxyFix корректирует Host, scheme и remote_addr по заголовкам X-Forwarded-*
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 _secret_key = os.environ.get('SECRET_KEY')
 if not _secret_key:
     import secrets as _secrets
@@ -205,6 +209,8 @@ login_manager.login_message_category = 'info'
 from flask_wtf.csrf import CSRFProtect
 csrf = CSRFProtect(app)
 app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 час
+# Отключаем строгую проверку Referer для HTTPS (необходимо за reverse proxy)
+app.config['WTF_CSRF_SSL_STRICT'] = False
 
 # Инициализация планировщика автоматической синхронизации
 from services.product_sync_scheduler import init_scheduler
@@ -5666,6 +5672,9 @@ def _run_startup_migrations():
         ('imported_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
         ('imported_products', 'brand_status', 'VARCHAR(20)'),
         ('supplier_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
+        # Notification columns (may be missing if table was created before these were added)
+        ('notifications', 'link', 'VARCHAR(500)'),
+        ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),
     ]
 
     for table, column, col_type in migrations:
@@ -5871,27 +5880,32 @@ def notifications_page():
 def api_notifications_list():
     """Список уведомлений текущего продавца."""
     if not current_user.seller:
-        return jsonify([]), 200
+        return jsonify({'items': [], 'total': 0, 'unread_count': 0}), 200
     seller_id = current_user.seller.id
     limit = request.args.get('limit', 50, type=int)
     offset = request.args.get('offset', 0, type=int)
     category = request.args.get('category', '').strip()
     unread_only = request.args.get('unread', '') == '1'
 
-    q = Notification.query.filter_by(seller_id=seller_id)
-    if unread_only:
-        q = q.filter_by(is_read=False)
-    if category and category in ('info', 'success', 'warning', 'error', 'promo'):
-        q = q.filter_by(category=category)
-    q = q.order_by(Notification.created_at.desc())
-    total = q.count()
-    items = q.offset(offset).limit(min(limit, 100)).all()
-    unread_count = Notification.query.filter_by(seller_id=seller_id, is_read=False).count()
-    return jsonify({
-        'items': [n.to_dict() for n in items],
-        'total': total,
-        'unread_count': unread_count,
-    })
+    try:
+        q = Notification.query.filter_by(seller_id=seller_id)
+        if unread_only:
+            q = q.filter_by(is_read=False)
+        if category and category in ('info', 'success', 'warning', 'error', 'promo'):
+            q = q.filter_by(category=category)
+        q = q.order_by(Notification.created_at.desc())
+        total = q.count()
+        items = q.offset(offset).limit(min(limit, 100)).all()
+        unread_count = Notification.query.filter_by(seller_id=seller_id, is_read=False).count()
+        return jsonify({
+            'items': [n.to_dict() for n in items],
+            'total': total,
+            'unread_count': unread_count,
+        })
+    except Exception as e:
+        logger.error(f"[Notifications] Error loading notifications for seller {seller_id}: {e}")
+        db.session.rollback()
+        return jsonify({'items': [], 'total': 0, 'unread_count': 0, 'error': str(e)}), 200
 
 
 @app.route('/api/notifications/unread-count')

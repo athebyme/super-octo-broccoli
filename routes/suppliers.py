@@ -492,47 +492,6 @@ def register_supplier_routes(app):
             'errors': validation_result['errors']
         })
 
-    @app.route('/admin/suppliers/<int:supplier_id>/marketplace_bulk_validate', methods=['POST'])
-    @login_required
-    @admin_required
-    def admin_supplier_marketplace_bulk_validate(supplier_id):
-        """Bulk auto-map and validation of marketplace fields for supplier products"""
-        product_ids_raw = request.form.getlist('product_ids')
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
-
-        if not product_ids:
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'error': 'Не указаны товары'}), 400
-            flash('Не указаны товары', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        result = SupplierService.start_bulk_marketplace_validation(
-            supplier_id, product_ids,
-            admin_user_id=current_user.id
-        )
-
-        if result.get('error'):
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'error': result['error']}), 400
-            flash(result['error'], 'danger')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        log_admin_action(
-            admin_user_id=current_user.id,
-            action='start_marketplace_bulk_validation',
-            target_type='supplier',
-            target_id=supplier_id,
-            details={'job_id': result['job_id'], 'count': result['total']},
-            request=request
-        )
-
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return jsonify(result)
-
-        flash(f'Bulk marketplace mapping & validation started in background ({result["total"]} products)', 'success')
-        return redirect(url_for('admin_supplier_ai_parser', supplier_id=supplier_id))
-
-
     @app.route('/admin/suppliers/<int:supplier_id>/ai/validate', methods=['POST'])
     @login_required
     @admin_required
@@ -749,8 +708,8 @@ def register_supplier_routes(app):
             flash('Не указаны товары', 'warning')
             return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
 
-        max_workers = request.form.get('max_workers', 4, type=int)
-        max_workers = max(1, min(max_workers, 8))
+        max_workers = request.form.get('max_workers', 8, type=int)
+        max_workers = max(1, min(max_workers, 16))
         model_override = request.form.get('model_override', '').strip() or None
 
         result = SupplierService.start_ai_parse_job(
@@ -814,8 +773,8 @@ def register_supplier_routes(app):
         parse_status = request.form.get('parse_status', '').strip()
         fill_max = request.form.get('fill_max', '').strip()
         limit = request.form.get('limit', 0, type=int)  # 0 = без лимита
-        max_workers = request.form.get('max_workers', 4, type=int)
-        max_workers = max(1, min(max_workers, 8))
+        max_workers = request.form.get('max_workers', 8, type=int)
+        max_workers = max(1, min(max_workers, 16))
         model_override = request.form.get('model_override', '').strip() or None
 
         # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)
@@ -1852,6 +1811,391 @@ def register_supplier_routes(app):
         db.session.commit()
 
         return jsonify({'deleted': deleted, 'message': f'Удалено {deleted} товаров'})
+
+    # -------------------------------------------------------------------
+    # Проверка карточки на WB — фото, цены, статус
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/wb-check', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_wb_check_card(product_id):
+        """Проверить состояние карточки на WB: наличие фото, цен, ошибок."""
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        if imp.import_status != 'imported' or not imp.product_id:
+            return jsonify({'error': 'Товар ещё не загружен на WB'}), 400
+
+        product = Product.query.get(imp.product_id)
+        if not product or not product.nm_id:
+            return jsonify({'error': 'Карточка WB не найдена в базе'}), 400
+
+        if not seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 400
+
+        from services.wb_api_client import WildberriesAPIClient
+        api = WildberriesAPIClient(seller.get_wb_api_key())
+
+        result = {
+            'nm_id': product.nm_id,
+            'vendor_code': product.vendor_code,
+            'title': product.title,
+            'has_photos': False,
+            'photos_count': 0,
+            'has_price': False,
+            'price': None,
+            'discount': None,
+            'issues': [],
+        }
+
+        try:
+            card = api.get_card_by_nm_id(product.nm_id, seller_id=seller.id)
+            if not card:
+                result['issues'].append('Карточка не найдена на WB')
+                return jsonify(result)
+
+            # Проверяем фото
+            photos = card.get('photos', [])
+            result['photos_count'] = len(photos)
+            result['has_photos'] = len(photos) > 0
+            if not photos:
+                result['issues'].append('Нет фотографий на WB')
+
+            # Проверяем цены через sizes
+            sizes = card.get('sizes', [])
+            has_any_price = False
+            for size in sizes:
+                price_info = size.get('price', {})
+                if price_info and price_info.get('total', 0) > 0:
+                    has_any_price = True
+                    result['price'] = price_info.get('total')
+                    result['discount'] = price_info.get('discount')
+                    break
+
+            result['has_price'] = has_any_price
+            if not has_any_price:
+                result['issues'].append('Цена не установлена или равна 0')
+
+            # Проверяем title и description
+            if not card.get('title'):
+                result['issues'].append('Отсутствует название карточки')
+            if not card.get('description'):
+                result['issues'].append('Отсутствует описание')
+
+            # Проверяем характеристики
+            charcs = card.get('characteristics', [])
+            result['characteristics_count'] = len(charcs)
+
+        except Exception as e:
+            result['issues'].append(f'Ошибка при запросе к WB API: {str(e)[:200]}')
+
+        return jsonify(result)
+
+    # -------------------------------------------------------------------
+    # Повторная загрузка фото на WB
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/wb-reupload-photos', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_wb_reupload_photos(product_id):
+        """Повторно загрузить фотографии товара на WB."""
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        if imp.import_status != 'imported' or not imp.product_id:
+            return jsonify({'success': False, 'error': 'Товар ещё не загружен на WB'}), 400
+
+        product = Product.query.get(imp.product_id)
+        if not product or not product.nm_id:
+            return jsonify({'success': False, 'error': 'Карточка WB не найдена'}), 400
+
+        if not seller.has_valid_api_key():
+            return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
+
+        from services.wb_product_importer import WBProductImporter
+        importer = WBProductImporter(seller)
+
+        try:
+            importer._upload_photos_for_card(product.nm_id, imp)
+            return jsonify({'success': True, 'message': 'Фотографии загружены на WB'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Ошибка загрузки фото: {str(e)[:200]}'}), 500
+
+    # -------------------------------------------------------------------
+    # Повторная установка цены на WB
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/wb-reupload-price', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_wb_reupload_price(product_id):
+        """Повторно установить цену товара на WB."""
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        if imp.import_status != 'imported' or not imp.product_id:
+            return jsonify({'success': False, 'error': 'Товар ещё не загружен на WB'}), 400
+
+        product = Product.query.get(imp.product_id)
+        if not product or not product.nm_id:
+            return jsonify({'success': False, 'error': 'Карточка WB не найдена'}), 400
+
+        if not seller.has_valid_api_key():
+            return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
+
+        from services.wb_product_importer import WBProductImporter
+        importer = WBProductImporter(seller)
+
+        try:
+            final_price, discount_price, price_before = importer._set_price_for_card(
+                product.nm_id, imp
+            )
+            if final_price:
+                # Обновляем цену в локальной базе
+                product.price = price_before
+                product.discount_price = final_price
+                db.session.commit()
+                return jsonify({
+                    'success': True,
+                    'message': f'Цена установлена: {final_price} руб.',
+                    'price': final_price,
+                    'price_before_discount': price_before,
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Не удалось рассчитать цену (нет supplier_price или настроек ценообразования)'
+                }), 400
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Ошибка установки цены: {str(e)[:200]}'}), 500
+
+    # -------------------------------------------------------------------
+    # Обогащение карточки WB данными из AI-парсинга поставщика
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/wb-enrich', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_wb_enrich_card(product_id):
+        """Обогатить карточку WB данными из AI-парсинга базы поставщика.
+        Обновляет: title, description, характеристики, габариты."""
+        import json as json_mod
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        if imp.import_status != 'imported' or not imp.product_id:
+            return jsonify({'success': False, 'error': 'Товар ещё не загружен на WB'}), 400
+
+        product = Product.query.get(imp.product_id)
+        if not product or not product.nm_id:
+            return jsonify({'success': False, 'error': 'Карточка WB не найдена'}), 400
+
+        if not seller.has_valid_api_key():
+            return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
+
+        # Получаем AI-данные из SupplierProduct
+        sp = None
+        if imp.supplier_product_id:
+            sp = SupplierProduct.query.get(imp.supplier_product_id)
+
+        if not sp:
+            return jsonify({'success': False, 'error': 'Не найден товар поставщика для обогащения'}), 400
+
+        # Собираем данные для обновления из AI парсинга и SupplierProduct
+        updates = {}
+        updated_fields = []
+
+        # Title — из AI SEO title или из спаршенного title
+        ai_title = sp.ai_seo_title or imp.ai_seo_title
+        if ai_title and len(ai_title) >= 5:
+            updates['title'] = ai_title[:60]
+            updated_fields.append('название')
+
+        # Description — из AI описания или sp описания
+        ai_desc = sp.ai_description if hasattr(sp, 'ai_description') else None
+        if not ai_desc and imp.description:
+            ai_desc = imp.description
+        if ai_desc and len(ai_desc) >= 50:
+            updates['description'] = ai_desc[:5000]
+            updated_fields.append('описание')
+
+        # Характеристики — из ai_marketplace_json (уже в формате WB)
+        try:
+            marketplace_data = json_mod.loads(sp.ai_marketplace_json) if sp.ai_marketplace_json else None
+        except (json_mod.JSONDecodeError, TypeError):
+            marketplace_data = None
+
+        if marketplace_data and isinstance(marketplace_data, dict):
+            charcs = marketplace_data.get('characteristics', [])
+            if charcs:
+                updates['characteristics'] = charcs
+                updated_fields.append(f'характеристики ({len(charcs)} шт.)')
+
+        # Габариты — из AI или sp
+        try:
+            ai_dims = json_mod.loads(sp.dimensions_json) if sp.dimensions_json else None
+        except (json_mod.JSONDecodeError, TypeError):
+            ai_dims = None
+
+        if not ai_dims:
+            try:
+                ai_dims = json_mod.loads(imp.ai_dimensions) if imp.ai_dimensions else None
+            except (json_mod.JSONDecodeError, TypeError):
+                ai_dims = None
+
+        if ai_dims and isinstance(ai_dims, dict):
+            dimensions = {}
+            if ai_dims.get('length'):
+                dimensions['length'] = int(ai_dims['length'])
+            if ai_dims.get('width'):
+                dimensions['width'] = int(ai_dims['width'])
+            if ai_dims.get('height'):
+                dimensions['height'] = int(ai_dims['height'])
+            weight = ai_dims.get('weight') or ai_dims.get('weightBrutto')
+            if weight:
+                dimensions['weightBrutto'] = float(weight)
+            if dimensions:
+                updates['dimensions'] = dimensions
+                updated_fields.append('габариты')
+
+        if not updates:
+            return jsonify({
+                'success': False,
+                'error': 'Нет AI-данных для обогащения. Сначала выполните AI-парсинг товара у поставщика.'
+            }), 400
+
+        # Отправляем обновление на WB
+        from services.wb_api_client import WildberriesAPIClient
+        api = WildberriesAPIClient(seller.get_wb_api_key())
+
+        try:
+            api.update_card(
+                nm_id=product.nm_id,
+                updates=updates,
+                merge_with_existing=True,
+                log_to_db=True,
+                seller_id=seller.id
+            )
+
+            # Обновляем локальные данные
+            if 'title' in updates:
+                product.title = updates['title']
+            if 'description' in updates:
+                product.description = updates['description']
+            product.last_sync = datetime.utcnow()
+            db.session.commit()
+
+            return jsonify({
+                'success': True,
+                'message': f'Карточка обогащена: {", ".join(updated_fields)}',
+                'updated_fields': updated_fields,
+            })
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': f'Ошибка обновления карточки WB: {str(e)[:200]}'
+            }), 500
+
+    # -------------------------------------------------------------------
+    # Массовая проверка карточек на WB
+    # -------------------------------------------------------------------
+    @app.route('/my-products/wb-check-bulk', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_wb_check_bulk():
+        """Массовая проверка состояния карточек на WB."""
+        seller = current_user.seller
+
+        if not seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 400
+
+        data = request.get_json(silent=True) or {}
+        product_ids = data.get('product_ids', [])
+
+        if not product_ids:
+            return jsonify({'error': 'Не выбраны товары'}), 400
+
+        # Берём только импортированные товары
+        imported = ImportedProduct.query.filter(
+            ImportedProduct.id.in_(product_ids),
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.import_status == 'imported',
+            ImportedProduct.product_id.isnot(None)
+        ).all()
+
+        if not imported:
+            return jsonify({'error': 'Нет загруженных на WB товаров среди выбранных'}), 400
+
+        # Собираем nm_ids
+        product_map = {}
+        for imp in imported:
+            prod = Product.query.get(imp.product_id)
+            if prod and prod.nm_id:
+                product_map[prod.nm_id] = {'imp': imp, 'product': prod}
+
+        if not product_map:
+            return jsonify({'error': 'Не удалось найти nmID для выбранных товаров'}), 400
+
+        from services.wb_api_client import WildberriesAPIClient
+        api = WildberriesAPIClient(seller.get_wb_api_key())
+
+        results = []
+        no_photos = 0
+        no_price = 0
+
+        for nm_id, info in product_map.items():
+            item = {
+                'product_id': info['imp'].id,
+                'nm_id': nm_id,
+                'title': info['product'].title or info['imp'].title,
+                'has_photos': None,
+                'has_price': None,
+                'issues': [],
+            }
+            try:
+                card = api.get_card_by_nm_id(nm_id, seller_id=seller.id)
+                if not card:
+                    item['issues'].append('Не найдена на WB')
+                    results.append(item)
+                    continue
+
+                photos = card.get('photos', [])
+                item['has_photos'] = len(photos) > 0
+                item['photos_count'] = len(photos)
+                if not photos:
+                    item['issues'].append('Нет фото')
+                    no_photos += 1
+
+                sizes = card.get('sizes', [])
+                has_price = False
+                for size in sizes:
+                    price_info = size.get('price', {})
+                    if price_info and price_info.get('total', 0) > 0:
+                        has_price = True
+                        break
+                item['has_price'] = has_price
+                if not has_price:
+                    item['issues'].append('Нет цены')
+                    no_price += 1
+
+            except Exception as e:
+                item['issues'].append(f'Ошибка API: {str(e)[:100]}')
+
+            results.append(item)
+
+        return jsonify({
+            'total': len(results),
+            'no_photos': no_photos,
+            'no_price': no_price,
+            'with_issues': sum(1 for r in results if r['issues']),
+            'results': results,
+        })
 
     # -------------------------------------------------------------------
     # Обновление существующих товаров из базы поставщика

@@ -205,7 +205,7 @@
             <!-- Карточки группы -->
             <div class="divide-y divide-gray-100">
                 {% for card in group.cards %}
-                <div class="flex items-center gap-4 p-4 hover:bg-gray-50 transition"
+                <div class="flex items-center gap-4 p-4 hover:bg-gray-50 transition {% if not card.nm_id or card.nm_id == 0 %}opacity-50{% endif %}"
                      :class="{'bg-indigo-50 border-l-4 border-indigo-500': selectedTarget == '{{ card.nm_id }}', 'bg-purple-50': selectedCards['{{ card.nm_id }}'] && selectedTarget != '{{ card.nm_id }}'}"
                      data-nm-id="{{ card.nm_id }}"
                      data-subject-id="{{ card.subject_id }}">
@@ -220,10 +220,11 @@
                                data-subject="{{ card.subject_id }}"
                                data-title="{{ card.title }}"
                                data-vendor="{{ card.vendor_code }}"
+                               {% if not card.nm_id or card.nm_id == 0 %}disabled{% endif %}
                                @change="setTarget('{{ card.nm_id }}', '{{ card.subject_id }}', '{{ card.vendor_code }}', '{{ card.title|e }}')"
                                :checked="selectedTarget == '{{ card.nm_id }}'">
                         <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover/radio:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-                            Сделать главной
+                            {% if not card.nm_id or card.nm_id == 0 %}nmID не получен от WB{% else %}Сделать главной{% endif %}
                         </span>
                     </div>
 
@@ -237,10 +238,11 @@
                                data-subject="{{ card.subject_id }}"
                                data-title="{{ card.title }}"
                                data-vendor="{{ card.vendor_code }}"
+                               {% if not card.nm_id or card.nm_id == 0 %}disabled{% endif %}
                                @change="toggleCard('{{ card.nm_id }}', '{{ card.subject_id }}', '{{ card.vendor_code }}', '{{ card.title|e }}')"
                                :checked="selectedCards['{{ card.nm_id }}']">
                         <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover/check:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
-                            Выбрать для слияния
+                            {% if not card.nm_id or card.nm_id == 0 %}nmID не получен от WB{% else %}Выбрать для слияния{% endif %}
                         </span>
                     </div>
 
@@ -248,7 +250,11 @@
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2 mb-1">
                             <span class="font-semibold text-gray-900">{{ card.vendor_code }}</span>
+                            {% if not card.nm_id or card.nm_id == 0 %}
+                            <span class="text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded">nmID не получен</span>
+                            {% else %}
                             <span class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">nmID: {{ card.nm_id }}</span>
+                            {% endif %}
                             {% if card.imt_id %}
                             <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">imtID: {{ card.imt_id }}</span>
                             {% endif %}
@@ -478,45 +484,32 @@ function mergeApp() {
             });
         },
 
-        // Автовыбор из рекомендаций
+        // Автовыбор из рекомендаций (данные приходят с сервера)
         handleAutoSelect() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const autoNmIds = urlParams.get('auto_select_nm_ids');
-            const autoTarget = urlParams.get('auto_target_nm_id');
-
-            if (autoNmIds && autoTarget) {
+            {% if auto_selection %}
+            const autoData = {{ auto_selection | tojson }};
+            if (autoData && autoData.target) {
                 // Очищаем старый выбор
                 this.clearAllSelection();
 
-                // Устанавливаем target
-                const targetRadio = document.querySelector(`input[name="target_nm_id"][value="${autoTarget}"]`);
-                if (targetRadio) {
-                    targetRadio.checked = true;
-                    this.selectedTarget = autoTarget;
-                    this.selectedTargetSubject = targetRadio.dataset.subject;
-                }
-
-                // Выбираем карточки
-                autoNmIds.split(',').forEach(nmId => {
-                    nmId = nmId.trim();
-                    if (nmId && nmId !== autoTarget) {
-                        const checkbox = document.querySelector(`input[name="merge_checkbox"][value="${nmId}"]`);
-                        if (checkbox) {
-                            checkbox.checked = true;
-                            this.selectedCards[nmId] = {
-                                subject: checkbox.dataset.subject,
-                                vendor: checkbox.dataset.vendor,
-                                title: checkbox.dataset.title
-                            };
-                        }
-                    }
-                });
+                // Устанавливаем target и карточки из серверных данных
+                // (не зависим от наличия DOM-элементов на текущей странице)
+                this.selectedTarget = autoData.target;
+                this.selectedTargetSubject = autoData.targetSubject;
+                this.selectedCards = autoData.cards || {};
 
                 this.saveToStorage();
 
-                // Уведомление
-                this.showNotification('Карточки из рекомендации выбраны автоматически', 'success');
+                // Проставляем radio/checkbox для карточек, видимых на текущей странице
+                this.restoreUIState();
+
+                const totalSelected = Object.keys(this.selectedCards).length;
+                this.showNotification(
+                    `Выбрано ${totalSelected} карточек из рекомендации. Нажмите "Объединить" внизу страницы.`,
+                    'success'
+                );
             }
+            {% endif %}
         },
 
         // Установить главную карточку
@@ -614,8 +607,9 @@ function mergeApp() {
         // Разъединить одну карточку
         unmergeCard(nmId, vendorCode) {
             if (confirm(`Отсоединить карточку ${vendorCode} (nmID: ${nmId}) от группы?\n\nОна получит новый уникальный imtID.`)) {
-                // Используем API или отдельный роут
-                window.location.href = `/products/merge/unmerge-single/${nmId}`;
+                const form = document.getElementById('unmergeCardForm');
+                form.action = `/products/merge/unmerge-single/${nmId}`;
+                form.submit();
             }
         },
 

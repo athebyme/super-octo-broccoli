@@ -472,7 +472,13 @@ class MarketplaceService:
         lines.append("")
 
         current_parent = None
-        for cat in categories:
+        # Страховка: если включено слишком много категорий, обрезаем.
+        # Обычно 50-200, но на всякий случай лимит 1000 (~30к символов).
+        MAX_CATEGORIES_IN_PROMPT = 1000
+        truncated = len(categories) > MAX_CATEGORIES_IN_PROMPT
+        cats_for_prompt = categories[:MAX_CATEGORIES_IN_PROMPT]
+
+        for cat in cats_for_prompt:
             parent = cat.parent_name or 'Другое'
             if parent != current_parent:
                 current_parent = parent
@@ -480,7 +486,13 @@ class MarketplaceService:
             lines.append(f"    - {cat.subject_name} (ID: {cat.subject_id})")
 
         lines.append("")
-        lines.append(f"Всего доступно {len(categories)} категорий.")
+        if truncated:
+            lines.append(
+                f"Показано {MAX_CATEGORIES_IN_PROMPT} из {len(categories)} категорий. "
+                f"Если ни одна не подходит — укажи наиболее близкую."
+            )
+        else:
+            lines.append(f"Всего доступно {len(categories)} категорий.")
 
         return "\n".join(lines)
 
