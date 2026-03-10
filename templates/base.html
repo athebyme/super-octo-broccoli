@@ -419,6 +419,43 @@
         }
         .flash-close:hover { opacity: 1; }
 
+        /* Notification bell animation */
+        @keyframes bell-ring {
+            0%   { transform: rotate(0deg); }
+            10%  { transform: rotate(14deg); }
+            20%  { transform: rotate(-12deg); }
+            30%  { transform: rotate(10deg); }
+            40%  { transform: rotate(-8deg); }
+            50%  { transform: rotate(6deg); }
+            60%  { transform: rotate(-4deg); }
+            70%  { transform: rotate(2deg); }
+            80%  { transform: rotate(-1deg); }
+            100% { transform: rotate(0deg); }
+        }
+        @keyframes bell-glow {
+            0%, 100% { filter: drop-shadow(0 0 0px transparent); }
+            50%      { filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.6)); }
+        }
+        .notif-bell-active svg {
+            animation: bell-ring 1s ease-in-out infinite;
+            transform-origin: 50% 0%;
+            color: #f87171;
+        }
+        .notif-bell-active .notif-badge {
+            animation: bell-glow 2s ease-in-out infinite;
+        }
+        .notif-bell-active::after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 8px;
+            height: 8px;
+            background: #ef4444;
+            border-radius: 50%;
+            animation: bell-glow 2s ease-in-out infinite;
+        }
+
         /* =========================================
            GLOBAL TAILWIND OVERRIDES — Editorial Style
            ========================================= */
@@ -907,6 +944,7 @@
         <div class="sidebar-section" style="padding: 4px 8px; margin-bottom: 4px;">
             <a href="{{ url_for('notifications_page') }}"
                class="sidebar-link {% if request.endpoint == 'notifications_page' %}active{% endif %}"
+               :class="{ 'notif-bell-active': $store.notif.unread > 0 }"
                style="position:relative">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
@@ -914,7 +952,7 @@
                 <span x-show="sidebarOpen" x-cloak>Уведомления</span>
                 <span x-show="$store.notif.unread > 0"
                       x-text="$store.notif.unread > 99 ? '99+' : $store.notif.unread"
-                      class="absolute inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
+                      class="notif-badge absolute inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
                       :style="sidebarOpen ? 'right: 8px; top: 50%; transform: translateY(-50%)' : 'top: 2px; right: 2px'"
                       x-cloak></span>
             </a>
