@@ -994,7 +994,7 @@ class EnrichmentService:
 
             # Создаём WB клиент
             try:
-                wb_client = WildberriesAPIClient(seller.get_wb_api_key())
+                wb_client = WildberriesAPIClient(seller.wb_api_key)
             except Exception as e:
                 job.status = 'failed'
                 db.session.commit()

@@ -140,7 +140,7 @@ def register_enrichment_routes(app):
 
         from services.wb_api_client import WildberriesAPIClient
         try:
-            wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
+            wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
         except Exception as e:
             return jsonify({'error': f'WB client error: {e}'}), 500
 
@@ -487,7 +487,7 @@ def register_enrichment_routes(app):
 
         from services.wb_api_client import WildberriesAPIClient
         try:
-            wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
+            wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
         except Exception as e:
             return jsonify({'error': f'WB client error: {e}'}), 500
 
@@ -717,7 +717,7 @@ def register_enrichment_routes(app):
 
         from services.wb_api_client import WildberriesAPIClient
         try:
-            wb_client = WildberriesAPIClient(current_user.seller.get_wb_api_key())
+            wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
             upload_results = wb_client.upload_photos_to_card(
                 product.nm_id, cached_paths, seller_id=current_user.seller.id
             )
