@@ -8,7 +8,7 @@ import logging
 from flask import render_template, request, redirect, url_for, flash, jsonify, abort, Response, send_file
 from flask_login import login_required, current_user
 
-from models import db, Product, ImportedProduct, EnrichmentJob
+from models import db, Product, ImportedProduct, EnrichmentJob, SupplierProduct
 from services.supplier_enrichment import get_enrichment_service
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,7 @@ def register_enrichment_routes(app):
         data = request.get_json(silent=True) or {}
         fields = data.get('fields', [])
         photo_strategy = data.get('photo_strategy', 'replace')
+        photo_indices = data.get('photo_indices')  # Новое: выборочные фото
         supplier_id = data.get('supplier_id')
 
         if not fields:
@@ -144,11 +145,39 @@ def register_enrichment_routes(app):
             return jsonify({'error': f'WB client error: {e}'}), 500
 
         try:
-            result = service.apply_enrichment(
-                product, imp, fields, photo_strategy,
-                current_user.seller, wb_client
-            )
-            return jsonify(result)
+            # Если есть выборочные фото — используем selective стратегию
+            if photo_indices is not None and 'photos' in fields:
+                # Применяем текстовые поля через обычный apply_enrichment
+                # но фото пропускаем (strategy=selective)
+                text_result = service.apply_enrichment(
+                    product, imp, fields, 'selective',
+                    current_user.seller, wb_client
+                )
+
+                # Отдельно применяем выбранные фото
+                photo_result = service.apply_selective_photos(
+                    product, imp, photo_indices, photo_strategy,
+                    current_user.seller, wb_client
+                )
+
+                # Объединяем результаты
+                combined_fields = list(text_result.get('fields_applied', []))
+                if photo_result.get('uploaded', 0) > 0:
+                    combined_fields.append('photos')
+
+                return jsonify({
+                    'success': text_result.get('success', False) or photo_result.get('success', False),
+                    'fields_applied': combined_fields,
+                    'photos': photo_result,
+                    'error': text_result.get('error') or photo_result.get('error'),
+                    'wb_sync': text_result.get('wb_sync', False),
+                })
+            else:
+                result = service.apply_enrichment(
+                    product, imp, fields, photo_strategy,
+                    current_user.seller, wb_client
+                )
+                return jsonify(result)
         except Exception as e:
             logger.error(f"[Enrich] apply_enrichment error for product {product_id}: {e}", exc_info=True)
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -498,6 +527,99 @@ def register_enrichment_routes(app):
             'skipped': job.skipped,
             'progress_pct': round(job.processed / job.total * 100) if job.total else 0,
             'results': results[-50:],
+        })
+
+    # =========================================================================
+    # ПРОВЕРКА ДОСТУПНОСТИ ОБОГАЩЕНИЯ (ДЛЯ СПИСКА КАРТОЧЕК)
+    # =========================================================================
+
+    @app.route('/api/products/enrich-availability', methods=['POST'])
+    @login_required
+    def api_enrich_availability():
+        """
+        Проверка наличия данных поставщика для списка карточек.
+        POST: {"product_ids": [1, 2, 3]}
+        Возвращает: {"results": {product_id: {available, photo_count, ...}}}
+        """
+        if not current_user.seller:
+            return jsonify({'error': 'No seller profile'}), 403
+
+        data = request.get_json(silent=True) or {}
+        product_ids = data.get('product_ids', [])
+
+        if not product_ids:
+            return jsonify({'results': {}})
+
+        # Ограничиваем количество для производительности
+        product_ids = product_ids[:200]
+
+        # Фильтруем только карточки текущего продавца
+        seller_id = current_user.seller.id
+        valid_products = Product.query.filter(
+            Product.id.in_(product_ids),
+            Product.seller_id == seller_id
+        ).with_entities(Product.id).all()
+        valid_ids = [p.id for p in valid_products]
+
+        service = get_enrichment_service()
+        results = service.check_enrichment_availability(valid_ids, seller_id)
+
+        return jsonify({'results': {str(k): v for k, v in results.items()}})
+
+    @app.route('/api/products/<int:product_id>/enrich/photo-compare', methods=['GET'])
+    @login_required
+    def api_product_photo_compare(product_id):
+        """
+        Полное сравнение фото WB-карточки и поставщика с деталями.
+        Возвращает обе галереи для side-by-side UI.
+        """
+        if not current_user.seller:
+            return jsonify({'error': 'No seller profile'}), 403
+
+        product = Product.query.get_or_404(product_id)
+        if product.seller_id != current_user.seller.id:
+            return jsonify({'error': 'Access denied'}), 403
+
+        service = get_enrichment_service()
+        imp = service.find_supplier_data(product, current_user.seller.id)
+
+        # Текущие фото WB
+        from seller_platform import wb_photo_url
+        wb_photos = []
+        if product.nm_id:
+            for i in range(1, 11):
+                wb_photos.append({
+                    'index': i,
+                    'url': wb_photo_url(product.nm_id, i),
+                })
+
+        # Фото поставщика
+        supplier_photos = []
+        supplier_meta = None
+        if imp:
+            supplier_photos = service._get_supplier_photo_list(imp)
+            supplier_meta = {
+                'id': imp.id,
+                'external_id': imp.external_id,
+                'source_type': imp.source_type,
+                'title': imp.title,
+            }
+
+        return jsonify({
+            'wb_photos': wb_photos,
+            'wb_photo_count': len(json.loads(product.photos_json or '[]')),
+            'supplier_photos': [
+                {
+                    'index': i,
+                    'proxy_url': f'/api/enrich/photo-proxy/{imp.id}/{i}' if imp else None,
+                    'cached': p.get('cached', False),
+                    'has_original': p.get('has_original', False),
+                }
+                for i, p in enumerate(supplier_photos)
+            ],
+            'supplier_photo_count': len(supplier_photos),
+            'supplier_meta': supplier_meta,
+            'matched': imp is not None,
         })
 
     # =========================================================================

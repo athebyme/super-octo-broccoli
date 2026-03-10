@@ -1359,6 +1359,19 @@ def products_list():
         except Exception:
             pass  # Таблицы могут не существовать при первом запуске
 
+        # Проверяем доступность обогащения для текущей страницы
+        enrichment_map = {}
+        try:
+            from services.supplier_enrichment import get_enrichment_service
+            enrich_svc = get_enrichment_service()
+            product_ids = [p.id for p in products]
+            if product_ids:
+                enrichment_map = enrich_svc.check_enrichment_availability(
+                    product_ids, current_user.seller.id
+                )
+        except Exception as e:
+            app.logger.debug(f"Enrichment availability check failed: {e}")
+
         return render_template(
             'products.html',
             products=products,
@@ -1378,6 +1391,7 @@ def products_list():
             blocked_nm_ids=blocked_nm_ids,
             shadowed_nm_ids=shadowed_nm_ids,
             filter_block_status=filter_block_status,
+            enrichment_map=enrichment_map,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
