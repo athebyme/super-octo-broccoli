@@ -1527,15 +1527,6 @@ class SupplierService:
                 result.error_messages.append(f"ImportedProduct {imp.id}: {str(e)[:100]}")
 
         db.session.commit()
-
-        # Проверяем товары без фото после обновления
-        if result.imported > 0:
-            try:
-                updated_ids = [imp.id for imp in imported_products]
-                _notify_products_without_photos(seller_id, updated_ids)
-            except Exception as e:
-                logger.warning(f"Ошибка при проверке фотографий после обновления: {e}")
-
         logger.info(f"Обновление продавца {seller_id}: ~{result.imported} / err={result.errors}")
         return result
 
@@ -3569,8 +3560,23 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
 
 
 def _notify_products_without_photos(seller_id: int, product_ids: List[int]) -> None:
-    """Проверить импортированные товары на наличие фотографий и уведомить продавца."""
+    """Проверить импортированные товары на наличие фотографий и уведомить продавца.
+
+    Дедупликация: не чаще 1 раза в час для одного продавца.
+    """
     if not product_ids:
+        return
+
+    # Дедупликация — не спамим
+    from models import Notification
+    from datetime import timedelta
+    recent_cutoff = datetime.utcnow() - timedelta(hours=1)
+    already_sent = Notification.query.filter(
+        Notification.seller_id == seller_id,
+        Notification.title.like('%без фотографий%'),
+        Notification.created_at >= recent_cutoff,
+    ).first()
+    if already_sent:
         return
 
     products = ImportedProduct.query.filter(
@@ -3595,7 +3601,6 @@ def _notify_products_without_photos(seller_id: int, product_ids: List[int]) -> N
         return
 
     count = len(no_photo_products)
-    # Показываем до 5 примеров
     examples = [p.title or p.external_id or f"ID {p.id}" for p in no_photo_products[:5]]
     examples_text = ", ".join(f'"{e}"' for e in examples)
     if count > 5:

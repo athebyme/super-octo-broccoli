@@ -1857,19 +1857,6 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 db_commit_with_retry(db.session)
 
-                # Уведомляем продавца об успешной синхронизации
-                create_notification(
-                    seller_id=seller.id,
-                    category='success',
-                    title='Синхронизация завершена',
-                    message=(
-                        f'Загружено {len(all_cards)} товаров с WB: '
-                        f'+{created_count} новых, ~{updated_count} обновлено '
-                        f'({elapsed:.0f}с).'
-                    ),
-                    link='/products',
-                )
-
                 # Логируем успешный запрос
                 APILog.log_request(
                     seller_id=seller.id,
@@ -1882,7 +1869,20 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
 
-                # Проверяем товары без фотографий и уведомляем продавца
+                # Уведомляем только если появились НОВЫЕ товары (не рутинное обновление)
+                if created_count > 0:
+                    create_notification(
+                        seller_id=seller.id,
+                        category='success',
+                        title=f'Синхронизация: +{created_count} новых товаров',
+                        message=(
+                            f'Загружено {len(all_cards)} товаров с WB: '
+                            f'+{created_count} новых, ~{updated_count} обновлено.'
+                        ),
+                        link='/products',
+                    )
+
+                # Проверяем товары без фотографий — не чаще 1 раза в 24ч
                 try:
                     no_photo_products = Product.query.filter(
                         Product.seller_id == seller.id,
@@ -1897,21 +1897,32 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                     if no_photo_products:
                         count = len(no_photo_products)
-                        examples = [p.title or p.vendor_code or f"nmID {p.nm_id}" for p in no_photo_products[:5]]
-                        examples_text = ", ".join(f'"{e}"' for e in examples)
-                        if count > 5:
-                            examples_text += f" и ещё {count - 5}"
 
-                        create_notification(
-                            seller_id=seller.id,
-                            category='warning',
-                            title=f'{count} товар(ов) без фотографий',
-                            message=(
-                                f'После синхронизации обнаружены товары без фото: {examples_text}. '
-                                f'Добавьте фотографии к этим товарам для лучших продаж.'
-                            ),
-                            link='/products?filter=no_photos',
-                            metadata={'no_photo_count': count,
+                        # Дедупликация: проверяем, не слали ли уже такое за последние 24ч
+                        from datetime import timedelta
+                        recent_cutoff = datetime.utcnow() - timedelta(hours=24)
+                        already_sent = Notification.query.filter(
+                            Notification.seller_id == seller.id,
+                            Notification.title.like('%без фотографий%'),
+                            Notification.created_at >= recent_cutoff,
+                        ).first()
+
+                        if not already_sent:
+                            examples = [p.title or p.vendor_code or f"nmID {p.nm_id}" for p in no_photo_products[:5]]
+                            examples_text = ", ".join(f'"{e}"' for e in examples)
+                            if count > 5:
+                                examples_text += f" и ещё {count - 5}"
+
+                            create_notification(
+                                seller_id=seller.id,
+                                category='warning',
+                                title=f'{count} товар(ов) без фотографий',
+                                message=(
+                                    f'После синхронизации обнаружены товары без фото: {examples_text}. '
+                                    f'Добавьте фотографии к этим товарам для лучших продаж.'
+                                ),
+                                link='/products?filter=no_photos',
+                                metadata={'no_photo_count': count,
                                       'no_photo_nm_ids': [p.nm_id for p in no_photo_products[:20]]},
                         )
                         app.logger.info(f"⚠️ {count} products without photos for seller_id={seller_id}")
