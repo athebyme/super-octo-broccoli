@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% block title %}Отзывы и вопросы{% endblock %}
+{% block content %}
+<div x-data="reviewsApp()" x-init="init()" class="p-6 max-w-7xl mx-auto">
+    <!-- Stats bar -->
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-white mb-4">Отзывы и вопросы</h1>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Средний рейтинг</div>
+                <div class="text-2xl font-bold text-white mt-1">
+                    <span x-text="stats.avg_rating ? stats.avg_rating.toFixed(1) : '—'"></span>
+                    <span class="text-yellow-400 text-lg">★</span>
+                </div>
+            </div>
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Без ответа (отзывы)</div>
+                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="stats.feedbacks_unanswered ?? '—'"></div>
+            </div>
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Без ответа (вопросы)</div>
+                <div class="text-2xl font-bold mt-1" style="color:#f59e0b" x-text="stats.questions_unanswered ?? '—'"></div>
+            </div>
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Всего отзывов</div>
+                <div class="text-2xl font-bold text-white mt-1" x-text="stats.feedbacks_total ?? '—'"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 mb-4 p-1 rounded-lg" style="background:var(--bg-card)">
+        <button @click="tab='feedbacks'; loadItems()"
+                :class="tab === 'feedbacks' ? 'bg-purple-600 text-white' : ''"
+                class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                :style="tab !== 'feedbacks' ? 'color:var(--text-secondary)' : ''">
+            Отзывы <span x-show="stats.feedbacks_unanswered" class="ml-1 px-1.5 py-0.5 rounded-full text-xs bg-red-500 text-white" x-text="stats.feedbacks_unanswered"></span>
+        </button>
+        <button @click="tab='questions'; loadItems()"
+                :class="tab === 'questions' ? 'bg-purple-600 text-white' : ''"
+                class="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                :style="tab !== 'questions' ? 'color:var(--text-secondary)' : ''">
+            Вопросы <span x-show="stats.questions_unanswered" class="ml-1 px-1.5 py-0.5 rounded-full text-xs bg-yellow-500 text-black" x-text="stats.questions_unanswered"></span>
+        </button>
+        <div class="flex-1"></div>
+        <label class="flex items-center gap-2 px-3 text-sm cursor-pointer" style="color:var(--text-secondary)">
+            <input type="checkbox" x-model="showAnswered" @change="loadItems()" class="rounded">
+            Показать отвеченные
+        </label>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-12">
+        <svg class="animate-spin h-8 w-8 text-purple-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+        </svg>
+    </div>
+
+    <!-- Items list -->
+    <div x-show="!loading" class="space-y-3">
+        <template x-for="item in items" :key="item.id">
+            <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <!-- Header -->
+                <div class="flex items-start justify-between mb-3">
+                    <div>
+                        <div class="flex items-center gap-2 mb-1 flex-wrap">
+                            <span class="font-medium text-white" x-text="item.productDetails?.productName || 'Товар'"></span>
+                            <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--bg-hover);color:var(--text-secondary)" x-text="item.productDetails?.brandName"></span>
+                            <template x-if="tab === 'feedbacks'">
+                                <span class="text-yellow-400" x-text="'★'.repeat(item.productValuation || 0) + '☆'.repeat(5 - (item.productValuation || 0))"></span>
+                            </template>
+                        </div>
+                        <div class="text-xs" style="color:var(--text-secondary)">
+                            <span x-text="item.userName || 'Покупатель'"></span> ·
+                            <span x-text="formatDate(item.createdDate)"></span> ·
+                            nmId: <span x-text="item.productDetails?.nmId"></span>
+                        </div>
+                    </div>
+                    <template x-if="item.answer">
+                        <span class="text-xs px-2 py-1 rounded-full bg-green-900 text-green-300 flex-shrink-0">Отвечен</span>
+                    </template>
+                </div>
+
+                <!-- Content -->
+                <div class="mb-3" style="color:var(--text-primary)">
+                    <p x-text="item.text" class="text-sm leading-relaxed"></p>
+                    <template x-if="item.pros">
+                        <p class="text-sm mt-2"><span class="text-green-400 font-medium">Достоинства:</span> <span x-text="item.pros"></span></p>
+                    </template>
+                    <template x-if="item.cons">
+                        <p class="text-sm mt-1"><span class="text-red-400 font-medium">Недостатки:</span> <span x-text="item.cons"></span></p>
+                    </template>
+                </div>
+
+                <!-- Existing answer -->
+                <template x-if="item.answer">
+                    <div class="rounded-lg p-3 mb-3" style="background:var(--bg-hover);border-left:3px solid var(--accent)">
+                        <div class="text-xs mb-1" style="color:var(--text-secondary)">Ваш ответ:</div>
+                        <p class="text-sm" style="color:var(--text-primary)" x-text="item.answer.text"></p>
+                    </div>
+                </template>
+
+                <!-- Reply section (only for unanswered) -->
+                <template x-if="!item.answer">
+                    <div>
+                        <div class="flex gap-2 mb-2">
+                            <button @click="generateReply(item)"
+                                    :disabled="item._generating"
+                                    class="px-3 py-1.5 rounded-lg text-sm font-medium text-white transition-colors"
+                                    :class="item._generating ? 'opacity-50 cursor-wait' : 'hover:opacity-90'"
+                                    style="background:var(--accent)">
+                                <span x-show="!item._generating">Сгенерировать ответ</span>
+                                <span x-show="item._generating">Генерация...</span>
+                            </button>
+                        </div>
+                        <template x-if="item._draft !== undefined">
+                            <div>
+                                <textarea x-model="item._draft" rows="3"
+                                    class="w-full rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-1 focus:ring-purple-500"
+                                    style="background:var(--bg-hover);border:1px solid var(--border);color:var(--text-primary)"
+                                    placeholder="Текст ответа..."></textarea>
+                                <div class="flex items-center justify-between mt-2">
+                                    <span class="text-xs" style="color:var(--text-secondary)" x-text="(item._draft || '').length + '/5000'"></span>
+                                    <div class="flex gap-2">
+                                        <button @click="item._draft = undefined" class="px-3 py-1.5 rounded-lg text-sm" style="color:var(--text-secondary)">Отмена</button>
+                                        <button @click="sendReply(item)"
+                                                :disabled="item._sending || !item._draft || item._draft.length < 2"
+                                                class="px-4 py-1.5 rounded-lg text-sm font-medium text-white transition-colors"
+                                                :class="item._sending ? 'opacity-50' : 'hover:opacity-90'"
+                                                style="background:#22c55e">
+                                            <span x-show="!item._sending">Отправить ответ</span>
+                                            <span x-show="item._sending">Отправка...</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+        </template>
+
+        <!-- Empty state -->
+        <div x-show="!loading && items.length === 0" class="text-center py-12" style="color:var(--text-secondary)">
+            <svg class="mx-auto h-12 w-12 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+            <p x-text="showAnswered ? 'Нет отзывов за выбранный период' : 'Все отзывы обработаны!'"></p>
+        </div>
+
+        <!-- Load more -->
+        <div x-show="hasMore && items.length > 0" class="text-center pt-4">
+            <button @click="loadMore()"
+                    :disabled="loadingMore"
+                    class="px-6 py-2 rounded-lg text-sm font-medium transition-colors hover:opacity-90"
+                    style="background:var(--bg-card);border:1px solid var(--border);color:var(--text-secondary)">
+                <span x-show="!loadingMore">Загрузить ещё</span>
+                <span x-show="loadingMore">Загрузка...</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+function reviewsApp() {
+    return {
+        tab: 'feedbacks',
+        showAnswered: false,
+        loading: true,
+        loadingMore: false,
+        items: [],
+        stats: {},
+        skip: 0,
+        batchSize: 30,
+        hasMore: false,
+
+        async init() {
+            await this.loadStats();
+            await this.loadItems();
+        },
+
+        async loadStats() {
+            try {
+                const resp = await fetch('/api/reviews/stats');
+                if (resp.ok) this.stats = await resp.json();
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        },
+
+        async loadItems() {
+            this.loading = true;
+            this.skip = 0;
+            this.items = [];
+            try {
+                const endpoint = this.tab === 'feedbacks' ? '/api/reviews/feedbacks' : '/api/reviews/questions';
+                const params = new URLSearchParams({
+                    isAnswered: this.showAnswered,
+                    take: this.batchSize,
+                    skip: 0,
+                    order: 'dateDesc'
+                });
+                const resp = await fetch(`${endpoint}?${params}`);
+                if (resp.ok) {
+                    const json = await resp.json();
+                    const data = json.data || {};
+                    this.items = (this.tab === 'feedbacks' ? data.feedbacks : data.questions) || [];
+                    this.skip = this.items.length;
+                    const total = this.showAnswered ? (data.countArchive || 0) : (data.countUnanswered || 0);
+                    this.hasMore = this.skip < total;
+                }
+            } catch (e) {
+                console.error('Failed to load items:', e);
+            }
+            this.loading = false;
+        },
+
+        async loadMore() {
+            this.loadingMore = true;
+            try {
+                const endpoint = this.tab === 'feedbacks' ? '/api/reviews/feedbacks' : '/api/reviews/questions';
+                const params = new URLSearchParams({
+                    isAnswered: this.showAnswered,
+                    take: this.batchSize,
+                    skip: this.skip,
+                    order: 'dateDesc'
+                });
+                const resp = await fetch(`${endpoint}?${params}`);
+                if (resp.ok) {
+                    const json = await resp.json();
+                    const data = json.data || {};
+                    const newItems = (this.tab === 'feedbacks' ? data.feedbacks : data.questions) || [];
+                    this.items = [...this.items, ...newItems];
+                    this.skip += newItems.length;
+                    const total = this.showAnswered ? (data.countArchive || 0) : (data.countUnanswered || 0);
+                    this.hasMore = this.skip < total;
+                }
+            } catch (e) {
+                console.error('Failed to load more:', e);
+            }
+            this.loadingMore = false;
+        },
+
+        async generateReply(item) {
+            item._generating = true;
+            try {
+                const body = {
+                    type: this.tab === 'feedbacks' ? 'feedback' : 'question',
+                    text: item.text || '',
+                    productName: item.productDetails?.productName || '',
+                    rating: item.productValuation,
+                    pros: item.pros || '',
+                    cons: item.cons || '',
+                    userName: item.userName || ''
+                };
+                const resp = await fetch('/api/reviews/generate-reply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                if (resp.ok) {
+                    const json = await resp.json();
+                    item._draft = json.reply;
+                } else {
+                    const err = await resp.json();
+                    alert('Ошибка генерации: ' + (err.error || 'Неизвестная ошибка'));
+                }
+            } catch (e) {
+                console.error('Failed to generate reply:', e);
+                alert('Ошибка: ' + e.message);
+            }
+            item._generating = false;
+        },
+
+        async sendReply(item) {
+            if (!item._draft || item._draft.length < 2) return;
+            item._sending = true;
+            try {
+                const resp = await fetch('/api/reviews/send-reply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        id: item.id,
+                        text: item._draft,
+                        type: this.tab === 'feedbacks' ? 'feedback' : 'question'
+                    })
+                });
+                if (resp.ok) {
+                    item.answer = { text: item._draft };
+                    item._draft = undefined;
+                    if (this.tab === 'feedbacks') {
+                        this.stats.feedbacks_unanswered = Math.max(0, (this.stats.feedbacks_unanswered || 0) - 1);
+                    } else {
+                        this.stats.questions_unanswered = Math.max(0, (this.stats.questions_unanswered || 0) - 1);
+                    }
+                } else {
+                    const err = await resp.json();
+                    alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                }
+            } catch (e) {
+                console.error('Failed to send reply:', e);
+                alert('Ошибка отправки: ' + e.message);
+            }
+            item._sending = false;
+        },
+
+        formatDate(dateStr) {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+        }
+    };
+}
+</script>
+{% endblock %}

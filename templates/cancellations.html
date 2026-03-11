@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Аналитика отмен{% endblock %}
+{% block content %}
+<div x-data="cancellationsApp()" x-init="init()" class="p-6 max-w-7xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-white">Аналитика отмен</h1>
+        <div class="flex gap-2">
+            <template x-for="p in [7, 30, 60, 90]" :key="p">
+                <button @click="period = p; loadData()"
+                        :class="period === p ? 'text-white' : ''"
+                        :style="period === p ? 'background:var(--accent)' : 'background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border)'"
+                        class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                        x-text="p + 'д'">
+                </button>
+            </template>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div x-show="loading" class="flex justify-center py-16">
+        <svg class="animate-spin h-8 w-8 text-purple-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+        </svg>
+    </div>
+
+    <div x-show="!loading">
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Всего заказов</div>
+                <div class="text-2xl font-bold text-white mt-1" x-text="data.totalOrders?.toLocaleString('ru-RU') ?? '—'"></div>
+            </div>
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Отменено</div>
+                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="data.cancelCount?.toLocaleString('ru-RU') ?? '—'"></div>
+            </div>
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Процент отмен</div>
+                <div class="text-2xl font-bold mt-1" :style="'color:' + (data.cancelRate > 10 ? '#ef4444' : data.cancelRate > 5 ? '#f59e0b' : '#22c55e')" x-text="(data.cancelRate ?? 0) + '%'"></div>
+            </div>
+            <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="text-sm" style="color:var(--text-secondary)">Потерянная выручка</div>
+                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="formatMoney(data.lostRevenue)"></div>
+            </div>
+        </div>
+
+        <!-- Daily trend chart -->
+        <div class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
+            <h2 class="text-lg font-semibold text-white mb-4">Тренд отмен по дням</h2>
+            <div class="flex items-end gap-1 overflow-x-auto pb-6" style="height:220px">
+                <template x-for="d in data.dailyTrend || []" :key="d.date">
+                    <div class="flex flex-col items-center flex-shrink-0" style="min-width:20px" :title="d.date + ': ' + d.orders + ' заказов, ' + d.cancels + ' отмен (' + d.cancelRate + '%)'">
+                        <div class="text-xs mb-1" :style="'color:' + (d.cancelRate > 10 ? '#ef4444' : 'var(--text-secondary)')" x-text="d.cancels || ''"></div>
+                        <div class="relative w-4">
+                            <div class="w-full rounded-t" style="background:var(--accent);opacity:0.6" :style="'height:' + Math.max(2, (d.orders / maxOrders) * 150) + 'px'"></div>
+                            <div class="w-full rounded-t absolute bottom-0" style="background:#ef4444" :style="'height:' + Math.max(0, (d.cancels / maxOrders) * 150) + 'px'"></div>
+                        </div>
+                        <div class="text-xs mt-1" style="color:var(--text-secondary);font-size:8px;writing-mode:vertical-lr" x-text="d.date.slice(5)"></div>
+                    </div>
+                </template>
+            </div>
+            <div class="flex gap-4 text-xs" style="color:var(--text-secondary)">
+                <span><span class="inline-block w-3 h-3 rounded mr-1" style="background:var(--accent);opacity:0.6"></span>Заказы</span>
+                <span><span class="inline-block w-3 h-3 rounded mr-1" style="background:#ef4444"></span>Отмены</span>
+            </div>
+        </div>
+
+        <!-- Tables grid -->
+        <div class="grid md:grid-cols-2 gap-6">
+            <!-- Top cancelled products -->
+            <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <h2 class="text-lg font-semibold text-white mb-4">Топ товаров по отменам</h2>
+                <div class="space-y-2 max-h-96 overflow-y-auto">
+                    <template x-for="item in data.topCancelled || []" :key="item.nmId">
+                        <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg-hover)">
+                            <div class="min-w-0 flex-1">
+                                <div class="text-sm text-white truncate" x-text="item.name"></div>
+                                <div class="text-xs" style="color:var(--text-secondary)">
+                                    <span x-text="item.brand"></span> · <span x-text="item.article"></span>
+                                </div>
+                            </div>
+                            <div class="text-right ml-3 flex-shrink-0">
+                                <div class="text-sm font-medium" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#22c55e')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-xs" style="color:var(--text-secondary)" x-text="item.cancels + '/' + item.orders"></div>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="!data.topCancelled || data.topCancelled.length === 0" class="text-center py-4" style="color:var(--text-secondary)">
+                        Нет отмен за период
+                    </div>
+                </div>
+            </div>
+
+            <!-- By region -->
+            <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <h2 class="text-lg font-semibold text-white mb-4">Отмены по регионам</h2>
+                <div class="space-y-2 max-h-96 overflow-y-auto">
+                    <template x-for="item in data.topRegions || []" :key="item.region">
+                        <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg-hover)">
+                            <div class="text-sm text-white" x-text="item.region"></div>
+                            <div class="text-right">
+                                <div class="text-sm font-medium" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#22c55e')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-xs" style="color:var(--text-secondary)" x-text="item.cancels + '/' + item.orders"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- By warehouse -->
+            <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <h2 class="text-lg font-semibold text-white mb-4">Отмены по складам</h2>
+                <div class="space-y-2 max-h-96 overflow-y-auto">
+                    <template x-for="item in data.topWarehouses || []" :key="item.warehouse">
+                        <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg-hover)">
+                            <div class="text-sm text-white" x-text="item.warehouse"></div>
+                            <div class="text-right">
+                                <div class="text-sm font-medium" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#22c55e')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-xs" style="color:var(--text-secondary)" x-text="item.cancels + '/' + item.orders"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- By category -->
+            <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <h2 class="text-lg font-semibold text-white mb-4">Отмены по категориям</h2>
+                <div class="space-y-2 max-h-96 overflow-y-auto">
+                    <template x-for="item in data.categories || []" :key="item.category">
+                        <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg-hover)">
+                            <div class="text-sm text-white" x-text="item.category"></div>
+                            <div class="text-right">
+                                <div class="text-sm font-medium" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#22c55e')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-xs" style="color:var(--text-secondary)" x-text="item.cancels + '/' + item.orders"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function cancellationsApp() {
+    return {
+        loading: true,
+        period: 30,
+        data: {},
+        maxOrders: 1,
+
+        async init() {
+            await this.loadData();
+        },
+
+        async loadData() {
+            this.loading = true;
+            try {
+                const resp = await fetch(`/api/cancellations/data?days=${this.period}`);
+                if (resp.ok) {
+                    this.data = await resp.json();
+                    this.maxOrders = Math.max(1, ...((this.data.dailyTrend || []).map(d => d.orders)));
+                }
+            } catch (e) {
+                console.error('Failed to load cancellation data:', e);
+            }
+            this.loading = false;
+        },
+
+        formatMoney(val) {
+            if (!val && val !== 0) return '—';
+            return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);
+        }
+    };
+}
+</script>
+{% endblock %}

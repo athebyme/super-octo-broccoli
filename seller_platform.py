@@ -5747,6 +5747,14 @@ register_analytics_routes(app)
 from routes.finances import register_finance_routes
 register_finance_routes(app)
 
+# ============= РОУТЫ ОТЗЫВОВ И ВОПРОСОВ =============
+from routes.reviews import register_reviews_routes
+register_reviews_routes(app)
+
+# ============= РОУТЫ АНАЛИТИКИ ОТМЕН =============
+from routes.cancellations import register_cancellations_routes
+register_cancellations_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
