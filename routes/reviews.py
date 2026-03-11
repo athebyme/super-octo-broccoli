@@ -495,14 +495,14 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
         ai_settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
         if not ai_settings:
             logger.warning("AI enabled for reviews but no AutoImportSettings found")
-            return None, 'Настройки AI не найдены. Перейдите в настройки автоимпорта и укажите API ключ AI.'
+            return None, 'Настройки AI не найдены. Перейдите в Профиль → AI-провайдер и укажите API ключ.'
 
         # Build AI config directly — don't use from_settings() which requires ai_enabled
         from services.ai_service import AIConfig, AIClient, AIProvider
         ai_api_key = getattr(ai_settings, 'ai_api_key', '')
         if not ai_api_key:
             logger.warning("AI enabled for reviews but no AI API key configured")
-            return None, 'API ключ AI не указан. Перейдите в настройки автоимпорта и укажите API ключ AI.'
+            return None, 'API ключ AI не указан. Перейдите в Профиль → AI-провайдер и укажите API ключ.'
 
         provider = AIProvider(getattr(ai_settings, 'ai_provider', 'cloudru') or 'cloudru')
         if provider == AIProvider.CLOUDRU:

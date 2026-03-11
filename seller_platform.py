@@ -5965,6 +5965,110 @@ def profile_page():
     )
 
 
+@app.route('/api/profile/ai-settings', methods=['GET'])
+@login_required
+def api_profile_ai_settings_get():
+    """Get AI provider settings from AutoImportSettings."""
+    if not current_user.seller:
+        return jsonify({'error': 'No seller'}), 403
+    settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+    if not settings:
+        return jsonify({
+            'provider': 'cloudru',
+            'model': 'openai/gpt-oss-120b',
+            'api_key': '',
+            'api_base_url': 'https://foundation-models.api.cloud.ru/v1',
+        })
+    return jsonify({
+        'provider': settings.ai_provider or 'cloudru',
+        'model': settings.ai_model or 'openai/gpt-oss-120b',
+        'api_key': settings.ai_api_key or '',
+        'api_base_url': settings.ai_api_base_url or '',
+    })
+
+
+@app.route('/api/profile/ai-settings', methods=['POST'])
+@login_required
+def api_profile_ai_settings_save():
+    """Save AI provider settings to AutoImportSettings."""
+    if not current_user.seller:
+        return jsonify({'error': 'No seller'}), 403
+    try:
+        body = request.get_json(silent=True) or {}
+        settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+        if not settings:
+            settings = AutoImportSettings(seller_id=current_user.seller.id)
+            db.session.add(settings)
+
+        provider = body.get('provider', 'cloudru')
+        settings.ai_provider = provider
+        settings.ai_model = body.get('model', '')
+        settings.ai_api_key = body.get('api_key', '')
+        settings.ai_api_base_url = body.get('api_base_url', '')
+
+        # Enable AI if key is provided
+        if settings.ai_api_key:
+            settings.ai_enabled = True
+
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/profile/ai-test', methods=['POST'])
+@login_required
+def api_profile_ai_test():
+    """Test AI connection with given settings."""
+    if not current_user.seller:
+        return jsonify({'error': 'No seller'}), 403
+    try:
+        import time
+        body = request.get_json(silent=True) or {}
+        provider = body.get('provider', 'cloudru')
+        api_key = body.get('api_key', '')
+        api_base_url = body.get('api_base_url', '')
+        model = body.get('model', '')
+
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API ключ не указан'})
+
+        from services.ai_service import AIConfig, AIClient, AIProvider
+        config = AIConfig(
+            provider=AIProvider(provider),
+            api_key=api_key,
+            api_base_url=api_base_url or (
+                'https://foundation-models.api.cloud.ru/v1' if provider == 'cloudru'
+                else 'https://api.openai.com/v1'
+            ),
+            model=model or 'openai/gpt-oss-120b',
+        )
+        config.timeout = 30
+
+        client = AIClient(config)
+        start = time.time()
+        result = client.chat_completion(
+            messages=[{"role": "user", "content": "Ответь одним словом: привет"}],
+            max_tokens=50,
+        )
+        elapsed = int((time.time() - start) * 1000)
+
+        if result:
+            return jsonify({
+                'success': True,
+                'response_length': len(result),
+                'elapsed_ms': elapsed,
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': client.last_error or 'Пустой ответ от AI',
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/notifications')
 @login_required
 def notifications_page():

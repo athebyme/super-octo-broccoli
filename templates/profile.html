@@ -253,6 +253,120 @@
                 </div>
             </div>
 
+            <!-- Tab: AI Settings -->
+            <div x-show="activeTab === 'ai'" x-cloak x-transition>
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+                    <div class="flex items-center gap-3 mb-6">
+                        <div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+                            <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900">AI-провайдер</h3>
+                            <p class="text-xs text-gray-500">Настройки подключения к AI для всех модулей</p>
+                        </div>
+                    </div>
+
+                    <!-- Status indicator -->
+                    <div x-show="ai.testResult" x-cloak class="mb-4 px-4 py-3 rounded-xl text-sm flex items-center gap-2"
+                         :class="ai.testResult === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'">
+                        <template x-if="ai.testResult === 'ok'">
+                            <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        </template>
+                        <template x-if="ai.testResult !== 'ok'">
+                            <svg class="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </template>
+                        <span x-text="ai.testMessage"></span>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Provider -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Провайдер</label>
+                            <select x-model="ai.provider" @change="onProviderChange()"
+                                class="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors bg-white">
+                                <option value="cloudru">Cloud.ru Foundation Models</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="custom">Другой (OpenAI-совместимый)</option>
+                            </select>
+                        </div>
+
+                        <!-- Model -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Модель</label>
+                            <select x-model="ai.model"
+                                class="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors bg-white">
+                                <template x-for="m in ai.availableModels" :key="m.id">
+                                    <option :value="m.id" x-text="m.name" :selected="m.id === ai.model"></option>
+                                </template>
+                            </select>
+                            <p class="text-xs text-gray-400 mt-1" x-text="ai.modelDescription"></p>
+                        </div>
+
+                        <!-- API Key -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">API ключ</label>
+                            <div class="relative">
+                                <input :type="ai.showKey ? 'text' : 'password'" x-model="ai.apiKey" placeholder="sk-..."
+                                    class="w-full px-4 py-2.5 pr-10 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors">
+                                <button @click="ai.showKey = !ai.showKey" type="button"
+                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path x-show="!ai.showKey" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                        <path x-show="ai.showKey" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M3 3l18 18"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-1" x-show="ai.provider === 'cloudru'">Service Account ключ Cloud.ru</p>
+                        </div>
+
+                        <!-- API Base URL -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">API Base URL</label>
+                            <input type="url" x-model="ai.apiBaseUrl"
+                                class="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
+                                :placeholder="ai.provider === 'cloudru' ? 'https://foundation-models.api.cloud.ru/v1' : 'https://api.openai.com/v1'">
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex items-center gap-3 mt-6 pt-6 border-t border-gray-100">
+                        <button @click="saveAISettings()"
+                            :disabled="ai.saving"
+                            class="px-5 py-2.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl transition-colors">
+                            <span x-show="!ai.saving">Сохранить</span>
+                            <span x-show="ai.saving">Сохранение...</span>
+                        </button>
+                        <button @click="testAIConnection()"
+                            :disabled="ai.testing"
+                            class="px-5 py-2.5 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 rounded-xl transition-colors">
+                            <span x-show="!ai.testing">Тест подключения</span>
+                            <span x-show="ai.testing">Проверка...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Usage hint -->
+                <div class="bg-indigo-50/50 rounded-2xl border border-indigo-100 p-5">
+                    <h4 class="text-sm font-semibold text-indigo-900 mb-2">Где используется AI</h4>
+                    <ul class="text-xs text-indigo-700 space-y-1.5">
+                        <li class="flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+                            Автоимпорт — определение категорий, размеров, SEO
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+                            Отзывы — генерация ответов на отзывы и вопросы
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span>
+                            AI-обновление — массовое улучшение карточек
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
             <!-- Tab: Notifications -->
             <div x-show="activeTab === 'notifications'" x-cloak x-transition>
                 <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
@@ -287,6 +401,7 @@ function profilePage() {
         tabs: [
             { id: 'profile', label: 'Профиль' },
             { id: 'marketplaces', label: 'Маркетплейсы' },
+            { id: 'ai', label: 'AI-провайдер' },
             { id: 'security', label: 'Безопасность' },
             { id: 'notifications', label: 'Уведомления' },
         ],
@@ -303,6 +418,131 @@ function profilePage() {
             { id: 'reports', title: 'Отчёты готовы', description: 'Сообщать когда финансовые отчёты сформированы', enabled: true },
             { id: 'system', title: 'Системные', description: 'Обновления системы, техработы, важные объявления', enabled: false },
         ],
+
+        // AI settings state
+        ai: {
+            provider: 'cloudru',
+            model: '',
+            apiKey: '',
+            apiBaseUrl: '',
+            showKey: false,
+            saving: false,
+            testing: false,
+            testResult: null,
+            testMessage: '',
+            availableModels: [],
+            modelDescription: '',
+        },
+
+        init() {
+            this.loadAISettings();
+        },
+
+        async loadAISettings() {
+            try {
+                const res = await fetch('/api/profile/ai-settings');
+                if (res.ok) {
+                    const data = await res.json();
+                    this.ai.provider = data.provider || 'cloudru';
+                    this.ai.model = data.model || '';
+                    this.ai.apiKey = data.api_key || '';
+                    this.ai.apiBaseUrl = data.api_base_url || '';
+                    this.loadModels();
+                }
+            } catch (e) {
+                console.error('Failed to load AI settings:', e);
+            }
+        },
+
+        async loadModels() {
+            try {
+                const res = await fetch(`/auto-import/ai/models?provider=${this.ai.provider}`);
+                const data = await res.json();
+                if (data.success && data.models) {
+                    this.ai.availableModels = data.models;
+                    if (!this.ai.model && data.models.length > 0) {
+                        this.ai.model = data.models[0].id;
+                    }
+                    const current = data.models.find(m => m.id === this.ai.model);
+                    this.ai.modelDescription = current ? (current.description || '') : '';
+                }
+            } catch (e) {
+                console.error('Failed to load models:', e);
+            }
+        },
+
+        onProviderChange() {
+            const defaults = {
+                cloudru: { url: 'https://foundation-models.api.cloud.ru/v1', model: 'openai/gpt-oss-120b' },
+                openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+                custom: { url: '', model: '' },
+            };
+            const d = defaults[this.ai.provider] || defaults.custom;
+            this.ai.apiBaseUrl = d.url;
+            this.ai.model = d.model;
+            this.ai.testResult = null;
+            this.loadModels();
+        },
+
+        async saveAISettings() {
+            this.ai.saving = true;
+            this.ai.testResult = null;
+            try {
+                const res = await fetch('/api/profile/ai-settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider: this.ai.provider,
+                        model: this.ai.model,
+                        api_key: this.ai.apiKey,
+                        api_base_url: this.ai.apiBaseUrl,
+                    }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    this.ai.testResult = 'ok';
+                    this.ai.testMessage = 'Настройки сохранены';
+                } else {
+                    this.ai.testResult = 'error';
+                    this.ai.testMessage = data.error || 'Ошибка сохранения';
+                }
+            } catch (e) {
+                this.ai.testResult = 'error';
+                this.ai.testMessage = 'Ошибка сети';
+            } finally {
+                this.ai.saving = false;
+            }
+        },
+
+        async testAIConnection() {
+            this.ai.testing = true;
+            this.ai.testResult = null;
+            try {
+                const res = await fetch('/api/profile/ai-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider: this.ai.provider,
+                        model: this.ai.model,
+                        api_key: this.ai.apiKey,
+                        api_base_url: this.ai.apiBaseUrl,
+                    }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    this.ai.testResult = 'ok';
+                    this.ai.testMessage = `Подключение успешно (${data.response_length || 0} символов, ${data.elapsed_ms || 0}ms)`;
+                } else {
+                    this.ai.testResult = 'error';
+                    this.ai.testMessage = data.error || 'Ошибка подключения';
+                }
+            } catch (e) {
+                this.ai.testResult = 'error';
+                this.ai.testMessage = 'Ошибка сети';
+            } finally {
+                this.ai.testing = false;
+            }
+        },
     };
 }
 </script>
