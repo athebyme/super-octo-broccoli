@@ -85,6 +85,7 @@ class Seller(db.Model):
     notes = db.Column(db.Text)  # Заметки админа
     api_last_sync = db.Column(db.DateTime)  # Последняя синхронизация с API
     api_sync_status = db.Column(db.String(50))  # Статус синхронизации
+    stock_refresh_interval = db.Column(db.Integer, default=30)  # Интервал обновления остатков (мин), от 5 до 60
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     reports = db.relationship(

@@ -409,9 +409,23 @@ function inventoryApp() {
             return Math.max(1, ...(this.ret.dailyTrend || []).map(d => d.sales + d.returns));
         },
 
+        refreshIntervalMin: 30,
+
         async init() {
             await this.loadStock();
+            await this.loadRefreshInterval();
             this.startAutoRefresh();
+        },
+
+        async loadRefreshInterval() {
+            try {
+                const resp = await fetch('/api/settings/stock-refresh');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.refreshIntervalMin = data.interval || 30;
+                    this.nextRefreshIn = this.refreshIntervalMin;
+                }
+            } catch (e) { /* use default */ }
         },
 
         // --- Stock ---
@@ -456,13 +470,12 @@ function inventoryApp() {
         },
 
         startAutoRefresh() {
-            // Auto-refresh every 30 minutes (WB API update interval)
-            const INTERVAL_MS = 30 * 60 * 1000;
+            const intervalMs = this.refreshIntervalMin * 60 * 1000;
             this.autoRefreshTimer = setInterval(() => {
                 this.refreshStock();
-            }, INTERVAL_MS);
+            }, intervalMs);
             this.autoRefreshActive = true;
-            this.nextRefreshIn = 30;
+            this.nextRefreshIn = this.refreshIntervalMin;
             this.countdownTimer = setInterval(() => {
                 this.nextRefreshIn = Math.max(0, this.nextRefreshIn - 1);
             }, 60000);

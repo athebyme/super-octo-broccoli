@@ -130,6 +130,49 @@
         </form>
     </div>
 
+    <!-- Настройки обновления остатков -->
+    <div x-data="stockRefreshSettings()" class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div class="px-6 py-4 bg-gray-50 border-b border-gray-100">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-lg flex items-center justify-center">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                </div>
+                <h3 class="font-semibold text-gray-900">Обновление остатков</h3>
+            </div>
+        </div>
+        <div class="p-6">
+            <p class="text-sm text-gray-600 mb-4">
+                Остатки на WB обновляются примерно каждые 30 минут. Вы можете настроить более частый опрос (от 5 мин), но данные могут не измениться между обновлениями.
+            </p>
+            <div class="flex items-center gap-4">
+                <label class="text-sm font-medium text-gray-700 whitespace-nowrap">Интервал:</label>
+                <input type="range" min="5" max="60" step="5"
+                       x-model.number="interval"
+                       class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600">
+                <div class="flex items-center gap-2 min-w-[100px]">
+                    <input type="number" min="5" max="60" step="5"
+                           x-model.number="interval"
+                           class="w-16 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+                    <span class="text-sm text-gray-500">мин</span>
+                </div>
+            </div>
+            <div class="flex items-center justify-between mt-4">
+                <div class="text-xs text-gray-400">
+                    <span x-show="interval < 30">Чаще чем WB обновляет данные — возможны одинаковые ответы</span>
+                    <span x-show="interval >= 30">Оптимально — совпадает с частотой обновления WB</span>
+                </div>
+                <button @click="save()" :disabled="saving || interval === saved"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                        :style="interval !== saved ? 'background:var(--accent,#c45d3e);color:#fff' : 'background:#e5e7eb;color:#9ca3af'"
+                        x-text="saving ? 'Сохранение...' : (interval !== saved ? 'Сохранить' : 'Сохранено')">
+                </button>
+            </div>
+            <div x-show="msg" x-cloak x-transition class="mt-3 text-sm" :class="msgErr ? 'text-red-600' : 'text-green-600'" x-text="msg"></div>
+        </div>
+    </div>
+
     <!-- Безопасность -->
     <div class="bg-gray-50 rounded-xl border border-gray-200 p-4">
         <div class="flex items-start gap-3">
@@ -187,6 +230,44 @@
 function toggleApiKey() {
     const input = document.getElementById('wb_api_key');
     input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function stockRefreshSettings() {
+    return {
+        interval: {{ seller.stock_refresh_interval or 30 }},
+        saved: {{ seller.stock_refresh_interval or 30 }},
+        saving: false,
+        msg: '',
+        msgErr: false,
+        async save() {
+            this.saving = true;
+            this.msg = '';
+            try {
+                const resp = await fetch('/api/settings/stock-refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                    },
+                    body: JSON.stringify({ interval: this.interval })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    this.saved = this.interval;
+                    this.msg = 'Сохранено';
+                    this.msgErr = false;
+                } else {
+                    this.msg = data.error || 'Ошибка сохранения';
+                    this.msgErr = true;
+                }
+            } catch (e) {
+                this.msg = 'Ошибка сети';
+                this.msgErr = true;
+            }
+            this.saving = false;
+            setTimeout(() => { this.msg = ''; }, 3000);
+        }
+    };
 }
 </script>
 {% endblock %}

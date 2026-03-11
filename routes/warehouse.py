@@ -250,3 +250,29 @@ def register_warehouse_routes(app):
             db.session.rollback()
             logger.error(f"Error in warehouse refresh: {e}")
             return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/settings/stock-refresh', methods=['POST'])
+    @login_required
+    def api_stock_refresh_settings():
+        """Update stock refresh interval setting."""
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        try:
+            data = request.get_json()
+            interval = int(data.get('interval', 30))
+            interval = max(5, min(60, interval))
+            current_user.seller.stock_refresh_interval = interval
+            db.session.commit()
+            return jsonify({'success': True, 'interval': interval})
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error saving stock refresh interval: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/settings/stock-refresh', methods=['GET'])
+    @login_required
+    def api_stock_refresh_settings_get():
+        """Get stock refresh interval setting."""
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        return jsonify({'interval': current_user.seller.stock_refresh_interval or 30})
