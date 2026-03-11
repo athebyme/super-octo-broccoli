@@ -214,11 +214,8 @@ def register_returns_routes(app):
     @app.route('/returns')
     @login_required
     def returns_page():
-        """Returns analytics page."""
-        if not current_user.seller or not current_user.seller.has_valid_api_key():
-            flash('Для аналитики возвратов необходимо настроить API ключ WB', 'warning')
-            return redirect(url_for('api_settings'))
-        return render_template('returns.html')
+        """Returns analytics page (redirects to combined inventory page)."""
+        return redirect(url_for('inventory_page'))
 
     @app.route('/api/returns/data')
     @login_required

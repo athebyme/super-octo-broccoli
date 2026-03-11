@@ -17,14 +17,20 @@ LOW_STOCK_THRESHOLD = 5
 def register_warehouse_routes(app):
     """Register warehouse analytics routes."""
 
-    @app.route('/warehouse')
+    @app.route('/inventory')
     @login_required
-    def warehouse_page():
-        """Warehouse analytics page."""
+    def inventory_page():
+        """Combined warehouse + returns analytics page."""
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             flash('Для складской аналитики необходимо настроить API ключ WB', 'warning')
             return redirect(url_for('api_settings'))
-        return render_template('warehouse.html')
+        return render_template('inventory.html')
+
+    @app.route('/warehouse')
+    @login_required
+    def warehouse_page():
+        """Warehouse analytics page (redirects to combined page)."""
+        return redirect(url_for('inventory_page'))
 
     @app.route('/api/warehouse/data')
     @login_required
