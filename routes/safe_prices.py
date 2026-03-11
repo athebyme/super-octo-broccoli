@@ -286,6 +286,10 @@ def calculate_price_changes(
     for product in products:
         old_price = float(product.price) if product.price else 0
 
+        # Пропускаем товары без nm_id — они не существуют на WB
+        if not product.nm_id or product.nm_id <= 0:
+            continue
+
         # Рассчитываем новую цену
         if change_type == 'fixed':
             # Изменение на фиксированную сумму
@@ -314,7 +318,11 @@ def calculate_price_changes(
             change_amount = new_price
 
         # Классифицируем изменение
-        safety_level = settings.classify_change(old_price, new_price)
+        # Товары с ценой 0 → warning, чтобы продавец видел их
+        if new_price <= 0:
+            safety_level = 'warning'
+        else:
+            safety_level = settings.classify_change(old_price, new_price)
 
         items.append({
             'product_id': product.id,
@@ -661,39 +669,65 @@ def batch_apply(batch_id: int):
         batch.status = 'applying'
         db.session.commit()
 
-        # Собираем данные для WB API
+        # Собираем данные для WB API, фильтруя невалидные элементы
         prices_data = []
         items = batch.items.filter_by(status='pending').all()
+        valid_items = []     # Элементы, отправленные в WB
+        skipped_count = 0
 
         for item in items:
+            # Валидация: пропускаем элементы с невалидными данными
+            price_val = int(item.new_price) if item.new_price else 0
+            if not item.nm_id or item.nm_id <= 0:
+                item.status = 'skipped'
+                item.error_message = 'Нет nmID — товар не существует на WB'
+                skipped_count += 1
+                continue
+            if price_val <= 0:
+                item.status = 'skipped'
+                item.error_message = 'Цена = 0 — невозможно установить нулевую цену на WB'
+                skipped_count += 1
+                continue
+
             prices_data.append({
                 'nmID': item.nm_id,
-                'price': int(item.new_price)  # WB требует целое число
+                'price': price_val
             })
+            valid_items.append(item)
 
-        # Отправляем в WB
-        result = api_client.upload_prices_batch(
-            prices_data,
-            log_to_db=True,
-            seller_id=seller.id
-        )
+        if skipped_count > 0:
+            logger.warning(
+                f"Batch {batch_id}: пропущено {skipped_count} товаров "
+                f"(невалидные nmID или цена=0)"
+            )
+
+        # Отправляем в WB только валидные элементы
+        result = {'total': 0, 'success': 0, 'failed': 0, 'errors': []}
+        if prices_data:
+            result = api_client.upload_prices_batch(
+                prices_data,
+                log_to_db=True,
+                seller_id=seller.id
+            )
 
         # Обновляем статусы элементов
         applied_count = 0
-        failed_count = 0
+        failed_count = skipped_count  # Считаем пропущенные как failed
 
-        for item in items:
-            # Проверяем есть ли ошибки для этого товара
-            item_failed = False
-            for error in result.get('errors', []):
-                if item.nm_id in error.get('nm_ids', []):
-                    item.status = 'failed'
-                    item.error_message = error.get('error')
-                    item_failed = True
-                    failed_count += 1
-                    break
+        # Собираем множество всех nmID, которые попали в ошибки
+        failed_nm_ids = set()
+        error_by_nm_id = {}
+        for error in result.get('errors', []):
+            for nm_id in error.get('nm_ids', []):
+                failed_nm_ids.add(nm_id)
+                error_by_nm_id[nm_id] = error.get('error', 'Неизвестная ошибка')
 
-            if not item_failed:
+        for item in valid_items:
+            if item.nm_id in failed_nm_ids:
+                item.status = 'failed'
+                item.error_message = error_by_nm_id.get(item.nm_id, 'Ошибка WB API')
+                failed_count += 1
+            else:
                 item.status = 'applied'
                 item.wb_applied_at = datetime.utcnow()
                 applied_count += 1
@@ -790,9 +824,13 @@ def batch_revert(batch_id: int):
         applied_items = batch.items.filter_by(status='applied').all()
 
         for item in applied_items:
+            old_price_val = int(item.old_price) if item.old_price else 0
+            # Пропускаем невалидные элементы (нет nmID или цена=0)
+            if not item.nm_id or item.nm_id <= 0 or old_price_val <= 0:
+                continue
             prices_data.append({
                 'nmID': item.nm_id,
-                'price': int(item.old_price) if item.old_price else 0
+                'price': old_price_val
             })
 
             # Создаем элемент отката
