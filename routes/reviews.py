@@ -72,6 +72,26 @@ def _get_product_context(seller_id, nm_id):
             except:
                 pass
 
+        # Stock / остатки
+        if product.quantity is not None:
+            parts.append(f"Общий остаток: {product.quantity} шт.")
+            if product.quantity == 0:
+                parts.append("⚠ Товар отсутствует на складах")
+
+        try:
+            from models import ProductStock
+            stocks = ProductStock.query.filter_by(product_id=product.id).filter(
+                ProductStock.quantity > 0
+            ).order_by(ProductStock.quantity.desc()).limit(10).all()
+            if stocks:
+                stock_lines = []
+                for s in stocks:
+                    wh = s.warehouse_name or f"Склад {s.warehouse_id}"
+                    stock_lines.append(f"  {wh}: {s.quantity} шт.")
+                parts.append("Остатки по складам:\n" + "\n".join(stock_lines))
+        except Exception as e:
+            logger.debug(f"Could not load stock details: {e}")
+
         return "\n".join(parts) if parts else ''
     except Exception as e:
         logger.error(f"Error getting product context for nm_id={nm_id}: {e}")
