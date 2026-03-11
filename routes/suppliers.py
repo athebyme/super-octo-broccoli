@@ -2911,6 +2911,111 @@ def register_supplier_routes(app):
 
         return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
 
+    # -------------------------------------------------------------------
+    # API: Поиск категорий WB (для автокомплита)
+    # -------------------------------------------------------------------
+    @app.route('/api/wb-subjects/search')
+    @login_required
+    @seller_required
+    def api_wb_subjects_search():
+        """Поиск категорий WB по названию.
+        Сначала ищем в локальной базе (MarketplaceCategory),
+        при недостатке результатов — в WB API."""
+        from models import MarketplaceCategory
+
+        q = request.args.get('q', '').strip()
+        if not q or len(q) < 2:
+            return jsonify({'success': True, 'subjects': []})
+
+        # 1) Поиск в локальной базе
+        local_results = MarketplaceCategory.query.filter(
+            MarketplaceCategory.subject_name.ilike(f'%{q}%')
+        ).order_by(MarketplaceCategory.subject_name).limit(30).all()
+
+        subjects = []
+        seen_ids = set()
+        for cat in local_results:
+            if cat.subject_id not in seen_ids:
+                seen_ids.add(cat.subject_id)
+                display = cat.subject_name
+                if cat.parent_name:
+                    display = f"{cat.parent_name} > {cat.subject_name}"
+                subjects.append({
+                    'subject_id': cat.subject_id,
+                    'subject_name': cat.subject_name,
+                    'parent_name': cat.parent_name or '',
+                    'display': display,
+                })
+
+        # 2) Если мало результатов и у продавца есть WB API key — дополняем из API
+        if len(subjects) < 5:
+            seller = current_user.seller
+            if seller and seller.has_valid_api_key():
+                try:
+                    from services.wb_api_client import WildberriesAPIClient
+                    api = WildberriesAPIClient(seller.wb_api_key)
+                    result = api.get_subjects_list(name=q, limit=50)
+                    for item in result.get('data', []):
+                        sid = item.get('subjectID')
+                        if sid and sid not in seen_ids:
+                            seen_ids.add(sid)
+                            parent = item.get('parentName', '')
+                            sname = item.get('subjectName', '')
+                            display = f"{parent} > {sname}" if parent else sname
+                            subjects.append({
+                                'subject_id': sid,
+                                'subject_name': sname,
+                                'parent_name': parent,
+                                'display': display,
+                            })
+                except Exception as e:
+                    logger.warning(f"WB API subject search failed: {e}")
+
+        return jsonify({'success': True, 'subjects': subjects[:30]})
+
+    # -------------------------------------------------------------------
+    # API: Обновить категорию WB на товаре поставщика
+    # -------------------------------------------------------------------
+    @app.route('/supplier-catalog/<int:supplier_id>/products/<int:product_id>/update-category', methods=['POST'])
+    @login_required
+    @seller_required
+    def supplier_catalog_update_category(supplier_id, product_id):
+        """Обновить wb_subject_id и wb_category_name на SupplierProduct."""
+        seller = current_user.seller
+        conn = SellerSupplier.query.filter_by(
+            seller_id=seller.id, supplier_id=supplier_id, is_active=True
+        ).first()
+        if not conn:
+            return jsonify({'success': False, 'error': 'Нет доступа'}), 403
+
+        product = SupplierProduct.query.get(product_id)
+        if not product or product.supplier_id != supplier_id:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        data = request.get_json() or {}
+        new_subject_id = data.get('subject_id')
+        new_subject_name = data.get('subject_name', '')
+        new_display = data.get('display', '')
+
+        if not new_subject_id:
+            return jsonify({'success': False, 'error': 'subject_id обязателен'}), 400
+
+        product.wb_subject_id = int(new_subject_id)
+        product.wb_subject_name = new_subject_name
+        product.wb_category_name = new_display or new_subject_name
+
+        db.session.commit()
+        logger.info(
+            f"Category updated: product={product_id}, "
+            f"subject_id={new_subject_id}, name={new_display}"
+        )
+
+        return jsonify({
+            'success': True,
+            'wb_subject_id': product.wb_subject_id,
+            'wb_category_name': product.wb_category_name,
+        })
+
 
 # ============================================================================
 # HELPERS
