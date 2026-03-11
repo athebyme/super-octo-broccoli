@@ -5774,6 +5774,8 @@ def _run_startup_migrations():
         # Notification columns (may be missing if table was created before these were added)
         ('notifications', 'link', 'VARCHAR(500)'),
         ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),
+        # Product rating from WB Analytics API
+        ('products', 'nm_rating', 'REAL'),
     ]
 
     for table, column, col_type in migrations:

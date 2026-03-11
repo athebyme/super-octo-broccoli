@@ -1,5 +1,6 @@
 from flask import render_template, jsonify, request, flash, redirect, url_for
 from flask_login import login_required, current_user
+import json
 import logging
 import traceback
 
@@ -146,6 +147,136 @@ def register_reviews_routes(app):
             return jsonify({'success': True, 'result': result})
         except Exception as e:
             logger.error(f"Error sending reply: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/reviews/check-new', methods=['POST'])
+    @login_required
+    def api_reviews_check_new():
+        """Check for new unanswered feedbacks/questions and create notifications."""
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        try:
+            from services.feedback_service import FeedbackService
+            from models import db, Notification
+
+            seller = current_user.seller
+            svc = FeedbackService(seller.wb_api_key)
+
+            fb_data = svc.get_feedbacks_unanswered_count()
+            q_data = svc.get_questions_unanswered_count()
+
+            fb_unanswered = fb_data.get('data', {}).get('countUnanswered', 0)
+            fb_today = fb_data.get('data', {}).get('countUnansweredToday', 0)
+            q_unanswered = q_data.get('data', {}).get('countUnanswered', 0)
+            q_today = q_data.get('data', {}).get('countUnansweredToday', 0)
+
+            notifications_created = []
+
+            # Notify about new unanswered feedbacks today
+            if fb_today > 0:
+                # Check if we already sent a similar notification today
+                from datetime import datetime, timedelta
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                existing = Notification.query.filter(
+                    Notification.seller_id == seller.id,
+                    Notification.category == 'warning',
+                    Notification.created_at >= today_start,
+                    Notification.title.like('%новых отзыв%')
+                ).first()
+
+                if not existing:
+                    # Load recent negative feedbacks for details
+                    negative_details = []
+                    try:
+                        recent = svc.get_feedbacks(is_answered=False, take=10, order='dateDesc')
+                        for fb in recent.get('data', {}).get('feedbacks', []):
+                            rating = fb.get('productValuation', 5)
+                            if rating <= 2:
+                                product = fb.get('productDetails', {}).get('productName', 'Товар')
+                                negative_details.append({
+                                    'rating': rating,
+                                    'product': product[:50],
+                                    'text': (fb.get('text', '') or '')[:100]
+                                })
+                    except Exception:
+                        pass
+
+                    if fb_today == 1:
+                        word = 'новый отзыв'
+                    elif fb_today < 5:
+                        word = 'новых отзыва'
+                    else:
+                        word = 'новых отзывов'
+
+                    title = f'{fb_today} {word} без ответа'
+                    message = f'Всего неотвеченных отзывов: {fb_unanswered}.'
+                    if negative_details:
+                        message += f' Из них негативных (1-2 звезды): {len(negative_details)}.'
+
+                    category = 'error' if negative_details else 'warning'
+
+                    notif = Notification(
+                        seller_id=seller.id,
+                        category=category,
+                        title=title,
+                        message=message,
+                        link='/reviews',
+                        metadata_json=json.dumps({
+                            'type': 'reviews',
+                            'feedbacks_unanswered': fb_unanswered,
+                            'feedbacks_today': fb_today,
+                            'negative_details': negative_details[:5]
+                        }, ensure_ascii=False)
+                    )
+                    db.session.add(notif)
+                    notifications_created.append('feedbacks')
+
+            # Notify about new unanswered questions today
+            if q_today > 0:
+                from datetime import datetime, timedelta
+                today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                existing = Notification.query.filter(
+                    Notification.seller_id == seller.id,
+                    Notification.category == 'warning',
+                    Notification.created_at >= today_start,
+                    Notification.title.like('%новых вопрос%')
+                ).first()
+
+                if not existing:
+                    if q_today == 1:
+                        word = 'новый вопрос'
+                    elif q_today < 5:
+                        word = 'новых вопроса'
+                    else:
+                        word = 'новых вопросов'
+
+                    notif = Notification(
+                        seller_id=seller.id,
+                        category='warning',
+                        title=f'{q_today} {word} без ответа',
+                        message=f'Всего неотвеченных вопросов: {q_unanswered}.',
+                        link='/reviews?tab=questions',
+                        metadata_json=json.dumps({
+                            'type': 'reviews_questions',
+                            'questions_unanswered': q_unanswered,
+                            'questions_today': q_today
+                        }, ensure_ascii=False)
+                    )
+                    db.session.add(notif)
+                    notifications_created.append('questions')
+
+            if notifications_created:
+                db.session.commit()
+
+            return jsonify({
+                'feedbacks_unanswered': fb_unanswered,
+                'feedbacks_today': fb_today,
+                'questions_unanswered': q_unanswered,
+                'questions_today': q_today,
+                'notifications_created': notifications_created
+            })
+        except Exception as e:
+            logger.error(f"Error checking new reviews: {e}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/reviews/rating-distribution')

@@ -176,8 +176,12 @@ function reviewsApp() {
         hasMore: false,
 
         async init() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('tab') === 'questions') this.tab = 'questions';
             await this.loadStats();
             await this.loadItems();
+            // Check for new items and create notifications in background
+            fetch('/api/reviews/check-new', {method: 'POST'}).catch(() => {});
         },
 
         async loadStats() {
