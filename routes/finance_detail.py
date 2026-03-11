@@ -271,6 +271,58 @@ def _compute_finance_analytics(records, days):
     }
 
 
+def _fetch_report_paginated(api_key, date_from, date_to, limit=100000):
+    """Fetch all pages of reportDetailByPeriod using rrdid pagination (API v5)."""
+    session = requests.Session()
+    session.headers.update({
+        'Authorization': api_key,
+        'Content-Type': 'application/json'
+    })
+
+    all_rows = []
+    rrdid = 0
+
+    while True:
+        params = {
+            'dateFrom': date_from,
+            'dateTo': date_to,
+            'limit': limit,
+            'rrdid': rrdid,
+        }
+        resp = session.get(
+            f"{STATISTICS_API_URL}/api/v5/supplier/reportDetailByPeriod",
+            params=params,
+            timeout=120
+        )
+        # 204 = no data (end of pagination or empty report)
+        if resp.status_code == 204:
+            break
+
+        resp.raise_for_status()
+        page = resp.json()
+
+        if not isinstance(page, list) or not page:
+            break
+
+        all_rows.extend(page)
+
+        # If page is smaller than limit, we got all data
+        if len(page) < limit:
+            break
+
+        # Paginate using rrd_id of last row
+        last_rrd_id = page[-1].get('rrd_id', 0)
+        if last_rrd_id and last_rrd_id != rrdid:
+            rrdid = last_rrd_id
+            # reportDetailByPeriod: max 1 request/min
+            logger.info(f"reportDetailByPeriod pagination: {len(all_rows)} rows so far, next rrdid={rrdid}, waiting 61s...")
+            time.sleep(61)
+        else:
+            break
+
+    return all_rows
+
+
 def _fetch_and_cache(api_key, seller_id, days):
     """Fetch data from WB API and update cache. Runs in background thread."""
     try:
@@ -278,18 +330,7 @@ def _fetch_and_cache(api_key, seller_id, days):
         date_from = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
         date_to = datetime.now().strftime('%Y-%m-%d')
 
-        session = requests.Session()
-        session.headers.update({
-            'Authorization': api_key,
-            'Content-Type': 'application/json'
-        })
-        resp = session.get(
-            f"{STATISTICS_API_URL}/api/v1/supplier/reportDetailByPeriod",
-            params={'dateFrom': date_from, 'dateTo': date_to},
-            timeout=120
-        )
-        resp.raise_for_status()
-        records = resp.json()
+        records = _fetch_report_paginated(api_key, date_from, date_to)
 
         if isinstance(records, list):
             data = _compute_finance_analytics(records, days)
@@ -361,18 +402,8 @@ def register_finance_detail_routes(app):
             # Force refresh - synchronous
             date_from = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
             date_to = datetime.now().strftime('%Y-%m-%d')
-            session = requests.Session()
-            session.headers.update({
-                'Authorization': current_user.seller.wb_api_key,
-                'Content-Type': 'application/json'
-            })
-            resp = session.get(
-                f"{STATISTICS_API_URL}/api/v1/supplier/reportDetailByPeriod",
-                params={'dateFrom': date_from, 'dateTo': date_to},
-                timeout=120
-            )
-            resp.raise_for_status()
-            records = resp.json()
+
+            records = _fetch_report_paginated(current_user.seller.wb_api_key, date_from, date_to)
 
             if not isinstance(records, list):
                 return jsonify({'error': 'Unexpected API response'}), 500
