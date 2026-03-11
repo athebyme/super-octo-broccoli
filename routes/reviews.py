@@ -102,10 +102,7 @@ def register_reviews_routes(app):
             cons = body.get('cons', '')
             user_name = body.get('userName', '')
 
-            if not text and not pros and not cons:
-                return jsonify({'error': 'Текст отзыва/вопроса не указан'}), 400
-
-            # Build AI prompt
+            # Generate reply — works even for text-less reviews (rating only)
             if item_type == 'feedback':
                 reply = _generate_feedback_reply(text, rating, product_name, pros, cons, user_name)
             else:
