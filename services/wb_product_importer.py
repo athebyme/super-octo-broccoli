@@ -217,6 +217,23 @@ class WBProductImporter:
             logger.info(f"  - Баркоды: {barcodes}")
             logger.debug(f"Данные варианта: {json.dumps(variant, ensure_ascii=False, default=str)}")
 
+            # === Pre-check: проверяем, не существует ли карточка по артикулу или баркоду ===
+            try:
+                existing_card = self.api_client.get_card_by_vendor_code(vendor_code)
+                existing_nm_id = existing_card.get('nmID')
+                if existing_nm_id:
+                    logger.info(
+                        f"Карточка с артикулом '{vendor_code}' уже существует на WB "
+                        f"(nmID={existing_nm_id}). Привязываем..."
+                    )
+                    linked = self._link_existing_card(
+                        imported_product, vendor_code, existing_nm_id
+                    )
+                    if linked:
+                        return linked
+            except Exception:
+                pass  # Карточка не найдена — продолжаем создание
+
             # Вызов API WB для создания карточки
             try:
                 response = self.api_client.create_product_card(
@@ -308,8 +325,46 @@ class WBProductImporter:
                         error_msg = f"bad request (проверьте данные: бренд='{product_brand}', категория={imported_product.wb_subject_id}, баркоды={barcodes})"
                 elif 'Бренда' in error_msg and 'пока нет на WB' in error_msg:
                     error_msg = f"Бренд '{product_brand}' не зарегистрирован на Wildberries. Необходимо сначала добавить бренд в личном кабинете WB или использовать существующий бренд."
-                elif 'повторяющиеся Баркоды' in error_msg:
-                    error_msg = f"Баркод уже используется в другой карточке или дублируется в текущей. Баркоды: {barcodes}"
+                elif 'повторяющиеся Баркоды' in error_msg or 'Неуникальный баркод' in error_msg or 'уникальный баркод' in error_msg.lower():
+                    # Баркод уже используется — пытаемся извлечь nmID и привязать существующую карточку
+                    # Формат ошибки WB: "Неуникальный баркод: товар с баркодом XXXX уже есть у вас: 839422800"
+                    existing_nm_id = self._extract_nm_id_from_barcode_error(error_msg)
+                    if existing_nm_id:
+                        logger.info(
+                            f"Баркод уже используется на WB (nmID={existing_nm_id}). "
+                            f"Пытаемся привязать существующую карточку..."
+                        )
+                        try:
+                            linked = self._link_existing_card(
+                                imported_product, vendor_code, existing_nm_id
+                            )
+                            if linked:
+                                return linked
+                        except Exception as link_err:
+                            logger.warning(f"Не удалось привязать карточку по баркоду: {link_err}")
+
+                    # Если не удалось извлечь nmID из ошибки — пробуем поискать по vendorCode
+                    # (пользователь мог ранее загружать под другим артикулом, напр. 2025W1V1S)
+                    if not existing_nm_id:
+                        found_nm_id = self._find_card_by_barcodes(barcodes)
+                        if found_nm_id:
+                            logger.info(
+                                f"Найдена карточка WB по баркоду: nmID={found_nm_id}. Привязываем..."
+                            )
+                            try:
+                                linked = self._link_existing_card(
+                                    imported_product, vendor_code, found_nm_id
+                                )
+                                if linked:
+                                    return linked
+                            except Exception as link_err:
+                                logger.warning(f"Не удалось привязать карточку: {link_err}")
+
+                    error_msg = (
+                        f"Баркод уже используется в другой карточке на WB. "
+                        f"Баркоды: {barcodes}. "
+                        f"Синхронизируйте товары чтобы обновить базу."
+                    )
                 elif 'vendor code is used' in error_msg.lower() or 'Артикул продавца' in error_msg:
                     # Артикул уже существует на WB — пытаемся найти и привязать существующую карточку
                     logger.info(f"Артикул '{vendor_code}' уже используется на WB. Пытаемся привязать существующую карточку...")
@@ -317,41 +372,11 @@ class WBProductImporter:
                         existing_card = self.api_client.get_card_by_vendor_code(vendor_code)
                         existing_nm_id = existing_card.get('nmID')
                         if existing_nm_id:
-                            logger.info(f"Найдена существующая карточка WB: nmID={existing_nm_id} для артикула '{vendor_code}'")
-                            # Привязываем как успешный импорт
-                            imported_product.wb_nm_id = existing_nm_id
-                            imported_product.import_status = 'completed'
-                            imported_product.import_error = None
-                            imported_product.imported_at = datetime.utcnow()
-                            db.session.commit()
-
-                            # Синхронизируем или создаём Product запись
-                            product = Product.query.filter_by(
-                                seller_id=self.seller.id,
-                                nm_id=existing_nm_id
-                            ).first()
-                            if not product:
-                                product = Product(
-                                    seller_id=self.seller.id,
-                                    nm_id=existing_nm_id,
-                                    vendor_code=vendor_code,
-                                    title=existing_card.get('title', imported_product.name or ''),
-                                    brand=existing_card.get('brand', ''),
-                                )
-                                db.session.add(product)
-                                db.session.commit()
-                                logger.info(f"Создана Product запись для nmID={existing_nm_id}")
-
-                            # Загружаем фото в существующую карточку
-                            try:
-                                self._upload_photos_for_card(existing_nm_id, imported_product)
-                                logger.info(f"Фото загружены в существующую карточку nmID={existing_nm_id}")
-                            except Exception as photo_err:
-                                logger.warning(f"Не удалось загрузить фото в существующую карточку: {photo_err}")
-
-                            return (True,
-                                    f"Карточка уже существовала на WB (nmID={existing_nm_id}). Привязана к импорту.",
-                                    existing_nm_id)
+                            linked = self._link_existing_card(
+                                imported_product, vendor_code, existing_nm_id
+                            )
+                            if linked:
+                                return linked
                     except Exception as link_err:
                         logger.warning(f"Не удалось привязать существующую карточку: {link_err}")
                     error_msg = f"Артикул '{vendor_code}' уже используется в другой карточке на WB. Синхронизируйте товары чтобы обновить базу."
@@ -504,6 +529,112 @@ class WBProductImporter:
             db.session.commit()
 
             return False, error_msg, None
+
+    # ------------------------------------------------------------------
+    # Helpers: привязка существующих карточек WB
+    # ------------------------------------------------------------------
+
+    def _extract_nm_id_from_barcode_error(self, error_msg: str) -> int:
+        """
+        Извлекает nmID из ошибки WB о дублирующемся баркоде.
+        Формат: 'Неуникальный баркод: товар с баркодом XXX уже есть у вас: 839422800'
+        """
+        import re
+        # Паттерн: "уже есть у вас: <nmID>"
+        match = re.search(r'уже есть у вас:\s*(\d+)', error_msg)
+        if match:
+            return int(match.group(1))
+        # Fallback: ищем последовательность цифр длиной 6+ в конце строки
+        match = re.search(r'(\d{6,})\.?\s*$', error_msg)
+        if match:
+            return int(match.group(1))
+        return 0
+
+    def _find_card_by_barcodes(self, barcodes: list) -> int:
+        """
+        Ищет существующую карточку на WB по баркодам.
+        Перебирает все карточки продавца и сравнивает SKUs.
+        Returns nmID если найдена, иначе 0.
+        """
+        if not barcodes or not self.api_client:
+            return 0
+
+        barcode_set = set(str(b) for b in barcodes if b)
+        if not barcode_set:
+            return 0
+
+        try:
+            # Получаем карточки из WB (используем кэшированный метод если есть)
+            cards = self.api_client.get_all_cards(batch_size=100)
+            for card in cards:
+                for size in card.get('sizes', []):
+                    card_skus = set(str(s) for s in size.get('skus', []) if s)
+                    if card_skus & barcode_set:
+                        nm_id = card.get('nmID', 0)
+                        logger.info(
+                            f"Найдена карточка WB nmID={nm_id} по баркоду "
+                            f"(совпали: {card_skus & barcode_set})"
+                        )
+                        return nm_id
+        except Exception as e:
+            logger.warning(f"Ошибка поиска карточки по баркодам: {e}")
+
+        return 0
+
+    def _link_existing_card(
+        self,
+        imported_product: ImportedProduct,
+        vendor_code: str,
+        existing_nm_id: int,
+    ):
+        """
+        Привязывает существующую карточку WB к импортированному товару.
+        Returns tuple (True, message, nm_id) при успехе, None при неудаче.
+        """
+        if not existing_nm_id:
+            return None
+
+        try:
+            existing_card = self.api_client.get_card_by_nm_id(existing_nm_id)
+        except Exception:
+            existing_card = None
+
+        # Привязываем
+        imported_product.wb_nm_id = existing_nm_id
+        imported_product.import_status = 'completed'
+        imported_product.import_error = None
+        imported_product.imported_at = datetime.utcnow()
+        db.session.commit()
+
+        # Синхронизируем или создаём Product запись
+        product = Product.query.filter_by(
+            seller_id=self.seller.id,
+            nm_id=existing_nm_id
+        ).first()
+        if not product:
+            product = Product(
+                seller_id=self.seller.id,
+                nm_id=existing_nm_id,
+                vendor_code=vendor_code,
+                title=(existing_card or {}).get('title', imported_product.title or ''),
+                brand=(existing_card or {}).get('brand', ''),
+            )
+            db.session.add(product)
+            db.session.commit()
+            logger.info(f"Создана Product запись для nmID={existing_nm_id}")
+
+        # Загружаем фото
+        try:
+            self._upload_photos_for_card(existing_nm_id, imported_product)
+            logger.info(f"Фото загружены в существующую карточку nmID={existing_nm_id}")
+        except Exception as photo_err:
+            logger.warning(f"Не удалось загрузить фото: {photo_err}")
+
+        return (
+            True,
+            f"Карточка уже существовала на WB (nmID={existing_nm_id}). Привязана к импорту.",
+            existing_nm_id,
+        )
 
     def _category_supports_sizes(self, wb_subject_id: int) -> bool:
         """
