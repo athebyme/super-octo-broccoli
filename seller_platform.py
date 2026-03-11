@@ -1619,16 +1619,52 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     app.logger.warning(f"⚠️ Failed to fetch prices from Prices API: {price_error}")
                     prices_by_nm_id = {}
 
+                # Deduplicate existing products before sync
+                try:
+                    from sqlalchemy import func
+                    dupes = (
+                        db.session.query(Product.nm_id, func.count(Product.id).label('cnt'))
+                        .filter(Product.seller_id == seller.id, Product.nm_id > 0)
+                        .group_by(Product.nm_id)
+                        .having(func.count(Product.id) > 1)
+                        .all()
+                    )
+                    if dupes:
+                        app.logger.warning(f"🔧 Found {len(dupes)} duplicate nm_ids, deduplicating...")
+                        for nm_id_val, cnt in dupes:
+                            products = (
+                                Product.query
+                                .filter_by(seller_id=seller.id, nm_id=nm_id_val)
+                                .order_by(Product.id.asc())
+                                .all()
+                            )
+                            # Keep the first (oldest), delete the rest
+                            for dup in products[1:]:
+                                db.session.delete(dup)
+                        db_commit_with_retry(db.session)
+                        app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
+                except Exception as dedup_err:
+                    app.logger.warning(f"⚠️ Deduplication failed (non-critical): {dedup_err}")
+                    db.session.rollback()
+
                 # Статистика
                 created_count = 0
                 updated_count = 0
                 batch_size = 100  # Commit каждые 100 карточек для больших датасетов
                 processed_in_batch = 0
+                # Track nm_ids seen in this sync to prevent duplicates
+                # (WB API can return the same nmID in multiple batches)
+                seen_nm_ids = set()
 
                 for card_data in all_cards:
                     nm_id = card_data.get('nmID')
                     if not nm_id:
                         continue
+
+                    # Skip duplicate nmIDs from API response
+                    if nm_id in seen_nm_ids:
+                        continue
+                    seen_nm_ids.add(nm_id)
 
                     # Ищем существующую карточку
                     product = Product.query.filter_by(
