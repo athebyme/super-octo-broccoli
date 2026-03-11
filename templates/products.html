@@ -92,7 +92,7 @@
                             <div x-show="fmt !== 'text'" class="mb-3">
                                 <label class="block text-xs font-medium text-gray-600 mb-1.5">Колонки</label>
                                 <div class="space-y-1.5 max-h-40 overflow-y-auto">
-                                    {% set pcols = {'nm_id': 'Артикул WB', 'vendor_code': 'Артикул продавца', 'title': 'Наименование', 'brand': 'Бренд', 'category': 'Категория', 'price': 'Цена', 'barcode': 'Баркод'} %}
+                                    {% set pcols = {'nm_id': 'Артикул WB', 'vendor_code': 'Артикул продавца', 'title': 'Наименование', 'brand': 'Бренд', 'category': 'Категория', 'price': 'Цена', 'nm_rating': 'Рейтинг', 'barcode': 'Баркод'} %}
                                     {% for key, label in pcols.items() %}
                                     <label class="flex items-center gap-2 cursor-pointer">
                                         <input type="checkbox" name="columns" value="{{ key }}" checked class="rounded text-indigo-600 focus:ring-indigo-500">
@@ -178,7 +178,7 @@
                     </svg>
                     Применить
                 </button>
-                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or active_only %}
+                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or active_only %}
                 <a href="{{ url_for('products_list') }}"
                    class="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium">
                     Сбросить
@@ -187,7 +187,7 @@
             </div>
 
             <!-- Расширенные фильтры -->
-            <details class="group" {% if filter_brand or filter_category or filter_has_stock or filter_block_status or sort_by != 'updated_at' %}open{% endif %}>
+            <details class="group" {% if filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or sort_by != 'updated_at' %}open{% endif %}>
                 <summary class="cursor-pointer text-sm font-medium text-gray-700 flex items-center gap-2">
                     <svg class="w-5 h-5 transform group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
@@ -254,6 +254,23 @@
                         </select>
                     </div>
 
+                    <!-- Фильтр по рейтингу карточки -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Рейтинг карточки
+                        </label>
+                        <div class="flex gap-2">
+                            <input type="number" name="rating_min" step="0.1" min="0" max="10"
+                                   value="{{ filter_rating_min }}"
+                                   placeholder="от"
+                                   class="w-1/2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm">
+                            <input type="number" name="rating_max" step="0.1" min="0" max="10"
+                                   value="{{ filter_rating_max }}"
+                                   placeholder="до"
+                                   class="w-1/2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm">
+                        </div>
+                    </div>
+
                     <!-- Сортировка -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">
@@ -271,6 +288,7 @@
                                 <option value="nm_id" {% if sort_by == 'nm_id' %}selected{% endif %}>NM ID</option>
                                 <option value="price" {% if sort_by == 'price' %}selected{% endif %}>Цена WB</option>
                                 <option value="supplier_price" {% if sort_by == 'supplier_price' %}selected{% endif %}>Цена поставщика</option>
+                                <option value="nm_rating" {% if sort_by == 'nm_rating' %}selected{% endif %}>Рейтинг</option>
                             </select>
                             <select name="order"
                                     class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
@@ -409,6 +427,9 @@
                         <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Цена пост.
                         </th>
+                        <th class="px-4 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                            Рейтинг
+                        </th>
                         <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                             Обновлено
                         </th>
@@ -506,6 +527,22 @@
                             <span class="text-sm text-gray-400">—</span>
                             {% endif %}
                         </td>
+                        <td class="px-4 py-3 text-center">
+                            {% if product.nm_rating is not none %}
+                            <div class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold
+                                {% if product.nm_rating >= 8 %}bg-green-100 text-green-700
+                                {% elif product.nm_rating >= 6 %}bg-yellow-100 text-yellow-700
+                                {% elif product.nm_rating >= 4 %}bg-orange-100 text-orange-700
+                                {% else %}bg-red-100 text-red-700{% endif %}">
+                                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                </svg>
+                                {{ '%.1f'|format(product.nm_rating) }}
+                            </div>
+                            {% else %}
+                            <span class="text-xs text-gray-400">—</span>
+                            {% endif %}
+                        </td>
                         <td class="px-4 py-3 text-sm text-gray-500">
                             {% if product.last_sync %}
                                 {{ product.last_sync.strftime('%d.%m.%y %H:%M') }}
@@ -546,13 +583,13 @@
             <div class="flex items-center justify-between">
                 <div class="flex-1 flex justify-between sm:hidden">
                     {% if pagination.has_prev %}
-                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
+                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                         Назад
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
+                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
                        class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                         Вперед
                     </a>
@@ -573,7 +610,7 @@
                     <div>
                         <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                             {% if pagination.has_prev %}
-                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
+                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
                                class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                                 ‹
                             </a>
@@ -586,7 +623,7 @@
                                         {{ page_num }}
                                     </span>
                                     {% else %}
-                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
+                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
                                        class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
                                         {{ page_num }}
                                     </a>
@@ -599,7 +636,7 @@
                             {% endfor %}
 
                             {% if pagination.has_next %}
-                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, sort=sort_by, order=sort_order) }}"
+                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
                                class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                                 ›
                             </a>

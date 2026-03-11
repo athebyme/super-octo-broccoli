@@ -376,6 +376,7 @@ def register_blocked_cards_routes(app):
                 'brand': p.brand,
                 'object_name': p.object_name,
                 'price': p.price,
+                'nm_rating': p.nm_rating,
                 'sizes': json.loads(p.sizes_json) if p.sizes_json else [],
             })
 

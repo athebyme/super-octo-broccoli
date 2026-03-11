@@ -385,7 +385,7 @@ def _upsert_blocked_cards(seller_id, api_data, db):
 
 def _upsert_shadowed_cards(seller_id, api_data, db):
     """Обновить таблицу shadowed_cards по данным из API"""
-    from models import ShadowedCard
+    from models import ShadowedCard, Product
 
     now = datetime.utcnow()
     api_nm_ids = set()
@@ -427,6 +427,15 @@ def _upsert_shadowed_cards(seller_id, api_data, db):
         ShadowedCard.is_active == True,
         ~ShadowedCard.nm_id.in_(api_nm_ids) if api_nm_ids else True
     ).update({'is_active': False, 'last_seen_at': now}, synchronize_session='fetch')
+
+    # Обновляем nm_rating в таблице products (cross-update)
+    for item in api_data:
+        nm_id = item.get('nmId')
+        nm_rating = item.get('nmRating')
+        if nm_id and nm_rating is not None:
+            Product.query.filter_by(
+                seller_id=seller_id, nm_id=nm_id
+            ).update({'nm_rating': nm_rating}, synchronize_session=False)
 
     db.session.commit()
 

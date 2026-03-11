@@ -1216,6 +1216,8 @@ def products_list():
         filter_category = request.args.get('category', '').strip()
         filter_has_stock = request.args.get('has_stock', '').strip()  # 'yes', 'no', ''
         filter_block_status = request.args.get('block_status', '').strip()  # 'blocked', 'shadowed', 'ok', ''
+        filter_rating_min = request.args.get('rating_min', '', type=str).strip()
+        filter_rating_max = request.args.get('rating_max', '', type=str).strip()
 
         # Сортировка
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
@@ -1297,6 +1299,18 @@ def products_list():
             except Exception:
                 pass  # Таблицы могут не существовать
 
+        # Фильтр по рейтингу карточки
+        if filter_rating_min:
+            try:
+                query = query.filter(Product.nm_rating >= float(filter_rating_min))
+            except (ValueError, TypeError):
+                pass
+        if filter_rating_max:
+            try:
+                query = query.filter(Product.nm_rating <= float(filter_rating_max))
+            except (ValueError, TypeError):
+                pass
+
         # Сортировка
         sort_column = {
             'updated_at': Product.updated_at,
@@ -1308,6 +1322,7 @@ def products_list():
             'category': Product.object_name,
             'price': Product.price,
             'supplier_price': Product.supplier_price,
+            'nm_rating': Product.nm_rating,
         }.get(sort_by, Product.updated_at)
 
         if sort_order == 'asc':
@@ -1391,6 +1406,8 @@ def products_list():
             blocked_nm_ids=blocked_nm_ids,
             shadowed_nm_ids=shadowed_nm_ids,
             filter_block_status=filter_block_status,
+            filter_rating_min=filter_rating_min,
+            filter_rating_max=filter_rating_max,
             enrichment_map=enrichment_map,
         )
     except Exception as e:
