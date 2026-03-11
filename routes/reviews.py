@@ -594,8 +594,9 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
         if result and len(result.strip()) >= 10:
             return result.strip(), None
 
-        logger.warning(f"AI returned empty/short response for reviews")
-        return None, 'AI вернул пустой ответ. Проверьте настройки AI провайдера.'
+        error_detail = ai_client.last_error or 'пустой ответ'
+        logger.warning(f"AI returned empty/short response for reviews: {error_detail}")
+        return None, f'AI вернул пустой ответ: {error_detail}'
     except Exception as e:
         logger.error(f"AI review reply generation failed: {e}")
         return None, f'Ошибка AI: {str(e)}'
