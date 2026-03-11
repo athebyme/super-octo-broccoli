@@ -97,7 +97,7 @@
                     <tbody>
                         <template x-for="w in (data.weeks || [])" :key="w.report_id">
                             <tr style="border-bottom:1px solid var(--border-light)">
-                                <td class="py-2 px-2" style="color:var(--text)" x-text="w.date_from + ' — ' + w.date_to"></td>
+                                <td class="py-2 px-2" style="color:var(--text)" x-text="fmtDate(w.date_from) + ' — ' + fmtDate(w.date_to)"></td>
                                 <td class="py-2 px-2 text-right" style="color:var(--text)" x-text="formatMoney(w.retail_amount)"></td>
                                 <td class="py-2 px-2 text-right" style="color:#ef4444" x-text="formatMoney(w.returns_amount)"></td>
                                 <td class="py-2 px-2 text-right" style="color:#ef4444" x-text="formatMoney(w.commission)"></td>
@@ -152,6 +152,7 @@ init(){this.loadData()},
 async loadData(){this.loading=true;try{const r=await fetch(`/api/finance-detail/data?days=${this.period}`);const d=await r.json();if(d._loading&&!d._cached){this.startPolling();return}this.data=d;this.hasData=true;this.isStale=d._stale||false;if(d._stale)this.startPolling()}catch(e){console.error(e)}this.loading=false},
 startPolling(){if(this.pollTimer)clearInterval(this.pollTimer);this.pollTimer=setInterval(async()=>{const r=await fetch(`/api/finance-detail/status?days=${this.period}`);const d=await r.json();if(d._cached&&!d._loading){clearInterval(this.pollTimer);this.pollTimer=null;this.data=d;this.hasData=true;this.isStale=false;this.loading=false}},2000)},
 formatMoney(v){if(!v&&v!==0)return'—';return Number(v).toLocaleString('ru-RU',{maximumFractionDigits:0})+' ₽'},
-fmtS(v){if(!v&&v!==0)return'—';const a=Math.abs(v);if(a>=1000)return(v/1000).toFixed(1)+'K';return Number(v).toLocaleString('ru-RU',{maximumFractionDigits:0})}}}
+fmtS(v){if(!v&&v!==0)return'—';const a=Math.abs(v);if(a>=1000)return(v/1000).toFixed(1)+'K';return Number(v).toLocaleString('ru-RU',{maximumFractionDigits:0})},
+fmtDate(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.toLocaleDateString('ru-RU',{day:'numeric',month:'short'})}}}
 </script>
 {% endblock %}
