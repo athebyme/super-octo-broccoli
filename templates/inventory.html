@@ -488,8 +488,10 @@ function inventoryApp() {
         },
 
         // --- Returns ---
+        _lastRetPeriod: null,
         async loadReturns() {
-            if (this.hasRetData && !this.retStale) return;
+            if (this.hasRetData && !this.retStale && this._lastRetPeriod === this.retPeriod) return;
+            this._lastRetPeriod = this.retPeriod;
             this.retLoading = true;
             try {
                 const r = await fetch(`/api/returns/data?days=${this.retPeriod}`);

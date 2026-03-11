@@ -88,6 +88,15 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Синхронизация аналитических данных WB (каждые 3 часа)
+    scheduler.add_job(
+        func=lambda: sync_wb_analytics_all_sellers(flask_app),
+        trigger=IntervalTrigger(hours=3),
+        id='wb_analytics_sync',
+        name='Sync WB analytics data (sales, orders, feedbacks, realization)',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
@@ -438,6 +447,19 @@ def _upsert_shadowed_cards(seller_id, api_data, db):
             ).update({'nm_rating': nm_rating}, synchronize_session=False)
 
     db.session.commit()
+
+
+def sync_wb_analytics_all_sellers(flask_app):
+    """Синхронизация аналитических данных WB (sales, orders, feedbacks, realization)
+    для всех продавцов с валидным API ключом."""
+    with flask_app.app_context():
+        try:
+            from services.wb_data_sync import sync_all_sellers
+            logger.info("📊 Starting WB analytics sync for all sellers...")
+            sync_all_sellers()
+            logger.info("✅ WB analytics sync finished.")
+        except Exception as e:
+            logger.exception(f"❌ Error in sync_wb_analytics_all_sellers: {e}")
 
 
 def sync_marketplaces(flask_app):

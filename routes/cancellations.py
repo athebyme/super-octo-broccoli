@@ -1,78 +1,37 @@
 from flask import render_template, jsonify, request, redirect, url_for, flash
 from flask_login import login_required, current_user
-import requests
 import logging
-import threading
-import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 
+from models import db, WBOrder
+
 logger = logging.getLogger(__name__)
 
-STATISTICS_API_URL = "https://statistics-api.wildberries.ru"
 
-# In-memory cache: {seller_id: {period: {data, updated_at, loading}}}
-_cache = {}
-_cache_lock = threading.Lock()
-CACHE_TTL = 300  # 5 minutes
+def _compute_cancellations_from_db(seller_id, days):
+    """Compute cancellation analytics from local DB (wb_orders table)."""
+    date_from = datetime.now() - timedelta(days=days)
 
+    orders = WBOrder.query.filter(
+        WBOrder.seller_id == seller_id,
+        WBOrder.date >= date_from
+    ).all()
 
-def _get_cache_key(seller_id, days):
-    return f"{seller_id}:{days}"
-
-
-def _get_cached(seller_id, days):
-    key = _get_cache_key(seller_id, days)
-    with _cache_lock:
-        entry = _cache.get(key)
-        if entry and entry.get('data'):
-            age = time.time() - entry.get('updated_at', 0)
-            return entry['data'], age < CACHE_TTL, entry.get('loading', False)
-    return None, False, False
-
-
-def _set_cached(seller_id, days, data):
-    key = _get_cache_key(seller_id, days)
-    with _cache_lock:
-        _cache[key] = {
-            'data': data,
-            'updated_at': time.time(),
-            'loading': False
-        }
-
-
-def _set_loading(seller_id, days, loading=True):
-    key = _get_cache_key(seller_id, days)
-    with _cache_lock:
-        if key not in _cache:
-            _cache[key] = {'data': None, 'updated_at': 0, 'loading': loading}
-        else:
-            _cache[key]['loading'] = loading
-
-
-def _is_loading(seller_id, days):
-    key = _get_cache_key(seller_id, days)
-    with _cache_lock:
-        entry = _cache.get(key)
-        return entry.get('loading', False) if entry else False
-
-
-def _compute_analytics(orders, days):
-    """Compute all analytics from raw orders list."""
     total_orders = len(orders)
-    cancelled = [o for o in orders if o.get('isCancel')]
+    cancelled = [o for o in orders if o.is_cancel]
     cancel_count = len(cancelled)
     cancel_rate = round(cancel_count / total_orders * 100, 1) if total_orders > 0 else 0
 
-    # By product (nmId)
+    # By product
     product_stats = defaultdict(lambda: {'orders': 0, 'cancels': 0, 'name': '', 'brand': '', 'article': ''})
     for o in orders:
-        nm_id = o.get('nmId', 0)
+        nm_id = o.nm_id or 0
         product_stats[nm_id]['orders'] += 1
-        product_stats[nm_id]['name'] = o.get('subject', '')
-        product_stats[nm_id]['brand'] = o.get('brand', '')
-        product_stats[nm_id]['article'] = o.get('supplierArticle', '')
-        if o.get('isCancel'):
+        product_stats[nm_id]['name'] = o.subject or product_stats[nm_id]['name']
+        product_stats[nm_id]['brand'] = o.brand or product_stats[nm_id]['brand']
+        product_stats[nm_id]['article'] = o.supplier_article or product_stats[nm_id]['article']
+        if o.is_cancel:
             product_stats[nm_id]['cancels'] += 1
 
     top_cancelled = []
@@ -91,9 +50,9 @@ def _compute_analytics(orders, days):
     # By region
     region_stats = defaultdict(lambda: {'orders': 0, 'cancels': 0})
     for o in orders:
-        region = o.get('regionName', 'Неизвестно') or 'Неизвестно'
+        region = o.region_name or 'Неизвестно'
         region_stats[region]['orders'] += 1
-        if o.get('isCancel'):
+        if o.is_cancel:
             region_stats[region]['cancels'] += 1
 
     top_regions = []
@@ -109,9 +68,9 @@ def _compute_analytics(orders, days):
     # By warehouse
     warehouse_stats = defaultdict(lambda: {'orders': 0, 'cancels': 0})
     for o in orders:
-        wh = o.get('warehouseName', 'Неизвестно') or 'Неизвестно'
+        wh = o.warehouse_name or 'Неизвестно'
         warehouse_stats[wh]['orders'] += 1
-        if o.get('isCancel'):
+        if o.is_cancel:
             warehouse_stats[wh]['cancels'] += 1
 
     top_warehouses = []
@@ -123,31 +82,35 @@ def _compute_analytics(orders, days):
             'cancelRate': round(stats['cancels'] / stats['orders'] * 100, 1) if stats['orders'] > 0 else 0
         })
 
-    # Daily trend
+    # Daily trend — fill all days
     daily_stats = defaultdict(lambda: {'orders': 0, 'cancels': 0})
     for o in orders:
-        date_str = o.get('date', '')[:10]
-        if date_str:
+        if o.date:
+            date_str = o.date.strftime('%Y-%m-%d')
             daily_stats[date_str]['orders'] += 1
-            if o.get('isCancel'):
+            if o.is_cancel:
                 daily_stats[date_str]['cancels'] += 1
 
     daily_trend = []
-    for date_str in sorted(daily_stats.keys()):
-        s = daily_stats[date_str]
+    current = date_from.date() if hasattr(date_from, 'date') else date_from
+    end = datetime.now().date()
+    while current <= end:
+        ds = current.strftime('%Y-%m-%d')
+        s = daily_stats.get(ds, {'orders': 0, 'cancels': 0})
         daily_trend.append({
-            'date': date_str,
+            'date': ds,
             'orders': s['orders'],
             'cancels': s['cancels'],
             'cancelRate': round(s['cancels'] / s['orders'] * 100, 1) if s['orders'] > 0 else 0
         })
+        current += timedelta(days=1)
 
-    # By category
+    # By category (using subject as proxy)
     category_stats = defaultdict(lambda: {'orders': 0, 'cancels': 0})
     for o in orders:
-        cat = o.get('category', 'Неизвестно') or 'Неизвестно'
+        cat = o.subject or 'Неизвестно'
         category_stats[cat]['orders'] += 1
-        if o.get('isCancel'):
+        if o.is_cancel:
             category_stats[cat]['cancels'] += 1
 
     categories = []
@@ -159,7 +122,7 @@ def _compute_analytics(orders, days):
             'cancelRate': round(stats['cancels'] / stats['orders'] * 100, 1) if stats['orders'] > 0 else 0
         })
 
-    lost_revenue = sum(float(o.get('finishedPrice', 0) or 0) for o in cancelled)
+    lost_revenue = sum(abs(o.finished_price or 0) for o in cancelled)
 
     return {
         'totalOrders': total_orders,
@@ -173,36 +136,6 @@ def _compute_analytics(orders, days):
         'categories': categories,
         'period': days
     }
-
-
-def _fetch_and_cache(api_key, seller_id, days):
-    """Fetch data from WB API and update cache. Runs in background thread."""
-    try:
-        _set_loading(seller_id, days, True)
-        date_from = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-
-        session = requests.Session()
-        session.headers.update({
-            'Authorization': api_key,
-            'Content-Type': 'application/json'
-        })
-        resp = session.get(
-            f"{STATISTICS_API_URL}/api/v1/supplier/orders",
-            params={'dateFrom': date_from},
-            timeout=60
-        )
-        resp.raise_for_status()
-        orders = resp.json()
-
-        if isinstance(orders, list):
-            data = _compute_analytics(orders, days)
-            _set_cached(seller_id, days, data)
-            logger.info(f"Cancellations cache updated for seller {seller_id}, {days}d: {len(orders)} orders")
-        else:
-            _set_loading(seller_id, days, False)
-    except Exception as e:
-        logger.error(f"Background cancellations fetch error for seller {seller_id}: {e}")
-        _set_loading(seller_id, days, False)
 
 
 def register_cancellations_routes(app):
@@ -220,78 +153,16 @@ def register_cancellations_routes(app):
     @app.route('/api/cancellations/data')
     @login_required
     def api_cancellations_data():
-        """Get cancellation analytics data. Returns cached data instantly if available,
-        triggers background refresh if stale."""
+        """Get cancellation analytics from local DB. Supports any period."""
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'API ключ WB не настроен'}), 403
 
         try:
-            days = min(int(request.args.get('days', 30)), 90)
+            days = min(int(request.args.get('days', 30)), 365)
             seller_id = current_user.seller.id
-            force = request.args.get('force', '').lower() == 'true'
-
-            cached_data, is_fresh, is_loading = _get_cached(seller_id, days)
-
-            if cached_data and not force:
-                # Return cached data immediately
-                result = dict(cached_data)
-                result['_cached'] = True
-                result['_stale'] = not is_fresh
-                result['_loading'] = is_loading
-
-                # Trigger background refresh if stale and not already loading
-                if not is_fresh and not is_loading:
-                    t = threading.Thread(
-                        target=_fetch_and_cache,
-                        args=(current_user.seller.wb_api_key, seller_id, days),
-                        daemon=True
-                    )
-                    t.start()
-
-                return jsonify(result)
-
-            # No cache — check if already loading
-            if is_loading:
-                return jsonify({'_loading': True, '_cached': False}), 202
-
-            # No cache, not loading — fetch synchronously for first load
-            # but also start background thread for very first request
-            if not force:
-                # Start background fetch
-                _set_loading(seller_id, days, True)
-                t = threading.Thread(
-                    target=_fetch_and_cache,
-                    args=(current_user.seller.wb_api_key, seller_id, days),
-                    daemon=True
-                )
-                t.start()
-                return jsonify({'_loading': True, '_cached': False}), 202
-
-            # Force refresh — synchronous
-            date_from = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-            session = requests.Session()
-            session.headers.update({
-                'Authorization': current_user.seller.wb_api_key,
-                'Content-Type': 'application/json'
-            })
-            resp = session.get(
-                f"{STATISTICS_API_URL}/api/v1/supplier/orders",
-                params={'dateFrom': date_from},
-                timeout=60
-            )
-            resp.raise_for_status()
-            orders = resp.json()
-
-            if not isinstance(orders, list):
-                return jsonify({'error': 'Unexpected API response'}), 500
-
-            data = _compute_analytics(orders, days)
-            _set_cached(seller_id, days, data)
+            data = _compute_cancellations_from_db(seller_id, days)
             return jsonify(data)
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"WB API error in cancellations: {e}")
-            return jsonify({'error': f'Ошибка WB API: {str(e)}'}), 502
         except Exception as e:
             logger.error(f"Error in cancellations analytics: {e}")
             return jsonify({'error': str(e)}), 500
@@ -299,16 +170,12 @@ def register_cancellations_routes(app):
     @app.route('/api/cancellations/status')
     @login_required
     def api_cancellations_status():
-        """Check if background data fetch is complete."""
+        """Backward compat — data is always ready from DB."""
         if not current_user.seller:
             return jsonify({'error': 'No seller'}), 403
-        days = min(int(request.args.get('days', 30)), 90)
-        seller_id = current_user.seller.id
-        cached_data, is_fresh, is_loading = _get_cached(seller_id, days)
-        if cached_data:
-            result = dict(cached_data)
-            result['_cached'] = True
-            result['_stale'] = not is_fresh
-            result['_loading'] = is_loading
-            return jsonify(result)
-        return jsonify({'_loading': is_loading, '_cached': False}), 202 if is_loading else 200
+        days = min(int(request.args.get('days', 30)), 365)
+        data = _compute_cancellations_from_db(current_user.seller.id, days)
+        data['_cached'] = True
+        data['_stale'] = False
+        data['_loading'] = False
+        return jsonify(data)
