@@ -251,6 +251,64 @@ def register_warehouse_routes(app):
             logger.error(f"Error in warehouse refresh: {e}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/analytics/sync', methods=['POST'])
+    @login_required
+    def api_analytics_sync():
+        """Trigger manual WB analytics data sync for current seller."""
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+
+        import threading
+
+        def _run_sync(seller_id, app):
+            with app.app_context():
+                from models import Seller
+                from services.wb_data_sync import sync_all
+                seller = Seller.query.get(seller_id)
+                if seller:
+                    try:
+                        result = sync_all(seller)
+                        logger.info(f"Manual analytics sync for seller={seller_id}: {result}")
+                    except Exception as e:
+                        logger.error(f"Manual analytics sync failed for seller={seller_id}: {e}")
+
+        thread = threading.Thread(
+            target=_run_sync,
+            args=(current_user.seller.id, app._get_current_object()),
+            daemon=True,
+            name=f"manual-analytics-sync-{current_user.seller.id}"
+        )
+        thread.start()
+
+        return jsonify({
+            'success': True,
+            'message': 'Синхронизация запущена. Данные появятся через 1-3 минуты.'
+        })
+
+    @app.route('/api/analytics/sync-status')
+    @login_required
+    def api_analytics_sync_status():
+        """Check how much analytics data exists for current seller."""
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+
+        from models import WBSale, WBOrder, WBFeedback, WBRealizationRow
+        seller_id = current_user.seller.id
+
+        sales_count = WBSale.query.filter_by(seller_id=seller_id).count()
+        orders_count = WBOrder.query.filter_by(seller_id=seller_id).count()
+        feedbacks_count = WBFeedback.query.filter_by(seller_id=seller_id).count()
+        realization_count = WBRealizationRow.query.filter_by(seller_id=seller_id).count()
+
+        return jsonify({
+            'sales': sales_count,
+            'orders': orders_count,
+            'feedbacks': feedbacks_count,
+            'realization': realization_count,
+            'total': sales_count + orders_count + feedbacks_count + realization_count,
+            'has_data': (sales_count + orders_count + feedbacks_count + realization_count) > 0,
+        })
+
     @app.route('/api/settings/stock-refresh', methods=['POST'])
     @login_required
     def api_stock_refresh_settings():

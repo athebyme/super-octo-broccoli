@@ -97,6 +97,16 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Первоначальная загрузка аналитики через 30 сек после старта (если данных нет)
+    scheduler.add_job(
+        func=lambda: initial_analytics_sync_if_empty(flask_app),
+        trigger='date',
+        run_date=datetime.utcnow() + timedelta(seconds=30),
+        id='wb_analytics_initial_sync',
+        name='Initial WB analytics sync (if tables empty)',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
@@ -447,6 +457,31 @@ def _upsert_shadowed_cards(seller_id, api_data, db):
             ).update({'nm_rating': nm_rating}, synchronize_session=False)
 
     db.session.commit()
+
+
+def initial_analytics_sync_if_empty(flask_app):
+    """Запускает первоначальную синхронизацию аналитики, если таблицы пустые."""
+    with flask_app.app_context():
+        try:
+            from models import Seller, WBSale
+            # Проверяем есть ли вообще данные
+            has_data = WBSale.query.first() is not None
+            if has_data:
+                logger.info("📊 Analytics tables already have data, skipping initial sync")
+                return
+
+            sellers = Seller.query.all()
+            has_api_key = any(s.wb_api_key for s in sellers)
+            if not has_api_key:
+                logger.info("📊 No sellers with API keys, skipping initial analytics sync")
+                return
+
+            logger.info("📊 Analytics tables are empty — running initial sync...")
+            from services.wb_data_sync import sync_all_sellers
+            sync_all_sellers()
+            logger.info("✅ Initial analytics sync completed")
+        except Exception as e:
+            logger.exception(f"❌ Error in initial_analytics_sync_if_empty: {e}")
 
 
 def sync_wb_analytics_all_sellers(flask_app):
