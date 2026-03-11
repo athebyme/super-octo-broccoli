@@ -187,7 +187,7 @@ def register_reviews_routes(app):
             nm_id = body.get('nmId', None)
 
             # Check if AI generation is enabled
-            ai_reply = _try_ai_generate(
+            ai_reply, ai_error = _try_ai_generate(
                 current_user.seller, item_type, text, rating,
                 product_name, pros, cons, user_name, nm_id
             )
@@ -201,7 +201,10 @@ def register_reviews_routes(app):
             else:
                 reply = _generate_question_reply(text, product_name, user_name)
 
-            return jsonify({'reply': reply, 'source': 'template'})
+            result = {'reply': reply, 'source': 'template'}
+            if ai_error:
+                result['ai_error'] = ai_error
+            return jsonify(result)
         except Exception as e:
             logger.error(f"Error generating reply: {e}\n{traceback.format_exc()}")
             return jsonify({'error': str(e)}), 500
@@ -481,25 +484,25 @@ def _get_review_settings(seller_id):
 
 
 def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, user_name, nm_id=None):
-    """Try to generate reply using AI. Returns None if AI is not configured or fails."""
+    """Try to generate reply using AI. Returns (reply, error) tuple."""
     try:
         settings = _get_review_settings(seller.id)
         if not settings.get('ai_enabled'):
-            return None
+            return None, None  # AI not enabled, silent fallback
 
         # Get AI config from AutoImportSettings (don't require ai_enabled for auto-import)
         from models import AutoImportSettings
         ai_settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
         if not ai_settings:
             logger.warning("AI enabled for reviews but no AutoImportSettings found")
-            return None
+            return None, 'Настройки AI не найдены. Перейдите в настройки автоимпорта и укажите API ключ AI.'
 
         # Build AI config directly — don't use from_settings() which requires ai_enabled
         from services.ai_service import AIConfig, AIService, AIProvider
         ai_api_key = getattr(ai_settings, 'ai_api_key', '')
         if not ai_api_key:
             logger.warning("AI enabled for reviews but no AI API key configured")
-            return None
+            return None, 'API ключ AI не указан. Перейдите в настройки автоимпорта и укажите API ключ AI.'
 
         provider = AIProvider(getattr(ai_settings, 'ai_provider', 'cloudru') or 'cloudru')
         if provider == AIProvider.CLOUDRU:
@@ -589,12 +592,13 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
         )
 
         if result and len(result.strip()) >= 10:
-            return result.strip()
+            return result.strip(), None
 
-        return None
+        logger.warning(f"AI returned empty/short response for reviews")
+        return None, 'AI вернул пустой ответ. Проверьте настройки AI провайдера.'
     except Exception as e:
         logger.error(f"AI review reply generation failed: {e}")
-        return None
+        return None, f'Ошибка AI: {str(e)}'
 
 
 def _generate_feedback_reply(text, rating, product_name, pros, cons, user_name):

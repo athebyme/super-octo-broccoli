@@ -148,14 +148,17 @@
                 <div class="rounded-lg p-4 min-h-[200px]" style="background:var(--bg);border:1px solid var(--border)">
                     <template x-if="testResult">
                         <div>
-                            <div class="flex items-center gap-2 mb-2">
+                            <div class="flex items-center gap-2 mb-2 flex-wrap">
                                 <span class="text-xs px-2 py-0.5 rounded-full"
                                       :style="testSource === 'ai' ? 'background:#dbeafe;color:#2563eb' : 'background:var(--accent-light);color:var(--accent)'"
                                       x-text="testSource === 'ai' ? 'AI' : 'Шаблон'"></span>
-                                <template x-if="testSelectedProduct">
+                                <template x-if="testSelectedProduct && testSource === 'ai'">
                                     <span class="text-xs px-2 py-0.5 rounded-full" style="background:#dcfce7;color:#16a34a">С данными карточки</span>
                                 </template>
                             </div>
+                            <template x-if="testAiError">
+                                <p class="text-xs mb-2 p-2 rounded" style="background:#fef2f2;color:#dc2626" x-text="testAiError"></p>
+                            </template>
                             <p class="text-sm leading-relaxed" style="color:var(--text)" x-text="testResult"></p>
                         </div>
                     </template>
@@ -446,6 +449,7 @@ function reviewsApp() {
         testCons: '',
         testResult: '',
         testSource: '',
+        testAiError: '',
         testGenerating: false,
         // Product picker
         showProductPicker: false,
@@ -664,6 +668,7 @@ function reviewsApp() {
         async runTest() {
             this.testGenerating = true;
             this.testResult = '';
+            this.testAiError = '';
             try {
                 const resp = await fetch('/api/reviews/generate-reply', {
                     method: 'POST',
@@ -683,6 +688,7 @@ function reviewsApp() {
                     const json = await resp.json();
                     this.testResult = json.reply;
                     this.testSource = json.source || 'template';
+                    this.testAiError = json.ai_error || '';
                 } else {
                     const err = await resp.json().catch(() => ({}));
                     this.testResult = 'Ошибка: ' + (err.error || 'Неизвестная ошибка');
