@@ -28,6 +28,23 @@ def init_scheduler(flask_app):
 
     logger.info("🕐 Initializing product sync scheduler...")
 
+    # Сброс зависших статусов синхронизации после перезапуска
+    with flask_app.app_context():
+        try:
+            from models import Seller, db as _db
+            stuck = Seller.query.filter(Seller.api_sync_status == 'syncing').all()
+            if stuck:
+                for s in stuck:
+                    logger.warning(f"Resetting stuck sync status for seller {s.id} (was 'syncing' at startup)")
+                    s.api_sync_status = 'error'
+                    if s.product_sync_settings:
+                        s.product_sync_settings.last_sync_status = 'error'
+                        s.product_sync_settings.last_sync_error = 'Sync interrupted by server restart'
+                _db.session.commit()
+                logger.info(f"✅ Reset {len(stuck)} stuck sync statuses")
+        except Exception as e:
+            logger.error(f"Failed to reset stuck sync statuses: {e}")
+
     # Создаем фоновый планировщик
     scheduler = BackgroundScheduler(
         daemon=True,
