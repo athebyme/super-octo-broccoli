@@ -7,6 +7,77 @@ import traceback
 logger = logging.getLogger(__name__)
 
 
+def _get_product_context(seller_id, nm_id):
+    """Get product characteristics from DB for AI context."""
+    if not nm_id:
+        return ''
+    try:
+        from models import Product
+        product = Product.query.filter_by(seller_id=seller_id, nm_id=nm_id).first()
+        if not product:
+            return ''
+
+        parts = []
+        if product.title:
+            parts.append(f"Название: {product.title}")
+        if product.brand:
+            parts.append(f"Бренд: {product.brand}")
+        if product.object_name:
+            parts.append(f"Тип товара: {product.object_name}")
+        if product.description:
+            parts.append(f"Описание: {product.description[:1000]}")
+        if product.price:
+            parts.append(f"Цена: {product.price} руб.")
+        if product.discount_price:
+            parts.append(f"Цена со скидкой: {product.discount_price} руб.")
+
+        # Characteristics
+        chars = product.get_characteristics()
+        if chars:
+            char_lines = []
+            for c in chars[:30]:
+                # WB characteristics format: list of dicts
+                if isinstance(c, dict):
+                    name = c.get('name', c.get('charcType', ''))
+                    val = c.get('value', '')
+                    if not val:
+                        val = ', '.join(str(v) for v in c.get('value', []) if v) if isinstance(c.get('value'), list) else ''
+                    if name and val:
+                        char_lines.append(f"  {name}: {val}")
+            if char_lines:
+                parts.append("Характеристики:\n" + "\n".join(char_lines))
+
+        # Dimensions
+        if product.dimensions_json:
+            try:
+                dims = json.loads(product.dimensions_json)
+                dim_parts = []
+                if dims.get('length'): dim_parts.append(f"длина {dims['length']} см")
+                if dims.get('width'): dim_parts.append(f"ширина {dims['width']} см")
+                if dims.get('height'): dim_parts.append(f"высота {dims['height']} см")
+                if dims.get('weight'): dim_parts.append(f"вес {dims['weight']} г")
+                if dim_parts:
+                    parts.append(f"Габариты: {', '.join(dim_parts)}")
+            except:
+                pass
+
+        # Sizes
+        if product.sizes_json:
+            try:
+                sizes = json.loads(product.sizes_json)
+                size_names = [s.get('techSize', s.get('wbSize', '')) for s in sizes if isinstance(s, dict)]
+                size_names = [s for s in size_names if s]
+                if size_names:
+                    parts.append(f"Размеры: {', '.join(size_names[:20])}")
+            except:
+                pass
+
+        return "\n".join(parts) if parts else ''
+    except Exception as e:
+        logger.error(f"Error getting product context for nm_id={nm_id}: {e}")
+        return ''
+
+
 def register_reviews_routes(app):
     """Register reviews and feedback routes."""
 
@@ -29,6 +100,18 @@ def register_reviews_routes(app):
             from services.feedback_service import FeedbackService
             svc = FeedbackService(current_user.seller.wb_api_key)
             stats = svc.get_reputation_stats()
+
+            # If avg_rating is 0 or missing, try to compute from recent feedbacks
+            if not stats.get('avg_rating'):
+                try:
+                    dist = svc.get_rating_distribution(total_count=500)
+                    total = sum(dist.values())
+                    if total > 0:
+                        weighted = sum(rating * count for rating, count in dist.items())
+                        stats['avg_rating'] = round(weighted / total, 1)
+                except Exception:
+                    pass
+
             return jsonify(stats)
         except Exception as e:
             logger.error(f"Error fetching review stats: {e}")
@@ -101,11 +184,12 @@ def register_reviews_routes(app):
             pros = body.get('pros', '')
             cons = body.get('cons', '')
             user_name = body.get('userName', '')
+            nm_id = body.get('nmId', None)
 
             # Check if AI generation is enabled
             ai_reply = _try_ai_generate(
                 current_user.seller, item_type, text, rating,
-                product_name, pros, cons, user_name
+                product_name, pros, cons, user_name, nm_id
             )
 
             if ai_reply:
@@ -328,6 +412,46 @@ def register_reviews_routes(app):
             logger.error(f"Error checking new reviews: {e}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/reviews/products')
+    @login_required
+    def api_reviews_products():
+        """Get seller's products for product picker."""
+        if not current_user.seller:
+            return jsonify({'error': 'No seller'}), 403
+        try:
+            from models import Product
+            search = request.args.get('search', '').strip()
+            query = Product.query.filter_by(
+                seller_id=current_user.seller.id,
+                is_active=True
+            )
+            if search:
+                term = f'%{search}%'
+                from models import db
+                query = query.filter(
+                    db.or_(
+                        Product.title.ilike(term),
+                        Product.vendor_code.ilike(term),
+                        Product.nm_id.cast(db.String).ilike(term),
+                        Product.brand.ilike(term)
+                    )
+                )
+            products = query.order_by(Product.title).limit(50).all()
+            return jsonify({
+                'products': [{
+                    'id': p.id,
+                    'nm_id': p.nm_id,
+                    'title': p.title or f'Артикул {p.vendor_code}',
+                    'brand': p.brand or '',
+                    'vendor_code': p.vendor_code or '',
+                    'price': float(p.discount_price or p.price or 0),
+                    'object_name': p.object_name or '',
+                } for p in products]
+            })
+        except Exception as e:
+            logger.error(f"Error fetching products for reviews: {e}")
+            return jsonify({'error': str(e)}), 500
+
     @app.route('/api/reviews/rating-distribution')
     @login_required
     def api_reviews_rating_distribution():
@@ -356,7 +480,7 @@ def _get_review_settings(seller_id):
     return {'ai_enabled': False, 'custom_instruction': '', 'tone': 'professional'}
 
 
-def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, user_name):
+def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, user_name, nm_id=None):
     """Try to generate reply using AI. Returns None if AI is not configured or fails."""
     try:
         settings = _get_review_settings(seller.id)
@@ -382,6 +506,9 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
         tone = settings.get('tone', 'professional')
         custom_instruction = settings.get('custom_instruction', '')
 
+        # Get product characteristics from DB
+        product_context = _get_product_context(seller.id, nm_id)
+
         # Build system prompt
         tone_map = {
             'professional': 'Отвечай профессионально и вежливо, как представитель солидного магазина.',
@@ -397,11 +524,15 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
 - {tone_instruction}
 - Для ПОЛОЖИТЕЛЬНЫХ отзывов (4-5 звёзд): поблагодари за выбор магазина, порадуйся положительному опыту
 - Для НЕЙТРАЛЬНЫХ отзывов (3 звезды): поблагодари, мягко адресуй замечания, сошлись на описание товара
-- Для НЕГАТИВНЫХ отзывов (1-2 звезды): ЗАЩИЩАЙ карточку товара. Товар соответствует описанию и характеристикам. Магазин прав. Вежливо порекомендуй ознакомиться с описанием перед покупкой. НЕ извиняйся за товар
-- Для ВОПРОСОВ: отвечай по существу, ссылайся на описание и характеристики в карточке
+- Для НЕГАТИВНЫХ отзывов (1-2 звезды): ЗАЩИЩАЙ карточку товара. Товар соответствует описанию и характеристикам на карточке. Магазин прав. Вежливо порекомендуй ознакомиться с описанием перед покупкой. НЕ извиняйся за товар. Используй конкретные характеристики из карточки для защиты
+- Для ВОПРОСОВ: отвечай по существу, используя реальные данные из карточки товара (характеристики, размеры, описание). Дай конкретный ответ на основе данных карточки
 - Не используй эмодзи
 - Не начинай с "Уважаемый покупатель"
-- Начинай с приветствия по имени если оно известно"""
+- Начинай с приветствия по имени если оно известно
+- Если есть данные карточки товара — ОБЯЗАТЕЛЬНО используй их для точного и конкретного ответа"""
+
+        if product_context:
+            system_prompt += f"\n\n--- ДАННЫЕ КАРТОЧКИ ТОВАРА ---\n{product_context}"
 
         if custom_instruction:
             system_prompt += f"\n\nДополнительные инструкции от продавца:\n{custom_instruction}"

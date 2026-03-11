@@ -60,7 +60,7 @@
     <!-- Test Panel -->
     <div x-show="showTestPanel" x-cloak class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
         <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Тест генерации ответа</h2>
-        <p class="text-xs mb-4" style="color:var(--text-muted)">Напишите тестовый отзыв или вопрос, чтобы проверить качество генерации. Ответ не отправляется на WB.</p>
+        <p class="text-xs mb-4" style="color:var(--text-muted)">Выберите карточку товара, напишите тестовый отзыв или вопрос — AI использует все характеристики карточки для точного ответа.</p>
         <div class="grid md:grid-cols-2 gap-6">
             <div>
                 <div class="flex gap-2 mb-3">
@@ -77,12 +77,33 @@
                 </div>
 
                 <div class="space-y-3">
+                    <!-- Product Picker -->
                     <div>
-                        <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Название товара</label>
-                        <input x-model="testProductName" type="text" class="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1"
-                               style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
-                               placeholder="Например: Набор кистей для макияжа">
+                        <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Карточка товара</label>
+                        <div class="relative">
+                            <button @click="showProductPicker = true"
+                                    class="w-full rounded-lg px-3 py-2 text-sm text-left flex items-center justify-between focus:outline-none focus:ring-1"
+                                    style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)">
+                                <span x-show="!testSelectedProduct" style="color:var(--text-muted)">Выберите карточку...</span>
+                                <span x-show="testSelectedProduct" class="truncate" x-text="testSelectedProduct?.title"></span>
+                                <svg class="w-4 h-4 flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <template x-if="testSelectedProduct">
+                                <div class="mt-1.5 flex items-center gap-2 text-xs" style="color:var(--text-muted)">
+                                    <span x-text="testSelectedProduct.brand"></span>
+                                    <span>&middot;</span>
+                                    <span x-text="'nmId: ' + testSelectedProduct.nm_id"></span>
+                                    <span>&middot;</span>
+                                    <span x-text="testSelectedProduct.vendor_code"></span>
+                                    <button @click="testSelectedProduct = null; testProductName = ''; testNmId = null"
+                                            class="ml-auto text-xs underline" style="color:var(--accent)">Очистить</button>
+                                </div>
+                            </template>
+                        </div>
                     </div>
+
                     <div x-show="testType === 'feedback'">
                         <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Рейтинг</label>
                         <div class="flex gap-1">
@@ -131,12 +152,15 @@
                                 <span class="text-xs px-2 py-0.5 rounded-full"
                                       :style="testSource === 'ai' ? 'background:#dbeafe;color:#2563eb' : 'background:var(--accent-light);color:var(--accent)'"
                                       x-text="testSource === 'ai' ? 'AI' : 'Шаблон'"></span>
+                                <template x-if="testSelectedProduct">
+                                    <span class="text-xs px-2 py-0.5 rounded-full" style="background:#dcfce7;color:#16a34a">С данными карточки</span>
+                                </template>
                             </div>
                             <p class="text-sm leading-relaxed" style="color:var(--text)" x-text="testResult"></p>
                         </div>
                     </template>
                     <template x-if="!testResult && !testGenerating">
-                        <p class="text-sm" style="color:var(--text-muted)">Заполните данные слева и нажмите "Сгенерировать ответ" чтобы увидеть результат</p>
+                        <p class="text-sm" style="color:var(--text-muted)">Выберите карточку, заполните данные и нажмите "Сгенерировать ответ"</p>
                     </template>
                     <template x-if="testGenerating">
                         <div class="flex items-center gap-2">
@@ -152,13 +176,72 @@
         </div>
     </div>
 
+    <!-- Product Picker Modal -->
+    <div x-show="showProductPicker" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center p-4"
+         @keydown.escape.window="showProductPicker = false">
+        <div class="absolute inset-0 bg-black/40" @click="showProductPicker = false"></div>
+        <div class="relative w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden" style="background:var(--bg-card);max-height:80vh">
+            <!-- Header -->
+            <div class="p-4 border-b" style="border-color:var(--border)">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-base font-semibold" style="color:var(--text)">Выберите карточку товара</h3>
+                    <button @click="showProductPicker = false" class="p-1 rounded-lg transition-colors hover:bg-gray-100" style="color:var(--text-muted)">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <input x-model="productSearch" @input.debounce.300ms="searchProducts()"
+                       x-ref="productSearchInput"
+                       type="text" class="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1"
+                       style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
+                       placeholder="Поиск по названию, артикулу, бренду...">
+            </div>
+            <!-- Product list -->
+            <div class="overflow-y-auto" style="max-height:55vh">
+                <template x-if="productsLoading">
+                    <div class="flex justify-center py-8">
+                        <svg class="animate-spin h-6 w-6" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                        </svg>
+                    </div>
+                </template>
+                <template x-if="!productsLoading && productsList.length === 0">
+                    <div class="text-center py-8">
+                        <p class="text-sm" style="color:var(--text-muted)">Товары не найдены</p>
+                    </div>
+                </template>
+                <template x-for="p in productsList" :key="p.nm_id">
+                    <button @click="selectProduct(p)"
+                            class="w-full text-left px-4 py-3 flex items-center gap-3 transition-colors hover:bg-gray-50 border-b"
+                            style="border-color:var(--border)">
+                        <div class="min-w-0 flex-1">
+                            <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="p.title"></div>
+                            <div class="flex items-center gap-2 mt-0.5 text-xs" style="color:var(--text-muted)">
+                                <span x-text="p.brand" class="font-medium" style="color:var(--accent)"></span>
+                                <span>&middot;</span>
+                                <span x-text="p.vendor_code"></span>
+                                <span>&middot;</span>
+                                <span x-text="'nmId: ' + p.nm_id"></span>
+                            </div>
+                        </div>
+                        <div class="text-right flex-shrink-0">
+                            <div class="text-sm font-semibold" style="color:var(--text)" x-text="p.price ? (p.price + ' ₽') : ''"></div>
+                            <div class="text-xs" style="color:var(--text-muted)" x-text="p.object_name"></div>
+                        </div>
+                    </button>
+                </template>
+            </div>
+        </div>
+    </div>
+
     <!-- KPI Cards -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
             <div class="text-sm" style="color:var(--text-secondary)">Средний рейтинг</div>
             <div class="text-2xl font-bold mt-1" style="color:var(--text)">
-                <span x-text="stats.avg_rating ? stats.avg_rating.toFixed(1) : '—'"></span>
-                <span class="text-yellow-500 text-lg">★</span>
+                <span x-text="(stats.avg_rating && stats.avg_rating > 0) ? Number(stats.avg_rating).toFixed(1) : '—'"></span>
+                <span x-show="stats.avg_rating && stats.avg_rating > 0" class="text-yellow-500 text-lg">★</span>
             </div>
         </div>
         <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
@@ -355,6 +438,8 @@ function reviewsApp() {
         showTestPanel: false,
         testType: 'feedback',
         testProductName: '',
+        testNmId: null,
+        testSelectedProduct: null,
         testRating: 5,
         testText: '',
         testPros: '',
@@ -362,6 +447,11 @@ function reviewsApp() {
         testResult: '',
         testSource: '',
         testGenerating: false,
+        // Product picker
+        showProductPicker: false,
+        productSearch: '',
+        productsList: [],
+        productsLoading: false,
         // Bulk reply
         bulkMode: false,
         bulkGenerating: false,
@@ -375,6 +465,13 @@ function reviewsApp() {
             await Promise.all([this.loadStats(), this.loadSettings()]);
             await this.loadItems();
             fetch('/api/reviews/check-new', {method: 'POST'}).catch(() => {});
+            // Watch product picker open
+            this.$watch('showProductPicker', (val) => {
+                if (val) {
+                    this.searchProducts();
+                    this.$nextTick(() => this.$refs.productSearchInput?.focus());
+                }
+            });
         },
 
         _prepareItems(items) {
@@ -460,7 +557,8 @@ function reviewsApp() {
                     rating: item.productValuation,
                     pros: item.pros || '',
                     cons: item.cons || '',
-                    userName: item.userName || ''
+                    userName: item.userName || '',
+                    nmId: item.productDetails?.nmId || item.nmId || null
                 };
                 const resp = await fetch('/api/reviews/generate-reply', {
                     method: 'POST',
@@ -538,6 +636,30 @@ function reviewsApp() {
             } catch (e) { console.error('Failed to save settings:', e); }
         },
 
+        // --- Product picker ---
+        async searchProducts() {
+            this.productsLoading = true;
+            try {
+                const params = new URLSearchParams();
+                if (this.productSearch) params.set('search', this.productSearch);
+                const resp = await fetch(`/api/reviews/products?${params}`);
+                if (resp.ok) {
+                    const json = await resp.json();
+                    this.productsList = json.products || [];
+                }
+            } catch (e) {
+                console.error('Failed to search products:', e);
+            }
+            this.productsLoading = false;
+        },
+
+        selectProduct(p) {
+            this.testSelectedProduct = p;
+            this.testProductName = p.title;
+            this.testNmId = p.nm_id;
+            this.showProductPicker = false;
+        },
+
         // --- Test panel ---
         async runTest() {
             this.testGenerating = true;
@@ -553,7 +675,8 @@ function reviewsApp() {
                         rating: this.testType === 'feedback' ? this.testRating : null,
                         pros: this.testPros,
                         cons: this.testCons,
-                        userName: 'Покупатель'
+                        userName: 'Покупатель',
+                        nmId: this.testNmId
                     })
                 });
                 if (resp.ok) {
