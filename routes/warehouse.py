@@ -318,7 +318,7 @@ def register_warehouse_routes(app):
         try:
             data = request.get_json()
             interval = int(data.get('interval', 30))
-            interval = max(5, min(60, interval))
+            interval = max(1, min(60, interval))
             current_user.seller.stock_refresh_interval = interval
             db.session.commit()
             return jsonify({'success': True, 'interval': interval})

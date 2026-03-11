@@ -102,7 +102,7 @@
                           x-text="wh.lowStockCount + ' позиций'"></span>
                 </div>
                 <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
-                    <template x-for="item in wh.lowStockAlerts || []" :key="'alert-' + item.nmId + '-' + item.warehouse">
+                    <template x-for="(item, idx) in (wh.lowStockAlerts || [])" :key="'alert-'+idx">
                         <div class="flex items-center justify-between p-3 rounded-lg" style="background:#fff;border:1px solid #fecaca">
                             <div class="min-w-0 flex-1">
                                 <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="item.title"></div>
@@ -124,22 +124,23 @@
             <div class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
                 <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Распределение по складам</h2>
                 <div class="space-y-3">
-                    <template x-for="w in wh.warehouses || []" :key="w.name">
+                    <template x-for="(w, idx) in (wh.warehouses || []).slice(0, 15)" :key="'wh-'+idx">
                         <div>
                             <div class="flex items-center justify-between mb-1">
                                 <span class="text-sm font-medium" style="color:var(--text)" x-text="w.name"></span>
-                                <span class="text-sm" style="color:var(--text-secondary)" x-text="w.totalQty.toLocaleString('ru-RU') + ' шт'"></span>
+                                <span class="text-sm" style="color:var(--text-secondary)" x-text="(w.totalQty||0).toLocaleString('ru-RU') + ' шт'"></span>
                             </div>
                             <div class="w-full rounded-full h-5 overflow-hidden" style="background:var(--border-light)">
                                 <div class="h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2"
-                                     style="background:var(--accent);min-width:2%"
-                                     :style="'width:' + (maxWhQty > 0 ? Math.max(2, (w.totalQty / maxWhQty) * 100) : 0) + '%'">
-                                    <span class="text-xs font-medium text-white" x-show="w.totalQty / maxWhQty > 0.15"
+                                     :style="{background: 'var(--accent)', minWidth: '2%', width: (maxWhQty > 0 ? Math.max(2, ((w.totalQty||0) / maxWhQty) * 100) : 0) + '%'}">
+                                    <span class="text-xs font-medium text-white" x-show="(w.totalQty||0) / maxWhQty > 0.15"
                                           x-text="Math.round(w.totalQty / totalWhQty * 100) + '%'"></span>
                                 </div>
                             </div>
                         </div>
                     </template>
+                    <div x-show="wh.warehouses && wh.warehouses.length > 15" class="text-center py-2 text-xs" style="color:var(--text-muted)"
+                         x-text="'и ещё ' + (wh.warehouses.length - 15) + ' складов'"></div>
                     <div x-show="!wh.warehouses || wh.warehouses.length === 0" class="text-center py-4" style="color:var(--text-muted)">
                         Нет данных по складам
                     </div>
@@ -163,11 +164,11 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <template x-for="w in wh.warehouses || []" :key="'tbl-'+w.name">
+                                <template x-for="(w, idx) in (wh.warehouses || []).slice(0, 30)" :key="'tbl-'+idx">
                                     <tr style="border-bottom:1px solid var(--border-light)">
                                         <td class="py-2 font-medium" style="color:var(--text)" x-text="w.name"></td>
                                         <td class="py-2 text-right" style="color:var(--text-secondary)" x-text="w.productCount"></td>
-                                        <td class="py-2 text-right font-semibold" style="color:var(--text)" x-text="w.totalQty.toLocaleString('ru-RU')"></td>
+                                        <td class="py-2 text-right font-semibold" style="color:var(--text)" x-text="(w.totalQty||0).toLocaleString('ru-RU')"></td>
                                         <td class="py-2 text-right" style="color:var(--text-secondary)" x-text="formatMoney(w.totalValue)"></td>
                                         <td class="py-2 text-right" style="color:var(--text-muted)">
                                             <span x-show="w.inWayToClient > 0" class="inline-block mr-1">
@@ -189,7 +190,7 @@
                 <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
                     <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Топ товаров по остаткам</h2>
                     <div class="space-y-2 max-h-96 overflow-y-auto">
-                        <template x-for="item in wh.topProducts || []" :key="item.nmId + '-' + item.warehouse">
+                        <template x-for="(item, idx) in (wh.topProducts || [])" :key="'top-'+idx">
                             <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
                                 <div class="min-w-0 flex-1">
                                     <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="item.title"></div>
@@ -273,8 +274,8 @@
                                         <span x-text="d.date.slice(5)"></span>: <span style="color:var(--accent)" x-text="d.sales + ' прод.'"></span>, <span style="color:#ef4444" x-text="d.returns + ' возвр.'"></span>
                                     </div>
                                 </div>
-                                <div class="w-full rounded-t" style="background:var(--accent);min-height:1px" :style="'height:' + (maxRetDaily > 0 ? Math.max(2, d.sales / maxRetDaily * 100) : 2) + '%'"></div>
-                                <div class="w-full rounded-b" style="background:#ef4444;min-height:0" :style="'height:' + (maxRetDaily > 0 ? d.returns / maxRetDaily * 100 : 0) + '%'"></div>
+                                <div class="w-full rounded-t" :style="{background: 'var(--accent)', minHeight: '1px', height: (maxRetDaily > 0 ? Math.max(2, d.sales / maxRetDaily * 100) : 2) + '%'}"></div>
+                                <div class="w-full rounded-b" :style="{background: '#ef4444', minHeight: '0', height: (maxRetDaily > 0 ? d.returns / maxRetDaily * 100 : 0) + '%'}"></div>
                             </div>
                         </template>
                     </div>

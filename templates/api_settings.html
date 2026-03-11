@@ -144,15 +144,15 @@
         </div>
         <div class="p-6">
             <p class="text-sm text-gray-600 mb-4">
-                Остатки на WB обновляются примерно каждые 30 минут. Вы можете настроить более частый опрос (от 5 мин), но данные могут не измениться между обновлениями.
+                Остатки на WB обновляются примерно каждые 30 минут. Можно настроить опрос от 1 минуты — для быстрой реакции на изменения.
             </p>
             <div class="flex items-center gap-4">
                 <label class="text-sm font-medium text-gray-700 whitespace-nowrap">Интервал:</label>
-                <input type="range" min="5" max="60" step="5"
+                <input type="range" min="1" max="60" step="1"
                        x-model.number="interval"
                        class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600">
                 <div class="flex items-center gap-2 min-w-[100px]">
-                    <input type="number" min="5" max="60" step="5"
+                    <input type="number" min="1" max="60" step="1"
                            x-model.number="interval"
                            class="w-16 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
                     <span class="text-sm text-gray-500">мин</span>

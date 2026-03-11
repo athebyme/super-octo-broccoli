@@ -98,12 +98,10 @@
                             <div class="w-full flex flex-col items-stretch justify-end" style="height:100%;gap:0">
                                 <!-- Orders bar (non-cancelled) -->
                                 <div class="w-full rounded-t transition-all duration-300 group-hover:opacity-80"
-                                     style="background:var(--accent);border-radius:3px 3px 0 0"
-                                     :style="'height:' + Math.max(2, ((d.orders - d.cancels) / maxOrders) * 100) + '%'"></div>
+                                     :style="{background: 'var(--accent)', borderRadius: '3px 3px 0 0', height: Math.max(2, ((d.orders - d.cancels) / maxOrders) * 100) + '%'}"></div>
                                 <!-- Cancels bar (stacked on top of zero) -->
                                 <div class="w-full transition-all duration-300 group-hover:opacity-80"
-                                     style="background:#ef4444;border-radius:0"
-                                     :style="'height:' + (d.cancels > 0 ? Math.max(2, (d.cancels / maxOrders) * 100) : 0) + '%'"></div>
+                                     :style="{background: '#ef4444', height: (d.cancels > 0 ? Math.max(2, (d.cancels / maxOrders) * 100) : 0) + '%'}"></div>
                             </div>
                         </div>
                     </template>

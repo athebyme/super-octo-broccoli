@@ -72,8 +72,7 @@
                         </div>
                         <div class="w-full rounded-full h-5 overflow-hidden" style="background:var(--border-light)">
                             <div class="h-full rounded-full transition-all duration-500 flex items-center justify-end pr-2"
-                                 style="background:var(--accent);min-width:2%"
-                                 :style="'width:' + (maxWarehouseQty > 0 ? Math.max(2, (wh.totalQty / maxWarehouseQty) * 100) : 0) + '%'">
+                                 :style="{background: 'var(--accent)', minWidth: '2%', width: (maxWarehouseQty > 0 ? Math.max(2, (wh.totalQty / maxWarehouseQty) * 100) : 0) + '%'}">
                                 <span class="text-xs font-medium text-white" x-show="wh.totalQty / maxWarehouseQty > 0.15"
                                       x-text="Math.round(wh.totalQty / totalQtyAll * 100) + '%'"></span>
                             </div>
