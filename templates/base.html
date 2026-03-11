@@ -830,7 +830,7 @@
             </a>
 
             <!-- Аналитика -->
-            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'cancellations_page'] %}
+            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'finance_detail_page', 'sentiment_page', 'returns_page', 'telegram_alerts_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -844,7 +844,13 @@
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('analytics_page') }}" class="sidebar-sublink {% if request.endpoint == 'analytics_page' %}active{% endif %}">Обзор</a>
                     <a href="{{ url_for('finances_page') }}" class="sidebar-sublink {% if request.endpoint == 'finances_page' %}active{% endif %}">Финансы</a>
+                    <a href="{{ url_for('finance_detail_page') }}" class="sidebar-sublink {% if request.endpoint == 'finance_detail_page' %}active{% endif %}">Детальный P&L</a>
                     <a href="{{ url_for('cancellations_page') }}" class="sidebar-sublink {% if request.endpoint == 'cancellations_page' %}active{% endif %}">Отмены</a>
+                    <a href="{{ url_for('returns_page') }}" class="sidebar-sublink {% if request.endpoint == 'returns_page' %}active{% endif %}">Возвраты</a>
+                    <a href="{{ url_for('regional_page') }}" class="sidebar-sublink {% if request.endpoint == 'regional_page' %}active{% endif %}">Регионы</a>
+                    <a href="{{ url_for('warehouse_page') }}" class="sidebar-sublink {% if request.endpoint == 'warehouse_page' %}active{% endif %}">Склады</a>
+                    <a href="{{ url_for('sentiment_page') }}" class="sidebar-sublink {% if request.endpoint == 'sentiment_page' %}active{% endif %}">Sentiment</a>
+                    <a href="{{ url_for('telegram_alerts_page') }}" class="sidebar-sublink {% if request.endpoint == 'telegram_alerts_page' %}active{% endif %}">Telegram</a>
                 </div>
             </div>
 

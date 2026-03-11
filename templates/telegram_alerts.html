@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+{% block title %}Telegram-алерты{% endblock %}
+{% block content %}
+<div x-data="telegramAlertsApp()" x-init="init()" class="p-6 max-w-4xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold" style="color:var(--text)">Telegram-алерты</h1>
+        <div class="flex items-center gap-3">
+            <span class="text-sm" style="color:var(--text-secondary)" x-text="config.is_active ? 'Активно' : 'Выключено'"></span>
+            <button @click="config.is_active = !config.is_active; saveConfig()"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
+                    :style="config.is_active ? 'background:var(--accent)' : 'background:var(--border)'">
+                <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
+                      :class="config.is_active ? 'translate-x-6' : 'translate-x-1'"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Status messages -->
+    <div x-show="statusMsg" x-cloak x-transition class="mb-4 px-4 py-3 rounded-xl text-sm"
+         :style="statusType === 'success' ? 'background:#dcfce7;color:#166534;border:1px solid #bbf7d0' : 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca'"
+         x-text="statusMsg"></div>
+
+    <!-- Setup Section -->
+    <div class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
+        <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Подключение бота</h2>
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium mb-1" style="color:var(--text-secondary)">Bot Token</label>
+                <input type="text" x-model="config.telegram_bot_token"
+                       placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+                       class="w-full px-3 py-2 rounded-lg text-sm outline-none transition-colors"
+                       style="background:var(--bg);border:1px solid var(--border);color:var(--text)"
+                       onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1" style="color:var(--text-secondary)">Chat ID</label>
+                <input type="text" x-model="config.telegram_chat_id"
+                       placeholder="-1001234567890"
+                       class="w-full px-3 py-2 rounded-lg text-sm outline-none transition-colors"
+                       style="background:var(--bg);border:1px solid var(--border);color:var(--text)"
+                       onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+            </div>
+            <div class="flex items-center gap-3">
+                <button @click="sendTest()" :disabled="testing"
+                        class="px-4 py-2 rounded-lg text-sm font-medium transition-opacity"
+                        style="background:var(--accent);color:#fff"
+                        :style="testing ? 'opacity:0.6;cursor:not-allowed' : ''">
+                    <span x-show="!testing">Отправить тест</span>
+                    <span x-show="testing">Отправка...</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instructions -->
+    <div class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
+        <h2 class="text-lg font-semibold mb-3" style="color:var(--text)">Как настроить</h2>
+        <div class="space-y-3 text-sm" style="color:var(--text-secondary)">
+            <div class="flex gap-3">
+                <span class="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold" style="background:var(--accent-light);color:var(--accent)">1</span>
+                <div>
+                    <div class="font-medium" style="color:var(--text)">Создайте бота в Telegram</div>
+                    <div>Откройте <a href="https://t.me/BotFather" target="_blank" class="underline" style="color:var(--accent)">@BotFather</a>, отправьте команду <code class="px-1 py-0.5 rounded text-xs" style="background:var(--bg);border:1px solid var(--border-light)">/newbot</code> и следуйте инструкциям. Скопируйте полученный токен.</div>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <span class="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold" style="background:var(--accent-light);color:var(--accent)">2</span>
+                <div>
+                    <div class="font-medium" style="color:var(--text)">Получите Chat ID</div>
+                    <div>Добавьте бота в группу (или напишите ему лично), затем откройте <code class="px-1 py-0.5 rounded text-xs" style="background:var(--bg);border:1px solid var(--border-light)">https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> и найдите поле <code class="px-1 py-0.5 rounded text-xs" style="background:var(--bg);border:1px solid var(--border-light)">chat.id</code>.</div>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <span class="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold" style="background:var(--accent-light);color:var(--accent)">3</span>
+                <div>
+                    <div class="font-medium" style="color:var(--text)">Проверьте подключение</div>
+                    <div>Вставьте токен и Chat ID выше, нажмите "Отправить тест". Если бот прислал сообщение, все работает.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Types -->
+    <div class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
+        <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Типы уведомлений</h2>
+        <div class="space-y-3">
+            <!-- Negative reviews -->
+            <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
+                <div>
+                    <div class="text-sm font-medium" style="color:var(--text)">Негативные отзывы (1-2 &#9733;)</div>
+                    <div class="text-xs mt-0.5" style="color:var(--text-muted)">Уведомление при получении отзыва с низкой оценкой</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" x-model="config.alert_negative_reviews" class="sr-only peer">
+                    <div class="w-9 h-5 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"
+                         :style="config.alert_negative_reviews ? 'background:var(--accent)' : 'background:var(--border)'"></div>
+                </label>
+            </div>
+
+            <!-- Low stock -->
+            <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
+                <div class="flex-1">
+                    <div class="text-sm font-medium" style="color:var(--text)">Низкие остатки</div>
+                    <div class="text-xs mt-0.5 flex items-center gap-2" style="color:var(--text-muted)">
+                        Остаток менее
+                        <input type="number" x-model.number="config.low_stock_threshold" min="1" max="999"
+                               class="w-16 px-2 py-1 rounded text-xs text-center outline-none"
+                               style="background:var(--bg-card);border:1px solid var(--border);color:var(--text)"
+                               onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+                        шт
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" x-model="config.alert_low_stock" class="sr-only peer">
+                    <div class="w-9 h-5 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"
+                         :style="config.alert_low_stock ? 'background:var(--accent)' : 'background:var(--border)'"></div>
+                </label>
+            </div>
+
+            <!-- Sales drop -->
+            <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
+                <div class="flex-1">
+                    <div class="text-sm font-medium" style="color:var(--text)">Падение продаж</div>
+                    <div class="text-xs mt-0.5 flex items-center gap-2" style="color:var(--text-muted)">
+                        Снижение более чем на
+                        <input type="number" x-model.number="config.sales_drop_percent" min="1" max="100"
+                               class="w-16 px-2 py-1 rounded text-xs text-center outline-none"
+                               style="background:var(--bg-card);border:1px solid var(--border);color:var(--text)"
+                               onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+                        %
+                    </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" x-model="config.alert_sales_drop" class="sr-only peer">
+                    <div class="w-9 h-5 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"
+                         :style="config.alert_sales_drop ? 'background:var(--accent)' : 'background:var(--border)'"></div>
+                </label>
+            </div>
+
+            <!-- Price change -->
+            <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
+                <div>
+                    <div class="text-sm font-medium" style="color:var(--text)">Изменения цен</div>
+                    <div class="text-xs mt-0.5" style="color:var(--text-muted)">Уведомление при изменении цен на товары</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" x-model="config.alert_price_change" class="sr-only peer">
+                    <div class="w-9 h-5 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"
+                         :style="config.alert_price_change ? 'background:var(--accent)' : 'background:var(--border)'"></div>
+                </label>
+            </div>
+
+            <!-- Order cancel -->
+            <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
+                <div>
+                    <div class="text-sm font-medium" style="color:var(--text)">Отмены заказов</div>
+                    <div class="text-xs mt-0.5" style="color:var(--text-muted)">Уведомление при отмене заказа покупателем</div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" x-model="config.alert_order_cancel" class="sr-only peer">
+                    <div class="w-9 h-5 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all"
+                         :style="config.alert_order_cancel ? 'background:var(--accent)' : 'background:var(--border)'"></div>
+                </label>
+            </div>
+        </div>
+
+        <button @click="saveConfig()" :disabled="saving"
+                class="mt-5 px-5 py-2.5 rounded-lg text-sm font-medium transition-opacity"
+                style="background:var(--accent);color:#fff"
+                :style="saving ? 'opacity:0.6;cursor:not-allowed' : ''">
+            <span x-show="!saving">Сохранить настройки</span>
+            <span x-show="saving">Сохранение...</span>
+        </button>
+    </div>
+
+    <!-- Alert History -->
+    <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold" style="color:var(--text)">История уведомлений</h2>
+            <button @click="loadHistory()" class="text-xs px-3 py-1.5 rounded-lg transition-colors"
+                    style="background:var(--bg);color:var(--text-secondary);border:1px solid var(--border)">
+                Обновить
+            </button>
+        </div>
+
+        <div x-show="history.length === 0" class="text-center py-8" style="color:var(--text-muted)">
+            <svg class="w-10 h-10 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
+            </svg>
+            <div class="text-sm">Уведомлений пока нет</div>
+        </div>
+
+        <div x-show="history.length > 0" class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--border)">
+                        <th class="text-left py-2 px-3 font-medium" style="color:var(--text-secondary)">Дата</th>
+                        <th class="text-left py-2 px-3 font-medium" style="color:var(--text-secondary)">Тип</th>
+                        <th class="text-left py-2 px-3 font-medium" style="color:var(--text-secondary)">Сообщение</th>
+                        <th class="text-left py-2 px-3 font-medium" style="color:var(--text-secondary)">Статус</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="(item, idx) in history" :key="idx">
+                        <tr style="border-bottom:1px solid var(--border-light)">
+                            <td class="py-2 px-3 whitespace-nowrap" style="color:var(--text-muted)" x-text="item.date"></td>
+                            <td class="py-2 px-3 whitespace-nowrap" style="color:var(--text)" x-text="item.type"></td>
+                            <td class="py-2 px-3" style="color:var(--text-secondary);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="item.message"></td>
+                            <td class="py-2 px-3 whitespace-nowrap">
+                                <span class="px-2 py-0.5 rounded-full text-xs font-medium"
+                                      :style="item.status === 'sent' ? 'background:#dcfce7;color:#166534' : 'background:#fef2f2;color:#991b1b'"
+                                      x-text="item.status === 'sent' ? 'Отправлено' : 'Ошибка'"></span>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function telegramAlertsApp() {
+    return {
+        config: {
+            telegram_chat_id: '',
+            telegram_bot_token: '',
+            is_active: false,
+            alert_negative_reviews: true,
+            alert_low_stock: true,
+            alert_sales_drop: true,
+            alert_price_change: true,
+            alert_order_cancel: true,
+            low_stock_threshold: 5,
+            sales_drop_percent: 30,
+        },
+        history: [],
+        saving: false,
+        testing: false,
+        statusMsg: '',
+        statusType: 'success',
+
+        async init() {
+            await Promise.all([this.loadConfig(), this.loadHistory()]);
+        },
+
+        async loadConfig() {
+            try {
+                const resp = await fetch('/api/telegram-alerts/config');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    Object.assign(this.config, data);
+                }
+            } catch (e) {
+                console.error('Failed to load config:', e);
+            }
+        },
+
+        async saveConfig() {
+            this.saving = true;
+            this.statusMsg = '';
+            try {
+                const resp = await fetch('/api/telegram-alerts/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.config),
+                });
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    this.showStatus('Настройки сохранены', 'success');
+                } else {
+                    this.showStatus(data.error || 'Ошибка сохранения', 'error');
+                }
+            } catch (e) {
+                this.showStatus('Ошибка сети', 'error');
+            }
+            this.saving = false;
+        },
+
+        async sendTest() {
+            this.testing = true;
+            this.statusMsg = '';
+            try {
+                const resp = await fetch('/api/telegram-alerts/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bot_token: this.config.telegram_bot_token,
+                        chat_id: this.config.telegram_chat_id,
+                    }),
+                });
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    this.showStatus('Тестовое сообщение отправлено!', 'success');
+                    this.loadHistory();
+                } else {
+                    this.showStatus(data.error || 'Ошибка отправки', 'error');
+                }
+            } catch (e) {
+                this.showStatus('Ошибка сети', 'error');
+            }
+            this.testing = false;
+        },
+
+        async loadHistory() {
+            try {
+                const resp = await fetch('/api/telegram-alerts/history');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.history = data.history || [];
+                }
+            } catch (e) {
+                console.error('Failed to load history:', e);
+            }
+        },
+
+        showStatus(msg, type) {
+            this.statusMsg = msg;
+            this.statusType = type;
+            setTimeout(() => { this.statusMsg = ''; }, 5000);
+        },
+    };
+}
+</script>
+{% endblock %}

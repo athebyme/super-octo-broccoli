@@ -5792,6 +5792,30 @@ register_reviews_routes(app)
 from routes.cancellations import register_cancellations_routes
 register_cancellations_routes(app)
 
+# ============= РОУТЫ РЕГИОНАЛЬНОЙ АНАЛИТИКИ =============
+from routes.regional import register_regional_routes
+register_regional_routes(app)
+
+# ============= РОУТЫ СКЛАДСКОЙ АНАЛИТИКИ =============
+from routes.warehouse import register_warehouse_routes
+register_warehouse_routes(app)
+
+# ============= РОУТЫ ДЕТАЛЬНОГО ФИНОТЧЁТА =============
+from routes.finance_detail import register_finance_detail_routes
+register_finance_detail_routes(app)
+
+# ============= РОУТЫ SENTIMENT АНАЛИЗА =============
+from routes.sentiment import register_sentiment_routes
+register_sentiment_routes(app)
+
+# ============= РОУТЫ TELEGRAM АЛЕРТОВ =============
+from routes.telegram_alerts import register_telegram_alerts_routes
+register_telegram_alerts_routes(app)
+
+# ============= РОУТЫ АНАЛИТИКИ ВОЗВРАТОВ =============
+from routes.returns import register_returns_routes
+register_returns_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
