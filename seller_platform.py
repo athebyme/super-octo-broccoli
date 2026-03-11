@@ -1190,8 +1190,9 @@ def products_list():
     if current_user.seller.api_sync_status == 'syncing' and current_user.seller.api_last_sync:
         from datetime import timedelta
         time_since_sync = datetime.utcnow() - current_user.seller.api_last_sync
-        # Если синхронизация висит больше 15 минут - сбрасываем статус
-        if time_since_sync > timedelta(minutes=15):
+        # Для больших каталогов (8000+ товаров) синхронизация может идти >1 часа
+        # Считаем зависшей только если прошло больше 2 часов
+        if time_since_sync > timedelta(hours=2):
             app.logger.warning(f"Resetting stuck sync status for seller {current_user.seller.id} (stuck for {time_since_sync})")
             current_user.seller.api_sync_status = 'error'
             # Обновляем настройки синхронизации
