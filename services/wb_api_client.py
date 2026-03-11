@@ -1227,11 +1227,34 @@ class WildberriesAPIClient:
             logger.warning("⚠️ Empty prices list provided to upload_prices_v2")
             return {'data': None, 'error': False, 'errorText': ''}
 
+        # Валидация: фильтруем невалидные элементы перед отправкой
+        valid_prices = []
+        invalid_count = 0
+        for p in prices:
+            nm_id = p.get('nmID')
+            price = p.get('price')
+            if not nm_id or not isinstance(nm_id, int) or nm_id <= 0:
+                logger.warning(f"⚠️ Skipping invalid nmID: {nm_id}")
+                invalid_count += 1
+                continue
+            if price is None or (isinstance(price, (int, float)) and price <= 0):
+                logger.warning(f"⚠️ Skipping nmID {nm_id}: price={price} (must be > 0)")
+                invalid_count += 1
+                continue
+            valid_prices.append(p)
+
+        if invalid_count > 0:
+            logger.warning(f"⚠️ Filtered out {invalid_count} invalid items before upload")
+
+        if not valid_prices:
+            logger.warning("⚠️ No valid prices to upload after filtering")
+            return {'data': None, 'error': False, 'errorText': ''}
+
         endpoint = "/api/v2/upload/task"
 
         # Преобразуем формат для API
         body = {
-            "data": prices
+            "data": valid_prices
         }
 
         logger.info(f"📤 Uploading {len(prices)} prices to WB")
@@ -1306,13 +1329,40 @@ class WildberriesAPIClient:
                 )
                 result['success'] += len(batch)
             except WBAPIException as e:
-                result['failed'] += len(batch)
-                result['errors'].append({
-                    'batch': i + 1,
-                    'error': str(e),
-                    'nm_ids': [p.get('nmID') for p in batch]
-                })
-                logger.error(f"  ❌ Batch {i+1} failed: {str(e)}")
+                error_str = str(e)
+                logger.error(f"  ❌ Batch {i+1} failed: {error_str}")
+
+                # Если батч упал целиком — пробуем отправить меньшими частями
+                # чтобы изолировать невалидные элементы от валидных
+                if len(batch) > 1:
+                    logger.info(f"  🔄 Retrying batch {i+1} in sub-batches of 100...")
+                    sub_batches = chunk_list(batch, 100)
+                    for si, sub_batch in enumerate(sub_batches):
+                        try:
+                            self.upload_prices_v2(
+                                sub_batch,
+                                log_to_db=False,
+                                seller_id=seller_id
+                            )
+                            result['success'] += len(sub_batch)
+                            logger.info(f"    Sub-batch {si+1}/{len(sub_batches)}: OK ({len(sub_batch)} items)")
+                        except WBAPIException as sub_e:
+                            # Суб-батч тоже упал — помечаем эти nmID как failed
+                            result['failed'] += len(sub_batch)
+                            result['errors'].append({
+                                'batch': i + 1,
+                                'sub_batch': si + 1,
+                                'error': str(sub_e),
+                                'nm_ids': [p.get('nmID') for p in sub_batch]
+                            })
+                            logger.error(f"    Sub-batch {si+1}/{len(sub_batches)}: FAILED ({len(sub_batch)} items)")
+                else:
+                    result['failed'] += len(batch)
+                    result['errors'].append({
+                        'batch': i + 1,
+                        'error': error_str,
+                        'nm_ids': [p.get('nmID') for p in batch]
+                    })
 
         logger.info(f"📊 Upload complete: {result['success']}/{result['total']} success")
         return result

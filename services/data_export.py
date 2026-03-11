@@ -26,6 +26,7 @@ PRODUCT_COLUMNS = {
     'brand': {'label': 'Бренд', 'getter': lambda p: p.get('brand', '')},
     'category': {'label': 'Категория', 'getter': lambda p: p.get('object_name') or p.get('subjectName', '')},
     'price': {'label': 'Цена', 'getter': lambda p: p.get('price', '')},
+    'nm_rating': {'label': 'Рейтинг', 'getter': lambda p: p.get('nm_rating', '')},
     'barcode': {'label': 'Баркод', 'getter': lambda p: _extract_barcode(p)},
 }
 

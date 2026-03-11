@@ -1589,6 +1589,8 @@ def register_supplier_routes(app):
 
         def run_bulk_import(app, job_uid, seller_id, product_ids):
             with app.app_context():
+                validated_count = 0
+                items_progress = []
                 try:
                     from services.wb_product_importer import WBProductImporter
                     from services.upload_readiness_validator import validate_product_upload_readiness
@@ -1622,8 +1624,19 @@ def register_supplier_routes(app):
                         db.session.commit()
 
                     # Импорт по одному с обновлением прогресса
-                    items_progress = []
                     for idx, pid in enumerate(product_ids):
+                        # Проверяем, не отменена ли задача
+                        try:
+                            db.session.refresh(job)
+                        except Exception:
+                            db.session.rollback()
+                            try:
+                                job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                            except Exception:
+                                break
+                        if not job or job.status == 'cancelled':
+                            break
+
                         product = ImportedProduct.query.filter_by(
                             id=pid, seller_id=seller_id
                         ).first()
@@ -1655,48 +1668,75 @@ def register_supplier_routes(app):
                         items_progress.append(item_result)
                         job.processed = idx + 1
                         job.set_progress({'product_ids': product_ids, 'items': items_progress})
-                        db.session.commit()
+                        # Безопасный commit: при ошибке сессии — rollback и повтор
+                        try:
+                            db.session.commit()
+                        except Exception:
+                            db.session.rollback()
+                            try:
+                                job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                                if job:
+                                    job.processed = idx + 1
+                                    job.set_progress({'product_ids': product_ids, 'items': items_progress})
+                                    db.session.commit()
+                            except Exception:
+                                db.session.rollback()
 
                     # Завершение
-                    job.status = 'completed'
-                    job.set_result({
-                        'imported': job.succeeded,
-                        'failed': job.failed_count,
-                        'total': job.total,
-                        'auto_validated': validated_count,
-                        'errors': [
-                            f"{it['title']}: {it['error']}"
-                            for it in items_progress if it['status'] != 'success' and it['error']
-                        ],
-                    })
-                    db.session.commit()
+                    # Перечитываем job чтобы не потерять статус cancelled
+                    try:
+                        db.session.refresh(job)
+                    except Exception:
+                        db.session.rollback()
+                        job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+
+                    if job and job.status != 'cancelled':
+                        job.status = 'completed'
+                    elif job and job.status == 'cancelled':
+                        # Задачу отменили — оставляем статус cancelled
+                        pass
+                    if job:
+                        job.set_result({
+                            'imported': job.succeeded,
+                            'failed': job.failed_count,
+                            'total': job.total,
+                            'auto_validated': validated_count,
+                            'errors': [
+                                f"{it['title']}: {it['error']}"
+                                for it in items_progress if it['status'] != 'success' and it['error']
+                            ],
+                        })
+                        db.session.commit()
 
                     # Создаём уведомление
-                    if job.succeeded > 0:
-                        cat = 'success' if job.failed_count == 0 else 'warning'
-                        n = Notification(
-                            seller_id=seller_id,
-                            category=cat,
-                            title='Массовый импорт на WB завершён',
-                            message=f'Импортировано {job.succeeded} из {job.total} товаров'
-                                    + (f', ошибок: {job.failed_count}' if job.failed_count else ''),
-                            link='/my-products?status=imported',
-                        )
-                    else:
-                        n = Notification(
-                            seller_id=seller_id,
-                            category='error',
-                            title='Массовый импорт на WB не удался',
-                            message=f'Ни один из {job.total} товаров не был импортирован',
-                            link='/my-products',
-                        )
-                    db.session.add(n)
-                    db.session.commit()
+                    if job and job.status != 'cancelled':
+                        if job.succeeded > 0:
+                            cat = 'success' if job.failed_count == 0 else 'warning'
+                            n = Notification(
+                                seller_id=seller_id,
+                                category=cat,
+                                title='Массовый импорт на WB завершён',
+                                message=f'Импортировано {job.succeeded} из {job.total} товаров'
+                                        + (f', ошибок: {job.failed_count}' if job.failed_count else ''),
+                                link='/my-products?status=imported',
+                            )
+                        else:
+                            n = Notification(
+                                seller_id=seller_id,
+                                category='error',
+                                title='Массовый импорт на WB не удался',
+                                message=f'Ни один из {job.total} товаров не был импортирован',
+                                link='/my-products',
+                            )
+                        db.session.add(n)
+                        db.session.commit()
 
                 except Exception as e:
+                    # Обязательно rollback перед попыткой записи — сессия может быть в broken state
+                    db.session.rollback()
                     try:
                         job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
-                        if job:
+                        if job and job.status not in ('completed', 'cancelled'):
                             job.status = 'failed'
                             job.error_message = str(e)[:500]
                             db.session.commit()
@@ -1710,7 +1750,27 @@ def register_supplier_routes(app):
                         db.session.add(n)
                         db.session.commit()
                     except Exception:
-                        pass
+                        db.session.rollback()
+                finally:
+                    # ГАРАНТИЯ: задача никогда не останется в статусе 'running' навсегда
+                    try:
+                        job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                        if job and job.status in ('running', 'pending'):
+                            job.status = 'failed'
+                            job.error_message = (job.error_message or 'Процесс прерван неожиданно')[:500]
+                            job.set_result({
+                                'imported': job.succeeded or 0,
+                                'failed': job.failed_count or 0,
+                                'total': job.total or 0,
+                                'auto_validated': validated_count,
+                                'errors': [
+                                    f"{it['title']}: {it['error']}"
+                                    for it in items_progress if it['status'] != 'success' and it.get('error')
+                                ],
+                            })
+                            db.session.commit()
+                    except Exception:
+                        db.session.rollback()
 
         t = threading.Thread(
             target=run_bulk_import,
@@ -1720,6 +1780,27 @@ def register_supplier_routes(app):
         t.start()
 
         return jsonify({'success': True, 'job_uid': job_uid})
+
+    # -------------------------------------------------------------------
+    # Cancel bulk WB import — отмена массового импорта
+    # -------------------------------------------------------------------
+    @app.route('/api/jobs/<job_uid>/cancel', methods=['POST'])
+    @login_required
+    @seller_required
+    def cancel_bulk_job(job_uid):
+        """Отмена фоновой задачи массового импорта."""
+        seller = current_user.seller
+        job = BackgroundJob.query.filter_by(
+            job_uid=job_uid, seller_id=seller.id
+        ).first_or_404()
+
+        if job.status in ('pending', 'running'):
+            job.status = 'cancelled'
+            job.error_message = 'Отменено пользователем'
+            db.session.commit()
+            return jsonify({'success': True, 'message': 'Задача отменена'})
+        else:
+            return jsonify({'success': False, 'error': f'Задача уже в статусе: {job.status}'}), 400
 
     # -------------------------------------------------------------------
     # Validate product for WB — пометить как валидированный
@@ -2829,6 +2910,111 @@ def register_supplier_routes(app):
             )
 
         return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+
+    # -------------------------------------------------------------------
+    # API: Поиск категорий WB (для автокомплита)
+    # -------------------------------------------------------------------
+    @app.route('/api/wb-subjects/search')
+    @login_required
+    @seller_required
+    def api_wb_subjects_search():
+        """Поиск категорий WB по названию.
+        Сначала ищем в локальной базе (MarketplaceCategory),
+        при недостатке результатов — в WB API."""
+        from models import MarketplaceCategory
+
+        q = request.args.get('q', '').strip()
+        if not q or len(q) < 2:
+            return jsonify({'success': True, 'subjects': []})
+
+        # 1) Поиск в локальной базе
+        local_results = MarketplaceCategory.query.filter(
+            MarketplaceCategory.subject_name.ilike(f'%{q}%')
+        ).order_by(MarketplaceCategory.subject_name).limit(30).all()
+
+        subjects = []
+        seen_ids = set()
+        for cat in local_results:
+            if cat.subject_id not in seen_ids:
+                seen_ids.add(cat.subject_id)
+                display = cat.subject_name
+                if cat.parent_name:
+                    display = f"{cat.parent_name} > {cat.subject_name}"
+                subjects.append({
+                    'subject_id': cat.subject_id,
+                    'subject_name': cat.subject_name,
+                    'parent_name': cat.parent_name or '',
+                    'display': display,
+                })
+
+        # 2) Если мало результатов и у продавца есть WB API key — дополняем из API
+        if len(subjects) < 5:
+            seller = current_user.seller
+            if seller and seller.has_valid_api_key():
+                try:
+                    from services.wb_api_client import WildberriesAPIClient
+                    api = WildberriesAPIClient(seller.wb_api_key)
+                    result = api.get_subjects_list(name=q, limit=50)
+                    for item in result.get('data', []):
+                        sid = item.get('subjectID')
+                        if sid and sid not in seen_ids:
+                            seen_ids.add(sid)
+                            parent = item.get('parentName', '')
+                            sname = item.get('subjectName', '')
+                            display = f"{parent} > {sname}" if parent else sname
+                            subjects.append({
+                                'subject_id': sid,
+                                'subject_name': sname,
+                                'parent_name': parent,
+                                'display': display,
+                            })
+                except Exception as e:
+                    logger.warning(f"WB API subject search failed: {e}")
+
+        return jsonify({'success': True, 'subjects': subjects[:30]})
+
+    # -------------------------------------------------------------------
+    # API: Обновить категорию WB на товаре поставщика
+    # -------------------------------------------------------------------
+    @app.route('/supplier-catalog/<int:supplier_id>/products/<int:product_id>/update-category', methods=['POST'])
+    @login_required
+    @seller_required
+    def supplier_catalog_update_category(supplier_id, product_id):
+        """Обновить wb_subject_id и wb_category_name на SupplierProduct."""
+        seller = current_user.seller
+        conn = SellerSupplier.query.filter_by(
+            seller_id=seller.id, supplier_id=supplier_id, is_active=True
+        ).first()
+        if not conn:
+            return jsonify({'success': False, 'error': 'Нет доступа'}), 403
+
+        product = SupplierProduct.query.get(product_id)
+        if not product or product.supplier_id != supplier_id:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        data = request.get_json() or {}
+        new_subject_id = data.get('subject_id')
+        new_subject_name = data.get('subject_name', '')
+        new_display = data.get('display', '')
+
+        if not new_subject_id:
+            return jsonify({'success': False, 'error': 'subject_id обязателен'}), 400
+
+        product.wb_subject_id = int(new_subject_id)
+        product.wb_subject_name = new_subject_name
+        product.wb_category_name = new_display or new_subject_name
+
+        db.session.commit()
+        logger.info(
+            f"Category updated: product={product_id}, "
+            f"subject_id={new_subject_id}, name={new_display}"
+        )
+
+        return jsonify({
+            'success': True,
+            'wb_subject_id': product.wb_subject_id,
+            'wb_category_name': product.wb_category_name,
+        })
 
 
 # ============================================================================

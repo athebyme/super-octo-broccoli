@@ -148,6 +148,18 @@
                             <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-500">
                                 {% if product.brand %}<span class="font-medium text-gray-700">{{ product.brand }}</span>{% endif %}
                                 {% if product.category %}<span class="text-gray-300">|</span><span>{{ product.category[:25] }}</span>{% endif %}
+                                <span class="text-gray-300">|</span>
+                                {% if product.wb_category_name %}
+                                <span class="text-indigo-600 cursor-pointer hover:underline"
+                                      title="Категория WB: {{ product.wb_category_name }} (ID: {{ product.wb_subject_id }}). Нажмите чтобы изменить"
+                                      id="cat-label-{{ product.id }}"
+                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '{{ product.wb_category_name|e }}', {{ product.wb_subject_id or 0 }})">{{ product.wb_category_name[:30] }}</span>
+                                {% else %}
+                                <span class="text-gray-400 cursor-pointer hover:underline hover:text-indigo-500 italic"
+                                      id="cat-label-{{ product.id }}"
+                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '', 0)"
+                                      title="Нажмите чтобы задать категорию WB">категория?</span>
+                                {% endif %}
                                 {% if product.vendor_code %}<span class="text-gray-300">|</span><span title="Артикул">{{ product.vendor_code }}</span>{% endif %}
                                 {% if product.barcode %}<span class="text-gray-300">|</span><span title="Штрихкод" class="font-mono text-[10px]">{{ product.barcode }}</span>{% endif %}
                                 {% if product.external_id %}<span class="text-gray-300">|</span><span title="ID поставщика" class="text-gray-400">{{ product.external_id }}</span>{% endif %}
@@ -232,4 +244,123 @@
     </div>
     {% endif %}
 </div>
+
+<!-- Модальное окно выбора категории WB -->
+<div id="category-modal" class="fixed inset-0 z-50 hidden" style="background:rgba(0,0,0,.4)">
+    <div class="flex items-start justify-center pt-20 px-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-900">Изменить категорию WB</h3>
+                <button onclick="closeCategoryModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+            </div>
+            <div class="px-5 py-4">
+                <input type="text" id="cat-search-input"
+                       placeholder="Начните вводить название категории..."
+                       class="w-full rounded-md border-gray-300 text-sm border px-3 py-2"
+                       oninput="debouncedCatSearch()">
+                <div id="cat-search-results" class="mt-2 max-h-60 overflow-y-auto"></div>
+                <div id="cat-current" class="mt-3 text-xs text-gray-500"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function(){
+    var modal = document.getElementById('category-modal');
+    var searchInput = document.getElementById('cat-search-input');
+    var resultsDiv = document.getElementById('cat-search-results');
+    var currentDiv = document.getElementById('cat-current');
+    var timer;
+    var activeProductId = null;
+    var activeSupplierId = null;
+
+    window.openCategoryModal = function(productId, supplierId, currentName, currentSubjectId) {
+        activeProductId = productId;
+        activeSupplierId = supplierId;
+        searchInput.value = '';
+        resultsDiv.innerHTML = '';
+        currentDiv.textContent = currentName
+            ? 'Текущая: ' + currentName + ' (ID: ' + currentSubjectId + ')'
+            : 'Категория не задана';
+        modal.classList.remove('hidden');
+        setTimeout(function(){ searchInput.focus(); }, 100);
+    };
+
+    window.closeCategoryModal = function() {
+        modal.classList.add('hidden');
+        activeProductId = null;
+    };
+
+    modal.addEventListener('click', function(e) {
+        if (e.target === modal) closeCategoryModal();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeCategoryModal();
+    });
+
+    window.debouncedCatSearch = function() {
+        clearTimeout(timer);
+        timer = setTimeout(doSearch, 300);
+    };
+
+    function doSearch() {
+        var q = searchInput.value.trim();
+        if (q.length < 2) { resultsDiv.innerHTML = ''; return; }
+        resultsDiv.innerHTML = '<div class="text-xs text-gray-400 py-2">Поиск...</div>';
+        fetch('/api/wb-subjects/search?q=' + encodeURIComponent(q))
+            .then(function(r){ return r.json(); })
+            .then(function(data){
+                if (!data.subjects || data.subjects.length === 0) {
+                    resultsDiv.innerHTML = '<div class="text-xs text-gray-500 py-2">Ничего не найдено</div>';
+                    return;
+                }
+                var html = '';
+                data.subjects.forEach(function(item) {
+                    html += '<button onclick="selectCat(' + item.subject_id + ',\'' + escHtml(item.subject_name) + '\',\'' + escHtml(item.display) + '\')" '
+                         + 'class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 flex justify-between items-center">'
+                         + '<span>' + escHtml(item.display) + '</span>'
+                         + '<span class="text-gray-400 text-xs ml-2 flex-shrink-0">ID: ' + item.subject_id + '</span>'
+                         + '</button>';
+                });
+                resultsDiv.innerHTML = html;
+            })
+            .catch(function(){ resultsDiv.innerHTML = '<div class="text-xs text-red-500 py-2">Ошибка поиска</div>'; });
+    }
+
+    window.selectCat = function(subjectId, subjectName, display) {
+        if (!activeProductId) return;
+        fetch('/supplier-catalog/' + activeSupplierId + '/products/' + activeProductId + '/update-category', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ subject_id: subjectId, subject_name: subjectName, display: display })
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+            if (data.success) {
+                var label = document.getElementById('cat-label-' + activeProductId);
+                if (label) {
+                    label.textContent = data.wb_category_name.substring(0, 30);
+                    label.className = 'text-indigo-600 cursor-pointer hover:underline';
+                    label.title = 'Категория WB: ' + data.wb_category_name + ' (ID: ' + data.wb_subject_id + '). Нажмите чтобы изменить';
+                    label.setAttribute('onclick',
+                        "openCategoryModal(" + activeProductId + "," + activeSupplierId + ",'" + escAttr(data.wb_category_name) + "'," + data.wb_subject_id + ")");
+                }
+                closeCategoryModal();
+            } else {
+                alert('Ошибка: ' + (data.error || ''));
+            }
+        })
+        .catch(function(){ alert('Ошибка сохранения'); });
+    };
+
+    function escHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+    function escAttr(s) {
+        return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    }
+})();
+</script>
 {% endblock %}

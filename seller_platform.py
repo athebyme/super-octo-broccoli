@@ -1216,6 +1216,8 @@ def products_list():
         filter_category = request.args.get('category', '').strip()
         filter_has_stock = request.args.get('has_stock', '').strip()  # 'yes', 'no', ''
         filter_block_status = request.args.get('block_status', '').strip()  # 'blocked', 'shadowed', 'ok', ''
+        filter_rating_min = request.args.get('rating_min', '', type=str).strip()
+        filter_rating_max = request.args.get('rating_max', '', type=str).strip()
 
         # Сортировка
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
@@ -1297,6 +1299,18 @@ def products_list():
             except Exception:
                 pass  # Таблицы могут не существовать
 
+        # Фильтр по рейтингу карточки
+        if filter_rating_min:
+            try:
+                query = query.filter(Product.nm_rating >= float(filter_rating_min))
+            except (ValueError, TypeError):
+                pass
+        if filter_rating_max:
+            try:
+                query = query.filter(Product.nm_rating <= float(filter_rating_max))
+            except (ValueError, TypeError):
+                pass
+
         # Сортировка
         sort_column = {
             'updated_at': Product.updated_at,
@@ -1308,6 +1322,7 @@ def products_list():
             'category': Product.object_name,
             'price': Product.price,
             'supplier_price': Product.supplier_price,
+            'nm_rating': Product.nm_rating,
         }.get(sort_by, Product.updated_at)
 
         if sort_order == 'asc':
@@ -1391,6 +1406,8 @@ def products_list():
             blocked_nm_ids=blocked_nm_ids,
             shadowed_nm_ids=shadowed_nm_ids,
             filter_block_status=filter_block_status,
+            filter_rating_min=filter_rating_min,
+            filter_rating_max=filter_rating_max,
             enrichment_map=enrichment_map,
         )
     except Exception as e:
@@ -6043,26 +6060,55 @@ def api_notifications_clear():
 @app.route('/api/jobs/<job_uid>')
 @login_required
 def api_job_status(job_uid):
-    """Статус фоновой задачи."""
+    """Статус фоновой задачи. Автоматически помечает зависшие задачи как failed."""
     if not current_user.seller:
         return jsonify({'error': 'forbidden'}), 403
     job = BackgroundJob.query.filter_by(
         job_uid=job_uid, seller_id=current_user.seller.id
     ).first_or_404()
+
+    # Автоматическая детекция зависших задач: если 'running' более 30 минут — failed
+    if job.status in ('running', 'pending') and job.updated_at:
+        from datetime import datetime, timedelta
+        stale_threshold = datetime.utcnow() - timedelta(minutes=30)
+        if job.updated_at < stale_threshold:
+            job.status = 'failed'
+            job.error_message = 'Задача зависла (нет прогресса более 30 минут)'
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
     return jsonify(job.to_dict())
 
 
 @app.route('/api/jobs/active')
 @login_required
 def api_jobs_active():
-    """Активные задачи текущего продавца."""
+    """Активные задачи текущего продавца. Автоматически завершает зависшие."""
     if not current_user.seller:
         return jsonify({'jobs': []})
     jobs = BackgroundJob.query.filter(
         BackgroundJob.seller_id == current_user.seller.id,
         BackgroundJob.status.in_(['pending', 'running'])
     ).order_by(BackgroundJob.created_at.desc()).limit(10).all()
-    return jsonify({'jobs': [j.to_dict() for j in jobs]})
+
+    # Автоматическая детекция зависших
+    from datetime import datetime, timedelta
+    stale_threshold = datetime.utcnow() - timedelta(minutes=30)
+    active_jobs = []
+    for j in jobs:
+        if j.updated_at and j.updated_at < stale_threshold:
+            j.status = 'failed'
+            j.error_message = 'Задача зависла (нет прогресса более 30 минут)'
+        else:
+            active_jobs.append(j)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    return jsonify({'jobs': [j.to_dict() for j in active_jobs]})
 
 
 @app.route('/api/jobs/recent')

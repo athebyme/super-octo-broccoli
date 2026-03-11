@@ -205,6 +205,9 @@ class Product(db.Model):
     dimensions_json = db.Column(db.Text)  # JSON с габаритами (длина, ширина, высота)
     tags_json = db.Column(db.Text)  # JSON список ключевых слов/тегов (хранится локально, не в WB)
 
+    # Рейтинг карточки WB (из Analytics API)
+    nm_rating = db.Column(db.Float, nullable=True)  # Рейтинг карточки (0-10)
+
     # Метаданные
     is_active = db.Column(db.Boolean, default=True)  # Активна ли карточка
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -234,6 +237,7 @@ class Product(db.Model):
             'price': float(self.price) if self.price else None,
             'discount_price': float(self.discount_price) if self.discount_price else None,
             'quantity': self.quantity,
+            'nm_rating': self.nm_rating,
             'is_active': self.is_active,
             'last_sync': self.last_sync.isoformat() if self.last_sync else None
         }

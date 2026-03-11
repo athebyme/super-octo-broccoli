@@ -135,7 +135,7 @@
             {% if has_wb_key %}
             <button @click="pushBulkToWB()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
                     class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40">
-                <span x-show="!activeJob || activeJob.status === 'completed' || activeJob.status === 'failed'">Отправить на WB</span>
+                <span x-show="!activeJob || activeJob.status === 'completed' || activeJob.status === 'failed' || activeJob.status === 'cancelled'">Отправить на WB</span>
                 <span x-show="activeJob && (activeJob.status === 'pending' || activeJob.status === 'running')" class="flex items-center gap-2">
                     <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                     Отправка...
@@ -167,13 +167,26 @@
                             <svg class="animate-spin h-4 w-4 text-gray-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             <span x-text="'Обработка товаров ' + activeJob.processed + ' / ' + activeJob.total + '...'"></span>
                         </span>
-                        <span class="text-gray-400" x-text="Math.floor(bulkElapsed / 60) + ':' + String(bulkElapsed % 60).padStart(2, '0')"></span>
+                        <div class="flex items-center gap-3">
+                            <span class="text-gray-400" x-text="Math.floor(bulkElapsed / 60) + ':' + String(bulkElapsed % 60).padStart(2, '0')"></span>
+                            <button @click="cancelJob()" class="text-xs text-red-400 hover:text-red-600 underline">Отменить</button>
+                        </div>
                     </div>
                     <div class="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
                         <div class="h-full bg-gray-900 rounded-full transition-all duration-500"
                              :style="'width:' + (activeJob.total > 0 ? Math.round(activeJob.processed / activeJob.total * 100) : 0) + '%'"></div>
                     </div>
                     <p class="text-xs text-gray-400 mt-2">Валидация, создание карточек, установка цен, загрузка фото — ~30-60 сек/товар. Можно уйти со страницы.</p>
+                </div>
+            </template>
+            <template x-if="activeJob.status === 'cancelled'">
+                <div>
+                    <div class="flex items-center gap-4 text-sm">
+                        <span class="text-orange-600 font-medium">Импорт отменён</span>
+                        <span class="text-green-700" x-text="'Отправлено: ' + (activeJob.succeeded || 0)"></span>
+                        <span class="text-gray-400" x-text="'Из ' + activeJob.total"></span>
+                        <button @click="dismissJob()" class="ml-auto text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+                    </div>
                 </div>
             </template>
             <template x-if="activeJob.status === 'completed' || activeJob.status === 'failed'">
@@ -568,7 +581,7 @@ function myProductsPage() {
                     this.startPolling(jobUid);
                     this.startElapsedTimer();
                 }
-                // Keep completed/failed visible for user to dismiss
+                // completed/failed/cancelled — показываем для dismiss
             } catch(e) {
                 localStorage.removeItem('bulk_wb_job_uid');
             }
@@ -603,6 +616,9 @@ function myProductsPage() {
         startPolling(jobUid) {
             if (this._pollTimer) clearInterval(this._pollTimer);
             this._pollTimer = setInterval(() => this.pollJob(jobUid), 2000);
+            this._pollStartedAt = Date.now();
+            this._lastProgressAt = Date.now();
+            this._lastProcessed = this.activeJob ? this.activeJob.processed : 0;
         },
 
         startElapsedTimer() {
@@ -611,12 +627,30 @@ function myProductsPage() {
         },
 
         async pollJob(jobUid) {
+            // Таймаут: если прогресс не менялся 10 минут — считаем зависшим
+            const now = Date.now();
+            const currentProcessed = this.activeJob ? this.activeJob.processed : 0;
+            if (currentProcessed !== this._lastProcessed) {
+                this._lastProgressAt = now;
+                this._lastProcessed = currentProcessed;
+            }
+            const staleSinceMs = now - (this._lastProgressAt || now);
+            if (staleSinceMs > 10 * 60 * 1000) {
+                // Нет прогресса 10 минут — помечаем как зависший
+                this.activeJob = Object.assign({}, this.activeJob, {
+                    status: 'failed',
+                    error_message: 'Процесс завис — прогресс не менялся более 10 минут. Попробуйте снова.'
+                });
+                this.stopPolling();
+                return;
+            }
+
             try {
                 const r = await fetch('/api/jobs/' + jobUid);
                 if (!r.ok) { this.stopPolling(); return; }
                 const job = await r.json();
                 this.activeJob = job;
-                if (job.status === 'completed' || job.status === 'failed') {
+                if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
                     this.stopPolling();
                     // Refresh global notification badge
                     if (Alpine.store('notif')) Alpine.store('notif').poll();
@@ -625,12 +659,27 @@ function myProductsPage() {
                         setTimeout(() => location.reload(), 3000);
                     }
                 }
-            } catch(e) {}
+            } catch(e) {
+                // Сетевая ошибка — не останавливаем polling, попробуем на следующем тике
+            }
         },
 
         stopPolling() {
             if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
             if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        },
+
+        async cancelJob() {
+            if (!this.activeJob || !this.activeJob.job_uid) return;
+            if (!confirm('Отменить импорт? Уже отправленные товары останутся на WB.')) return;
+            try {
+                const r = await fetch('/api/jobs/' + this.activeJob.job_uid + '/cancel', {method: 'POST'});
+                const data = await r.json();
+                if (data.success) {
+                    this.activeJob = Object.assign({}, this.activeJob, {status: 'cancelled', error_message: 'Отменено пользователем'});
+                    this.stopPolling();
+                }
+            } catch(e) {}
         },
 
         dismissJob() {
