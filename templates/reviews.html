@@ -5,10 +5,151 @@
     <!-- Header -->
     <div class="flex items-center justify-between mb-6">
         <h1 class="text-2xl font-bold" style="color:var(--text)">Отзывы и вопросы</h1>
-        <button @click="loadStats(); loadItems()" class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
-                style="background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border)">
-            Обновить
-        </button>
+        <div class="flex gap-2">
+            <button @click="showSettings = !showSettings"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                    :style="showSettings ? 'background:var(--accent);color:#fff' : 'background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border)'">
+                Настройки AI
+            </button>
+            <button @click="showTestPanel = !showTestPanel"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                    :style="showTestPanel ? 'background:var(--accent);color:#fff' : 'background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border)'">
+                Тест ответа
+            </button>
+            <button @click="loadStats(); loadItems()" class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                    style="background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border)">
+                Обновить
+            </button>
+        </div>
+    </div>
+
+    <!-- AI Settings Panel -->
+    <div x-show="showSettings" x-cloak class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
+        <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Настройки генерации ответов</h2>
+        <div class="grid md:grid-cols-2 gap-6">
+            <div>
+                <label class="flex items-center gap-3 mb-4 cursor-pointer">
+                    <input type="checkbox" x-model="aiSettings.ai_enabled" @change="saveSettings()" style="accent-color:var(--accent)" class="w-4 h-4">
+                    <span class="text-sm font-medium" style="color:var(--text)">Использовать AI для генерации ответов</span>
+                </label>
+                <p class="text-xs mb-4" style="color:var(--text-muted)">
+                    При включении используется AI из настроек автоимпорта. При выключении — шаблонные ответы.
+                </p>
+
+                <label class="block text-sm font-medium mb-2" style="color:var(--text)">Тон ответов</label>
+                <div class="flex gap-2 mb-4">
+                    <template x-for="t in [{v:'professional',l:'Профессиональный'},{v:'friendly',l:'Дружелюбный'},{v:'formal',l:'Официальный'}]">
+                        <button @click="aiSettings.tone = t.v; saveSettings()"
+                                class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                                :style="aiSettings.tone === t.v ? 'background:var(--accent);color:#fff' : 'background:var(--bg);color:var(--text-secondary);border:1px solid var(--border)'"
+                                x-text="t.l"></button>
+                    </template>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-2" style="color:var(--text)">Дополнительные инструкции для AI</label>
+                <textarea x-model="aiSettings.custom_instruction" @change="saveSettings()" rows="4"
+                    class="w-full rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-1"
+                    style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
+                    placeholder="Например: Упоминай что у нас бесплатная доставка. Предлагай скидку 10% на следующий заказ для негативных отзывов."></textarea>
+                <p class="text-xs mt-1" style="color:var(--text-muted)">Эти инструкции будут добавлены к промпту AI при генерации каждого ответа.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Test Panel -->
+    <div x-show="showTestPanel" x-cloak class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">
+        <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Тест генерации ответа</h2>
+        <p class="text-xs mb-4" style="color:var(--text-muted)">Напишите тестовый отзыв или вопрос, чтобы проверить качество генерации. Ответ не отправляется на WB.</p>
+        <div class="grid md:grid-cols-2 gap-6">
+            <div>
+                <div class="flex gap-2 mb-3">
+                    <button @click="testType = 'feedback'"
+                            class="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
+                            :style="testType === 'feedback' ? 'background:var(--accent);color:#fff' : 'background:var(--bg);color:var(--text-secondary);border:1px solid var(--border)'">
+                        Отзыв
+                    </button>
+                    <button @click="testType = 'question'"
+                            class="px-3 py-1 rounded-lg text-xs font-medium transition-colors"
+                            :style="testType === 'question' ? 'background:var(--accent);color:#fff' : 'background:var(--bg);color:var(--text-secondary);border:1px solid var(--border)'">
+                        Вопрос
+                    </button>
+                </div>
+
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Название товара</label>
+                        <input x-model="testProductName" type="text" class="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1"
+                               style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
+                               placeholder="Например: Набор кистей для макияжа">
+                    </div>
+                    <div x-show="testType === 'feedback'">
+                        <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Рейтинг</label>
+                        <div class="flex gap-1">
+                            <template x-for="s in [1,2,3,4,5]">
+                                <button @click="testRating = s" class="text-2xl transition-colors"
+                                        :style="s <= testRating ? 'color:#eab308' : 'color:var(--border)'"
+                                        x-text="'★'"></button>
+                            </template>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Текст отзыва/вопроса</label>
+                        <textarea x-model="testText" rows="3" class="w-full rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-1"
+                                  style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
+                                  placeholder="Напишите текст отзыва..."></textarea>
+                    </div>
+                    <div x-show="testType === 'feedback'" class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Достоинства</label>
+                            <input x-model="testPros" type="text" class="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1"
+                                   style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
+                                   placeholder="Хорошее качество">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Недостатки</label>
+                            <input x-model="testCons" type="text" class="w-full rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1"
+                                   style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
+                                   placeholder="Долгая доставка">
+                        </div>
+                    </div>
+                    <button @click="runTest()"
+                            :disabled="testGenerating"
+                            class="px-4 py-2 rounded-lg text-sm font-medium text-white transition-all"
+                            :style="testGenerating ? 'background:var(--accent);opacity:0.6;cursor:wait' : 'background:var(--accent)'">
+                        <span x-show="!testGenerating">Сгенерировать ответ</span>
+                        <span x-show="testGenerating">Генерация...</span>
+                    </button>
+                </div>
+            </div>
+            <div>
+                <label class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Результат</label>
+                <div class="rounded-lg p-4 min-h-[200px]" style="background:var(--bg);border:1px solid var(--border)">
+                    <template x-if="testResult">
+                        <div>
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="text-xs px-2 py-0.5 rounded-full"
+                                      :style="testSource === 'ai' ? 'background:#dbeafe;color:#2563eb' : 'background:var(--accent-light);color:var(--accent)'"
+                                      x-text="testSource === 'ai' ? 'AI' : 'Шаблон'"></span>
+                            </div>
+                            <p class="text-sm leading-relaxed" style="color:var(--text)" x-text="testResult"></p>
+                        </div>
+                    </template>
+                    <template x-if="!testResult && !testGenerating">
+                        <p class="text-sm" style="color:var(--text-muted)">Заполните данные слева и нажмите "Сгенерировать ответ" чтобы увидеть результат</p>
+                    </template>
+                    <template x-if="testGenerating">
+                        <div class="flex items-center gap-2">
+                            <svg class="animate-spin h-4 w-4" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                            </svg>
+                            <span class="text-sm" style="color:var(--text-muted)">Генерация ответа...</span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- KPI Cards -->
@@ -51,6 +192,34 @@
             </button>
         </div>
         <div class="flex-1"></div>
+        <!-- Bulk actions -->
+        <template x-if="!showAnswered && items.filter(i => !i.answer).length > 0 && !bulkMode">
+            <button @click="bulkGenerateAll()"
+                    :disabled="bulkGenerating"
+                    class="px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors mr-2"
+                    style="background:#22c55e">
+                Ответить на все (<span x-text="items.filter(i => !i.answer).length"></span>)
+            </button>
+        </template>
+        <template x-if="bulkMode && !bulkGenerating && !bulkSending">
+            <div class="flex gap-2 mr-2">
+                <button @click="bulkSendAll()" class="px-3 py-1.5 rounded-lg text-xs font-medium text-white" style="background:#22c55e">
+                    Отправить все ответы (<span x-text="items.filter(i => !i.answer && i._draft && i._draft.length >= 2).length"></span>)
+                </button>
+                <button @click="bulkCancel()" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="color:var(--text-secondary);border:1px solid var(--border)">
+                    Отмена
+                </button>
+            </div>
+        </template>
+        <template x-if="bulkGenerating || bulkSending">
+            <div class="flex items-center gap-2 mr-2 text-xs" style="color:var(--text-secondary)">
+                <svg class="animate-spin h-4 w-4" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                </svg>
+                <span x-text="(bulkGenerating ? 'Генерация' : 'Отправка') + '... ' + bulkProgress + '/' + bulkTotal"></span>
+            </div>
+        </template>
         <label class="flex items-center gap-2 text-sm cursor-pointer" style="color:var(--text-secondary)">
             <input type="checkbox" x-model="showAnswered" @change="loadItems()" class="rounded" style="accent-color:var(--accent)">
             Показать отвеченные
@@ -179,11 +348,31 @@ function reviewsApp() {
         skip: 0,
         batchSize: 30,
         hasMore: false,
+        // Settings
+        showSettings: false,
+        aiSettings: { ai_enabled: false, custom_instruction: '', tone: 'professional' },
+        // Test panel
+        showTestPanel: false,
+        testType: 'feedback',
+        testProductName: '',
+        testRating: 5,
+        testText: '',
+        testPros: '',
+        testCons: '',
+        testResult: '',
+        testSource: '',
+        testGenerating: false,
+        // Bulk reply
+        bulkMode: false,
+        bulkGenerating: false,
+        bulkSending: false,
+        bulkProgress: 0,
+        bulkTotal: 0,
 
         async init() {
             const params = new URLSearchParams(window.location.search);
             if (params.get('tab') === 'questions') this.tab = 'questions';
-            await this.loadStats();
+            await Promise.all([this.loadStats(), this.loadSettings()]);
             await this.loadItems();
             fetch('/api/reviews/check-new', {method: 'POST'}).catch(() => {});
         },
@@ -329,6 +518,97 @@ function reviewsApp() {
             if (!dateStr) return '';
             const d = new Date(dateStr);
             return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+        },
+
+        // --- Settings ---
+        async loadSettings() {
+            try {
+                const resp = await fetch('/api/reviews/settings');
+                if (resp.ok) this.aiSettings = await resp.json();
+            } catch (e) {}
+        },
+
+        async saveSettings() {
+            try {
+                await fetch('/api/reviews/settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(this.aiSettings)
+                });
+            } catch (e) { console.error('Failed to save settings:', e); }
+        },
+
+        // --- Test panel ---
+        async runTest() {
+            this.testGenerating = true;
+            this.testResult = '';
+            try {
+                const resp = await fetch('/api/reviews/generate-reply', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        type: this.testType,
+                        text: this.testText,
+                        productName: this.testProductName,
+                        rating: this.testType === 'feedback' ? this.testRating : null,
+                        pros: this.testPros,
+                        cons: this.testCons,
+                        userName: 'Покупатель'
+                    })
+                });
+                if (resp.ok) {
+                    const json = await resp.json();
+                    this.testResult = json.reply;
+                    this.testSource = json.source || 'template';
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    this.testResult = 'Ошибка: ' + (err.error || 'Неизвестная ошибка');
+                    this.testSource = '';
+                }
+            } catch (e) {
+                this.testResult = 'Ошибка: ' + e.message;
+            }
+            this.testGenerating = false;
+        },
+
+        // --- Bulk reply ---
+        async bulkGenerateAll() {
+            const unanswered = this.items.filter(i => !i.answer);
+            if (!unanswered.length) return;
+            this.bulkMode = true;
+            this.bulkGenerating = true;
+            this.bulkProgress = 0;
+            this.bulkTotal = unanswered.length;
+
+            for (let i = 0; i < this.items.length; i++) {
+                if (this.items[i].answer) continue;
+                await this.generateReply(i);
+                this.bulkProgress++;
+            }
+            this.bulkGenerating = false;
+        },
+
+        async bulkSendAll() {
+            const ready = this.items.filter(i => !i.answer && i._draft && i._draft.length >= 2);
+            if (!ready.length) return;
+            this.bulkSending = true;
+            this.bulkProgress = 0;
+            this.bulkTotal = ready.length;
+
+            for (let i = 0; i < this.items.length; i++) {
+                if (this.items[i].answer || !this.items[i]._draft || this.items[i]._draft.length < 2) continue;
+                await this.sendReply(i);
+                this.bulkProgress++;
+            }
+            this.bulkSending = false;
+            this.bulkMode = false;
+        },
+
+        bulkCancel() {
+            this.items.forEach((item, i) => {
+                if (!item.answer) this.items[i]._draft = '';
+            });
+            this.bulkMode = false;
         }
     };
 }

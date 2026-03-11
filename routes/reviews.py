@@ -89,12 +89,12 @@ def register_reviews_routes(app):
     @app.route('/api/reviews/generate-reply', methods=['POST'])
     @login_required
     def api_reviews_generate_reply():
-        """Generate AI reply for a feedback or question."""
+        """Generate reply for a feedback or question. Uses AI if enabled, templates otherwise."""
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'API ключ WB не настроен'}), 403
         try:
             body = request.get_json(silent=True) or {}
-            item_type = body.get('type', 'feedback')  # feedback or question
+            item_type = body.get('type', 'feedback')
             text = body.get('text', '')
             product_name = body.get('productName', '')
             rating = body.get('rating', None)
@@ -102,15 +102,67 @@ def register_reviews_routes(app):
             cons = body.get('cons', '')
             user_name = body.get('userName', '')
 
-            # Generate reply — works even for text-less reviews (rating only)
+            # Check if AI generation is enabled
+            ai_reply = _try_ai_generate(
+                current_user.seller, item_type, text, rating,
+                product_name, pros, cons, user_name
+            )
+
+            if ai_reply:
+                return jsonify({'reply': ai_reply, 'source': 'ai'})
+
+            # Fallback to templates
             if item_type == 'feedback':
                 reply = _generate_feedback_reply(text, rating, product_name, pros, cons, user_name)
             else:
                 reply = _generate_question_reply(text, product_name, user_name)
 
-            return jsonify({'reply': reply})
+            return jsonify({'reply': reply, 'source': 'template'})
         except Exception as e:
             logger.error(f"Error generating reply: {e}\n{traceback.format_exc()}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/reviews/settings', methods=['GET'])
+    @login_required
+    def api_reviews_settings_get():
+        """Get review reply settings."""
+        if not current_user.seller:
+            return jsonify({'error': 'No seller'}), 403
+        settings = _get_review_settings(current_user.seller.id)
+        return jsonify(settings)
+
+    @app.route('/api/reviews/settings', methods=['POST'])
+    @login_required
+    def api_reviews_settings_save():
+        """Save review reply settings."""
+        if not current_user.seller:
+            return jsonify({'error': 'No seller'}), 403
+        try:
+            from models import db, SystemSettings
+            body = request.get_json(silent=True) or {}
+            seller_id = current_user.seller.id
+            key = f'reviews_ai_settings_{seller_id}'
+
+            settings = SystemSettings.query.filter_by(key=key).first()
+            if not settings:
+                settings = SystemSettings(
+                    key=key,
+                    value_type='json',
+                    description=f'AI настройки ответов на отзывы для продавца {seller_id}'
+                )
+                db.session.add(settings)
+
+            settings.set_value({
+                'ai_enabled': bool(body.get('ai_enabled', False)),
+                'custom_instruction': body.get('custom_instruction', ''),
+                'tone': body.get('tone', 'professional'),
+            })
+            settings.updated_by_user_id = current_user.id
+            db.session.commit()
+
+            return jsonify({'success': True})
+        except Exception as e:
+            logger.error(f"Error saving review settings: {e}")
             return jsonify({'error': str(e)}), 500
 
     @app.route('/api/reviews/send-reply', methods=['POST'])
@@ -290,6 +342,108 @@ def register_reviews_routes(app):
         except Exception as e:
             logger.error(f"Error fetching rating distribution: {e}")
             return jsonify({'error': str(e)}), 500
+
+
+def _get_review_settings(seller_id):
+    """Get review AI settings for a seller."""
+    from models import SystemSettings
+    key = f'reviews_ai_settings_{seller_id}'
+    settings = SystemSettings.query.filter_by(key=key).first()
+    if settings:
+        val = settings.get_value()
+        if isinstance(val, dict):
+            return val
+    return {'ai_enabled': False, 'custom_instruction': '', 'tone': 'professional'}
+
+
+def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, user_name):
+    """Try to generate reply using AI. Returns None if AI is not configured or fails."""
+    try:
+        settings = _get_review_settings(seller.id)
+        if not settings.get('ai_enabled'):
+            return None
+
+        # Get AI config from AutoImportSettings
+        from models import AutoImportSettings
+        ai_settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+        if not ai_settings or not getattr(ai_settings, 'ai_enabled', False):
+            logger.warning("AI enabled for reviews but no AI config found")
+            return None
+
+        from services.ai_service import AIConfig, AIService
+        config = AIConfig.from_settings(ai_settings)
+        if not config:
+            return None
+
+        config.temperature = 0.7
+        config.max_tokens = 500
+        ai_service = AIService(config)
+
+        tone = settings.get('tone', 'professional')
+        custom_instruction = settings.get('custom_instruction', '')
+
+        # Build system prompt
+        tone_map = {
+            'professional': 'Отвечай профессионально и вежливо, как представитель солидного магазина.',
+            'friendly': 'Отвечай дружелюбно и тепло, как будто общаешься с хорошим знакомым.',
+            'formal': 'Отвечай строго формально и официально.',
+        }
+        tone_instruction = tone_map.get(tone, tone_map['professional'])
+
+        system_prompt = f"""Ты — представитель интернет-магазина на Wildberries. Пиши ответы на отзывы и вопросы покупателей.
+
+Правила:
+- Ответ на русском языке, 2-4 предложения, не больше
+- {tone_instruction}
+- Для ПОЛОЖИТЕЛЬНЫХ отзывов (4-5 звёзд): поблагодари за выбор магазина, порадуйся положительному опыту
+- Для НЕЙТРАЛЬНЫХ отзывов (3 звезды): поблагодари, мягко адресуй замечания, сошлись на описание товара
+- Для НЕГАТИВНЫХ отзывов (1-2 звезды): ЗАЩИЩАЙ карточку товара. Товар соответствует описанию и характеристикам. Магазин прав. Вежливо порекомендуй ознакомиться с описанием перед покупкой. НЕ извиняйся за товар
+- Для ВОПРОСОВ: отвечай по существу, ссылайся на описание и характеристики в карточке
+- Не используй эмодзи
+- Не начинай с "Уважаемый покупатель"
+- Начинай с приветствия по имени если оно известно"""
+
+        if custom_instruction:
+            system_prompt += f"\n\nДополнительные инструкции от продавца:\n{custom_instruction}"
+
+        # Build user message
+        parts = []
+        if item_type == 'feedback':
+            parts.append(f"Тип: отзыв на товар")
+            if rating:
+                parts.append(f"Рейтинг: {rating} из 5 звёзд")
+        else:
+            parts.append(f"Тип: вопрос покупателя")
+
+        if product_name:
+            parts.append(f"Товар: {product_name}")
+        if user_name:
+            parts.append(f"Имя покупателя: {user_name}")
+        if text:
+            parts.append(f"Текст: {text}")
+        if pros:
+            parts.append(f"Достоинства: {pros}")
+        if cons:
+            parts.append(f"Недостатки: {cons}")
+
+        user_message = "\n".join(parts)
+        if not user_message.strip():
+            user_message = f"Отзыв без текста, рейтинг: {rating or 'не указан'}, товар: {product_name or 'не указан'}"
+
+        result = ai_service.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ]
+        )
+
+        if result and len(result.strip()) >= 10:
+            return result.strip()
+
+        return None
+    except Exception as e:
+        logger.error(f"AI review reply generation failed: {e}")
+        return None
 
 
 def _generate_feedback_reply(text, rating, product_name, pros, cons, user_name):
