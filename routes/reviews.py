@@ -498,7 +498,7 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
             return None, 'Настройки AI не найдены. Перейдите в настройки автоимпорта и укажите API ключ AI.'
 
         # Build AI config directly — don't use from_settings() which requires ai_enabled
-        from services.ai_service import AIConfig, AIService, AIProvider
+        from services.ai_service import AIConfig, AIClient, AIProvider
         ai_api_key = getattr(ai_settings, 'ai_api_key', '')
         if not ai_api_key:
             logger.warning("AI enabled for reviews but no AI API key configured")
@@ -524,7 +524,7 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
 
         config.temperature = 0.7
         config.max_tokens = 500
-        ai_service = AIService(config)
+        ai_client = AIClient(config)
 
         tone = settings.get('tone', 'professional')
         custom_instruction = settings.get('custom_instruction', '')
@@ -584,7 +584,7 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
         if not user_message.strip():
             user_message = f"Отзыв без текста, рейтинг: {rating or 'не указан'}, товар: {product_name or 'не указан'}"
 
-        result = ai_service.chat_completion(
+        result = ai_client.chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message}
