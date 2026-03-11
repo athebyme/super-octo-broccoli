@@ -62,29 +62,36 @@ def register_warehouse_routes(app):
                     'lowStockAlerts': [],
                 })
 
-            # Aggregate by warehouse
+            # Aggregate by warehouse NAME (WB has multiple warehouse_ids per physical warehouse)
             wh_data = defaultdict(lambda: {
                 'name': '',
                 'totalQty': 0,
                 'totalValue': 0,
-                'productCount': 0,
                 'inWayToClient': 0,
                 'inWayFromClient': 0,
                 'products': set(),
             })
 
-            all_products = []
+            # Aggregate products by nm_id (sum across all warehouses)
+            product_agg = defaultdict(lambda: {
+                'nmId': 0,
+                'title': '',
+                'brand': '',
+                'vendorCode': '',
+                'quantity': 0,
+                'value': 0.0,
+            })
+
             low_stock_alerts = []
             total_quantity = 0
             total_value = 0
 
             for stock, product in stocks:
-                wh_key = stock.warehouse_id or stock.warehouse_name or 'unknown'
-                wh = wh_data[wh_key]
-                wh['name'] = stock.warehouse_name or f'Склад {stock.warehouse_id}'
+                wh_name = stock.warehouse_name or f'Склад {stock.warehouse_id}'
+                wh = wh_data[wh_name]
+                wh['name'] = wh_name
 
                 qty = stock.quantity or 0
-                qty_full = stock.quantity_full or 0
                 price = float(product.discount_price or product.price or 0)
                 value = qty * price
 
@@ -97,31 +104,31 @@ def register_warehouse_routes(app):
                 total_quantity += qty
                 total_value += value
 
-                all_products.append({
-                    'nmId': product.nm_id,
-                    'title': product.title or product.vendor_code or str(product.nm_id),
-                    'brand': product.brand or '',
-                    'vendorCode': product.vendor_code or '',
-                    'warehouse': stock.warehouse_name or '',
-                    'quantity': qty,
-                    'quantityFull': qty_full,
-                    'value': round(value, 2),
-                })
+                # Aggregate per product
+                pa = product_agg[product.nm_id]
+                pa['id'] = product.id
+                pa['nmId'] = product.nm_id
+                pa['title'] = product.title or product.vendor_code or str(product.nm_id)
+                pa['brand'] = product.brand or ''
+                pa['vendorCode'] = product.vendor_code or ''
+                pa['quantity'] += qty
+                pa['value'] += value
 
-                # Low stock alerts: available quantity < threshold but > 0
+                # Low stock alerts: per stock record with low qty
                 if 0 < qty < LOW_STOCK_THRESHOLD:
                     low_stock_alerts.append({
+                        'id': product.id,
                         'nmId': product.nm_id,
                         'title': product.title or product.vendor_code or str(product.nm_id),
                         'brand': product.brand or '',
                         'vendorCode': product.vendor_code or '',
-                        'warehouse': stock.warehouse_name or '',
+                        'warehouse': wh_name,
                         'quantity': qty,
                     })
 
             # Build warehouse list
             warehouses = []
-            for wh_key, wh in sorted(wh_data.items(), key=lambda x: x[1]['totalQty'], reverse=True):
+            for wh_name, wh in sorted(wh_data.items(), key=lambda x: x[1]['totalQty'], reverse=True):
                 warehouses.append({
                     'name': wh['name'],
                     'productCount': len(wh['products']),
@@ -131,14 +138,15 @@ def register_warehouse_routes(app):
                     'inWayFromClient': wh['inWayFromClient'],
                 })
 
-            # Top stocked products (by quantity)
-            top_products = sorted(all_products, key=lambda x: x['quantity'], reverse=True)[:20]
+            # Top stocked products (by total quantity across all warehouses)
+            all_products = sorted(product_agg.values(), key=lambda x: x['quantity'], reverse=True)
+            top_products = [{**p, 'value': round(p['value'], 2)} for p in all_products[:20]]
 
             # Low stock sorted by quantity ascending
             low_stock_alerts.sort(key=lambda x: x['quantity'])
 
-            # Dead stock: products with high stock (top by quantity, could be sitting)
-            dead_stock = sorted(all_products, key=lambda x: x['quantity'], reverse=True)[:10]
+            # Dead stock: products with highest stock
+            dead_stock = [{**p, 'value': round(p['value'], 2)} for p in all_products[:10]]
 
             return jsonify({
                 'totalQuantity': total_quantity,

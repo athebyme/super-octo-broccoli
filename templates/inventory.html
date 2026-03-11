@@ -103,7 +103,7 @@
                 </div>
                 <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
                     <template x-for="(item, idx) in (wh.lowStockAlerts || [])" :key="'alert-'+idx">
-                        <div class="flex items-center justify-between p-3 rounded-lg" style="background:#fff;border:1px solid #fecaca">
+                        <a :href="'/products/' + item.id" class="flex items-center justify-between p-3 rounded-lg hover:shadow-sm transition-shadow" style="background:#fff;border:1px solid #fecaca;text-decoration:none">
                             <div class="min-w-0 flex-1">
                                 <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="item.title"></div>
                                 <div class="text-xs" style="color:var(--text-muted)">
@@ -115,7 +115,7 @@
                                       :style="item.quantity <= 2 ? 'background:#fef2f2;color:#ef4444' : 'background:#fffbeb;color:#f59e0b'"
                                       x-text="item.quantity + ' шт'"></span>
                             </div>
-                        </div>
+                        </a>
                     </template>
                 </div>
             </div>
@@ -191,18 +191,18 @@
                     <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Топ товаров по остаткам</h2>
                     <div class="space-y-2 max-h-96 overflow-y-auto">
                         <template x-for="(item, idx) in (wh.topProducts || [])" :key="'top-'+idx">
-                            <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
+                            <a :href="'/products/' + item.id" class="flex items-center justify-between p-3 rounded-lg hover:shadow-sm transition-shadow" style="background:var(--bg);border:1px solid var(--border-light);text-decoration:none">
                                 <div class="min-w-0 flex-1">
                                     <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="item.title"></div>
                                     <div class="text-xs" style="color:var(--text-muted)">
-                                        <span x-text="item.nmId"></span> · <span x-text="item.warehouse"></span>
+                                        <span x-text="item.vendorCode || item.nmId"></span> · <span x-text="item.brand"></span>
                                     </div>
                                 </div>
                                 <div class="text-right ml-3 flex-shrink-0">
                                     <div class="text-sm font-semibold" style="color:var(--text)" x-text="item.quantity.toLocaleString('ru-RU') + ' шт'"></div>
                                     <div class="text-xs" style="color:var(--text-muted)" x-text="formatMoney(item.value)"></div>
                                 </div>
-                            </div>
+                            </a>
                         </template>
                         <div x-show="!wh.topProducts || wh.topProducts.length === 0" class="text-center py-4" style="color:var(--text-muted)">
                             Нет данных
