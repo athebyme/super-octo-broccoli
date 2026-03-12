@@ -154,6 +154,41 @@
                     class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-red-300 hover:text-red-600 disabled:opacity-40">
                 Удалить выбранные
             </button>
+            <!-- AI Агенты -->
+            <div x-data="bulkAiAgents()" class="relative" x-show="$store.myProducts ? $store.myProducts.selected.length > 0 : selected.length > 0" x-cloak>
+                <button @click="toggle()" type="button"
+                        class="px-4 py-2 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-md text-sm font-medium hover:from-violet-600 hover:to-purple-600 flex items-center gap-1.5">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    AI-агенты
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="open" @click.away="open=false" x-transition
+                     class="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
+                    <div class="px-3 py-2 bg-gray-50 border-b border-gray-100">
+                        <p class="text-xs font-medium text-gray-500">AI-обработка выбранных товаров</p>
+                    </div>
+                    <template x-if="loading">
+                        <div class="p-4 text-center">
+                            <svg class="w-5 h-5 mx-auto text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </div>
+                    </template>
+                    <template x-if="!loading && actions.length === 0">
+                        <div class="p-4 text-center">
+                            <p class="text-xs text-gray-500">Нет доступных агентов</p>
+                            <a href="/agents" class="text-xs text-indigo-600 hover:underline mt-1 inline-block">Активировать</a>
+                        </div>
+                    </template>
+                    <div x-show="!loading && actions.length > 0" class="py-1">
+                        <template x-for="action in actions" :key="action.agent_id">
+                            <button @click="submitBulk(action)" type="button"
+                                    class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                                <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                                <span x-text="action.label_batch"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -794,6 +829,54 @@ function myProductsPage() {
         showNotification(msg, type) {
             this.notification = {msg, type};
             if (type !== 'info') setTimeout(() => this.notification = null, 5000);
+        }
+    };
+}
+
+function bulkAiAgents() {
+    return {
+        open: false,
+        loading: false,
+        actions: [],
+        loaded: false,
+        toggle() {
+            this.open = !this.open;
+            if (this.open && !this.loaded) this.loadActions();
+        },
+        async loadActions() {
+            this.loading = true;
+            try {
+                const resp = await fetch('/agents/api/available-actions');
+                const data = await resp.json();
+                this.actions = data.actions || [];
+            } catch(e) { console.error('Failed to load AI actions:', e); }
+            this.loading = false;
+            this.loaded = true;
+        },
+        submitBulk(action) {
+            // Get selected IDs from parent Alpine component
+            const page = document.querySelector('[x-data*="myProductsPage"]');
+            const ids = page ? Alpine.$data(page).selected : [];
+            if (!ids.length) { alert('Выберите товары'); return; }
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/agents/tasks/create';
+
+            const fields = {
+                agent_id: action.agent_id,
+                task_type: action.batch,
+                title: action.label_batch + ' (' + ids.length + ' товаров)',
+                input_data: JSON.stringify({product_ids: ids}),
+                csrf_token: '{{ csrf_token() }}'
+            };
+            for (const [k, v] of Object.entries(fields)) {
+                const inp = document.createElement('input');
+                inp.type = 'hidden'; inp.name = k; inp.value = v;
+                form.appendChild(inp);
+            }
+            document.body.appendChild(form);
+            form.submit();
         }
     };
 }
