@@ -39,6 +39,30 @@ CONTEXT_CHAR_LIMIT = 200_000
 # Макс. число провалов задачи перед пропуском (dead letter protection)
 MAX_TASK_FAILURES = 3
 
+# Максимальная длина сообщения об ошибке для платформы
+MAX_ERROR_LENGTH = 500
+
+
+def _sanitize_error(error_msg: str) -> str:
+    """Очищает сообщение об ошибке от HTML и обрезает до разумной длины."""
+    if not error_msg:
+        return 'Неизвестная ошибка'
+
+    # Если ошибка содержит HTML — значит LLM API вернул веб-страницу вместо JSON
+    if '<!DOCTYPE' in error_msg or '<html' in error_msg or '<!doctype' in error_msg:
+        return (
+            'LLM API вернул HTML-страницу вместо JSON-ответа. '
+            'Вероятно, неверный CLOUDRU_BASE_URL. '
+            'Проверьте настройки: правильный URL — '
+            'https://foundation-models.api.cloud.ru/v1'
+        )
+
+    # Обрезаем слишком длинные сообщения
+    if len(error_msg) > MAX_ERROR_LENGTH:
+        return error_msg[:MAX_ERROR_LENGTH] + '...'
+
+    return error_msg
+
 
 def _touch_liveness():
     """Обновляет liveness-файл для Docker healthcheck."""
@@ -236,7 +260,7 @@ class BaseAgent(ABC):
             self._task_failures.pop(task_id, None)
 
         except Exception as e:
-            error_msg = str(e)
+            error_msg = _sanitize_error(str(e))
             logger.error(f"Task {task_id[:8]} failed: {error_msg}", exc_info=True)
 
             # Инкрементируем счётчик провалов
