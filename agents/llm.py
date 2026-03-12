@@ -351,7 +351,7 @@ class OpenAICompatLLM(BaseLLM):
 
 
 class CloudRuLLM(OpenAICompatLLM):
-    """Cloud.ru Foundation Models — специализированный провайдер."""
+    """Cloud.ru Foundation Models — основной провайдер (GPT-OSS-120B и др.)."""
 
     def __init__(self, config: AgentConfig = None):
         cfg = config or AgentConfig
@@ -366,21 +366,56 @@ class CloudRuLLM(OpenAICompatLLM):
 
 # ── Фабрика ───────────────────────────────────────────────────────
 
-def create_llm(config: AgentConfig = None) -> BaseLLM:
-    """Создаёт LLM по конфигурации."""
-    cfg = config or AgentConfig
-    provider = cfg.LLM_PROVIDER.lower()
+def _create_by_provider(provider: str, config: AgentConfig,
+                        model_override: str = None) -> BaseLLM:
+    """Создаёт LLM по имени провайдера."""
+    provider = provider.lower()
 
     if provider == 'claude':
-        return ClaudeLLM(cfg)
+        llm = ClaudeLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     elif provider == 'gemini':
-        return GeminiLLM(cfg)
+        llm = GeminiLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     elif provider == 'cloudru':
-        return CloudRuLLM(cfg)
+        llm = CloudRuLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     elif provider == 'openai_compat':
-        return OpenAICompatLLM(cfg)
+        llm = OpenAICompatLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     else:
         raise ValueError(
             f"Unknown LLM provider: {provider}. "
             f"Use 'claude', 'gemini', 'cloudru', or 'openai_compat'."
         )
+
+
+def create_llm(config: AgentConfig = None) -> BaseLLM:
+    """Создаёт основной LLM по конфигурации."""
+    cfg = config or AgentConfig
+    return _create_by_provider(cfg.LLM_PROVIDER, cfg)
+
+
+def create_fallback_llm(config: AgentConfig = None) -> BaseLLM | None:
+    """
+    Создаёт fallback LLM для сложных агентов.
+
+    Возвращает None если FALLBACK_LLM_PROVIDER не задан.
+    Используется агентами с use_fallback_llm=True (auto-importer, card-doctor и др.)
+    """
+    cfg = config or AgentConfig
+    fallback_provider = cfg.FALLBACK_LLM_PROVIDER
+
+    if not fallback_provider:
+        return None
+
+    logger.info(f"Creating fallback LLM: {fallback_provider} / {cfg.FALLBACK_LLM_MODEL}")
+    return _create_by_provider(fallback_provider, cfg, cfg.FALLBACK_LLM_MODEL or None)

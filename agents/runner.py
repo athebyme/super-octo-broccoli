@@ -7,11 +7,11 @@
   # Запуск конкретного агента:
   python -m agents.runner --agent seo-writer
 
-  # С Claude:
-  LLM_PROVIDER=claude ANTHROPIC_API_KEY=sk-... python -m agents.runner --agent seo-writer
+  # С Cloud.ru GPT-OSS-120B (по умолчанию):
+  LLM_PROVIDER=cloudru CLOUDRU_API_KEY=... python -m agents.runner --agent seo-writer
 
-  # С Gemini:
-  LLM_PROVIDER=gemini GEMINI_API_KEY=... python -m agents.runner --agent category-mapper
+  # С fallback на Claude для сложных агентов:
+  FALLBACK_LLM_PROVIDER=claude ANTHROPIC_API_KEY=sk-... python -m agents.runner --all
 
   # Все агенты (multi-agent режим):
   python -m agents.runner --all
@@ -23,9 +23,10 @@
   PLATFORM_URL=http://localhost:5000
   AGENT_ID=<uuid из БД>
   AGENT_API_KEY=<ключ>
-  LLM_PROVIDER=claude|gemini
-  ANTHROPIC_API_KEY=sk-ant-...
-  GEMINI_API_KEY=AI...
+  LLM_PROVIDER=cloudru|claude|gemini|openai_compat
+  CLOUDRU_API_KEY=<ключ Cloud.ru>
+  FALLBACK_LLM_PROVIDER=claude  (опционально, для сложных агентов)
+  ANTHROPIC_API_KEY=sk-ant-...  (если fallback=claude)
 """
 import argparse
 import logging
@@ -109,6 +110,20 @@ AGENT_REGISTRY = {
 }
 
 
+def _get_model_name() -> str:
+    """Возвращает имя текущей модели по провайдеру."""
+    p = AgentConfig.LLM_PROVIDER.lower()
+    if p == 'cloudru':
+        return AgentConfig.CLOUDRU_MODEL
+    elif p == 'claude':
+        return AgentConfig.CLAUDE_MODEL
+    elif p == 'gemini':
+        return AgentConfig.GEMINI_MODEL
+    elif p == 'openai_compat':
+        return AgentConfig.OPENAI_COMPAT_MODEL
+    return p
+
+
 def load_dotenv():
     """Загружает .env файл из корня проекта (без внешних зависимостей)."""
     env_path = os.path.join(
@@ -166,7 +181,11 @@ def list_agents():
             print(f"    {name:<26} {info['description']}")
 
     print(f"\n  Всего: {len(AGENT_REGISTRY)} агентов")
-    print(f"  LLM: Claude (Anthropic) + Gemini (Google AI)\n")
+    print(f"  LLM: {AgentConfig.LLM_PROVIDER} ({_get_model_name()})")
+    if AgentConfig.FALLBACK_LLM_PROVIDER:
+        print(f"  Fallback: {AgentConfig.FALLBACK_LLM_PROVIDER} ({AgentConfig.FALLBACK_LLM_MODEL})")
+        print(f"  Сложные агенты (fallback): auto-importer, card-doctor, price-optimizer")
+    print()
 
 
 def run_single_agent(agent_name: str):
@@ -181,8 +200,14 @@ def run_single_agent(agent_name: str):
     agent_class = info['class']
     agent = agent_class()
 
+    agent_cls = info['class']
+    uses_fallback = getattr(agent_cls, 'use_fallback_llm', False) and AgentConfig.FALLBACK_LLM_PROVIDER
+
     print(f"\n  Запуск агента: {info['display_name']} ({agent_name})")
-    print(f"  LLM: {AgentConfig.LLM_PROVIDER} ({AgentConfig.CLAUDE_MODEL if AgentConfig.LLM_PROVIDER == 'claude' else AgentConfig.GEMINI_MODEL})")
+    if uses_fallback:
+        print(f"  LLM: {AgentConfig.FALLBACK_LLM_PROVIDER} ({AgentConfig.FALLBACK_LLM_MODEL}) [fallback]")
+    else:
+        print(f"  LLM: {AgentConfig.LLM_PROVIDER} ({_get_model_name()})")
     print(f"  Платформа: {AgentConfig.PLATFORM_URL}")
     print(f"  Polling: каждые {AgentConfig.POLL_INTERVAL}с")
     print()
@@ -240,8 +265,9 @@ def main():
 
 Переменные окружения:
   PLATFORM_URL, AGENT_ID, AGENT_API_KEY
-  LLM_PROVIDER (claude|gemini)
-  ANTHROPIC_API_KEY / GEMINI_API_KEY
+  LLM_PROVIDER (cloudru|claude|gemini|openai_compat)
+  CLOUDRU_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY
+  FALLBACK_LLM_PROVIDER (claude — для сложных агентов)
         """
     )
     parser.add_argument('--agent', '-a', type=str,

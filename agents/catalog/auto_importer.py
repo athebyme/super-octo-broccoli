@@ -10,6 +10,7 @@ from ..base_agent import BaseAgent
 class AutoImporterAgent(BaseAgent):
     agent_name = 'auto-importer'
     max_iterations = 15
+    use_fallback_llm = True  # сложный multi-step pipeline → Claude
 
     system_prompt = """Ты — агент полного цикла импорта товаров на Wildberries.
 

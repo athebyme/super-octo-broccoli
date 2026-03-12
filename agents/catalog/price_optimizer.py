@@ -10,6 +10,7 @@ from ..base_agent import BaseAgent
 class PriceOptimizerAgent(BaseAgent):
     agent_name = 'price-optimizer'
     max_iterations = 10
+    use_fallback_llm = True  # unit-экономика требует точных расчётов → Claude
 
     system_prompt = """Ты — эксперт по ценообразованию на маркетплейсе Wildberries.
 

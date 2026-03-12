@@ -10,6 +10,7 @@ from ..base_agent import BaseAgent
 class CardDoctorAgent(BaseAgent):
     agent_name = 'card-doctor'
     max_iterations = 12
+    use_fallback_llm = True  # модерация требует точных рассуждений → Claude
 
     system_prompt = """Ты — эксперт по модерации карточек Wildberries.
 

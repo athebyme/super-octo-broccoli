@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 from .config import AgentConfig
-from .llm import BaseLLM, create_llm
+from .llm import BaseLLM, create_llm, create_fallback_llm
 from .platform_client import PlatformClient
 from .tools import ToolRegistry, create_platform_tools
 
@@ -40,13 +40,25 @@ class BaseAgent(ABC):
     system_prompt: str = 'Ты AI-агент для платформы WB-селлеров.'
     max_iterations: int = 15  # макс. итераций ReAct
     max_tool_retries: int = 2
+    use_fallback_llm: bool = False  # True → использовать Claude/Sonnet для сложных задач
 
     def __init__(self, config: AgentConfig = None):
         self.config = config or AgentConfig
         self.config.validate()
 
         self.platform = PlatformClient(self.config)
-        self.llm: BaseLLM = create_llm(self.config)
+
+        # Выбор LLM: fallback (Claude) для сложных агентов, иначе основной (Cloud.ru)
+        if self.use_fallback_llm:
+            fallback = create_fallback_llm(self.config)
+            if fallback:
+                self.llm: BaseLLM = fallback
+                logger.info(f"Agent [{self.agent_name}] using fallback LLM")
+            else:
+                self.llm: BaseLLM = create_llm(self.config)
+                logger.info(f"Agent [{self.agent_name}] fallback not configured, using default LLM")
+        else:
+            self.llm: BaseLLM = create_llm(self.config)
 
         # Инструменты
         self._tools = create_platform_tools(self.platform)
