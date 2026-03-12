@@ -3695,3 +3695,236 @@ class ProhibitedBrand(db.Model):
 
     def __repr__(self):
         return f'<ProhibitedBrand {self.brand_name} [{self.marketplace}]>'
+
+
+# ============= АГЕНТЫ =============
+
+class ServiceAgent(db.Model):
+    """Зарегистрированный сервисный агент (Go-микросервис или внутренний)"""
+    __tablename__ = 'service_agents'
+
+    id = db.Column(db.String(36), primary_key=True)  # UUID
+    name = db.Column(db.String(100), nullable=False)  # 'category-mapper', 'size-normalizer', 'seo-writer'
+    display_name = db.Column(db.String(200), nullable=False)  # 'Агент категорий'
+    description = db.Column(db.Text)
+    agent_type = db.Column(db.String(30), nullable=False, default='external')  # 'external' (Go), 'internal' (Python)
+    category = db.Column(db.String(50), nullable=False, default='general')
+    # Специализация: 'catalog' (каталог/импорт), 'content' (контент/SEO),
+    # 'pricing' (цены), 'compliance' (модерация/блокировки), 'analytics' (аналитика), 'general'
+    status = db.Column(db.String(20), nullable=False, default='offline')  # online, offline, error
+    version = db.Column(db.String(30))  # '1.0.0'
+    endpoint_url = db.Column(db.String(500))  # 'http://agent-import:8080' для внешних
+    api_key_hash = db.Column(db.String(255))  # Хеш API-ключа для аутентификации агента
+    capabilities = db.Column(db.Text, default='[]')  # JSON: ['parse_csv', 'enrich_product', 'map_category']
+    config_json = db.Column(db.Text, default='{}')  # Конфигурация агента (JSON)
+    task_types = db.Column(db.Text, default='[]')  # JSON: типы задач которые принимает агент
+    icon = db.Column(db.String(30), default='cpu')  # Иконка: 'cpu', 'tag', 'ruler', 'pen', 'shield', 'chart', 'camera', 'palette'
+    color = db.Column(db.String(20), default='blue')  # Цвет: 'blue', 'violet', 'emerald', 'amber', 'red', 'pink', 'cyan'
+    last_heartbeat = db.Column(db.DateTime)
+    last_error = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    tasks = db.relationship('AgentTask', backref='agent', lazy='dynamic', cascade='all, delete-orphan')
+
+    __table_args__ = (
+        db.Index('idx_agent_name', 'name'),
+        db.Index('idx_agent_status', 'status'),
+    )
+
+    def get_capabilities(self):
+        import json as _json
+        try:
+            return _json.loads(self.capabilities or '[]')
+        except Exception:
+            return []
+
+    def get_config(self):
+        import json as _json
+        try:
+            return _json.loads(self.config_json or '{}')
+        except Exception:
+            return {}
+
+    def is_online(self):
+        if not self.last_heartbeat:
+            return False
+        return (datetime.utcnow() - self.last_heartbeat).total_seconds() < 120
+
+    def get_task_types(self):
+        import json as _json
+        try:
+            return _json.loads(self.task_types or '[]')
+        except Exception:
+            return []
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'display_name': self.display_name,
+            'description': self.description,
+            'agent_type': self.agent_type,
+            'category': self.category,
+            'status': self.status,
+            'version': self.version,
+            'endpoint_url': self.endpoint_url,
+            'capabilities': self.get_capabilities(),
+            'task_types': self.get_task_types(),
+            'config': self.get_config(),
+            'icon': self.icon or 'cpu',
+            'color': self.color or 'blue',
+            'is_online': self.is_online(),
+            'last_heartbeat': self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+            'last_error': self.last_error,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ServiceAgent {self.name} [{self.status}]>'
+
+
+class AgentTask(db.Model):
+    """Задача, выполняемая агентом"""
+    __tablename__ = 'agent_tasks'
+
+    id = db.Column(db.String(36), primary_key=True)  # UUID
+    agent_id = db.Column(db.String(36), db.ForeignKey('service_agents.id'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    task_type = db.Column(db.String(50), nullable=False)  # 'import_products', 'optimize_prices', 'fix_card'
+    title = db.Column(db.String(300), nullable=False)  # Человекочитаемое описание
+    status = db.Column(db.String(20), nullable=False, default='queued')
+    # queued -> running -> completed / failed / cancelled
+    priority = db.Column(db.Integer, default=0)  # 0=normal, 1=high, 2=critical
+
+    # Входные данные
+    input_data = db.Column(db.Text, default='{}')  # JSON
+
+    # Прогресс
+    total_steps = db.Column(db.Integer, default=0)
+    completed_steps = db.Column(db.Integer, default=0)
+    current_step_label = db.Column(db.String(300))  # 'Обогащение товара 45 из 120'
+
+    # Результат
+    result_data = db.Column(db.Text, default='{}')  # JSON
+    error_message = db.Column(db.Text)
+
+    # Таймстампы
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', foreign_keys=[seller_id])
+    steps = db.relationship('AgentTaskStep', backref='task', lazy='dynamic',
+                            cascade='all, delete-orphan', order_by='AgentTaskStep.step_number')
+
+    __table_args__ = (
+        db.Index('idx_atask_seller_status', 'seller_id', 'status'),
+        db.Index('idx_atask_agent_status', 'agent_id', 'status'),
+        db.Index('idx_atask_created', 'created_at'),
+    )
+
+    @property
+    def progress_percent(self):
+        if self.total_steps and self.total_steps > 0:
+            return min(100, int(self.completed_steps / self.total_steps * 100))
+        return 0
+
+    @property
+    def duration_seconds(self):
+        if self.started_at:
+            end = self.completed_at or datetime.utcnow()
+            return int((end - self.started_at).total_seconds())
+        return 0
+
+    def get_input(self):
+        import json as _json
+        try:
+            return _json.loads(self.input_data or '{}')
+        except Exception:
+            return {}
+
+    def get_result(self):
+        import json as _json
+        try:
+            return _json.loads(self.result_data or '{}')
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'agent_id': self.agent_id,
+            'agent_name': self.agent.display_name if self.agent else None,
+            'seller_id': self.seller_id,
+            'task_type': self.task_type,
+            'title': self.title,
+            'status': self.status,
+            'priority': self.priority,
+            'total_steps': self.total_steps,
+            'completed_steps': self.completed_steps,
+            'current_step_label': self.current_step_label,
+            'progress_percent': self.progress_percent,
+            'duration_seconds': self.duration_seconds,
+            'result': self.get_result(),
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AgentTask {self.id[:8]} [{self.status}] {self.title[:40]}>'
+
+
+class AgentTaskStep(db.Model):
+    """Шаг выполнения задачи агента (лог рассуждений и действий)"""
+    __tablename__ = 'agent_task_steps'
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.String(36), db.ForeignKey('agent_tasks.id'), nullable=False, index=True)
+    step_number = db.Column(db.Integer, nullable=False)
+
+    step_type = db.Column(db.String(30), nullable=False, default='action')
+    # 'thinking' — рассуждение агента
+    # 'action'   — выполняемое действие (API call, DB query)
+    # 'result'   — результат действия
+    # 'error'    — ошибка
+    # 'decision' — принятое решение
+
+    title = db.Column(db.String(300), nullable=False)
+    detail = db.Column(db.Text)  # Подробное описание / данные
+    status = db.Column(db.String(20), default='completed')  # running, completed, failed, skipped
+    duration_ms = db.Column(db.Integer)  # Длительность шага в мс
+    metadata_json = db.Column(db.Text, default='{}')  # Доп. данные (JSON)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.Index('idx_atstep_task_num', 'task_id', 'step_number'),
+    )
+
+    def get_metadata(self):
+        import json as _json
+        try:
+            return _json.loads(self.metadata_json or '{}')
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'step_number': self.step_number,
+            'step_type': self.step_type,
+            'title': self.title,
+            'detail': self.detail,
+            'status': self.status,
+            'duration_ms': self.duration_ms,
+            'metadata': self.get_metadata(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AgentTaskStep #{self.step_number} [{self.step_type}] {self.title[:30]}>'

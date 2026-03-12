@@ -34,6 +34,7 @@ from models import (
     CategoryMapping, ProductCategoryCorrection,
     CardMergeHistory, SellerReport,
     BackgroundJob, Notification,
+    ServiceAgent, AgentTask, AgentTaskStep,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -842,27 +843,62 @@ def admin_audit_logs():
 def admin_system_settings():
     """Управление системными настройками"""
     if request.method == 'POST':
-        # Обновление настроек
-        for key in request.form:
-            if key.startswith('setting_'):
-                setting_key = key.replace('setting_', '')
-                value = request.form.get(key)
+        import json as _json
+        # Собираем структурированные JSON-настройки (reviews_ai_settings и т.п.)
+        json_updates = {}  # setting_key -> {field: value}
+        simple_updates = {}  # setting_key -> value
 
-                setting = SystemSettings.query.filter_by(key=setting_key).first()
-                if setting:
-                    old_value = setting.get_value()
-                    setting.set_value(value)
-                    setting.updated_by_user_id = current_user.id
+        for form_key in request.form:
+            if not form_key.startswith('setting_'):
+                continue
+            raw = form_key[len('setting_'):]
 
-                    # Логируем изменение
-                    log_admin_action(
-                        admin_user_id=current_user.id,
-                        action='update_system_setting',
-                        target_type='system_setting',
-                        target_id=setting.id,
-                        details={'key': setting_key, 'old_value': old_value, 'new_value': value},
-                        request=request
-                    )
+            if '__' in raw:
+                # Структурированное поле: reviews_ai_settings_1__ai_enabled
+                setting_key, field = raw.rsplit('__', 1)
+                json_updates.setdefault(setting_key, {})[field] = request.form.get(form_key)
+            else:
+                simple_updates[raw] = request.form.get(form_key)
+
+        # Обновляем простые настройки
+        for setting_key, value in simple_updates.items():
+            setting = SystemSettings.query.filter_by(key=setting_key).first()
+            if setting:
+                old_value = setting.get_value()
+                setting.set_value(value)
+                setting.updated_by_user_id = current_user.id
+                log_admin_action(
+                    admin_user_id=current_user.id,
+                    action='update_system_setting',
+                    target_type='system_setting',
+                    target_id=setting.id,
+                    details={'key': setting_key, 'old_value': old_value, 'new_value': value},
+                    request=request
+                )
+
+        # Обновляем JSON-настройки (reviews_ai_settings_N и т.п.)
+        for setting_key, fields in json_updates.items():
+            setting = SystemSettings.query.filter_by(key=setting_key).first()
+            if setting:
+                old_value = setting.get_value()
+                current_val = old_value if isinstance(old_value, dict) else {}
+                for field, val in fields.items():
+                    if val in ('true', 'True'):
+                        current_val[field] = True
+                    elif val in ('false', 'False'):
+                        current_val[field] = False
+                    else:
+                        current_val[field] = val
+                setting.value = _json.dumps(current_val, ensure_ascii=False)
+                setting.updated_by_user_id = current_user.id
+                log_admin_action(
+                    admin_user_id=current_user.id,
+                    action='update_system_setting',
+                    target_type='system_setting',
+                    target_id=setting.id,
+                    details={'key': setting_key, 'old_value': str(old_value), 'new_value': str(current_val)},
+                    request=request
+                )
 
         db.session.commit()
         flash('Настройки успешно обновлены', 'success')
@@ -871,7 +907,38 @@ def admin_system_settings():
     # Получаем все настройки
     settings = SystemSettings.query.order_by(SystemSettings.key).all()
 
-    return render_template('admin_system_settings.html', settings=settings)
+    # Сводка по агентам
+    agents_summary = None
+    try:
+        from services.agent_service import AGENT_CATALOG
+        registered = {a.name: a for a in ServiceAgent.query.all()}
+        agents_list = []
+        category_labels = {
+            'catalog': 'Каталог', 'content': 'Контент', 'pricing': 'Цены',
+            'compliance': 'Модерация', 'analytics': 'Аналитика',
+        }
+        for spec in AGENT_CATALOG:
+            db_agent = registered.get(spec['name'])
+            agents_list.append({
+                'name': spec['name'],
+                'display_name': spec['display_name'],
+                'category': category_labels.get(spec.get('category', ''), spec.get('category', '')),
+                'status': db_agent.status if db_agent else 'not_activated',
+            })
+        online = sum(1 for a in agents_list if a['status'] == 'online')
+        offline = sum(1 for a in agents_list if a['status'] == 'offline')
+        not_activated = sum(1 for a in agents_list if a['status'] == 'not_activated')
+        agents_summary = {
+            'total': len(agents_list),
+            'online': online,
+            'offline': offline,
+            'not_activated': not_activated,
+            'agents': agents_list,
+        }
+    except Exception:
+        pass
+
+    return render_template('admin_system_settings.html', settings=settings, agents_summary=agents_summary)
 
 
 # ============= API DEBUG CONSOLE =============
@@ -5820,6 +5887,14 @@ register_telegram_alerts_routes(app)
 from routes.returns import register_returns_routes
 register_returns_routes(app)
 
+# ============= РОУТЫ СЕРВИСНЫХ АГЕНТОВ =============
+from routes.agents import register_agents_routes
+register_agents_routes(app)
+
+# ============= INTERNAL API ДЛЯ АГЕНТОВ =============
+from routes.internal_api import register_internal_api_routes
+register_internal_api_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5841,6 +5916,11 @@ def _run_startup_migrations():
         ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),
         # Product rating from WB Analytics API
         ('products', 'nm_rating', 'REAL'),
+        # Service agents extended columns
+        ('service_agents', 'category', "TEXT NOT NULL DEFAULT 'general'"),
+        ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
+        ('service_agents', 'icon', "TEXT DEFAULT 'cpu'"),
+        ('service_agents', 'color', "TEXT DEFAULT 'blue'"),
     ]
 
     for table, column, col_type in migrations:
@@ -5989,6 +6069,89 @@ def _run_startup_migrations():
         except Exception as e:
             db.session.rollback()
             logger.warning(f"Could not create finance_snapshots table: {e}")
+
+    # Создаём таблицы сервисных агентов если их нет
+    for tbl_name, tbl_sql in [
+        ('service_agents', '''
+            CREATE TABLE service_agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                description TEXT,
+                agent_type TEXT NOT NULL DEFAULT 'external',
+                status TEXT NOT NULL DEFAULT 'offline',
+                version TEXT,
+                endpoint_url TEXT,
+                api_key_hash TEXT,
+                capabilities TEXT DEFAULT '[]',
+                config_json TEXT DEFAULT '{}',
+                last_heartbeat TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''),
+        ('agent_tasks', '''
+            CREATE TABLE agent_tasks (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL REFERENCES service_agents(id),
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                task_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                priority INTEGER DEFAULT 0,
+                input_data TEXT DEFAULT '{}',
+                total_steps INTEGER DEFAULT 0,
+                completed_steps INTEGER DEFAULT 0,
+                current_step_label TEXT,
+                result_data TEXT DEFAULT '{}',
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''),
+        ('agent_task_steps', '''
+            CREATE TABLE agent_task_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+                step_number INTEGER NOT NULL,
+                step_type TEXT NOT NULL DEFAULT 'action',
+                title TEXT NOT NULL,
+                detail TEXT,
+                status TEXT DEFAULT 'completed',
+                duration_ms INTEGER,
+                metadata_json TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''),
+    ]:
+        if tbl_name not in insp.get_table_names():
+            try:
+                db.session.execute(db.text(tbl_sql))
+                db.session.commit()
+                logger.info(f"Created table '{tbl_name}'")
+            except Exception as e:
+                db.session.rollback()
+                logger.warning(f"Could not create {tbl_name} table: {e}")
+
+    # Индексы для таблиц агентов
+    agent_indexes = [
+        ('idx_agent_name', 'service_agents', 'name'),
+        ('idx_agent_status', 'service_agents', 'status'),
+        ('idx_atask_seller_status', 'agent_tasks', 'seller_id, status'),
+        ('idx_atask_agent_status', 'agent_tasks', 'agent_id, status'),
+        ('idx_atask_created', 'agent_tasks', 'created_at'),
+        ('idx_atstep_task_num', 'agent_task_steps', 'task_id, step_number'),
+    ]
+    for idx_name, table, columns in agent_indexes:
+        if table in insp.get_table_names():
+            try:
+                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
     # Индексы для таблиц аналитики и финансов
     analytics_indexes = [

@@ -3,6 +3,19 @@
 {% block title %}Системные настройки - Admin{% endblock %}
 
 {% block content %}
+{# Русские названия для системных настроек #}
+{% set setting_labels = {
+    'api_rate_limit_per_minute': 'Лимит API-запросов в минуту',
+    'cleanup_logs_days': 'Хранение логов (дней)',
+    'global_sync_enabled': 'Глобальная автосинхронизация',
+    'max_sync_interval_minutes': 'Макс. интервал синхронизации (мин)',
+    'min_sync_interval_minutes': 'Мин. интервал синхронизации (мин)',
+} %}
+{% set tone_labels = {
+    'professional': 'Профессиональный',
+    'friendly': 'Дружелюбный',
+    'formal': 'Формальный',
+} %}
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative flex justify-between items-center">
@@ -10,23 +23,27 @@
                 <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Системные настройки</h1>
                 <p class="mt-2 text-sm text-gray-400">Глобальные параметры системы</p>
             </div>
-            <a href="{{ url_for('admin_panel') }}" class="text-gray-400 hover:text-white transition-colors">← Назад в админку</a>
+            <a href="{{ url_for('admin_panel') }}" class="text-gray-400 hover:text-white transition-colors">&larr; Назад в админку</a>
         </div>
     </div>
 
     <form method="POST" action="{{ url_for('admin_system_settings') }}" class="space-y-6">
+
+        {# ═══ ОСНОВНЫЕ НАСТРОЙКИ ═══ #}
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
             <div class="px-6 py-4 border-b border-gray-200">
-                <h2 class="text-lg font-semibold text-gray-900">Настройки</h2>
+                <h2 class="text-lg font-semibold text-gray-900">Основные</h2>
+                <p class="text-xs text-gray-500 mt-1">API, логи, синхронизация</p>
             </div>
 
             <div class="px-6 py-4 space-y-6">
                 {% for setting in settings %}
+                {% if not setting.key.startswith('reviews_ai_settings_') %}
                 <div class="border-b border-gray-200 pb-4 last:border-0 last:pb-0">
                     <div class="flex items-start justify-between">
                         <div class="flex-1 mr-4">
                             <label for="setting_{{ setting.key }}" class="block text-sm font-medium text-gray-700">
-                                {{ setting.key.replace('_', ' ').title() }}
+                                {{ setting_labels.get(setting.key, setting.key.replace('_', ' ').title()) }}
                             </label>
                             <p class="mt-1 text-sm text-gray-500">{{ setting.description }}</p>
                         </div>
@@ -50,24 +67,163 @@
                     </div>
                     {% if setting.updated_by %}
                     <div class="mt-2 text-xs text-gray-500">
-                        Последнее изменение: {{ setting.updated_by.username }} —
+                        Изменено: {{ setting.updated_by.username }} &mdash;
                         {% if setting.updated_at %}
-                        {{ setting.updated_at.strftime('%Y-%m-%d %H:%M') }}
+                        {{ setting.updated_at.strftime('%d.%m.%Y %H:%M') }}
                         {% endif %}
                     </div>
                     {% endif %}
                 </div>
+                {% endif %}
                 {% endfor %}
             </div>
+        </div>
 
-            <div class="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-                <button type="submit"
-                        class="inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                    Сохранить изменения
-                </button>
+        {# ═══ AI ОТЗЫВЫ ═══ #}
+        {% set ai_settings = [] %}
+        {% for setting in settings %}
+            {% if setting.key.startswith('reviews_ai_settings_') %}
+                {% if ai_settings.append(setting) %}{% endif %}
+            {% endif %}
+        {% endfor %}
+
+        {% if ai_settings %}
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-900">AI-ответы на отзывы</h2>
+                <p class="text-xs text-gray-500 mt-1">Настройки автоответов по продавцам</p>
+            </div>
+
+            <div class="px-6 py-4 space-y-6">
+                {% for setting in ai_settings %}
+                {% set seller_id = setting.key.replace('reviews_ai_settings_', '') %}
+                {% set ai_val = setting.get_value() if setting.get_value() is mapping else {} %}
+                <div class="border-b border-gray-200 pb-5 last:border-0 last:pb-0">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-sm font-medium text-gray-900">Продавец #{{ seller_id }}</h3>
+                            {% if setting.updated_by %}
+                            <p class="text-xs text-gray-400">
+                                Изменено: {{ setting.updated_by.username }} &mdash;
+                                {{ setting.updated_at.strftime('%d.%m.%Y %H:%M') if setting.updated_at else '' }}
+                            </p>
+                            {% endif %}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500">AI-ответы</span>
+                            <select name="setting_{{ setting.key }}__ai_enabled"
+                                    class="pl-3 pr-8 py-1.5 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="true" {% if ai_val.get('ai_enabled') %}selected{% endif %}>Вкл</option>
+                                <option value="false" {% if not ai_val.get('ai_enabled') %}selected{% endif %}>Выкл</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Тон ответов</label>
+                            <select name="setting_{{ setting.key }}__tone"
+                                    class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                                {% for tone_key, tone_name in tone_labels.items() %}
+                                <option value="{{ tone_key }}" {% if ai_val.get('tone') == tone_key %}selected{% endif %}>{{ tone_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Инструкция</label>
+                            <input type="text" name="setting_{{ setting.key }}__custom_instruction"
+                                   value="{{ ai_val.get('custom_instruction', '') }}"
+                                   placeholder="Дополнительные указания для AI..."
+                                   class="w-full px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
             </div>
         </div>
+        {% endif %}
+
+        {# ═══ КНОПКА СОХРАНЕНИЯ ═══ #}
+        <div class="flex justify-end">
+            <button type="submit"
+                    class="inline-flex justify-center items-center px-5 py-2.5 border border-transparent text-sm font-medium rounded-lg text-white bg-[#0a0a0a] hover:bg-[#1a1a1a] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors">
+                Сохранить изменения
+            </button>
+        </div>
     </form>
+
+    {# ═══ СЕРВИСНЫЕ АГЕНТЫ ═══ #}
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-6">
+        <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-gray-900">Сервисные агенты</h2>
+                <p class="text-xs text-gray-500 mt-1">AI-агенты для автоматизации задач</p>
+            </div>
+            <a href="{{ url_for('agents_dashboard') }}"
+               class="text-sm text-indigo-600 hover:text-indigo-800 font-medium transition-colors">
+                Открыть панель агентов &rarr;
+            </a>
+        </div>
+
+        <div class="px-6 py-4">
+            {% if agents_summary %}
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <div class="text-2xl font-semibold text-gray-900">{{ agents_summary.total }}</div>
+                    <div class="text-xs text-gray-500 mt-1">Всего</div>
+                </div>
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <div class="text-2xl font-semibold text-emerald-600">{{ agents_summary.online }}</div>
+                    <div class="text-xs text-gray-500 mt-1">Online</div>
+                </div>
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <div class="text-2xl font-semibold text-gray-400">{{ agents_summary.offline }}</div>
+                    <div class="text-xs text-gray-500 mt-1">Offline</div>
+                </div>
+                <div class="text-center p-3 bg-gray-50 rounded-lg">
+                    <div class="text-2xl font-semibold text-amber-600">{{ agents_summary.not_activated }}</div>
+                    <div class="text-xs text-gray-500 mt-1">Не активированы</div>
+                </div>
+            </div>
+
+            {% if agents_summary.agents %}
+            <div class="space-y-2">
+                {% for agent in agents_summary.agents %}
+                <div class="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-gray-50 transition-colors">
+                    <div class="flex items-center gap-3">
+                        <span class="w-2 h-2 rounded-full flex-shrink-0
+                            {% if agent.status == 'online' %}bg-emerald-500{% elif agent.status == 'offline' %}bg-gray-300{% else %}bg-amber-400{% endif %}"></span>
+                        <div>
+                            <span class="text-sm font-medium text-gray-900">{{ agent.display_name }}</span>
+                            <span class="text-xs text-gray-400 ml-1.5">{{ agent.category }}</span>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        {% if agent.status == 'online' %}
+                            <span class="text-xs text-emerald-600 font-medium">Online</span>
+                        {% elif agent.status == 'offline' %}
+                            <span class="text-xs text-gray-400">Offline</span>
+                        {% else %}
+                            <span class="text-xs text-amber-500">Не активирован</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% else %}
+            <div class="text-center py-8">
+                <svg class="w-12 h-12 mx-auto text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                </svg>
+                <p class="text-sm text-gray-500">Агенты не настроены</p>
+                <a href="{{ url_for('agents_dashboard') }}" class="text-sm text-indigo-600 hover:text-indigo-800 mt-1 inline-block">
+                    Перейти к настройке &rarr;
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
 
     <!-- Информация -->
     <div class="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">

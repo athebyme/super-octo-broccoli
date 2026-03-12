@@ -215,8 +215,15 @@ def migrate():
     print("\n📝 Создание настроек по умолчанию для продавцов...")
     if table_exists(cursor, 'sellers'):
         cursor.execute("""
-            INSERT INTO safe_price_change_settings (seller_id, is_enabled)
-            SELECT id, 1 FROM sellers
+            INSERT INTO safe_price_change_settings (
+                seller_id, is_enabled, safe_threshold_percent,
+                warning_threshold_percent, mode,
+                require_comment_for_dangerous, allow_bulk_dangerous,
+                max_products_per_batch, allow_unlimited_batch,
+                notify_on_dangerous
+            )
+            SELECT id, 1, 10.0, 20.0, 'confirm', 1, 0, 1000, 1, 1
+            FROM sellers
             WHERE id NOT IN (SELECT seller_id FROM safe_price_change_settings)
         """)
         created_settings = cursor.rowcount

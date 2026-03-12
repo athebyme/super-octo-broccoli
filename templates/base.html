@@ -829,6 +829,14 @@
                 <span x-show="sidebarOpen" x-cloak>Отзывы</span>
             </a>
 
+            <!-- Агенты -->
+            <a href="{{ url_for('agents_dashboard') }}" class="sidebar-link {% if request.endpoint in ['agents_dashboard', 'agent_task_detail'] %}active{% endif %}" style="position:relative">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span x-show="sidebarOpen" x-cloak>Агенты</span>
+            </a>
+
             <!-- Аналитика -->
             {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'inventory_page', 'finance_detail_page', 'sentiment_page', 'returns_page', 'telegram_alerts_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
@@ -1016,9 +1024,9 @@
         {% if messages %}
         <div class="flash-container">
             {% for category, message in messages %}
-            <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)"
+            <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, {{ 30000 if 'AGENT_' in message else 5000 }})"
                 class="flash-msg {{ category }}">
-                <span>{{ message }}</span>
+                <span style="white-space: pre-line">{{ message }}</span>
                 <button @click="show = false" class="flash-close">
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
