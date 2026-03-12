@@ -196,7 +196,18 @@ def run_single_agent(agent_name: str):
         print(f"Доступные: {', '.join(AGENT_REGISTRY.keys())}")
         sys.exit(1)
 
-    AgentConfig.validate()
+    try:
+        AgentConfig.validate()
+    except ValueError as e:
+        print(f"\n  Ошибка конфигурации агента '{agent_name}':")
+        print(f"  {e}\n")
+        print("  Убедитесь что в .env файле заданы:")
+        print("    AGENT_SEO_WRITER_ID=<uuid>        # получите в UI: /agents → Активировать")
+        print("    AGENT_SEO_WRITER_KEY=<key>         # генерируется при активации")
+        print("    CLOUDRU_API_KEY=<key>              # ключ LLM провайдера")
+        print()
+        sys.exit(1)
+
     agent_class = info['class']
     agent = agent_class()
 
