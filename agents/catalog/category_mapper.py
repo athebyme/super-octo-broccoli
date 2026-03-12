@@ -60,7 +60,9 @@ class CategoryMapperAgent(BaseAgent):
                     f"1. Получи данные товара через get_imported_product (product_id={imported_product_id})\n"
                     f"2. Проанализируй название, описание, бренд, характеристики\n"
                     f"3. Определи наиболее подходящую категорию WB (предмет/subject)\n"
-                    f"4. Оцени уверенность (0-1)\n\n"
+                    f"4. Оцени уверенность (0-1)\n"
+                    f"5. Сохрани категорию: update_product(product_id={imported_product_id}, data={{\"wb_category_id\": subject_id}})\n\n"
+                    f"ВАЖНО: ОБЯЗАТЕЛЬНО вызови update_product для сохранения категории.\n\n"
                     f"Верни JSON: {{subject_id, subject_name, parent_category, confidence, reasoning}}"
                 )
 
@@ -71,7 +73,9 @@ class CategoryMapperAgent(BaseAgent):
                 f"1. Получи данные товара через get_product\n"
                 f"2. Проанализируй название, описание, бренд\n"
                 f"3. Определи наиболее подходящую категорию WB\n"
-                f"4. Оцени уверенность (0-1)\n\n"
+                f"4. Оцени уверенность (0-1)\n"
+                f"5. Сохрани категорию: update_product(product_id={product_id}, data={{\"wb_category_id\": subject_id}})\n\n"
+                f"ВАЖНО: ОБЯЗАТЕЛЬНО вызови update_product для сохранения категории.\n\n"
                 f"Верни JSON: {{subject_id, subject_name, parent_category, confidence, reasoning}}"
             )
 
@@ -82,6 +86,8 @@ class CategoryMapperAgent(BaseAgent):
                 or input_data.get('imported_product_ids')
                 or []
             )
+            limit = input_data.get('limit', 10)
+
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
@@ -92,19 +98,26 @@ class CategoryMapperAgent(BaseAgent):
                     f"Всего товаров: {count}\n\n"
                     f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные выше товары.\n"
                     f"НЕ загружай список всех товаров продавца.\n\n"
-                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
-                    f"2. Определи категорию WB для каждого товара\n"
-                    f"3. Верни результаты с уровнем уверенности\n\n"
-                    f"Верни JSON: {{processed: число, results: [{{product_id, subject_id, subject_name, confidence}}]}}"
+                    f"Для каждого ID:\n"
+                    f"1. Получи данные через get_imported_product (product_id=ID)\n"
+                    f"2. По названию, описанию, бренду определи категорию WB\n"
+                    f"3. Сохрани категорию: update_product(product_id=ID, data={{\"wb_category_id\": subject_id}})\n\n"
+                    f"ВАЖНО: После определения категории ОБЯЗАТЕЛЬНО вызови update_product для сохранения.\n\n"
+                    f"Верни JSON: {{processed: число, saved: число, results: [{{product_id, subject_id, subject_name, confidence}}]}}"
                 )
 
             return (
                 f"Пакетный маппинг категорий.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи импортированные товары через get_imported_products\n"
-                f"2. Для каждого товара определи категорию WB\n"
-                f"3. Верни результаты с уровнем уверенности\n\n"
-                f"Верни JSON: {{processed: число, results: [{{product_id, subject_id, subject_name, confidence}}]}}"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_imported_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"2. Для каждого товара определи категорию WB по названию, описанию, бренду\n"
+                f"3. Для каждого товара сохрани категорию: update_product(product_id=ID, data={{\"wb_category_id\": subject_id}})\n\n"
+                f"ВАЖНО:\n"
+                f"- Загрузи товары ОДНИМ вызовом. НЕ листай страницы.\n"
+                f"- После определения категории ОБЯЗАТЕЛЬНО вызови update_product для сохранения.\n"
+                f"- Не загружай каждый товар отдельно — данных из списка достаточно.\n\n"
+                f"Верни JSON: {{processed: число, saved: число, results: [{{product_id, subject_id, subject_name, confidence}}]}}"
             )
 
         return (
