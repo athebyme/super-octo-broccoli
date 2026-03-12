@@ -85,8 +85,23 @@ class WBProductImporter:
         if not self.api_client:
             return False, "API ключ WB не настроен", None
 
+        if imported_product.import_status == 'brand_prohibited':
+            return False, f'Бренд "{imported_product.brand}" запрещён на Wildberries', None
+
         if imported_product.import_status != 'validated':
             return False, f"Товар не готов к импорту (статус: {imported_product.import_status})", None
+
+        # Проверка запрещённого бренда
+        try:
+            from services.prohibited_brands_service import check_brand_for_import
+            can_import, reason = check_brand_for_import(imported_product.brand, 'wb')
+            if not can_import:
+                imported_product.import_status = 'brand_prohibited'
+                imported_product.import_error = reason
+                db.session.commit()
+                return False, reason, None
+        except Exception as e:
+            logger.warning(f"Ошибка проверки запрещённого бренда: {e}")
 
         if imported_product.product_id:
             # Товар уже импортирован

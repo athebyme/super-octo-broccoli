@@ -632,6 +632,39 @@ def migrate(db_path):
             print(f"  ⚠️  Индекс: {e}")
 
         # ============================================================
+        # Таблица prohibited_brands (запрещённые бренды по маркетплейсам)
+        # ============================================================
+        print("\n📋 Таблица: prohibited_brands")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prohibited_brands'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE prohibited_brands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    brand_name VARCHAR(200) NOT NULL,
+                    brand_name_normalized VARCHAR(200) NOT NULL,
+                    marketplace VARCHAR(50) NOT NULL,
+                    reason TEXT,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_prohibited_brand_mp UNIQUE (brand_name_normalized, marketplace)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_prohibited_brand_normalized
+                ON prohibited_brands (brand_name_normalized)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_prohibited_brand_active
+                ON prohibited_brands (marketplace, is_active)
+            """)
+            print("  ✅ Таблица prohibited_brands создана")
+        else:
+            print("  ⏭️  Таблица уже существует")
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()

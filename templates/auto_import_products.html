@@ -60,6 +60,17 @@
             <div class="text-2xl font-bold text-red-600">{{ stats.failed }}</div>
             <div class="text-xs text-red-600">Ошибки</div>
         </div>
+        {% if stats.brand_prohibited is defined and stats.brand_prohibited > 0 %}
+        <div class="bg-white border border-gray-200 rounded-xl shadow-sm p-4 text-center">
+            <div class="flex items-center justify-center mb-2">
+                <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-amber-600">
+                    <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                </div>
+            </div>
+            <div class="text-2xl font-bold text-orange-600">{{ stats.brand_prohibited }}</div>
+            <div class="text-xs text-orange-600">Бренд запрещён</div>
+        </div>
+        {% endif %}
     </div>
     {% endif %}
 
@@ -289,6 +300,10 @@
                             {% elif product.import_status == 'validated' %}
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
                                 Готово
+                            </span>
+                            {% elif product.import_status == 'brand_prohibited' %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-orange-100 text-orange-800" title="{{ product.import_error or 'Бренд запрещён' }}">
+                                Бренд запрещён
                             </span>
                             {% elif product.import_status == 'failed' %}
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
