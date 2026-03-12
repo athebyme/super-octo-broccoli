@@ -1231,8 +1231,9 @@ def register_supplier_routes(app):
         if ai_filter not in ('ai_parsed', 'not_parsed'):
             ai_filter = None
 
-        # wb_filter подразумевает show_imported=True
-        effective_show_imported = show_imported or wb_filter is not None
+        # on_wb подразумевает show_imported=True (товары на WB всегда импортированы)
+        # not_on_wb — не подразумевает, чтобы скрывать импортированные но не на WB
+        effective_show_imported = show_imported or wb_filter == 'on_wb'
 
         # Получаем ID уже импортированных товаров
         imported_sp_ids = set(
