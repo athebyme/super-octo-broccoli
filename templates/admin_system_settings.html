@@ -3,6 +3,17 @@
 {% block title %}Системные настройки - Admin{% endblock %}
 
 {% block content %}
+{# Русские названия для системных настроек #}
+{% set setting_labels = {
+    'api_rate_limit_per_minute': 'Лимит API-запросов в минуту',
+    'cleanup_logs_days': 'Хранение логов (дней)',
+    'global_sync_enabled': 'Глобальная автосинхронизация',
+    'max_sync_interval_minutes': 'Макс. интервал синхронизации (мин)',
+    'min_sync_interval_minutes': 'Мин. интервал синхронизации (мин)',
+    'reviews_ai_settings_1': 'AI-настройки отзывов (продавец 1)',
+    'reviews_ai_settings_2': 'AI-настройки отзывов (продавец 2)',
+    'reviews_ai_settings_3': 'AI-настройки отзывов (продавец 3)',
+} %}
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative flex justify-between items-center">
@@ -26,7 +37,7 @@
                     <div class="flex items-start justify-between">
                         <div class="flex-1 mr-4">
                             <label for="setting_{{ setting.key }}" class="block text-sm font-medium text-gray-700">
-                                {{ setting.key.replace('_', ' ').title() }}
+                                {{ setting_labels.get(setting.key, setting.key.replace('_', ' ').title()) }}
                             </label>
                             <p class="mt-1 text-sm text-gray-500">{{ setting.description }}</p>
                         </div>
