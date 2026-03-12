@@ -13,7 +13,7 @@ import json
 import logging
 import uuid
 
-from flask import render_template, request, redirect, url_for, flash, jsonify, abort
+from flask import render_template, request, redirect, url_for, flash, jsonify, abort, session
 from flask_login import login_required, current_user
 from werkzeug.security import generate_password_hash
 
@@ -240,7 +240,15 @@ def register_agents_routes(app):
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
-        flash(f'Агент зарегистрирован. API ключ (сохраните!): {raw_key}', 'success')
+        env_prefix = name.upper().replace('-', '_')
+        session['agent_credentials'] = {
+            'display_name': display_name,
+            'agent_name': name,
+            'agent_id': str(agent.id),
+            'agent_key': raw_key,
+            'env_id_var': f'AGENT_{env_prefix}_ID',
+            'env_key_var': f'AGENT_{env_prefix}_KEY',
+        }
         return redirect(url_for('agents_dashboard'))
 
     @app.route('/agents/admin/seed/<agent_name>', methods=['POST'])
@@ -260,13 +268,43 @@ def register_agents_routes(app):
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
-        # Формируем .env-переменные для docker-compose
+        # Передаём credentials через session — шаблон покажет модалку
         env_prefix = agent_name.upper().replace('-', '_')
-        flash(
-            f'{agent.display_name} активирован! Добавьте в .env:\n'
-            f'AGENT_{env_prefix}_ID={agent.id}\n'
-            f'AGENT_{env_prefix}_KEY={raw_key}\n\n'
-            f'Запуск: docker compose --profile agents up -d agent-{agent_name}',
-            'success'
-        )
+        session['agent_credentials'] = {
+            'display_name': agent.display_name,
+            'agent_name': agent_name,
+            'agent_id': str(agent.id),
+            'agent_key': raw_key,
+            'env_id_var': f'AGENT_{env_prefix}_ID',
+            'env_key_var': f'AGENT_{env_prefix}_KEY',
+        }
+        return redirect(url_for('agents_dashboard'))
+
+    @app.route('/agents/admin/regenerate-key/<agent_id>', methods=['POST'])
+    @login_required
+    def agents_admin_regenerate_key(agent_id):
+        """Перегенерировать API-ключ агента (только админ)."""
+        if not current_user.is_admin:
+            abort(403)
+
+        agent = agent_service.get_agent(agent_id)
+        if not agent:
+            flash('Агент не найден', 'danger')
+            return redirect(url_for('agents_dashboard'))
+
+        # Генерируем новый API ключ
+        raw_key = str(uuid.uuid4())
+        agent.api_key_hash = generate_password_hash(raw_key)
+        db.session.commit()
+
+        env_prefix = agent.name.upper().replace('-', '_')
+        session['agent_credentials'] = {
+            'display_name': agent.display_name,
+            'agent_name': agent.name,
+            'agent_id': str(agent.id),
+            'agent_key': raw_key,
+            'env_id_var': f'AGENT_{env_prefix}_ID',
+            'env_key_var': f'AGENT_{env_prefix}_KEY',
+            'regenerated': True,
+        }
         return redirect(url_for('agents_dashboard'))
