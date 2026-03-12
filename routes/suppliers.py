@@ -1226,22 +1226,13 @@ def register_supplier_routes(app):
         wb_filter = request.args.get('wb_filter', '').strip()
         if wb_filter not in ('on_wb', 'not_on_wb'):
             wb_filter = None
-        # Фильтр по AI-парсингу: ai_parsed / ai_not_on_wb / not_parsed / all
+        # Фильтр по AI-парсингу: ai_parsed / not_parsed / all
         ai_filter = request.args.get('ai_filter', '').strip()
-        if ai_filter not in ('ai_parsed', 'not_parsed', 'ai_not_on_wb'):
+        if ai_filter not in ('ai_parsed', 'not_parsed'):
             ai_filter = None
 
-        # wb_filter и ai_not_on_wb подразумевают show_imported=True
-        effective_show_imported = show_imported or wb_filter is not None or ai_filter == 'ai_not_on_wb'
-
-        pagination = SupplierService.get_available_products_for_seller(
-            seller.id, supplier_id,
-            page=page, per_page=50,
-            search=search, show_imported=effective_show_imported,
-            stock_status=effective_stock,
-            wb_filter=wb_filter,
-            ai_filter=ai_filter
-        )
+        # wb_filter подразумевает show_imported=True
+        effective_show_imported = show_imported or wb_filter is not None
 
         # Получаем ID уже импортированных товаров
         imported_sp_ids = set(
@@ -1260,41 +1251,53 @@ def register_supplier_routes(app):
             ).all()
         )
 
-        # Дополнительно: определяем товары на WB по совпадению артикула
-        # Используем ту же логику что и wb_product_importer для формирования vendor_code
-        if pagination.items:
-            settings = seller.auto_import_settings
-            if settings and settings.vendor_code_pattern:
-                vc_pattern = settings.vendor_code_pattern
-                vc_supplier_code = settings.supplier_code or ''
-            elif conn.vendor_code_pattern:
-                vc_pattern = conn.vendor_code_pattern
-                vc_supplier_code = conn.supplier_code or ''
-            else:
-                vc_pattern = 'id-{product_id}-{supplier_code}'
-                vc_supplier_code = conn.supplier_code or ''
+        # Дополнительно: определяем товары на WB по совпадению артикула (vendor_code)
+        settings = seller.auto_import_settings
+        if settings and settings.vendor_code_pattern:
+            vc_pattern = settings.vendor_code_pattern
+            vc_supplier_code = settings.supplier_code or ''
+        elif conn.vendor_code_pattern:
+            vc_pattern = conn.vendor_code_pattern
+            vc_supplier_code = conn.supplier_code or ''
+        else:
+            vc_pattern = 'id-{product_id}-{supplier_code}'
+            vc_supplier_code = conn.supplier_code or ''
 
-            # Вычисляем vendor_code для каждого товара на странице
-            sp_vendor_codes = {}
-            for sp in pagination.items:
-                if sp.id in wb_existing_sp_ids:
-                    continue
-                vc = vc_pattern.replace('{product_id}', str(sp.external_id or ''))
+        # Получаем все external_id поставщика и вычисляем vendor_code'ы
+        all_sp_external_ids = dict(
+            db.session.query(SupplierProduct.id, SupplierProduct.external_id).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                ~SupplierProduct.id.in_(wb_existing_sp_ids) if wb_existing_sp_ids else True
+            ).all()
+        )
+        if all_sp_external_ids:
+            vc_to_sp = {}
+            for sp_id, ext_id in all_sp_external_ids.items():
+                vc = vc_pattern.replace('{product_id}', str(ext_id or ''))
                 vc = vc.replace('{supplier_code}', vc_supplier_code)
                 if vc:
-                    sp_vendor_codes[sp.id] = vc
+                    vc_to_sp[vc] = sp_id
 
-            if sp_vendor_codes:
-                # Проверяем какие артикулы уже есть в карточках продавца на WB
+            if vc_to_sp:
                 existing_vc = set(
                     row[0] for row in db.session.query(Product.vendor_code).filter(
                         Product.seller_id == seller.id,
-                        Product.vendor_code.in_(list(sp_vendor_codes.values()))
+                        Product.vendor_code.in_(list(vc_to_sp.keys()))
                     ).all()
                 )
-                for sp_id, vc in sp_vendor_codes.items():
-                    if vc in existing_vc:
-                        wb_existing_sp_ids.add(sp_id)
+                for vc in existing_vc:
+                    if vc in vc_to_sp:
+                        wb_existing_sp_ids.add(vc_to_sp[vc])
+
+        pagination = SupplierService.get_available_products_for_seller(
+            seller.id, supplier_id,
+            page=page, per_page=50,
+            search=search, show_imported=effective_show_imported,
+            stock_status=effective_stock,
+            wb_filter=wb_filter,
+            ai_filter=ai_filter,
+            wb_existing_sp_ids=wb_existing_sp_ids
+        )
 
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
