@@ -1226,6 +1226,10 @@ def register_supplier_routes(app):
         wb_filter = request.args.get('wb_filter', '').strip()
         if wb_filter not in ('on_wb', 'not_on_wb'):
             wb_filter = None
+        # Фильтр по AI-парсингу: ai_parsed / not_parsed / all
+        ai_filter = request.args.get('ai_filter', '').strip()
+        if ai_filter not in ('ai_parsed', 'not_parsed'):
+            ai_filter = None
 
         # wb_filter подразумевает show_imported=True
         effective_show_imported = show_imported or wb_filter is not None
@@ -1235,7 +1239,8 @@ def register_supplier_routes(app):
             page=page, per_page=50,
             search=search, show_imported=effective_show_imported,
             stock_status=effective_stock,
-            wb_filter=wb_filter
+            wb_filter=wb_filter,
+            ai_filter=ai_filter
         )
 
         # Получаем ID уже импортированных товаров
@@ -1300,6 +1305,7 @@ def register_supplier_routes(app):
                                show_imported=show_imported,
                                stock_status=stock_status,
                                wb_filter=wb_filter or '',
+                               ai_filter=ai_filter or '',
                                price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
                                wb_existing_sp_ids=wb_existing_sp_ids,

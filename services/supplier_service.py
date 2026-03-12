@@ -1536,11 +1536,13 @@ class SupplierService:
                                           search: str = None,
                                           show_imported: bool = False,
                                           stock_status: str = None,
-                                          wb_filter: str = None):
+                                          wb_filter: str = None,
+                                          ai_filter: str = None):
         """Товары поставщика, доступные для импорта продавцу
 
         stock_status: 'in_stock' | 'out_of_stock' | None (все)
         wb_filter: 'on_wb' | 'not_on_wb' | None (все)
+        ai_filter: 'ai_parsed' | 'not_parsed' | None (все)
         """
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
@@ -1572,6 +1574,12 @@ class SupplierService:
             q = q.filter(db.or_(
                 SupplierProduct.supplier_quantity.is_(None),
                 SupplierProduct.supplier_quantity == 0))
+
+        # Фильтр по AI-парсингу
+        if ai_filter == 'ai_parsed':
+            q = q.filter(SupplierProduct.ai_parsed_at.isnot(None))
+        elif ai_filter == 'not_parsed':
+            q = q.filter(SupplierProduct.ai_parsed_at.is_(None))
 
         if search:
             search_term = f"%{search}%"

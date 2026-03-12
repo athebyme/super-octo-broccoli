@@ -54,6 +54,13 @@
                 <option value="on_wb" {{ 'selected' if wb_filter == 'on_wb' }}>Уже на WB</option>
             </select>
         </div>
+        <div>
+            <select name="ai_filter" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
+                <option value="" {{ 'selected' if not ai_filter }}>AI: все</option>
+                <option value="ai_parsed" {{ 'selected' if ai_filter == 'ai_parsed' }}>AI-спарсенные</option>
+                <option value="not_parsed" {{ 'selected' if ai_filter == 'not_parsed' }}>Без AI</option>
+            </select>
+        </div>
         <label class="flex items-center gap-2">
             <input type="checkbox" name="show_imported" value="1" {{ 'checked' if show_imported }}
                    class="rounded border-gray-300 text-gray-900" onchange="this.form.submit()">
@@ -225,19 +232,19 @@
         </p>
         <nav class="flex gap-1">
             {% if pagination.has_prev %}
-            <a href="?page={{ pagination.prev_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}"
+            <a href="?page={{ pagination.prev_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&laquo;</a>
             {% endif %}
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
-                <a href="?page={{ p }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}"
+                <a href="?page={{ p }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
                    class="px-3 py-2 text-sm border rounded-md {{ 'bg-[#1a1a1a] text-white border-[#1a1a1a]' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
                 {% else %}
                 <span class="px-2 py-2 text-gray-400">...</span>
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
-            <a href="?page={{ pagination.next_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}"
+            <a href="?page={{ pagination.next_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>
