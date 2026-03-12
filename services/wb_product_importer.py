@@ -4,6 +4,7 @@
 """
 import json
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -13,6 +14,53 @@ from services.prohibited_words_filter import filter_prohibited_words
 from services.pricing_engine import calculate_price
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_wb_size(size_str: str) -> Optional[str]:
+    """
+    Нормализует значение размера для WB API.
+    Убирает текстовые описания (универсальный, one size и т.д.),
+    извлекает только числовой размер. Убирает кавычки.
+
+    Примеры:
+        'универсальный (42-46)' -> '42-46'
+        'универсальный' -> None
+        '42-44' -> '42-44'
+        '«42»' -> '42'
+        'One Size' -> None
+        '42' -> '42'
+    """
+    if not size_str:
+        return None
+
+    cleaned = str(size_str).strip().strip('"\'«»')
+
+    # Если в строке есть числовой диапазон в скобках — извлекаем
+    paren_match = re.search(r'\((\d[\d\s,\-]+\d)\)', cleaned)
+    if paren_match:
+        cleaned = paren_match.group(1).strip()
+
+    # Убираем текстовые описания размеров
+    non_numeric_labels = [
+        'универсальный', 'универсальная', 'универсальное', 'универсальн',
+        'one size', 'one-size', 'onesize', 'free size',
+        'безразмерный', 'безразмерная', 'стандартный', 'стандарт',
+    ]
+    cleaned_lower = cleaned.lower().strip()
+    for label in non_numeric_labels:
+        if cleaned_lower == label:
+            return None
+        cleaned = re.sub(re.escape(label), '', cleaned, flags=re.IGNORECASE).strip()
+
+    # Убираем скобки
+    cleaned = re.sub(r'[()[\]]', '', cleaned).strip()
+    # Убираем кавычки
+    cleaned = cleaned.strip('"\'«»').strip()
+
+    if not cleaned:
+        return None
+
+    return cleaned
 
 
 class WBProductImporter:
@@ -83,8 +131,14 @@ class WBProductImporter:
                         sizes_list = []
                     else:
                         # Возможно, это размер (S, M, 42 и т.д.)
-                        has_real_sizes = True
-                        sizes_list = [raw]
+                        # Нормализуем: убираем "универсальный" и прочие текстовые описания
+                        norm_raw = _normalize_wb_size(raw)
+                        if norm_raw:
+                            has_real_sizes = True
+                            sizes_list = [norm_raw]
+                        else:
+                            has_real_sizes = False
+                            sizes_list = []
             elif isinstance(sizes_data, list):
                 # Старый формат - список размеров
                 sizes_list = sizes_data
@@ -114,6 +168,16 @@ class WBProductImporter:
 
             # Проверяем через WB API, поддерживает ли категория размеры
             category_has_sizes = self._category_supports_sizes(imported_product.wb_subject_id)
+
+            if has_real_sizes and sizes_list and category_has_sizes:
+                # Нормализуем размеры: убираем "универсальный", кавычки и т.д.
+                normalized_sizes = []
+                for size_val in sizes_list:
+                    norm = _normalize_wb_size(str(size_val))
+                    if norm:
+                        normalized_sizes.append(norm)
+                sizes_list = normalized_sizes
+                has_real_sizes = len(sizes_list) > 0
 
             if has_real_sizes and sizes_list and category_has_sizes:
                 # Товар С размерами И категория поддерживает размеры
@@ -2103,6 +2167,16 @@ class WBProductImporter:
             has_real_sizes = False
 
         wb_sizes = []
+        if has_real_sizes and sizes_list and category_has_sizes:
+            # Нормализуем размеры: убираем "универсальный", кавычки и т.д.
+            normalized_sizes = []
+            for size_val in sizes_list:
+                norm = _normalize_wb_size(str(size_val))
+                if norm:
+                    normalized_sizes.append(norm)
+            sizes_list = normalized_sizes
+            has_real_sizes = len(sizes_list) > 0
+
         if has_real_sizes and sizes_list and category_has_sizes:
             for idx, size_val in enumerate(sizes_list):
                 barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')

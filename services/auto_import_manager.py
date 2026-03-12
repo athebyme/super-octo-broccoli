@@ -41,6 +41,48 @@ class SizeParser:
             'volume': r'(?:объ[её]м|мл)\s*(\d+(?:[.,]\d+)?)\s*(?:мл|л)?',
         }
 
+    @staticmethod
+    def _clean_size_text(size_str: str) -> str:
+        """
+        Очищает строку размера от текстовых описаний.
+        'универсальный (42-46)' -> '42-46'
+        'универсальный' -> ''
+        '42-44' -> '42-44'
+        'One Size' -> ''
+        """
+        if not size_str:
+            return ''
+
+        # Убираем кавычки
+        cleaned = size_str.strip().strip('"\'«»')
+
+        # Если есть числовой диапазон в скобках — извлекаем его
+        # "универсальный (42-46)" -> "42-46"
+        paren_match = re.search(r'\((\d[\d\s,\-]+\d)\)', cleaned)
+        if paren_match:
+            cleaned = paren_match.group(1).strip()
+
+        # Убираем текстовые слова-описания размеров (не числовые)
+        non_numeric_labels = [
+            'универсальный', 'универсальная', 'универсальное', 'универсальн',
+            'one size', 'one-size', 'onesize', 'os', 'uni', 'free size',
+            'безразмерный', 'безразмерная', 'стандартный', 'стандарт',
+        ]
+        cleaned_lower = cleaned.lower().strip()
+        for label in non_numeric_labels:
+            if cleaned_lower == label:
+                return ''
+            # Убираем label из строки если он часть строки
+            cleaned = re.sub(re.escape(label), '', cleaned, flags=re.IGNORECASE).strip()
+
+        # Убираем скобки, оставшиеся после очистки
+        cleaned = re.sub(r'[()[\]]', '', cleaned).strip()
+
+        # Убираем кавычки ещё раз после очистки
+        cleaned = cleaned.strip('"\'«»').strip()
+
+        return cleaned
+
     def parse(self, sizes_raw: str) -> Dict[str, any]:
         """
         Парсит строку размеров и возвращает структурированные данные
@@ -66,7 +108,10 @@ class SizeParser:
             'simple_sizes': []
         }
 
-        sizes_lower = sizes_raw.lower()
+        # Нормализуем: убираем текстовые описания типа "универсальный", "one size" и т.д.
+        # Оставляем только числовые размеры
+        sizes_cleaned = self._clean_size_text(sizes_raw)
+        sizes_lower = sizes_cleaned.lower()
 
         # Извлекаем размерности
         for dim_type, pattern in self.dimension_patterns.items():
@@ -80,15 +125,20 @@ class SizeParser:
         # Если не нашли размерности, пробуем определить как простые размеры
         if not result['dimensions']:
             # Размеры одежды (42-44, S-M-L и т.д.)
-            if re.search(r'\d{2}-\d{2}', sizes_raw):  # 42-44 или 46-48
-                # Для одежды/белья размеры через тире - это отдельные размеры, не диапазон
-                # "46-48" -> ["46", "48"], а НЕ ["46", "47", "48"]
-                parts = sizes_raw.split('-')
-                result['simple_sizes'] = [p.strip() for p in parts if p.strip()]
-            elif ',' in sizes_raw:
-                result['simple_sizes'] = [s.strip() for s in sizes_raw.split(',') if s.strip()]
-            else:
-                result['simple_sizes'] = [sizes_raw.strip()]
+            if re.search(r'\d{2}-\d{2}', sizes_cleaned):  # 42-44 или 46-48
+                # Извлекаем только числовой диапазон (например, "42-46" из "универсальный (42-46)")
+                range_match = re.search(r'(\d{2}-\d{2})', sizes_cleaned)
+                if range_match:
+                    range_str = range_match.group(1)
+                    parts = range_str.split('-')
+                    result['simple_sizes'] = [p.strip() for p in parts if p.strip()]
+                else:
+                    parts = sizes_cleaned.split('-')
+                    result['simple_sizes'] = [p.strip() for p in parts if p.strip()]
+            elif ',' in sizes_cleaned:
+                result['simple_sizes'] = [s.strip() for s in sizes_cleaned.split(',') if s.strip()]
+            elif sizes_cleaned.strip():
+                result['simple_sizes'] = [sizes_cleaned.strip()]
 
         return result
 
