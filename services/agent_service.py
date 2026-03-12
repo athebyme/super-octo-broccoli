@@ -212,6 +212,7 @@ def get_agent_catalog():
         labels = spec.get('task_types_labels', {})
         entry['task_types_display'] = [labels.get(t, t) for t in spec.get('task_types', [])]
         db_agent = registered.get(spec['name'])
+        if db_agent:
             entry['registered'] = True
             entry['id'] = db_agent.id
             entry['status'] = db_agent.status
