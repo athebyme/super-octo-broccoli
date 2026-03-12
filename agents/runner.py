@@ -144,13 +144,43 @@ def load_dotenv():
                 os.environ[key] = value
 
 
-def setup_logging(level: str = 'INFO'):
-    """Настройка логирования."""
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-    )
+def setup_logging(level: str = 'INFO', json_format: bool = None):
+    """Настройка логирования. json_format=True для structured JSON логов."""
+    if json_format is None:
+        json_format = os.getenv('LOG_FORMAT', '').lower() == 'json'
+
+    log_level = getattr(logging, level.upper(), logging.INFO)
+
+    if json_format:
+        # Structured JSON logging для агрегации (ELK, Loki, CloudWatch)
+        import json as _json
+
+        class JsonFormatter(logging.Formatter):
+            def format(self, record):
+                log_entry = {
+                    'ts': self.formatTime(record, '%Y-%m-%dT%H:%M:%S'),
+                    'level': record.levelname,
+                    'logger': record.name,
+                    'msg': record.getMessage(),
+                }
+                if record.exc_info and record.exc_info[0]:
+                    log_entry['error'] = self.formatException(record.exc_info)
+                # Добавляем agent_name если доступен
+                agent_name = os.getenv('AGENT_NAME', '')
+                if agent_name:
+                    log_entry['agent'] = agent_name
+                return _json.dumps(log_entry, ensure_ascii=False)
+
+        handler = logging.StreamHandler()
+        handler.setFormatter(JsonFormatter())
+        logging.root.handlers = [handler]
+        logging.root.setLevel(log_level)
+    else:
+        logging.basicConfig(
+            level=log_level,
+            format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+        )
     # Тихие логеры
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
@@ -192,13 +222,31 @@ def run_single_agent(agent_name: str):
     """Запускает один агент."""
     info = AGENT_REGISTRY.get(agent_name)
     if not info:
-        print(f"Неизвестный агент: {agent_name}")
-        print(f"Доступные: {', '.join(AGENT_REGISTRY.keys())}")
+        print(f"\n  [ОШИБКА] Неизвестный агент: {agent_name}")
+        print(f"  Доступные: {', '.join(AGENT_REGISTRY.keys())}")
         sys.exit(1)
 
-    AgentConfig.validate()
-    agent_class = info['class']
-    agent = agent_class()
+    try:
+        AgentConfig.validate()
+    except ValueError as e:
+        print(f"\n  [ОШИБКА КОНФИГУРАЦИИ] Агент '{agent_name}' не может запуститься:")
+        for err in str(e).replace('Agent config errors: ', '').split('; '):
+            print(f"    - {err}")
+        print()
+        print("  Убедитесь, что в .env или переменных окружения заданы:")
+        print("    AGENT_ID=<uuid из UI: /agents -> Активировать>")
+        print("    AGENT_API_KEY=<ключ из UI>")
+        print("    CLOUDRU_API_KEY=<ключ Cloud.ru> (если LLM_PROVIDER=cloudru)")
+        print()
+        sys.exit(1)
+
+    try:
+        agent_class = info['class']
+        agent = agent_class()
+    except Exception as e:
+        print(f"\n  [ОШИБКА ИНИЦИАЛИЗАЦИИ] Агент '{agent_name}': {e}")
+        logging.getLogger(__name__).error(f"Agent init failed: {e}", exc_info=True)
+        sys.exit(1)
 
     agent_cls = info['class']
     uses_fallback = getattr(agent_cls, 'use_fallback_llm', False) and AgentConfig.FALLBACK_LLM_PROVIDER

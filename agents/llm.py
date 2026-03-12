@@ -10,6 +10,7 @@
 
 Унифицированный интерфейс: chat(), chat_with_tools(), structured_output()
 """
+import functools
 import json
 import logging
 import time
@@ -19,6 +20,47 @@ from typing import Any
 from .config import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+
+# ── Retry-декоратор для LLM-вызовов ──────────────────────────────
+
+def llm_retry(max_retries: int = 3, base_delay: float = 2.0):
+    """
+    Retry с экспоненциальным backoff для LLM-вызовов.
+
+    Перехватывает сетевые ошибки, rate-limit (429), server errors (502/503/529).
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (ConnectionError, TimeoutError, OSError) as e:
+                    last_error = e
+                except Exception as e:
+                    err_str = str(e).lower()
+                    status = getattr(getattr(e, 'response', None), 'status_code', 0) or 0
+                    is_retryable = (
+                        status in (429, 502, 503, 529)
+                        or 'rate' in err_str
+                        or 'overloaded' in err_str
+                        or 'timeout' in err_str
+                    )
+                    if not is_retryable or attempt >= max_retries:
+                        raise
+                    last_error = e
+
+                wait = base_delay * (2 ** attempt)
+                logger.warning(
+                    f"LLM call failed (attempt {attempt+1}/{max_retries+1}), "
+                    f"retry in {wait:.0f}s: {last_error}"
+                )
+                time.sleep(wait)
+            raise last_error
+        return wrapper
+    return decorator
 
 
 # ── Базовый интерфейс ─────────────────────────────────────────────
@@ -68,6 +110,7 @@ class ClaudeLLM(BaseLLM):
         self.model = self.cfg.CLAUDE_MODEL
         logger.info(f"Claude LLM initialized: {self.model}")
 
+    @llm_retry()
     def chat(self, system: str, messages: list[dict],
              temperature: float = None, max_tokens: int = None) -> str:
         resp = self.client.messages.create(
@@ -79,6 +122,7 @@ class ClaudeLLM(BaseLLM):
         )
         return resp.content[0].text
 
+    @llm_retry()
     def chat_with_tools(self, system: str, messages: list[dict],
                         tools: list[dict],
                         temperature: float = None,
@@ -140,6 +184,7 @@ class GeminiLLM(BaseLLM):
         self.model = self.cfg.GEMINI_MODEL
         logger.info(f"Gemini LLM initialized: {self.model}")
 
+    @llm_retry()
     def chat(self, system: str, messages: list[dict],
              temperature: float = None, max_tokens: int = None) -> str:
         from google.genai import types
@@ -165,6 +210,7 @@ class GeminiLLM(BaseLLM):
         )
         return resp.text
 
+    @llm_retry()
     def chat_with_tools(self, system: str, messages: list[dict],
                         tools: list[dict],
                         temperature: float = None,
@@ -269,6 +315,7 @@ class OpenAICompatLLM(BaseLLM):
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         logger.info(f"OpenAI-compat LLM initialized: {self.model} @ {self.base_url}")
 
+    @llm_retry()
     def chat(self, system: str, messages: list[dict],
              temperature: float = None, max_tokens: int = None) -> str:
         oai_messages = [{'role': 'system', 'content': system}]
@@ -282,6 +329,7 @@ class OpenAICompatLLM(BaseLLM):
         )
         return resp.choices[0].message.content or ''
 
+    @llm_retry()
     def chat_with_tools(self, system: str, messages: list[dict],
                         tools: list[dict],
                         temperature: float = None,

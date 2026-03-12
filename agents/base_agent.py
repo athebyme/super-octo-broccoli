@@ -6,15 +6,19 @@
 - ReAct loop (Reason → Act → Observe)
 - Автоматическое логирование шагов в платформу
 - Tool calling через LLM (Gemini / Claude)
-- Heartbeat в фоне
+- Heartbeat в фоне + liveness file для Docker healthcheck
 - Graceful shutdown
+- Защита от переполнения контекста LLM
+- Пропуск задач, которые уже провалились слишком много раз
 """
 import json
 import logging
+import os
 import signal
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 from .config import AgentConfig
@@ -23,6 +27,69 @@ from .platform_client import PlatformClient
 from .tools import ToolRegistry, create_platform_tools
 
 logger = logging.getLogger(__name__)
+
+# Файл liveness для Docker healthcheck
+LIVENESS_FILE = Path('/tmp/agent-alive')
+
+# Примерный лимит символов контекста перед сжатием
+# (грубая оценка: ~4 символа ≈ 1 токен, лимит ~80k токенов → ~300k символов,
+#  оставляем запас для системного промпта и ответа)
+CONTEXT_CHAR_LIMIT = 200_000
+
+# Макс. число провалов задачи перед пропуском (dead letter protection)
+MAX_TASK_FAILURES = 3
+
+
+def _touch_liveness():
+    """Обновляет liveness-файл для Docker healthcheck."""
+    try:
+        LIVENESS_FILE.touch()
+    except OSError:
+        pass
+
+
+def _estimate_context_size(messages: list[dict]) -> int:
+    """Примерная оценка размера контекста в символах."""
+    return sum(len(m.get('content', '')) for m in messages)
+
+
+def _summarize_old_messages(messages: list[dict]) -> list[dict]:
+    """
+    Сжимает старые сообщения, оставляя первое (задачу) и последние 4.
+    Промежуточные заменяются кратким резюме.
+    """
+    if len(messages) <= 6:
+        return messages
+
+    first = messages[0]  # исходный промпт задачи
+    tail = messages[-4:]  # последние 2 пары (assistant + user)
+
+    # Собираем краткое резюме промежуточных шагов
+    middle = messages[1:-4]
+    tool_names = set()
+    for m in middle:
+        content = m.get('content', '')
+        # Извлекаем имена вызванных инструментов
+        for marker in ('[Tool Call:', '[Tool Result:'):
+            idx = 0
+            while True:
+                pos = content.find(marker, idx)
+                if pos == -1:
+                    break
+                end = content.find(']', pos)
+                if end != -1:
+                    name_part = content[pos + len(marker):end].split('(')[0].strip()
+                    if name_part:
+                        tool_names.add(name_part)
+                idx = pos + 1
+
+    summary = (
+        f"[Контекст сжат: {len(middle)} промежуточных сообщений опущены. "
+        f"Вызванные инструменты: {', '.join(sorted(tool_names)) or 'нет'}. "
+        f"Продолжай выполнение задачи.]"
+    )
+
+    return [first, {'role': 'user', 'content': summary}] + tail
 
 
 class BaseAgent(ABC):
@@ -72,6 +139,9 @@ class BaseAgent(ABC):
         self._running = False
         self._heartbeat_thread: Optional[threading.Thread] = None
 
+        # Трекинг провалов задач (task_id → failure_count)
+        self._task_failures: dict[str, int] = {}
+
     # ── Абстрактные методы ─────────────────────────────────────────
 
     def get_tools(self) -> Optional[ToolRegistry]:
@@ -94,6 +164,7 @@ class BaseAgent(ABC):
         self._running = True
         self._setup_signals()
         self._start_heartbeat()
+        _touch_liveness()
 
         logger.info(f"Agent [{self.agent_name}] started. Polling every {self.config.POLL_INTERVAL}s")
         self.platform.heartbeat('online')
@@ -125,6 +196,22 @@ class BaseAgent(ABC):
 
         task = tasks[0]
         task_id = task['id']
+
+        # Dead letter protection: пропускаем задачи с слишком большим числом провалов
+        fail_count = self._task_failures.get(task_id, 0)
+        if fail_count >= MAX_TASK_FAILURES:
+            logger.warning(
+                f"Task {task_id[:8]} skipped: failed {fail_count} times (dead letter)"
+            )
+            try:
+                self.platform.fail_task(
+                    task_id,
+                    f'Задача провалилась {fail_count} раз подряд, пропущена агентом'
+                )
+            except Exception:
+                pass
+            return
+
         logger.info(f"Picked up task {task_id[:8]}: {task.get('title', '?')}")
 
         try:
@@ -145,9 +232,16 @@ class BaseAgent(ABC):
                                      json.dumps(result, ensure_ascii=False)[:500])
             logger.info(f"Task {task_id[:8]} completed")
 
+            # Сбрасываем счётчик провалов при успехе
+            self._task_failures.pop(task_id, None)
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Task {task_id[:8]} failed: {error_msg}", exc_info=True)
+
+            # Инкрементируем счётчик провалов
+            self._task_failures[task_id] = self._task_failures.get(task_id, 0) + 1
+
             try:
                 self.platform.log_error(task_id, 'Ошибка выполнения', error_msg)
                 self.platform.fail_task(task_id, error_msg)
@@ -172,6 +266,11 @@ class BaseAgent(ABC):
         total_steps = 0
 
         for iteration in range(self.max_iterations):
+            # Защита от переполнения контекста
+            if _estimate_context_size(messages) > CONTEXT_CHAR_LIMIT:
+                logger.info(f"Task {task_id[:8]}: context overflow, summarizing")
+                messages = _summarize_old_messages(messages)
+
             t0 = time.time()
 
             # Вызов LLM
@@ -297,13 +396,14 @@ class BaseAgent(ABC):
     # ── Heartbeat ──────────────────────────────────────────────────
 
     def _start_heartbeat(self):
-        """Запускает фоновый heartbeat."""
+        """Запускает фоновый heartbeat + обновляет liveness-файл."""
         def _beat():
             while self._running:
                 try:
                     self.platform.heartbeat('online')
                 except Exception as e:
                     logger.warning(f"Heartbeat failed: {e}")
+                _touch_liveness()
                 time.sleep(self.config.HEARTBEAT_INTERVAL)
 
         self._heartbeat_thread = threading.Thread(target=_beat, daemon=True)
