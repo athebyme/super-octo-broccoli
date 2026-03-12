@@ -30,8 +30,14 @@ AGENT_CATALOG = [
         'category': 'catalog',
         'icon': 'tag',
         'color': 'blue',
-        'capabilities': ['map_category', 'suggest_subject', 'validate_category', 'analyze_parent_tree'],
+        'capabilities': ['Маппинг категории', 'Подбор subjectID', 'Валидация категории', 'Анализ дерева'],
         'task_types': ['map_single', 'map_batch', 'remap_incorrect'],
+        'task_types_labels': {
+            'map_single': 'Категория для одного товара',
+            'map_batch': 'Категории пакетом',
+            'remap_incorrect': 'Перекатегоризация ошибочных',
+        },
+        'hint': 'Активируйте агента и отправьте ему товар — он подберёт категорию WB автоматически. Особенно полезен после импорта из каталога поставщика.',
     },
     {
         'name': 'size-normalizer',
@@ -40,8 +46,14 @@ AGENT_CATALOG = [
         'category': 'catalog',
         'icon': 'ruler',
         'color': 'cyan',
-        'capabilities': ['parse_sizes', 'convert_units', 'build_size_grid', 'validate_dimensions'],
+        'capabilities': ['Парсинг размеров', 'Конвертация единиц', 'Размерная сетка', 'Валидация габаритов'],
         'task_types': ['normalize_single', 'normalize_batch', 'fill_size_grid'],
+        'task_types_labels': {
+            'normalize_single': 'Размеры одного товара',
+            'normalize_batch': 'Размеры пакетом',
+            'fill_size_grid': 'Заполнить размерную сетку',
+        },
+        'hint': 'Агент разберёт строки вроде "42-44 RU / M-L" и заполнит размерную сетку WB. Запускайте после импорта товаров с размерами.',
     },
     {
         'name': 'auto-importer',
@@ -50,8 +62,14 @@ AGENT_CATALOG = [
         'category': 'catalog',
         'icon': 'download',
         'color': 'violet',
-        'capabilities': ['parse_csv', 'parse_xlsx', 'download_photos', 'create_wb_card', 'orchestrate_pipeline'],
+        'capabilities': ['Парсинг CSV', 'Парсинг XLSX', 'Загрузка фото', 'Создание карточки WB', 'Оркестрация'],
         'task_types': ['import_batch', 'import_single', 'reimport_failed'],
+        'task_types_labels': {
+            'import_batch': 'Импорт пакета товаров',
+            'import_single': 'Импорт одного товара',
+            'reimport_failed': 'Повторный импорт ошибочных',
+        },
+        'hint': 'Главный агент для импорта. Берёт товары из каталога поставщика и проводит через весь пайплайн: категория → характеристики → SEO → создание карточки.',
     },
     {
         'name': 'characteristics-filler',
@@ -60,8 +78,14 @@ AGENT_CATALOG = [
         'category': 'catalog',
         'icon': 'list',
         'color': 'indigo',
-        'capabilities': ['extract_characteristics', 'match_dictionary', 'fill_required', 'validate_charcs'],
+        'capabilities': ['Извлечение характеристик', 'Подбор из словаря', 'Обязательные поля', 'Валидация'],
         'task_types': ['fill_single', 'fill_batch', 'validate_existing'],
+        'task_types_labels': {
+            'fill_single': 'Характеристики одного товара',
+            'fill_batch': 'Характеристики пакетом',
+            'validate_existing': 'Проверить заполненные',
+        },
+        'hint': 'Агент извлечёт из описания поставщика состав, материал, сезон и другие характеристики, и подберёт значения из справочника WB.',
     },
 
     # ── Контент и SEO ──
@@ -72,8 +96,14 @@ AGENT_CATALOG = [
         'category': 'content',
         'icon': 'pen',
         'color': 'emerald',
-        'capabilities': ['generate_title', 'generate_description', 'extract_keywords', 'optimize_seo'],
+        'capabilities': ['Генерация заголовка', 'Генерация описания', 'Подбор ключевых слов', 'SEO-оптимизация'],
         'task_types': ['seo_single', 'seo_batch', 'rewrite_titles'],
+        'task_types_labels': {
+            'seo_single': 'SEO для одного товара',
+            'seo_batch': 'SEO пакетом',
+            'rewrite_titles': 'Переписать заголовки',
+        },
+        'hint': 'Агент напишет SEO-заголовок (до 60 символов) и описание с ключевыми словами. Работает по одному товару или пакетом.',
     },
     {
         'name': 'photo-optimizer',
@@ -82,8 +112,14 @@ AGENT_CATALOG = [
         'category': 'content',
         'icon': 'camera',
         'color': 'pink',
-        'capabilities': ['analyze_photos', 'check_quality', 'crop_background', 'sort_by_relevance'],
+        'capabilities': ['Анализ фото', 'Проверка качества', 'Обрезка фона', 'Сортировка'],
         'task_types': ['optimize_photos', 'replace_bad_photos', 'generate_infographics'],
+        'task_types_labels': {
+            'optimize_photos': 'Оптимизация фото',
+            'replace_bad_photos': 'Замена некачественных',
+            'generate_infographics': 'Генерация инфографики',
+        },
+        'hint': 'Проверит качество фото, отсортирует по релевантности и подготовит к загрузке на WB. Выявит некачественные и предложит замену.',
     },
     {
         'name': 'brand-resolver',
@@ -92,8 +128,14 @@ AGENT_CATALOG = [
         'category': 'content',
         'icon': 'badge',
         'color': 'amber',
-        'capabilities': ['resolve_brand', 'match_aliases', 'validate_wb_brand', 'suggest_brand'],
+        'capabilities': ['Распознавание бренда', 'Сопоставление написаний', 'Проверка реестра WB', 'Подбор бренда'],
         'task_types': ['resolve_single', 'resolve_batch', 'audit_brands'],
+        'task_types_labels': {
+            'resolve_single': 'Бренд одного товара',
+            'resolve_batch': 'Бренды пакетом',
+            'audit_brands': 'Аудит брендов',
+        },
+        'hint': 'Агент проверит бренд по реестру WB и исправит написание. Полезен когда поставщик указывает бренд неточно или на другом языке.',
     },
 
     # ── Ценообразование ──
@@ -104,8 +146,14 @@ AGENT_CATALOG = [
         'category': 'pricing',
         'icon': 'chart',
         'color': 'emerald',
-        'capabilities': ['calculate_cost', 'analyze_margin', 'detect_anomaly', 'suggest_price'],
+        'capabilities': ['Расчёт себестоимости', 'Анализ маржи', 'Поиск аномалий', 'Рекомендация цены'],
         'task_types': ['optimize_prices', 'margin_audit', 'anomaly_scan'],
+        'task_types_labels': {
+            'optimize_prices': 'Оптимизация цен',
+            'margin_audit': 'Аудит маржинальности',
+            'anomaly_scan': 'Поиск аномалий цен',
+        },
+        'hint': 'Рассчитает себестоимость с учётом комиссии и логистики WB, проверит маржу и предложит оптимальную цену продажи.',
     },
 
     # ── Модерация и compliance ──
@@ -116,8 +164,14 @@ AGENT_CATALOG = [
         'category': 'compliance',
         'icon': 'shield',
         'color': 'red',
-        'capabilities': ['diagnose_block', 'check_prohibited_words', 'fix_violations', 'verify_compliance'],
+        'capabilities': ['Диагностика блокировки', 'Проверка стоп-слов', 'Исправление нарушений', 'Проверка правил'],
         'task_types': ['diagnose_single', 'diagnose_batch', 'preventive_scan'],
+        'task_types_labels': {
+            'diagnose_single': 'Диагностика одной карточки',
+            'diagnose_batch': 'Диагностика пакетом',
+            'preventive_scan': 'Превентивная проверка',
+        },
+        'hint': 'Если карточку заблокировали или скрыли — агент найдёт причину и предложит исправление. Также может проверить карточки заранее.',
     },
 
     # ── Аналитика ──
@@ -128,8 +182,14 @@ AGENT_CATALOG = [
         'category': 'analytics',
         'icon': 'message',
         'color': 'violet',
-        'capabilities': ['analyze_sentiment', 'classify_issues', 'extract_insights', 'suggest_improvements'],
+        'capabilities': ['Анализ тональности', 'Классификация проблем', 'Выделение инсайтов', 'Рекомендации'],
         'task_types': ['analyze_reviews', 'weekly_report', 'product_insights'],
+        'task_types_labels': {
+            'analyze_reviews': 'Анализ отзывов',
+            'weekly_report': 'Еженедельный отчёт',
+            'product_insights': 'Инсайты по товару',
+        },
+        'hint': 'Агент разберёт отзывы покупателей, выявит повторяющиеся проблемы и даст рекомендации по улучшению товара и карточки.',
     },
 ]
 
@@ -148,8 +208,10 @@ def get_agent_catalog():
 
     for spec in AGENT_CATALOG:
         entry = dict(spec)
+        # Русские названия задач для UI
+        labels = spec.get('task_types_labels', {})
+        entry['task_types_display'] = [labels.get(t, t) for t in spec.get('task_types', [])]
         db_agent = registered.get(spec['name'])
-        if db_agent:
             entry['registered'] = True
             entry['id'] = db_agent.id
             entry['status'] = db_agent.status
