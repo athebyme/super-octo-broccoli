@@ -1576,8 +1576,15 @@ class SupplierService:
                 SupplierProduct.supplier_quantity == 0))
 
         # Фильтр по AI-парсингу
-        if ai_filter == 'ai_parsed':
+        if ai_filter in ('ai_parsed', 'ai_not_on_wb'):
             q = q.filter(SupplierProduct.ai_parsed_at.isnot(None))
+            if ai_filter == 'ai_not_on_wb':
+                wb_sp_subq = db.session.query(ImportedProduct.supplier_product_id).filter(
+                    ImportedProduct.seller_id == seller_id,
+                    ImportedProduct.supplier_product_id.isnot(None),
+                    ImportedProduct.product_id.isnot(None)
+                ).subquery()
+                q = q.filter(~SupplierProduct.id.in_(wb_sp_subq))
         elif ai_filter == 'not_parsed':
             q = q.filter(SupplierProduct.ai_parsed_at.is_(None))
 

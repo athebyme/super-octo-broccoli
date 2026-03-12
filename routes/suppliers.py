@@ -1226,13 +1226,13 @@ def register_supplier_routes(app):
         wb_filter = request.args.get('wb_filter', '').strip()
         if wb_filter not in ('on_wb', 'not_on_wb'):
             wb_filter = None
-        # Фильтр по AI-парсингу: ai_parsed / not_parsed / all
+        # Фильтр по AI-парсингу: ai_parsed / ai_not_on_wb / not_parsed / all
         ai_filter = request.args.get('ai_filter', '').strip()
-        if ai_filter not in ('ai_parsed', 'not_parsed'):
+        if ai_filter not in ('ai_parsed', 'not_parsed', 'ai_not_on_wb'):
             ai_filter = None
 
-        # wb_filter подразумевает show_imported=True
-        effective_show_imported = show_imported or wb_filter is not None
+        # wb_filter и ai_not_on_wb подразумевают show_imported=True
+        effective_show_imported = show_imported or wb_filter is not None or ai_filter == 'ai_not_on_wb'
 
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,

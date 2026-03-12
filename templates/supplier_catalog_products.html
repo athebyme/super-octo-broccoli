@@ -58,6 +58,7 @@
             <select name="ai_filter" class="rounded-md border-gray-300 text-sm border px-3 py-2" onchange="this.form.submit()">
                 <option value="" {{ 'selected' if not ai_filter }}>AI: все</option>
                 <option value="ai_parsed" {{ 'selected' if ai_filter == 'ai_parsed' }}>AI-спарсенные</option>
+                <option value="ai_not_on_wb" {{ 'selected' if ai_filter == 'ai_not_on_wb' }}>AI-спарсенные, не на WB</option>
                 <option value="not_parsed" {{ 'selected' if ai_filter == 'not_parsed' }}>Без AI</option>
             </select>
         </div>
