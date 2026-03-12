@@ -843,27 +843,62 @@ def admin_audit_logs():
 def admin_system_settings():
     """Управление системными настройками"""
     if request.method == 'POST':
-        # Обновление настроек
-        for key in request.form:
-            if key.startswith('setting_'):
-                setting_key = key.replace('setting_', '')
-                value = request.form.get(key)
+        import json as _json
+        # Собираем структурированные JSON-настройки (reviews_ai_settings и т.п.)
+        json_updates = {}  # setting_key -> {field: value}
+        simple_updates = {}  # setting_key -> value
 
-                setting = SystemSettings.query.filter_by(key=setting_key).first()
-                if setting:
-                    old_value = setting.get_value()
-                    setting.set_value(value)
-                    setting.updated_by_user_id = current_user.id
+        for form_key in request.form:
+            if not form_key.startswith('setting_'):
+                continue
+            raw = form_key[len('setting_'):]
 
-                    # Логируем изменение
-                    log_admin_action(
-                        admin_user_id=current_user.id,
-                        action='update_system_setting',
-                        target_type='system_setting',
-                        target_id=setting.id,
-                        details={'key': setting_key, 'old_value': old_value, 'new_value': value},
-                        request=request
-                    )
+            if '__' in raw:
+                # Структурированное поле: reviews_ai_settings_1__ai_enabled
+                setting_key, field = raw.rsplit('__', 1)
+                json_updates.setdefault(setting_key, {})[field] = request.form.get(form_key)
+            else:
+                simple_updates[raw] = request.form.get(form_key)
+
+        # Обновляем простые настройки
+        for setting_key, value in simple_updates.items():
+            setting = SystemSettings.query.filter_by(key=setting_key).first()
+            if setting:
+                old_value = setting.get_value()
+                setting.set_value(value)
+                setting.updated_by_user_id = current_user.id
+                log_admin_action(
+                    admin_user_id=current_user.id,
+                    action='update_system_setting',
+                    target_type='system_setting',
+                    target_id=setting.id,
+                    details={'key': setting_key, 'old_value': old_value, 'new_value': value},
+                    request=request
+                )
+
+        # Обновляем JSON-настройки (reviews_ai_settings_N и т.п.)
+        for setting_key, fields in json_updates.items():
+            setting = SystemSettings.query.filter_by(key=setting_key).first()
+            if setting:
+                old_value = setting.get_value()
+                current_val = old_value if isinstance(old_value, dict) else {}
+                for field, val in fields.items():
+                    if val in ('true', 'True'):
+                        current_val[field] = True
+                    elif val in ('false', 'False'):
+                        current_val[field] = False
+                    else:
+                        current_val[field] = val
+                setting.value = _json.dumps(current_val, ensure_ascii=False)
+                setting.updated_by_user_id = current_user.id
+                log_admin_action(
+                    admin_user_id=current_user.id,
+                    action='update_system_setting',
+                    target_type='system_setting',
+                    target_id=setting.id,
+                    details={'key': setting_key, 'old_value': str(old_value), 'new_value': str(current_val)},
+                    request=request
+                )
 
         db.session.commit()
         flash('Настройки успешно обновлены', 'success')
@@ -872,7 +907,38 @@ def admin_system_settings():
     # Получаем все настройки
     settings = SystemSettings.query.order_by(SystemSettings.key).all()
 
-    return render_template('admin_system_settings.html', settings=settings)
+    # Сводка по агентам
+    agents_summary = None
+    try:
+        from services.agent_service import AGENT_CATALOG
+        registered = {a.name: a for a in ServiceAgent.query.all()}
+        agents_list = []
+        category_labels = {
+            'catalog': 'Каталог', 'content': 'Контент', 'pricing': 'Цены',
+            'compliance': 'Модерация', 'analytics': 'Аналитика',
+        }
+        for spec in AGENT_CATALOG:
+            db_agent = registered.get(spec['name'])
+            agents_list.append({
+                'name': spec['name'],
+                'display_name': spec['display_name'],
+                'category': category_labels.get(spec.get('category', ''), spec.get('category', '')),
+                'status': db_agent.status if db_agent else 'not_activated',
+            })
+        online = sum(1 for a in agents_list if a['status'] == 'online')
+        offline = sum(1 for a in agents_list if a['status'] == 'offline')
+        not_activated = sum(1 for a in agents_list if a['status'] == 'not_activated')
+        agents_summary = {
+            'total': len(agents_list),
+            'online': online,
+            'offline': offline,
+            'not_activated': not_activated,
+            'agents': agents_list,
+        }
+    except Exception:
+        pass
+
+    return render_template('admin_system_settings.html', settings=settings, agents_summary=agents_summary)
 
 
 # ============= API DEBUG CONSOLE =============
