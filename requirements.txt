@@ -15,3 +15,4 @@ Flask-WTF==1.2.1
 # AI Agent Runtime (LLM providers)
 anthropic>=0.40.0
 google-genai>=1.0.0
+openai>=1.30.0

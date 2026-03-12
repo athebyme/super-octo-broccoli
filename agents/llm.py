@@ -5,6 +5,8 @@
 Поддерживает:
   - Google Gemini (через google-genai SDK)
   - Anthropic Claude (через anthropic SDK)
+  - Cloud.ru Foundation Models (OpenAI-compatible API)
+  - Любой OpenAI-совместимый API (vLLM, Ollama, LM Studio, etc.)
 
 Унифицированный интерфейс: chat(), chat_with_tools(), structured_output()
 """
@@ -241,6 +243,127 @@ class GeminiLLM(BaseLLM):
         return json.loads(resp.text)
 
 
+# ── OpenAI-совместимый API (Cloud.ru, vLLM, Ollama, etc.) ─────────
+
+class OpenAICompatLLM(BaseLLM):
+    """
+    Универсальный провайдер через OpenAI-совместимый API.
+
+    Работает с:
+      - Cloud.ru Foundation Models (DeepSeek, Qwen, Llama)
+      - vLLM / TGI (self-hosted)
+      - Ollama
+      - LM Studio
+      - Together AI, Fireworks, Groq и др.
+    """
+
+    def __init__(self, config: AgentConfig = None,
+                 api_key: str = None, base_url: str = None, model: str = None):
+        self.cfg = config or AgentConfig
+        from openai import OpenAI
+
+        self.api_key = api_key or self.cfg.OPENAI_COMPAT_API_KEY or 'not-needed'
+        self.base_url = base_url or self.cfg.OPENAI_COMPAT_BASE_URL
+        self.model = model or self.cfg.OPENAI_COMPAT_MODEL
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        logger.info(f"OpenAI-compat LLM initialized: {self.model} @ {self.base_url}")
+
+    def chat(self, system: str, messages: list[dict],
+             temperature: float = None, max_tokens: int = None) -> str:
+        oai_messages = [{'role': 'system', 'content': system}]
+        oai_messages.extend(messages)
+
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=oai_messages,
+            temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
+            max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+        )
+        return resp.choices[0].message.content or ''
+
+    def chat_with_tools(self, system: str, messages: list[dict],
+                        tools: list[dict],
+                        temperature: float = None,
+                        max_tokens: int = None) -> dict:
+        oai_messages = [{'role': 'system', 'content': system}]
+        oai_messages.extend(messages)
+
+        # Конвертируем tools в формат OpenAI
+        oai_tools = []
+        for tool in tools:
+            oai_tools.append({
+                'type': 'function',
+                'function': {
+                    'name': tool['name'],
+                    'description': tool.get('description', ''),
+                    'parameters': tool.get('input_schema', tool.get('parameters', {})),
+                },
+            })
+
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=oai_messages,
+            tools=oai_tools if oai_tools else None,
+            temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
+            max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+        )
+
+        msg = resp.choices[0].message
+        text = msg.content or ''
+        tool_calls = []
+
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                args = tc.function.arguments
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except (json.JSONDecodeError, ValueError):
+                        args = {}
+                tool_calls.append({
+                    'name': tc.function.name,
+                    'arguments': args,
+                    'id': tc.id or f"call_{tc.function.name}_{int(time.time())}",
+                })
+
+        stop_reason = 'tool_use' if tool_calls else 'end_turn'
+        return {
+            'text': text,
+            'tool_calls': tool_calls,
+            'stop_reason': stop_reason,
+        }
+
+    def structured_output(self, system: str, prompt: str,
+                          schema: dict) -> dict:
+        schema_str = json.dumps(schema, ensure_ascii=False, indent=2)
+        full_prompt = (
+            f"{prompt}\n\n"
+            f"Ответь СТРОГО в JSON формате по схеме:\n```json\n{schema_str}\n```\n"
+            f"Без комментариев, только валидный JSON."
+        )
+        text = self.chat(system, [{'role': 'user', 'content': full_prompt}])
+        text = text.strip()
+        if text.startswith('```'):
+            lines = text.split('\n')
+            text = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
+        return json.loads(text)
+
+
+class CloudRuLLM(OpenAICompatLLM):
+    """Cloud.ru Foundation Models — специализированный провайдер."""
+
+    def __init__(self, config: AgentConfig = None):
+        cfg = config or AgentConfig
+        super().__init__(
+            config=cfg,
+            api_key=cfg.CLOUDRU_API_KEY,
+            base_url=cfg.CLOUDRU_BASE_URL,
+            model=cfg.CLOUDRU_MODEL,
+        )
+        logger.info(f"Cloud.ru LLM initialized: {self.model}")
+
+
 # ── Фабрика ───────────────────────────────────────────────────────
 
 def create_llm(config: AgentConfig = None) -> BaseLLM:
@@ -252,5 +375,12 @@ def create_llm(config: AgentConfig = None) -> BaseLLM:
         return ClaudeLLM(cfg)
     elif provider == 'gemini':
         return GeminiLLM(cfg)
+    elif provider == 'cloudru':
+        return CloudRuLLM(cfg)
+    elif provider == 'openai_compat':
+        return OpenAICompatLLM(cfg)
     else:
-        raise ValueError(f"Unknown LLM provider: {provider}. Use 'claude' or 'gemini'.")
+        raise ValueError(
+            f"Unknown LLM provider: {provider}. "
+            f"Use 'claude', 'gemini', 'cloudru', or 'openai_compat'."
+        )
