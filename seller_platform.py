@@ -1190,8 +1190,9 @@ def products_list():
     if current_user.seller.api_sync_status == 'syncing' and current_user.seller.api_last_sync:
         from datetime import timedelta
         time_since_sync = datetime.utcnow() - current_user.seller.api_last_sync
-        # Если синхронизация висит больше 15 минут - сбрасываем статус
-        if time_since_sync > timedelta(minutes=15):
+        # Для больших каталогов (8000+ товаров) синхронизация может идти >1 часа
+        # Считаем зависшей только если прошло больше 2 часов
+        if time_since_sync > timedelta(hours=2):
             app.logger.warning(f"Resetting stuck sync status for seller {current_user.seller.id} (stuck for {time_since_sync})")
             current_user.seller.api_sync_status = 'error'
             # Обновляем настройки синхронизации
@@ -1618,16 +1619,52 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     app.logger.warning(f"⚠️ Failed to fetch prices from Prices API: {price_error}")
                     prices_by_nm_id = {}
 
+                # Deduplicate existing products before sync
+                try:
+                    from sqlalchemy import func
+                    dupes = (
+                        db.session.query(Product.nm_id, func.count(Product.id).label('cnt'))
+                        .filter(Product.seller_id == seller.id, Product.nm_id > 0)
+                        .group_by(Product.nm_id)
+                        .having(func.count(Product.id) > 1)
+                        .all()
+                    )
+                    if dupes:
+                        app.logger.warning(f"🔧 Found {len(dupes)} duplicate nm_ids, deduplicating...")
+                        for nm_id_val, cnt in dupes:
+                            products = (
+                                Product.query
+                                .filter_by(seller_id=seller.id, nm_id=nm_id_val)
+                                .order_by(Product.id.asc())
+                                .all()
+                            )
+                            # Keep the first (oldest), delete the rest
+                            for dup in products[1:]:
+                                db.session.delete(dup)
+                        db_commit_with_retry(db.session)
+                        app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
+                except Exception as dedup_err:
+                    app.logger.warning(f"⚠️ Deduplication failed (non-critical): {dedup_err}")
+                    db.session.rollback()
+
                 # Статистика
                 created_count = 0
                 updated_count = 0
                 batch_size = 100  # Commit каждые 100 карточек для больших датасетов
                 processed_in_batch = 0
+                # Track nm_ids seen in this sync to prevent duplicates
+                # (WB API can return the same nmID in multiple batches)
+                seen_nm_ids = set()
 
                 for card_data in all_cards:
                     nm_id = card_data.get('nmID')
                     if not nm_id:
                         continue
+
+                    # Skip duplicate nmIDs from API response
+                    if nm_id in seen_nm_ids:
+                        continue
+                    seen_nm_ids.add(nm_id)
 
                     # Ищем существующую карточку
                     product = Product.query.filter_by(
@@ -5747,6 +5784,38 @@ register_analytics_routes(app)
 from routes.finances import register_finance_routes
 register_finance_routes(app)
 
+# ============= РОУТЫ ОТЗЫВОВ И ВОПРОСОВ =============
+from routes.reviews import register_reviews_routes
+register_reviews_routes(app)
+
+# ============= РОУТЫ АНАЛИТИКИ ОТМЕН =============
+from routes.cancellations import register_cancellations_routes
+register_cancellations_routes(app)
+
+# ============= РОУТЫ РЕГИОНАЛЬНОЙ АНАЛИТИКИ =============
+from routes.regional import register_regional_routes
+register_regional_routes(app)
+
+# ============= РОУТЫ СКЛАДСКОЙ АНАЛИТИКИ =============
+from routes.warehouse import register_warehouse_routes
+register_warehouse_routes(app)
+
+# ============= РОУТЫ ДЕТАЛЬНОГО ФИНОТЧЁТА =============
+from routes.finance_detail import register_finance_detail_routes
+register_finance_detail_routes(app)
+
+# ============= РОУТЫ SENTIMENT АНАЛИЗА =============
+from routes.sentiment import register_sentiment_routes
+register_sentiment_routes(app)
+
+# ============= РОУТЫ TELEGRAM АЛЕРТОВ =============
+from routes.telegram_alerts import register_telegram_alerts_routes
+register_telegram_alerts_routes(app)
+
+# ============= РОУТЫ АНАЛИТИКИ ВОЗВРАТОВ =============
+from routes.returns import register_returns_routes
+register_returns_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5766,6 +5835,8 @@ def _run_startup_migrations():
         # Notification columns (may be missing if table was created before these were added)
         ('notifications', 'link', 'VARCHAR(500)'),
         ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),
+        # Product rating from WB Analytics API
+        ('products', 'nm_rating', 'REAL'),
     ]
 
     for table, column, col_type in migrations:
@@ -5953,6 +6024,110 @@ def profile_page():
         api_logs_count=api_logs_count,
         days_in_system=days_in_system,
     )
+
+
+@app.route('/api/profile/ai-settings', methods=['GET'])
+@login_required
+def api_profile_ai_settings_get():
+    """Get AI provider settings from AutoImportSettings."""
+    if not current_user.seller:
+        return jsonify({'error': 'No seller'}), 403
+    settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+    if not settings:
+        return jsonify({
+            'provider': 'cloudru',
+            'model': 'openai/gpt-oss-120b',
+            'api_key': '',
+            'api_base_url': 'https://foundation-models.api.cloud.ru/v1',
+        })
+    return jsonify({
+        'provider': settings.ai_provider or 'cloudru',
+        'model': settings.ai_model or 'openai/gpt-oss-120b',
+        'api_key': settings.ai_api_key or '',
+        'api_base_url': settings.ai_api_base_url or '',
+    })
+
+
+@app.route('/api/profile/ai-settings', methods=['POST'])
+@login_required
+def api_profile_ai_settings_save():
+    """Save AI provider settings to AutoImportSettings."""
+    if not current_user.seller:
+        return jsonify({'error': 'No seller'}), 403
+    try:
+        body = request.get_json(silent=True) or {}
+        settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
+        if not settings:
+            settings = AutoImportSettings(seller_id=current_user.seller.id)
+            db.session.add(settings)
+
+        provider = body.get('provider', 'cloudru')
+        settings.ai_provider = provider
+        settings.ai_model = body.get('model', '')
+        settings.ai_api_key = body.get('api_key', '')
+        settings.ai_api_base_url = body.get('api_base_url', '')
+
+        # Enable AI if key is provided
+        if settings.ai_api_key:
+            settings.ai_enabled = True
+
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/profile/ai-test', methods=['POST'])
+@login_required
+def api_profile_ai_test():
+    """Test AI connection with given settings."""
+    if not current_user.seller:
+        return jsonify({'error': 'No seller'}), 403
+    try:
+        import time
+        body = request.get_json(silent=True) or {}
+        provider = body.get('provider', 'cloudru')
+        api_key = body.get('api_key', '')
+        api_base_url = body.get('api_base_url', '')
+        model = body.get('model', '')
+
+        if not api_key:
+            return jsonify({'success': False, 'error': 'API ключ не указан'})
+
+        from services.ai_service import AIConfig, AIClient, AIProvider
+        config = AIConfig(
+            provider=AIProvider(provider),
+            api_key=api_key,
+            api_base_url=api_base_url or (
+                'https://foundation-models.api.cloud.ru/v1' if provider == 'cloudru'
+                else 'https://api.openai.com/v1'
+            ),
+            model=model or 'openai/gpt-oss-120b',
+        )
+        config.timeout = 30
+
+        client = AIClient(config)
+        start = time.time()
+        result = client.chat_completion(
+            messages=[{"role": "user", "content": "Ответь одним словом: привет"}],
+            max_tokens=50,
+        )
+        elapsed = int((time.time() - start) * 1000)
+
+        if result:
+            return jsonify({
+                'success': True,
+                'response_length': len(result),
+                'elapsed_ms': elapsed,
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': client.last_error or 'Пустой ответ от AI',
+            })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/notifications')

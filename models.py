@@ -85,6 +85,7 @@ class Seller(db.Model):
     notes = db.Column(db.Text)  # Заметки админа
     api_last_sync = db.Column(db.DateTime)  # Последняя синхронизация с API
     api_sync_status = db.Column(db.String(50))  # Статус синхронизации
+    stock_refresh_interval = db.Column(db.Integer, default=30)  # Интервал обновления остатков (мин), от 5 до 60
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     reports = db.relationship(
@@ -3400,6 +3401,139 @@ class FinanceSnapshot(db.Model):
 
     def __repr__(self):
         return f'<FinanceSnapshot seller={self.seller_id} {self.period_start}..{self.period_end}>'
+
+
+# ============================================================================
+# Сырые данные WB — локальное хранилище для аналитики за произвольный период
+# ============================================================================
+
+class WBSale(db.Model):
+    """Строка продажи/возврата из WB Statistics API /api/v1/supplier/sales.
+    Дедупликация по srid (уникальный ID операции на стороне WB)."""
+    __tablename__ = 'wb_sales'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    srid = db.Column(db.String(100), nullable=False)
+    sale_id = db.Column(db.String(50))  # S-xxxxx / R-xxxxx
+    nm_id = db.Column(db.BigInteger)
+    date = db.Column(db.DateTime)
+    last_change_date = db.Column(db.DateTime)
+    supplier_article = db.Column(db.String(100))
+    subject = db.Column(db.String(200))
+    brand = db.Column(db.String(200))
+    warehouse_name = db.Column(db.String(200))
+    region_name = db.Column(db.String(200))
+    country_name = db.Column(db.String(200))
+    finished_price = db.Column(db.Float, default=0)
+    price_with_disc = db.Column(db.Float, default=0)
+    for_pay = db.Column(db.Float, default=0)
+    is_return = db.Column(db.Boolean, default=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'srid', name='uq_wb_sale_srid'),
+        db.Index('idx_wb_sale_seller_date', 'seller_id', 'date'),
+        db.Index('idx_wb_sale_nm', 'seller_id', 'nm_id'),
+    )
+
+
+class WBOrder(db.Model):
+    """Строка заказа из WB Statistics API /api/v1/supplier/orders.
+    Дедупликация по srid."""
+    __tablename__ = 'wb_orders'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    srid = db.Column(db.String(100), nullable=False)
+    nm_id = db.Column(db.BigInteger)
+    date = db.Column(db.DateTime)
+    last_change_date = db.Column(db.DateTime)
+    supplier_article = db.Column(db.String(100))
+    subject = db.Column(db.String(200))
+    brand = db.Column(db.String(200))
+    warehouse_name = db.Column(db.String(200))
+    region_name = db.Column(db.String(200))
+    oblast_okrug_name = db.Column(db.String(200))
+    country_name = db.Column(db.String(200))
+    total_price = db.Column(db.Float, default=0)
+    finished_price = db.Column(db.Float, default=0)
+    is_cancel = db.Column(db.Boolean, default=False)
+    cancel_dt = db.Column(db.DateTime)
+    order_type = db.Column(db.String(50))
+    sticker = db.Column(db.String(100))
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'srid', name='uq_wb_order_srid'),
+        db.Index('idx_wb_order_seller_date', 'seller_id', 'date'),
+        db.Index('idx_wb_order_nm', 'seller_id', 'nm_id'),
+    )
+
+
+class WBFeedback(db.Model):
+    """Отзыв из WB Feedbacks API /api/v1/feedbacks.
+    Дедупликация по wb_id (id отзыва на стороне WB)."""
+    __tablename__ = 'wb_feedbacks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    wb_id = db.Column(db.String(100), nullable=False)  # id from WB API
+    nm_id = db.Column(db.BigInteger)
+    created_date = db.Column(db.DateTime)
+    updated_date = db.Column(db.DateTime)
+    valuation = db.Column(db.Integer)  # 1-5
+    text = db.Column(db.Text)
+    user_name = db.Column(db.String(200))
+    product_name = db.Column(db.String(500))
+    subject_name = db.Column(db.String(200))
+    brand_name = db.Column(db.String(200))
+    is_answered = db.Column(db.Boolean, default=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'wb_id', name='uq_wb_feedback_id'),
+        db.Index('idx_wb_feedback_seller_date', 'seller_id', 'created_date'),
+        db.Index('idx_wb_feedback_nm', 'seller_id', 'nm_id'),
+    )
+
+
+class WBRealizationRow(db.Model):
+    """Строка отчёта реализации из WB /api/v5/supplier/reportDetailByPeriod.
+    Дедупликация по rrd_id (уникальный ID строки отчёта)."""
+    __tablename__ = 'wb_realization_rows'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+    rrd_id = db.Column(db.BigInteger, nullable=False)
+    realizationreport_id = db.Column(db.BigInteger)
+    rr_dt = db.Column(db.DateTime)  # Дата отчёта
+    date_from = db.Column(db.Date)
+    date_to = db.Column(db.Date)
+    nm_id = db.Column(db.BigInteger)
+    sa_name = db.Column(db.String(200))
+    subject_name = db.Column(db.String(200))
+    brand_name = db.Column(db.String(200))
+    supplier_oper_name = db.Column(db.String(200))
+    doc_type_name = db.Column(db.String(100))
+    retail_price_withdisc_rub = db.Column(db.Float, default=0)
+    retail_amount = db.Column(db.Float, default=0)
+    ppvz_for_pay = db.Column(db.Float, default=0)
+    ppvz_sales_commission = db.Column(db.Float, default=0)
+    commission_percent = db.Column(db.Float, default=0)
+    delivery_rub = db.Column(db.Float, default=0)
+    rebill_logistic_cost = db.Column(db.Float, default=0)
+    storage_fee = db.Column(db.Float, default=0)
+    penalty = db.Column(db.Float, default=0)
+    deduction = db.Column(db.Float, default=0)
+    acceptance = db.Column(db.Float, default=0)
+    additional_payment = db.Column(db.Float, default=0)
+    return_amount = db.Column(db.Integer, default=0)
+    delivery_amount = db.Column(db.Integer, default=0)
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'rrd_id', name='uq_wb_realization_rrd'),
+        db.Index('idx_wb_real_seller_date', 'seller_id', 'rr_dt'),
+        db.Index('idx_wb_real_nm', 'seller_id', 'nm_id'),
+        db.Index('idx_wb_real_report', 'seller_id', 'realizationreport_id'),
+    )
 
 
 # ============================================================================

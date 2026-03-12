@@ -1536,26 +1536,38 @@ class SupplierService:
                                           search: str = None,
                                           show_imported: bool = False,
                                           stock_status: str = None,
-                                          wb_filter: str = None):
+                                          wb_filter: str = None,
+                                          ai_filter: str = None,
+                                          wb_existing_sp_ids: set = None):
         """Товары поставщика, доступные для импорта продавцу
 
         stock_status: 'in_stock' | 'out_of_stock' | None (все)
         wb_filter: 'on_wb' | 'not_on_wb' | None (все)
+        ai_filter: 'ai_parsed' | 'not_parsed' | None (все)
+        wb_existing_sp_ids: pre-computed set of supplier_product IDs already on WB
+                           (includes both ImportedProduct links and vendor_code matches)
         """
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
 
-        # Фильтр по статусу на WB
+        # Фильтр по статусу на WB (uses pre-computed set including vendor_code matches)
         if wb_filter in ('on_wb', 'not_on_wb'):
-            wb_sp_subq = db.session.query(ImportedProduct.supplier_product_id).filter(
-                ImportedProduct.seller_id == seller_id,
-                ImportedProduct.supplier_product_id.isnot(None),
-                ImportedProduct.product_id.isnot(None)
-            ).subquery()
-            if wb_filter == 'on_wb':
-                q = q.filter(SupplierProduct.id.in_(wb_sp_subq))
+            if wb_existing_sp_ids:
+                if wb_filter == 'on_wb':
+                    q = q.filter(SupplierProduct.id.in_(wb_existing_sp_ids))
+                else:
+                    q = q.filter(~SupplierProduct.id.in_(wb_existing_sp_ids))
             else:
-                q = q.filter(~SupplierProduct.id.in_(wb_sp_subq))
+                # Fallback if no pre-computed set
+                wb_sp_subq = db.session.query(ImportedProduct.supplier_product_id).filter(
+                    ImportedProduct.seller_id == seller_id,
+                    ImportedProduct.supplier_product_id.isnot(None),
+                    ImportedProduct.product_id.isnot(None)
+                ).subquery()
+                if wb_filter == 'on_wb':
+                    q = q.filter(SupplierProduct.id.in_(wb_sp_subq))
+                else:
+                    q = q.filter(~SupplierProduct.id.in_(wb_sp_subq))
         elif not show_imported:
             # Исключаем уже импортированные
             imported_sp_ids = db.session.query(ImportedProduct.supplier_product_id).filter(
@@ -1572,6 +1584,12 @@ class SupplierService:
             q = q.filter(db.or_(
                 SupplierProduct.supplier_quantity.is_(None),
                 SupplierProduct.supplier_quantity == 0))
+
+        # Фильтр по AI-парсингу
+        if ai_filter == 'ai_parsed':
+            q = q.filter(SupplierProduct.ai_parsed_at.isnot(None))
+        elif ai_filter == 'not_parsed':
+            q = q.filter(SupplierProduct.ai_parsed_at.is_(None))
 
         if search:
             search_term = f"%{search}%"

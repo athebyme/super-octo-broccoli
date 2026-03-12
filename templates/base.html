@@ -420,29 +420,30 @@
         .flash-close:hover { opacity: 1; }
 
         /* Notification bell animation */
+        /* Bell rings for 1s then pauses for 4s (5s total cycle) */
         @keyframes bell-ring {
             0%   { transform: rotate(0deg); }
-            10%  { transform: rotate(14deg); }
-            20%  { transform: rotate(-12deg); }
-            30%  { transform: rotate(10deg); }
-            40%  { transform: rotate(-8deg); }
-            50%  { transform: rotate(6deg); }
-            60%  { transform: rotate(-4deg); }
-            70%  { transform: rotate(2deg); }
-            80%  { transform: rotate(-1deg); }
-            100% { transform: rotate(0deg); }
+            2%   { transform: rotate(14deg); }
+            4%   { transform: rotate(-12deg); }
+            6%   { transform: rotate(10deg); }
+            8%   { transform: rotate(-8deg); }
+            10%  { transform: rotate(6deg); }
+            12%  { transform: rotate(-4deg); }
+            14%  { transform: rotate(2deg); }
+            16%  { transform: rotate(-1deg); }
+            20%, 100% { transform: rotate(0deg); }
         }
         @keyframes bell-glow {
             0%, 100% { filter: drop-shadow(0 0 0px transparent); }
             50%      { filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.6)); }
         }
         .notif-bell-active svg {
-            animation: bell-ring 1s ease-in-out infinite;
+            animation: bell-ring 5s ease-in-out infinite;
             transform-origin: 50% 0%;
             color: #f87171;
         }
         .notif-bell-active .notif-badge {
-            animation: bell-glow 2s ease-in-out infinite;
+            animation: bell-glow 3s ease-in-out infinite;
         }
         .notif-bell-active::after {
             content: '';
@@ -820,8 +821,16 @@
                 </div>
             </div>
 
+            <!-- Отзывы -->
+            <a href="{{ url_for('reviews_page') }}" class="sidebar-link {% if request.endpoint in ['reviews_page'] %}active{% endif %}" style="position:relative">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+                <span x-show="sidebarOpen" x-cloak>Отзывы</span>
+            </a>
+
             <!-- Аналитика -->
-            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page'] %}
+            {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'inventory_page', 'finance_detail_page', 'sentiment_page', 'returns_page', 'telegram_alerts_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -835,6 +844,12 @@
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('analytics_page') }}" class="sidebar-sublink {% if request.endpoint == 'analytics_page' %}active{% endif %}">Обзор</a>
                     <a href="{{ url_for('finances_page') }}" class="sidebar-sublink {% if request.endpoint == 'finances_page' %}active{% endif %}">Финансы</a>
+                    <a href="{{ url_for('finance_detail_page') }}" class="sidebar-sublink {% if request.endpoint == 'finance_detail_page' %}active{% endif %}">Детальный P&L</a>
+                    <a href="{{ url_for('cancellations_page') }}" class="sidebar-sublink {% if request.endpoint == 'cancellations_page' %}active{% endif %}">Отмены</a>
+                    <a href="{{ url_for('inventory_page') }}" class="sidebar-sublink {% if request.endpoint == 'inventory_page' %}active{% endif %}">Склад и возвраты</a>
+                    <a href="{{ url_for('regional_page') }}" class="sidebar-sublink {% if request.endpoint == 'regional_page' %}active{% endif %}">Регионы</a>
+                    <a href="{{ url_for('sentiment_page') }}" class="sidebar-sublink {% if request.endpoint == 'sentiment_page' %}active{% endif %}">Sentiment</a>
+                    <a href="{{ url_for('telegram_alerts_page') }}" class="sidebar-sublink {% if request.endpoint == 'telegram_alerts_page' %}active{% endif %}">Telegram</a>
                 </div>
             </div>
 
@@ -1120,8 +1135,11 @@
             toasts: [],
             _lastCheck: 0,
             _toastId: 0,
+            _shownInitial: false,
 
             init() {
+                // Remember that we already showed the initial toast this session
+                this._shownInitial = sessionStorage.getItem('_notif_initial_shown') === '1';
                 this.poll();
                 setInterval(() => this.poll(), 15000);
             },
@@ -1133,15 +1151,17 @@
                     const prev = this.unread;
                     this.unread = d.unread_count || 0;
 
-                    // Первый запуск: если есть непрочитанные — показать сводку
-                    if (this._lastCheck === 0 && this.unread > 0) {
+                    // First poll of session: show summary toast once, then remember
+                    if (this._lastCheck === 0 && this.unread > 0 && !this._shownInitial) {
+                        this._shownInitial = true;
+                        sessionStorage.setItem('_notif_initial_shown', '1');
                         this.showToast('info',
                             `У вас ${this.unread} ${this._pluralNotif(this.unread)}`,
                             'Нажмите чтобы посмотреть',
                             '/notifications');
                     }
-                    // Последующие опросы: если появились новые — показать последнее
-                    else if (this.unread > prev && prev >= 0 && this._lastCheck > 0) {
+                    // Subsequent polls: toast only for genuinely NEW notifications
+                    else if (this._lastCheck > 0 && this.unread > prev) {
                         this.fetchLatestAndToast();
                     }
                     this._lastCheck = Date.now();

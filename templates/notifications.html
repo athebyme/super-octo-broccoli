@@ -225,6 +225,7 @@ function notificationsPage() {
         async markAllRead() {
             this.notifications.forEach(n => n.is_read = true);
             await fetch('/api/notifications/read-all', {method: 'POST'});
+            sessionStorage.removeItem('_notif_initial_shown');
             if (Alpine.store('notif')) Alpine.store('notif').poll();
         },
 
@@ -233,6 +234,7 @@ function notificationsPage() {
             await fetch('/api/notifications/read-all', {method: 'POST'});
             await fetch('/api/notifications/clear', {method: 'POST'});
             this.notifications = [];
+            sessionStorage.removeItem('_notif_initial_shown');
             if (Alpine.store('notif')) Alpine.store('notif').poll();
         },
     };

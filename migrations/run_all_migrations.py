@@ -429,6 +429,154 @@ def migrate(db_path):
             print("  ⏭️  Таблица уже существует")
 
         # ============================================================
+        # Миграция sellers (stock_refresh_interval)
+        # ============================================================
+        print("\n📋 Таблица: sellers (stock_refresh_interval)")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sellers'")
+        if cursor.fetchone():
+            existing_sellers = get_existing_columns(cursor, 'sellers')
+            if add_column_if_missing(cursor, 'sellers', 'stock_refresh_interval', 'INTEGER DEFAULT 30', existing_sellers):
+                total_added += 1
+
+        # ============================================================
+        # Таблицы WB аналитики (wb_sales, wb_orders, wb_feedbacks, wb_realization_rows)
+        # ============================================================
+        print("\n📋 Таблицы WB аналитики")
+        print("-" * 40)
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = {row[0] for row in cursor.fetchall()}
+
+        if 'wb_sales' not in existing_tables:
+            cursor.execute('''
+                CREATE TABLE wb_sales (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    srid TEXT NOT NULL,
+                    sale_id TEXT,
+                    nm_id INTEGER,
+                    date DATETIME,
+                    last_change_date DATETIME,
+                    supplier_article TEXT,
+                    subject TEXT,
+                    brand TEXT,
+                    warehouse_name TEXT,
+                    region_name TEXT,
+                    country_name TEXT,
+                    finished_price REAL DEFAULT 0,
+                    price_with_disc REAL DEFAULT 0,
+                    for_pay REAL DEFAULT 0,
+                    is_return BOOLEAN DEFAULT 0,
+                    UNIQUE(seller_id, srid)
+                )
+            ''')
+            cursor.execute('CREATE INDEX idx_wb_sales_seller_date ON wb_sales(seller_id, date)')
+            cursor.execute('CREATE INDEX idx_wb_sales_seller_lcd ON wb_sales(seller_id, last_change_date)')
+            print("  ✅ Создана таблица wb_sales")
+            total_added += 1
+        else:
+            print("  ⏭️  wb_sales уже существует")
+
+        if 'wb_orders' not in existing_tables:
+            cursor.execute('''
+                CREATE TABLE wb_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    srid TEXT NOT NULL,
+                    nm_id INTEGER,
+                    date DATETIME,
+                    last_change_date DATETIME,
+                    supplier_article TEXT,
+                    subject TEXT,
+                    brand TEXT,
+                    warehouse_name TEXT,
+                    region_name TEXT,
+                    oblast_okrug_name TEXT,
+                    country_name TEXT,
+                    total_price REAL DEFAULT 0,
+                    finished_price REAL DEFAULT 0,
+                    is_cancel BOOLEAN DEFAULT 0,
+                    cancel_dt DATETIME,
+                    order_type TEXT,
+                    sticker TEXT,
+                    UNIQUE(seller_id, srid)
+                )
+            ''')
+            cursor.execute('CREATE INDEX idx_wb_orders_seller_date ON wb_orders(seller_id, date)')
+            cursor.execute('CREATE INDEX idx_wb_orders_seller_lcd ON wb_orders(seller_id, last_change_date)')
+            print("  ✅ Создана таблица wb_orders")
+            total_added += 1
+        else:
+            print("  ⏭️  wb_orders уже существует")
+
+        if 'wb_feedbacks' not in existing_tables:
+            cursor.execute('''
+                CREATE TABLE wb_feedbacks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    wb_id TEXT NOT NULL,
+                    nm_id INTEGER,
+                    created_date DATETIME,
+                    updated_date DATETIME,
+                    valuation INTEGER DEFAULT 0,
+                    text TEXT,
+                    user_name TEXT,
+                    product_name TEXT,
+                    subject_name TEXT,
+                    brand_name TEXT,
+                    is_answered BOOLEAN DEFAULT 0,
+                    UNIQUE(seller_id, wb_id)
+                )
+            ''')
+            cursor.execute('CREATE INDEX idx_wb_feedbacks_seller ON wb_feedbacks(seller_id)')
+            print("  ✅ Создана таблица wb_feedbacks")
+            total_added += 1
+        else:
+            print("  ⏭️  wb_feedbacks уже существует")
+
+        if 'wb_realization_rows' not in existing_tables:
+            cursor.execute('''
+                CREATE TABLE wb_realization_rows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    rrd_id INTEGER NOT NULL,
+                    realizationreport_id INTEGER,
+                    rr_dt DATETIME,
+                    date_from DATE,
+                    date_to DATE,
+                    nm_id INTEGER,
+                    sa_name TEXT,
+                    subject_name TEXT,
+                    brand_name TEXT,
+                    supplier_oper_name TEXT,
+                    doc_type_name TEXT,
+                    retail_price_withdisc_rub REAL DEFAULT 0,
+                    retail_amount REAL DEFAULT 0,
+                    ppvz_for_pay REAL DEFAULT 0,
+                    ppvz_sales_commission REAL DEFAULT 0,
+                    commission_percent REAL DEFAULT 0,
+                    delivery_rub REAL DEFAULT 0,
+                    rebill_logistic_cost REAL DEFAULT 0,
+                    storage_fee REAL DEFAULT 0,
+                    penalty REAL DEFAULT 0,
+                    deduction REAL DEFAULT 0,
+                    acceptance REAL DEFAULT 0,
+                    additional_payment REAL DEFAULT 0,
+                    return_amount INTEGER DEFAULT 0,
+                    delivery_amount INTEGER DEFAULT 0,
+                    UNIQUE(seller_id, rrd_id)
+                )
+            ''')
+            cursor.execute('CREATE INDEX idx_wb_realization_seller_dt ON wb_realization_rows(seller_id, rr_dt)')
+            cursor.execute('CREATE INDEX idx_wb_realization_seller_rrd ON wb_realization_rows(seller_id, rrd_id)')
+            print("  ✅ Создана таблица wb_realization_rows")
+            total_added += 1
+        else:
+            print("  ⏭️  wb_realization_rows уже существует")
+
+        # ============================================================
         # Дедупликация Product по (seller_id, nm_id)
         # и создание уникального индекса
         # ============================================================
