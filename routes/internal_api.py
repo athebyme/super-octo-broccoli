@@ -239,7 +239,10 @@ def register_internal_api_routes(app):
 
 
 def _product_to_dict(p):
-    """Сериализация Product для Internal API."""
+    """Сериализация Product для Internal API (агенты).
+
+    Только поля, нужные агентам. Без photo URLs (экономия токенов).
+    """
     return {
         'id': p.id,
         'nm_id': p.nm_id,
@@ -251,23 +254,50 @@ def _product_to_dict(p):
         'barcode': p.barcode,
         'category': getattr(p, 'category', None),
         'wb_status': getattr(p, 'wb_status', None),
-        'photos': getattr(p, 'photos', None),
     }
 
 
 def _imported_product_to_dict(p):
-    """Сериализация ImportedProduct для Internal API."""
+    """Сериализация ImportedProduct для Internal API (агенты).
+
+    Только поля, нужные для AI-обработки. Без дублирующих блоков
+    (original_data, all_data_for_parsing) и photo URLs — они не нужны
+    текстовым агентам и занимают ~75% токенов.
+    """
+    import json as _json
+
+    # Характеристики — распарсим JSON text
+    chars = {}
+    if p.characteristics:
+        try:
+            chars = _json.loads(p.characteristics)
+        except Exception:
+            pass
+
+    # Размеры
+    sizes = {}
+    if p.sizes:
+        try:
+            sizes = _json.loads(p.sizes)
+        except Exception:
+            pass
+
     return {
         'id': p.id,
         'external_id': p.external_id,
         'title': p.title,
-        'description': p.description,
-        'brand': p.brand,
-        'category': p.category,
-        'price': p.price,
-        'photo_urls': p.photo_urls,
-        'characteristics': p.characteristics,
-        'supplier_id': p.supplier_id,
+        'description': p.description or '',
+        'brand': p.brand or '',
+        'category': p.category or '',
+        'mapped_wb_category': p.mapped_wb_category or '',
+        'wb_subject_id': p.wb_subject_id,
+        'country': p.country or '',
+        'gender': p.gender or '',
+        'supplier_price': p.supplier_price,
+        'characteristics': chars,
+        'sizes': sizes,
+        'import_status': p.import_status,
+        'photos_count': len(_json.loads(p.photo_urls)) if p.photo_urls else 0,
     }
 
 
