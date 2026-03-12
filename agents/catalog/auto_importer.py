@@ -9,7 +9,7 @@ from ..base_agent import BaseAgent
 
 class AutoImporterAgent(BaseAgent):
     agent_name = 'auto-importer'
-    max_iterations = 15
+    max_iterations = 25
     use_fallback_llm = True  # сложный multi-step pipeline → Claude
 
     system_prompt = """Ты — агент полного цикла импорта товаров на Wildberries.
@@ -50,17 +50,19 @@ class AutoImporterAgent(BaseAgent):
         seller_id = task.get('seller_id')
 
         if task_type == 'import_batch':
+            limit = input_data.get('limit', 5)
             return (
                 f"Импорт пакета товаров от поставщика.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи импортированные товары через get_imported_products\n"
-                f"2. Для каждого товара:\n"
-                f"   a. Определи категорию WB\n"
-                f"   b. Сгенерируй SEO-заголовок\n"
-                f"   c. Сгенерируй описание\n"
-                f"   d. Заполни характеристики\n"
-                f"   e. Проверь на стоп-слова\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_imported_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"2. Для каждого товара из полученного списка:\n"
+                f"   a. Определи категорию WB по названию, бренду, описанию\n"
+                f"   b. Сгенерируй SEO-заголовок (до 60 символов)\n"
+                f"   c. Сгенерируй описание (до 1000 символов)\n"
+                f"   d. Проверь на стоп-слова\n"
                 f"3. Подготовь отчёт о готовности\n\n"
+                f"ВАЖНО: Загрузи товары ОДНИМ вызовом. НЕ листай страницы. Данных из списка достаточно для обработки.\n\n"
                 f"Верни JSON: {{total, ready, needs_review, "
                 f"products: [{{id, title, category, status, issues}}]}}"
             )

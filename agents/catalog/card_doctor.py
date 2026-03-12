@@ -9,7 +9,7 @@ from ..base_agent import BaseAgent
 
 class CardDoctorAgent(BaseAgent):
     agent_name = 'card-doctor'
-    max_iterations = 12
+    max_iterations = 20
     use_fallback_llm = True  # модерация требует точных рассуждений → Claude
 
     system_prompt = """Ты — эксперт по модерации карточек Wildberries.
@@ -64,6 +64,8 @@ class CardDoctorAgent(BaseAgent):
 
         elif task_type in ('diagnose_batch', 'preventive_scan'):
             product_ids = input_data.get('product_ids', [])
+            limit = input_data.get('limit', 10)
+
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
@@ -77,12 +79,15 @@ class CardDoctorAgent(BaseAgent):
                     f"3. Подготовь отчёт о рисках\n\n"
                     f"Верни JSON: {{total, clean, at_risk, critical, issues: [...]}}"
                 )
+
             return (
-                f"Превентивный скан всех карточек.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи товары через get_products\n"
-                f"2. Проверь каждый на стоп-слова и нарушения\n"
+                f"Превентивный скан карточек.\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: проверь максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"2. Проверь каждый товар из списка на стоп-слова и нарушения\n"
                 f"3. Подготовь отчёт о рисках\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом и сразу анализируй.\n\n"
                 f"Верни JSON: {{total, clean, at_risk, critical, issues: [...]}}"
             )
 

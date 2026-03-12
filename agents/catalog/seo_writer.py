@@ -94,13 +94,16 @@ class SEOWriterAgent(BaseAgent):
             )
 
         elif task_type == 'rewrite_titles':
+            limit = input_data.get('limit', 10)
             return (
                 f"Перепиши заголовки товаров по правилам WB.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи товары через get_products\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
                 f"2. Проанализируй заголовки на соответствие правилам WB\n"
                 f"3. Перепиши несоответствующие заголовки\n"
                 f"4. Обнови через update_product\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{rewritten: число, skipped: число, details: [...]}}"
             )
 

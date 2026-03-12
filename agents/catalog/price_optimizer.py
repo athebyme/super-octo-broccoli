@@ -9,7 +9,7 @@ from ..base_agent import BaseAgent
 
 class PriceOptimizerAgent(BaseAgent):
     agent_name = 'price-optimizer'
-    max_iterations = 10
+    max_iterations = 20
     use_fallback_llm = True  # unit-экономика требует точных расчётов → Claude
 
     system_prompt = """Ты — эксперт по ценообразованию на маркетплейсе Wildberries.
@@ -47,6 +47,8 @@ class PriceOptimizerAgent(BaseAgent):
 
         if task_type == 'optimize_prices':
             product_ids = input_data.get('product_ids', [])
+            limit = input_data.get('limit', 10)
+
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
@@ -60,25 +62,30 @@ class PriceOptimizerAgent(BaseAgent):
                     f"3. Предложи оптимальные цены\n\n"
                     f"Верни JSON: {{products: [{{product_id, current_price, suggested_price, margin_pct, reasoning}}]}}"
                 )
+
             return (
                 f"Оптимизируй цены товаров.\n"
                 f"Seller ID: {seller_id}\n"
-                f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n\n"
-                f"1. Получи товары через get_products\n"
-                f"2. Рассчитай unit-экономику для каждого\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"2. Рассчитай unit-экономику для каждого товара\n"
                 f"3. Определи товары с отрицательной/низкой маржой\n"
                 f"4. Предложи оптимальные цены\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{products: [{{product_id, current_price, suggested_price, margin_pct, reasoning}}]}}"
             )
 
         elif task_type == 'margin_audit':
+            limit = input_data.get('limit', 10)
             return (
                 f"Аудит маржинальности.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи все товары\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: проверь максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
                 f"2. Рассчитай маржу по каждому\n"
                 f"3. Выдели проблемные (маржа < 20%)\n"
                 f"4. Подготовь отчёт\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{total, avg_margin, problematic: [...], recommendations: [...]}}"
             )
 

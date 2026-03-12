@@ -83,12 +83,15 @@ class CharacteristicsFillerAgent(BaseAgent):
             )
 
         elif task_type == 'validate_existing':
+            limit = input_data.get('limit', 10)
             return (
                 f"Валидация характеристик товаров.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи товары через get_products\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: проверь максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
                 f"2. Проверь заполненность обязательных характеристик\n"
                 f"3. Найди ошибки и пустые поля\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{total, valid, issues: [{{product_id, missing: [...], errors: [...]}}]}}"
             )
 

@@ -64,18 +64,18 @@ def create_platform_tools(platform_client) -> ToolRegistry:
 
     registry.register(
         name='get_products',
-        description='Получить список товаров продавца. Возвращает массив товаров с id, title, brand, category, status.',
+        description='Получить список товаров продавца. Возвращает массив товаров с id, title, brand, category, status. Максимум 20 товаров за запрос.',
         parameters={
             'properties': {
                 'seller_id': {'type': 'integer', 'description': 'ID продавца'},
                 'page': {'type': 'integer', 'description': 'Номер страницы (default: 1)'},
-                'per_page': {'type': 'integer', 'description': 'Товаров на странице (default: 50)'},
+                'per_page': {'type': 'integer', 'description': 'Товаров на странице (default: 20, max: 20)'},
                 'status': {'type': 'string', 'description': 'Фильтр по статусу WB'},
             },
             'required': ['seller_id'],
         },
-        handler=lambda seller_id, page=1, per_page=50, status=None:
-            platform_client.list_products(seller_id, page, per_page, status),
+        handler=lambda seller_id, page=1, per_page=20, status=None:
+            platform_client.list_products(seller_id, page, min(int(per_page), 20), status),
     )
 
     registry.register(
@@ -113,17 +113,17 @@ def create_platform_tools(platform_client) -> ToolRegistry:
 
     registry.register(
         name='get_imported_products',
-        description='Получить товары, импортированные от поставщика (ещё не обработанные).',
+        description='Получить товары от поставщика (ещё не обработанные). Максимум 20 товаров за запрос.',
         parameters={
             'properties': {
                 'seller_id': {'type': 'integer', 'description': 'ID продавца'},
-                'page': {'type': 'integer', 'description': 'Номер страницы'},
-                'per_page': {'type': 'integer', 'description': 'Товаров на странице'},
+                'page': {'type': 'integer', 'description': 'Номер страницы (default: 1)'},
+                'per_page': {'type': 'integer', 'description': 'Товаров на странице (default: 20, max: 20)'},
             },
             'required': ['seller_id'],
         },
-        handler=lambda seller_id, page=1, per_page=50:
-            platform_client.list_imported_products(seller_id, page, per_page),
+        handler=lambda seller_id, page=1, per_page=20:
+            platform_client.list_imported_products(seller_id, page, min(int(per_page), 20)),
     )
 
     registry.register(

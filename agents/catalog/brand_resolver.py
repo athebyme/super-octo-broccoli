@@ -60,6 +60,8 @@ class BrandResolverAgent(BaseAgent):
 
         elif task_type == 'resolve_batch':
             product_ids = input_data.get('product_ids', [])
+            limit = input_data.get('limit', 10)
+
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
@@ -70,27 +72,33 @@ class BrandResolverAgent(BaseAgent):
                     f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
                     f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
                     f"2. Нормализуй бренд\n"
-                    f"3. Обнови товары с исправленными брендами\n\n"
+                    f"3. Обнови каждый товар через update_product\n\n"
                     f"Верни JSON: {{total, updated, skipped, "
                     f"results: [{{product_id, original, normalized}}]}}"
                 )
+
             return (
                 f"Пакетная нормализация брендов.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи товары через get_products\n"
-                f"2. Для каждого нормализуй бренд\n"
-                f"3. Обнови товары с исправленными брендами\n\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"2. Для каждого товара нормализуй бренд\n"
+                f"3. Обнови товары с исправленными брендами через update_product\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{total, updated, skipped, "
                 f"results: [{{product_id, original, normalized}}]}}"
             )
 
         elif task_type == 'audit_brands':
+            limit = input_data.get('limit', 10)
             return (
-                f"Аудит брендов: проверь все товары на корректность.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи товары\n"
+                f"Аудит брендов.\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: проверь максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
                 f"2. Проверь бренды на корректность\n"
                 f"3. Найди потенциальные проблемы\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{total, correct, issues: [{{product_id, brand, issue}}]}}"
             )
 
