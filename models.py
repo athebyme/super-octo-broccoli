@@ -3704,16 +3704,22 @@ class ServiceAgent(db.Model):
     __tablename__ = 'service_agents'
 
     id = db.Column(db.String(36), primary_key=True)  # UUID
-    name = db.Column(db.String(100), nullable=False)  # 'auto-import', 'price-optimizer', 'card-doctor'
-    display_name = db.Column(db.String(200), nullable=False)  # 'Агент автоимпорта'
+    name = db.Column(db.String(100), nullable=False)  # 'category-mapper', 'size-normalizer', 'seo-writer'
+    display_name = db.Column(db.String(200), nullable=False)  # 'Агент категорий'
     description = db.Column(db.Text)
     agent_type = db.Column(db.String(30), nullable=False, default='external')  # 'external' (Go), 'internal' (Python)
+    category = db.Column(db.String(50), nullable=False, default='general')
+    # Специализация: 'catalog' (каталог/импорт), 'content' (контент/SEO),
+    # 'pricing' (цены), 'compliance' (модерация/блокировки), 'analytics' (аналитика), 'general'
     status = db.Column(db.String(20), nullable=False, default='offline')  # online, offline, error
     version = db.Column(db.String(30))  # '1.0.0'
     endpoint_url = db.Column(db.String(500))  # 'http://agent-import:8080' для внешних
     api_key_hash = db.Column(db.String(255))  # Хеш API-ключа для аутентификации агента
     capabilities = db.Column(db.Text, default='[]')  # JSON: ['parse_csv', 'enrich_product', 'map_category']
     config_json = db.Column(db.Text, default='{}')  # Конфигурация агента (JSON)
+    task_types = db.Column(db.Text, default='[]')  # JSON: типы задач которые принимает агент
+    icon = db.Column(db.String(30), default='cpu')  # Иконка: 'cpu', 'tag', 'ruler', 'pen', 'shield', 'chart', 'camera', 'palette'
+    color = db.Column(db.String(20), default='blue')  # Цвет: 'blue', 'violet', 'emerald', 'amber', 'red', 'pink', 'cyan'
     last_heartbeat = db.Column(db.DateTime)
     last_error = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -3745,6 +3751,13 @@ class ServiceAgent(db.Model):
             return False
         return (datetime.utcnow() - self.last_heartbeat).total_seconds() < 120
 
+    def get_task_types(self):
+        import json as _json
+        try:
+            return _json.loads(self.task_types or '[]')
+        except Exception:
+            return []
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -3752,11 +3765,15 @@ class ServiceAgent(db.Model):
             'display_name': self.display_name,
             'description': self.description,
             'agent_type': self.agent_type,
+            'category': self.category,
             'status': self.status,
             'version': self.version,
             'endpoint_url': self.endpoint_url,
             'capabilities': self.get_capabilities(),
+            'task_types': self.get_task_types(),
             'config': self.get_config(),
+            'icon': self.icon or 'cpu',
+            'color': self.color or 'blue',
             'is_online': self.is_online(),
             'last_heartbeat': self.last_heartbeat.isoformat() if self.last_heartbeat else None,
             'last_error': self.last_error,

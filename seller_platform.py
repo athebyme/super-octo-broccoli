@@ -5850,6 +5850,11 @@ def _run_startup_migrations():
         ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),
         # Product rating from WB Analytics API
         ('products', 'nm_rating', 'REAL'),
+        # Service agents extended columns
+        ('service_agents', 'category', "TEXT NOT NULL DEFAULT 'general'"),
+        ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
+        ('service_agents', 'icon', "TEXT DEFAULT 'cpu'"),
+        ('service_agents', 'color', "TEXT DEFAULT 'blue'"),
     ]
 
     for table, column, col_type in migrations:

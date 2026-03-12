@@ -37,6 +37,7 @@ def register_agents_routes(app):
             return redirect(url_for('dashboard'))
 
         agents = agent_service.list_agents()
+        catalog = agent_service.get_agent_catalog()
         seller_id = current_user.seller.id if current_user.seller else None
 
         # Активные задачи
@@ -56,6 +57,7 @@ def register_agents_routes(app):
 
         return render_template('agents.html',
             agents=agents,
+            catalog=catalog,
             active_tasks=active_tasks,
             recent_tasks=recent_tasks,
             failed_tasks=failed_tasks,
@@ -214,6 +216,9 @@ def register_agents_routes(app):
         agent_type = request.form.get('agent_type', 'external')
         endpoint_url = request.form.get('endpoint_url', '').strip()
         description = request.form.get('description', '').strip()
+        category = request.form.get('category', 'general')
+        icon = request.form.get('icon', 'cpu')
+        color = request.form.get('color', 'blue')
 
         if not name or not display_name:
             flash('Имя и отображаемое имя обязательны', 'warning')
@@ -225,6 +230,9 @@ def register_agents_routes(app):
             agent_type=agent_type,
             description=description,
             endpoint_url=endpoint_url,
+            category=category,
+            icon=icon,
+            color=color,
         )
 
         # Генерируем API ключ
@@ -233,4 +241,24 @@ def register_agents_routes(app):
         db.session.commit()
 
         flash(f'Агент зарегистрирован. API ключ (сохраните!): {raw_key}', 'success')
+        return redirect(url_for('agents_dashboard'))
+
+    @app.route('/agents/admin/seed/<agent_name>', methods=['POST'])
+    @login_required
+    def agents_admin_seed(agent_name):
+        """Активировать агента из каталога (только админ)."""
+        if not current_user.is_admin:
+            abort(403)
+
+        agent = agent_service.seed_agent(agent_name)
+        if not agent:
+            flash(f'Агент "{agent_name}" не найден в каталоге', 'danger')
+            return redirect(url_for('agents_dashboard'))
+
+        # Генерируем API ключ
+        raw_key = str(uuid.uuid4())
+        agent.api_key_hash = generate_password_hash(raw_key)
+        db.session.commit()
+
+        flash(f'{agent.display_name} активирован. API ключ: {raw_key}', 'success')
         return redirect(url_for('agents_dashboard'))

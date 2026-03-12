@@ -19,6 +19,181 @@ from models import db, ServiceAgent, AgentTask, AgentTaskStep, Notification
 logger = logging.getLogger(__name__)
 
 
+# ── Каталог типов агентов ───────────────────────────────────────────
+
+AGENT_CATALOG = [
+    # ── Каталог и импорт ──
+    {
+        'name': 'category-mapper',
+        'display_name': 'Агент категорий',
+        'description': 'Определяет правильную категорию WB для товара, анализируя название, описание и характеристики. Подбирает subjectID по справочнику маркетплейса.',
+        'category': 'catalog',
+        'icon': 'tag',
+        'color': 'blue',
+        'capabilities': ['map_category', 'suggest_subject', 'validate_category', 'analyze_parent_tree'],
+        'task_types': ['map_single', 'map_batch', 'remap_incorrect'],
+    },
+    {
+        'name': 'size-normalizer',
+        'display_name': 'Агент размеров',
+        'description': 'Нормализует размеры, габариты и вес из данных поставщика в формат WB. Парсит строки типа "42-44 RU", конвертирует единицы измерения, заполняет размерные сетки.',
+        'category': 'catalog',
+        'icon': 'ruler',
+        'color': 'cyan',
+        'capabilities': ['parse_sizes', 'convert_units', 'build_size_grid', 'validate_dimensions'],
+        'task_types': ['normalize_single', 'normalize_batch', 'fill_size_grid'],
+    },
+    {
+        'name': 'auto-importer',
+        'display_name': 'Агент импорта',
+        'description': 'Полный цикл импорта товаров поставщика: парсинг каталога, маппинг категорий, обогащение данных, загрузка фото, создание карточки на WB.',
+        'category': 'catalog',
+        'icon': 'download',
+        'color': 'violet',
+        'capabilities': ['parse_csv', 'parse_xlsx', 'download_photos', 'create_wb_card', 'orchestrate_pipeline'],
+        'task_types': ['import_batch', 'import_single', 'reimport_failed'],
+    },
+    {
+        'name': 'characteristics-filler',
+        'display_name': 'Агент характеристик',
+        'description': 'Заполняет обязательные и рекомендованные характеристики карточки по справочнику WB. Извлекает данные из описания поставщика, подбирает значения из словарей.',
+        'category': 'catalog',
+        'icon': 'list',
+        'color': 'indigo',
+        'capabilities': ['extract_characteristics', 'match_dictionary', 'fill_required', 'validate_charcs'],
+        'task_types': ['fill_single', 'fill_batch', 'validate_existing'],
+    },
+
+    # ── Контент и SEO ──
+    {
+        'name': 'seo-writer',
+        'display_name': 'Агент SEO',
+        'description': 'Генерирует SEO-оптимизированные заголовки и описания для карточек WB. Учитывает ключевые слова, ограничения по длине и требования маркетплейса.',
+        'category': 'content',
+        'icon': 'pen',
+        'color': 'emerald',
+        'capabilities': ['generate_title', 'generate_description', 'extract_keywords', 'optimize_seo'],
+        'task_types': ['seo_single', 'seo_batch', 'rewrite_titles'],
+    },
+    {
+        'name': 'photo-optimizer',
+        'display_name': 'Агент фото',
+        'description': 'Анализирует и оптимизирует фотографии товаров: проверка качества, обрезка белого фона, сортировка по релевантности, подготовка к загрузке на WB.',
+        'category': 'content',
+        'icon': 'camera',
+        'color': 'pink',
+        'capabilities': ['analyze_photos', 'check_quality', 'crop_background', 'sort_by_relevance'],
+        'task_types': ['optimize_photos', 'replace_bad_photos', 'generate_infographics'],
+    },
+    {
+        'name': 'brand-resolver',
+        'display_name': 'Агент брендов',
+        'description': 'Распознаёт и нормализует бренды: сопоставляет вариации написания, проверяет наличие в реестре WB, предлагает корректный бренд для карточки.',
+        'category': 'content',
+        'icon': 'badge',
+        'color': 'amber',
+        'capabilities': ['resolve_brand', 'match_aliases', 'validate_wb_brand', 'suggest_brand'],
+        'task_types': ['resolve_single', 'resolve_batch', 'audit_brands'],
+    },
+
+    # ── Ценообразование ──
+    {
+        'name': 'price-optimizer',
+        'display_name': 'Агент цен',
+        'description': 'Оптимизирует цены: расчёт себестоимости с учётом логистики WB, анализ маржинальности, обнаружение аномалий, рекомендации по корректировке.',
+        'category': 'pricing',
+        'icon': 'chart',
+        'color': 'emerald',
+        'capabilities': ['calculate_cost', 'analyze_margin', 'detect_anomaly', 'suggest_price'],
+        'task_types': ['optimize_prices', 'margin_audit', 'anomaly_scan'],
+    },
+
+    # ── Модерация и compliance ──
+    {
+        'name': 'card-doctor',
+        'display_name': 'Агент модерации',
+        'description': 'Диагностирует причины блокировки и скрытия карточек. Анализирует ошибки, предлагает исправления, проверяет на стоп-слова и нарушения правил WB.',
+        'category': 'compliance',
+        'icon': 'shield',
+        'color': 'red',
+        'capabilities': ['diagnose_block', 'check_prohibited_words', 'fix_violations', 'verify_compliance'],
+        'task_types': ['diagnose_single', 'diagnose_batch', 'preventive_scan'],
+    },
+
+    # ── Аналитика ──
+    {
+        'name': 'review-analyst',
+        'display_name': 'Агент отзывов',
+        'description': 'Анализирует отзывы покупателей: выявляет тренды, классифицирует проблемы, генерирует рекомендации по улучшению товара и карточки.',
+        'category': 'analytics',
+        'icon': 'message',
+        'color': 'violet',
+        'capabilities': ['analyze_sentiment', 'classify_issues', 'extract_insights', 'suggest_improvements'],
+        'task_types': ['analyze_reviews', 'weekly_report', 'product_insights'],
+    },
+]
+
+
+def get_agent_catalog():
+    """Возвращает каталог доступных типов агентов, сгруппированный по категориям."""
+    categories = {
+        'catalog': {'label': 'Каталог и импорт', 'icon': 'download', 'agents': []},
+        'content': {'label': 'Контент и SEO', 'icon': 'pen', 'agents': []},
+        'pricing': {'label': 'Ценообразование', 'icon': 'chart', 'agents': []},
+        'compliance': {'label': 'Модерация', 'icon': 'shield', 'agents': []},
+        'analytics': {'label': 'Аналитика', 'icon': 'chart', 'agents': []},
+    }
+    # Подтягиваем актуальный статус из БД
+    registered = {a.name: a for a in ServiceAgent.query.all()}
+
+    for spec in AGENT_CATALOG:
+        entry = dict(spec)
+        db_agent = registered.get(spec['name'])
+        if db_agent:
+            entry['registered'] = True
+            entry['id'] = db_agent.id
+            entry['status'] = db_agent.status
+            entry['is_online'] = db_agent.is_online()
+            entry['version'] = db_agent.version
+            entry['last_heartbeat'] = db_agent.last_heartbeat
+        else:
+            entry['registered'] = False
+            entry['id'] = None
+            entry['status'] = 'not_registered'
+            entry['is_online'] = False
+            entry['version'] = None
+            entry['last_heartbeat'] = None
+
+        cat = spec.get('category', 'general')
+        if cat in categories:
+            categories[cat]['agents'].append(entry)
+
+    return categories
+
+
+def seed_agent(name: str) -> Optional[ServiceAgent]:
+    """Регистрирует агент из каталога по имени."""
+    spec = None
+    for s in AGENT_CATALOG:
+        if s['name'] == name:
+            spec = s
+            break
+    if not spec:
+        return None
+
+    return register_agent(
+        name=spec['name'],
+        display_name=spec['display_name'],
+        description=spec['description'],
+        agent_type='external',
+        capabilities=spec.get('capabilities', []),
+        config={'task_types': spec.get('task_types', [])},
+        category=spec.get('category', 'general'),
+        icon=spec.get('icon', 'cpu'),
+        color=spec.get('color', 'blue'),
+    )
+
+
 # ── Агенты ──────────────────────────────────────────────────────────
 
 def register_agent(
@@ -30,6 +205,9 @@ def register_agent(
     version: str = '',
     capabilities: list = None,
     config: dict = None,
+    category: str = 'general',
+    icon: str = 'cpu',
+    color: str = 'blue',
 ) -> ServiceAgent:
     """Регистрирует нового агента или обновляет существующего."""
     agent = ServiceAgent.query.filter_by(name=name).first()
@@ -41,13 +219,24 @@ def register_agent(
         agent.version = version
         agent.capabilities = json.dumps(capabilities or [], ensure_ascii=False)
         agent.config_json = json.dumps(config or {}, ensure_ascii=False)
+        agent.category = category
+        agent.icon = icon
+        agent.color = color
+        task_types = (config or {}).get('task_types', [])
+        if task_types:
+            agent.task_types = json.dumps(task_types, ensure_ascii=False)
         agent.updated_at = datetime.utcnow()
     else:
+        task_types = (config or {}).get('task_types', [])
         agent = ServiceAgent(
             id=str(uuid.uuid4()),
             name=name,
             display_name=display_name,
             description=description,
+            category=category,
+            icon=icon,
+            color=color,
+            task_types=json.dumps(task_types, ensure_ascii=False),
             agent_type=agent_type,
             endpoint_url=endpoint_url,
             version=version,
