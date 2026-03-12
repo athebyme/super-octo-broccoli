@@ -8,8 +8,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Копируем только агентский код и скрипты (не весь репозиторий)
+COPY agents/ ./agents/
+COPY docker-entrypoint-agent.sh .
+COPY agent-healthcheck.sh .
 
-RUN chmod +x /app/docker-entrypoint-agent.sh
+RUN chmod +x /app/docker-entrypoint-agent.sh /app/agent-healthcheck.sh
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD ["/app/agent-healthcheck.sh"]
 
 ENTRYPOINT ["/app/docker-entrypoint-agent.sh"]

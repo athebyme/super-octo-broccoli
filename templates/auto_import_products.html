@@ -180,11 +180,30 @@
                     disabled>
                 Импортировать в WB (<span id="selectedCount">0</span>)
             </button>
-            <button id="aiSelectedBtn"
-                    class="hidden px-4 py-2 border border-purple-200 shadow-sm text-sm font-medium rounded-xl text-purple-700 bg-purple-50 hover:bg-purple-100 disabled:bg-gray-200 disabled:cursor-not-allowed transition-colors"
-                    disabled>
-                AI оптимизация (<span id="aiSelectedCount">0</span>)
-            </button>
+            <div id="aiSelectedWrapper" class="hidden relative" x-data="bulkAiActions()">
+                <button @click="toggle()" type="button"
+                        class="px-4 py-2 border border-purple-200 shadow-sm text-sm font-medium rounded-xl text-purple-700 bg-purple-50 hover:bg-purple-100 transition-colors inline-flex items-center gap-1.5">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    AI-агенты (<span id="aiSelectedCount">0</span>)
+                    <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="open" @click.away="open=false" x-transition
+                     class="absolute left-0 mt-2 w-64 bg-white rounded-xl shadow-lg border border-gray-200 z-50 py-1">
+                    <template x-if="loading">
+                        <div class="px-4 py-3 text-sm text-gray-500 text-center">Загрузка...</div>
+                    </template>
+                    <template x-if="!loading && actions.length === 0">
+                        <div class="px-4 py-3 text-sm text-gray-500 text-center">Нет доступных агентов</div>
+                    </template>
+                    <template x-for="action in actions" :key="action.agent_id">
+                        <button @click="submitBulk(action)" type="button"
+                                class="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                            <span x-text="action.label_batch"></span>
+                        </button>
+                    </template>
+                </div>
+            </div>
             <button id="deleteSelectedBtn"
                     class="hidden px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-xl text-white bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                     disabled>
@@ -417,6 +436,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const deleteAllBtn = document.getElementById('deleteAllBtn');
     const selectedCountSpan = document.getElementById('selectedCount');
     const deleteSelectedCountSpan = document.getElementById('deleteSelectedCount');
+    const aiSelectedCountSpan = document.getElementById('aiSelectedCount');
+    const aiWrapper = document.getElementById('aiSelectedWrapper');
 
     // Update button visibility and count
     function updateButtons() {
@@ -430,6 +451,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         selectedCountSpan.textContent = validatedCount;
         deleteSelectedCountSpan.textContent = count;
+        if (aiSelectedCountSpan) aiSelectedCountSpan.textContent = count;
 
         // Show import button only if there are validated products
         if (validatedCount > 0) {
@@ -438,6 +460,13 @@ document.addEventListener('DOMContentLoaded', function() {
         } else {
             importBtn.classList.add('hidden');
             importBtn.disabled = true;
+        }
+
+        // Show AI agents button if any products selected
+        if (count > 0 && aiWrapper) {
+            aiWrapper.classList.remove('hidden');
+        } else if (aiWrapper) {
+            aiWrapper.classList.add('hidden');
         }
 
         // Show delete button if any products selected
@@ -614,5 +643,58 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// Alpine.js: Bulk AI agent actions
+function bulkAiActions() {
+    return {
+        open: false,
+        loading: false,
+        actions: [],
+        loaded: false,
+        toggle() {
+            this.open = !this.open;
+            if (this.open && !this.loaded) this.loadActions();
+        },
+        async loadActions() {
+            this.loading = true;
+            try {
+                const resp = await fetch('/agents/api/available-actions');
+                const data = await resp.json();
+                this.actions = data.actions || [];
+            } catch(e) {
+                console.error('Failed to load AI actions:', e);
+            }
+            this.loading = false;
+            this.loaded = true;
+        },
+        submitBulk(action) {
+            const ids = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.dataset.productId);
+            if (!ids.length) { alert('Выберите товары'); return; }
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '{{ url_for("agent_task_create") }}';
+
+            const fields = {
+                agent_id: action.agent_id,
+                task_type: action.batch,
+                title: action.label_batch + ' (' + ids.length + ' товаров)',
+                input_data: JSON.stringify({imported_product_ids: ids}),
+                csrf_token: '{{ csrf_token() }}'
+            };
+
+            for (const [k, v] of Object.entries(fields)) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = k;
+                input.value = v;
+                form.appendChild(input);
+            }
+
+            document.body.appendChild(form);
+            form.submit();
+        }
+    };
+}
 </script>
 {% endblock %}

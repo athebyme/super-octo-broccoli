@@ -126,6 +126,18 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             platform_client.list_imported_products(seller_id, page, per_page),
     )
 
+    registry.register(
+        name='get_imported_product',
+        description='Получить детальную информацию об одном импортированном товаре по ID.',
+        parameters={
+            'properties': {
+                'product_id': {'type': 'integer', 'description': 'ID импортированного товара'},
+            },
+            'required': ['product_id'],
+        },
+        handler=lambda product_id: platform_client.get_imported_product(product_id),
+    )
+
     # ── Продавец ───────────────────────────────────────────────
 
     registry.register(
@@ -141,120 +153,3 @@ def create_platform_tools(platform_client) -> ToolRegistry:
     )
 
     return registry
-
-
-# ── Кастомные инструменты для специализированных агентов ───────────
-
-def create_seo_tools() -> list[dict]:
-    """Дополнительные tool-определения для SEO-агента (чисто LLM-based)."""
-    return [
-        {
-            'name': 'analyze_keywords',
-            'description': 'Анализирует ключевые слова товара и конкурентов. Выделяет высокочастотные и низкоконкурентные фразы.',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'product_title': {'type': 'string', 'description': 'Текущий заголовок товара'},
-                    'product_category': {'type': 'string', 'description': 'Категория товара'},
-                    'product_description': {'type': 'string', 'description': 'Описание товара'},
-                },
-                'required': ['product_title'],
-            },
-        },
-        {
-            'name': 'generate_seo_title',
-            'description': 'Генерирует SEO-оптимизированный заголовок для WB. Учитывает ограничение 60 символов и ключевые слова.',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'product_title': {'type': 'string'},
-                    'keywords': {'type': 'array', 'items': {'type': 'string'}},
-                    'brand': {'type': 'string'},
-                    'category': {'type': 'string'},
-                },
-                'required': ['product_title'],
-            },
-        },
-        {
-            'name': 'generate_seo_description',
-            'description': 'Генерирует SEO-описание для карточки WB. До 1000 символов с ключевыми словами.',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'product_title': {'type': 'string'},
-                    'current_description': {'type': 'string'},
-                    'keywords': {'type': 'array', 'items': {'type': 'string'}},
-                    'characteristics': {'type': 'string'},
-                },
-                'required': ['product_title'],
-            },
-        },
-    ]
-
-
-def create_category_tools() -> list[dict]:
-    """Дополнительные tool-определения для агента категорий."""
-    return [
-        {
-            'name': 'analyze_product_for_category',
-            'description': 'Анализирует товар и определяет наиболее подходящую категорию WB (subjectID).',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'title': {'type': 'string', 'description': 'Название товара'},
-                    'description': {'type': 'string', 'description': 'Описание'},
-                    'brand': {'type': 'string', 'description': 'Бренд'},
-                    'characteristics': {'type': 'string', 'description': 'Характеристики JSON'},
-                },
-                'required': ['title'],
-            },
-        },
-        {
-            'name': 'validate_category_mapping',
-            'description': 'Проверяет корректность маппинга категории. Подтверждает или предлагает альтернативу.',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'product_title': {'type': 'string'},
-                    'current_category': {'type': 'string'},
-                    'suggested_category': {'type': 'string'},
-                },
-                'required': ['product_title', 'current_category'],
-            },
-        },
-    ]
-
-
-def create_price_tools() -> list[dict]:
-    """Дополнительные tool-определения для агента цен."""
-    return [
-        {
-            'name': 'calculate_unit_economics',
-            'description': 'Рассчитывает unit-экономику товара: себестоимость, комиссия WB, логистика, маржа.',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'purchase_price': {'type': 'number', 'description': 'Закупочная цена'},
-                    'selling_price': {'type': 'number', 'description': 'Цена продажи'},
-                    'category_commission': {'type': 'number', 'description': 'Комиссия категории %'},
-                    'logistics_cost': {'type': 'number', 'description': 'Стоимость логистики'},
-                    'weight_kg': {'type': 'number', 'description': 'Вес, кг'},
-                },
-                'required': ['purchase_price', 'selling_price'],
-            },
-        },
-        {
-            'name': 'suggest_optimal_price',
-            'description': 'Рекомендует оптимальную цену с учётом маржинальности и конкуренции.',
-            'input_schema': {
-                'type': 'object',
-                'properties': {
-                    'purchase_price': {'type': 'number'},
-                    'current_price': {'type': 'number'},
-                    'target_margin': {'type': 'number', 'description': 'Целевая маржа %'},
-                    'category': {'type': 'string'},
-                },
-                'required': ['purchase_price', 'current_price'],
-            },
-        },
-    ]

@@ -13,7 +13,7 @@ import json
 import logging
 import uuid
 
-from flask import render_template, request, redirect, url_for, flash, jsonify, abort
+from flask import render_template, request, redirect, url_for, flash, jsonify, abort, session
 from flask_login import login_required, current_user
 from werkzeug.security import generate_password_hash
 
@@ -145,6 +145,102 @@ def register_agents_routes(app):
             'agents': [a.to_dict() for a in agents],
         })
 
+    @app.route('/agents/api/available-actions')
+    @login_required
+    def agents_api_available_actions():
+        """API: доступные AI-действия для товаров (online агенты с task_types)."""
+        agents = agent_service.list_agents()
+        agent_service.mark_stale_agents()
+
+        # Map agent names to product-relevant actions
+        PRODUCT_ACTIONS = {
+            'seo-writer': {
+                'single': 'seo_single',
+                'batch': 'seo_batch',
+                'label': 'SEO оптимизация',
+                'label_batch': 'SEO пакетом',
+                'icon': 'pen',
+                'color': 'emerald',
+                'title_template': 'SEO: {product}',
+            },
+            'category-mapper': {
+                'single': 'map_single',
+                'batch': 'map_batch',
+                'label': 'Подобрать категорию',
+                'label_batch': 'Категории пакетом',
+                'icon': 'tag',
+                'color': 'blue',
+                'title_template': 'Категория: {product}',
+            },
+            'characteristics-filler': {
+                'single': 'fill_single',
+                'batch': 'fill_batch',
+                'label': 'Заполнить характеристики',
+                'label_batch': 'Характеристики пакетом',
+                'icon': 'list',
+                'color': 'indigo',
+                'title_template': 'Характеристики: {product}',
+            },
+            'size-normalizer': {
+                'single': 'normalize_single',
+                'batch': 'normalize_batch',
+                'label': 'Нормализовать размеры',
+                'label_batch': 'Размеры пакетом',
+                'icon': 'ruler',
+                'color': 'cyan',
+                'title_template': 'Размеры: {product}',
+            },
+            'card-doctor': {
+                'single': 'diagnose_single',
+                'batch': 'diagnose_batch',
+                'label': 'Проверить карточку',
+                'label_batch': 'Проверка пакетом',
+                'icon': 'shield',
+                'color': 'red',
+                'title_template': 'Диагностика: {product}',
+            },
+            'brand-resolver': {
+                'single': 'resolve_single',
+                'batch': 'resolve_batch',
+                'label': 'Определить бренд',
+                'label_batch': 'Бренды пакетом',
+                'icon': 'badge',
+                'color': 'amber',
+                'title_template': 'Бренд: {product}',
+            },
+            'price-optimizer': {
+                'single': 'optimize_prices',
+                'batch': 'optimize_prices',
+                'label': 'Оптимизировать цену',
+                'label_batch': 'Цены пакетом',
+                'icon': 'chart',
+                'color': 'emerald',
+                'title_template': 'Цена: {product}',
+            },
+            'review-analyst': {
+                'single': 'analyze_reviews',
+                'batch': 'analyze_reviews',
+                'label': 'Анализ отзывов',
+                'label_batch': 'Отзывы пакетом',
+                'icon': 'message',
+                'color': 'violet',
+                'title_template': 'Отзывы: {product}',
+            },
+        }
+
+        available = []
+        for a in agents:
+            action = PRODUCT_ACTIONS.get(a.name)
+            if action and a.status == 'online':
+                available.append({
+                    'agent_id': str(a.id),
+                    'agent_name': a.name,
+                    'display_name': a.display_name,
+                    **action,
+                })
+
+        return jsonify({'actions': available})
+
     # ── Действия ────────────────────────────────────────────────────
 
     @app.route('/agents/tasks/<task_id>/cancel', methods=['POST'])
@@ -166,9 +262,11 @@ def register_agents_routes(app):
     @login_required
     def agent_task_create():
         """Создать задачу для агента вручную."""
+        fallback_url = request.form.get('redirect_url') or url_for('agents_dashboard')
+
         if not current_user.seller:
             flash('Нет профиля продавца', 'danger')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         agent_id = request.form.get('agent_id')
         task_type = request.form.get('task_type', '')
@@ -176,12 +274,12 @@ def register_agents_routes(app):
 
         if not agent_id or not task_type or not title:
             flash('Заполните все поля', 'warning')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         agent = agent_service.get_agent(agent_id)
         if not agent:
             flash('Агент не найден', 'danger')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         input_data = {}
         try:
@@ -190,7 +288,7 @@ def register_agents_routes(app):
                 input_data = json.loads(raw)
         except json.JSONDecodeError:
             flash('Некорректный JSON во входных данных', 'warning')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         task = agent_service.create_task(
             agent_id=agent_id,
@@ -240,7 +338,15 @@ def register_agents_routes(app):
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
-        flash(f'Агент зарегистрирован. API ключ (сохраните!): {raw_key}', 'success')
+        env_prefix = name.upper().replace('-', '_')
+        session['agent_credentials'] = {
+            'display_name': display_name,
+            'agent_name': name,
+            'agent_id': str(agent.id),
+            'agent_key': raw_key,
+            'env_id_var': f'AGENT_{env_prefix}_ID',
+            'env_key_var': f'AGENT_{env_prefix}_KEY',
+        }
         return redirect(url_for('agents_dashboard'))
 
     @app.route('/agents/admin/seed/<agent_name>', methods=['POST'])
@@ -260,13 +366,43 @@ def register_agents_routes(app):
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
-        # Формируем .env-переменные для docker-compose
+        # Передаём credentials через session — шаблон покажет модалку
         env_prefix = agent_name.upper().replace('-', '_')
-        flash(
-            f'{agent.display_name} активирован! Добавьте в .env:\n'
-            f'AGENT_{env_prefix}_ID={agent.id}\n'
-            f'AGENT_{env_prefix}_KEY={raw_key}\n\n'
-            f'Запуск: docker compose --profile agents up -d agent-{agent_name}',
-            'success'
-        )
+        session['agent_credentials'] = {
+            'display_name': agent.display_name,
+            'agent_name': agent_name,
+            'agent_id': str(agent.id),
+            'agent_key': raw_key,
+            'env_id_var': f'AGENT_{env_prefix}_ID',
+            'env_key_var': f'AGENT_{env_prefix}_KEY',
+        }
+        return redirect(url_for('agents_dashboard'))
+
+    @app.route('/agents/admin/regenerate-key/<agent_id>', methods=['POST'])
+    @login_required
+    def agents_admin_regenerate_key(agent_id):
+        """Перегенерировать API-ключ агента (только админ)."""
+        if not current_user.is_admin:
+            abort(403)
+
+        agent = agent_service.get_agent(agent_id)
+        if not agent:
+            flash('Агент не найден', 'danger')
+            return redirect(url_for('agents_dashboard'))
+
+        # Генерируем новый API ключ
+        raw_key = str(uuid.uuid4())
+        agent.api_key_hash = generate_password_hash(raw_key)
+        db.session.commit()
+
+        env_prefix = agent.name.upper().replace('-', '_')
+        session['agent_credentials'] = {
+            'display_name': agent.display_name,
+            'agent_name': agent.name,
+            'agent_id': str(agent.id),
+            'agent_key': raw_key,
+            'env_id_var': f'AGENT_{env_prefix}_ID',
+            'env_key_var': f'AGENT_{env_prefix}_KEY',
+            'regenerated': True,
+        }
         return redirect(url_for('agents_dashboard'))

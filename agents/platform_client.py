@@ -14,8 +14,12 @@ import logging
 from typing import Optional
 
 import requests
+import urllib3
 
 from .config import AgentConfig
+
+# Подавляем предупреждения о self-signed сертификатах внутри Docker-сети
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,9 @@ class PlatformClient:
         self.cfg = config or AgentConfig
         self.base_url = self.cfg.PLATFORM_URL.rstrip('/')
         self.session = requests.Session()
+        # Внутри Docker-сети seller-platform использует self-signed сертификат —
+        # верификацию отключаем для inter-service коммуникации.
+        self.session.verify = False
         self.session.headers.update({
             'X-Agent-Id': self.cfg.AGENT_ID,
             'X-Agent-Key': self.cfg.AGENT_API_KEY,
@@ -37,18 +44,20 @@ class PlatformClient:
         return f"{self.base_url}/internal/v1{path}"
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
-        """Выполняет запрос с retry на сетевые ошибки."""
+        """Выполняет запрос с retry на сетевые и timeout ошибки."""
         url = self._url(path)
         last_error = None
         for attempt in range(4):
             try:
-                resp = self.session.request(method, url, timeout=30, **kwargs)
+                resp = self.session.request(method, url, timeout=90, **kwargs)
                 resp.raise_for_status()
                 return resp.json()
-            except requests.exceptions.ConnectionError as e:
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.ReadTimeout,
+                    requests.exceptions.Timeout) as e:
                 last_error = e
                 wait = 2 ** (attempt + 1)
-                logger.warning(f"Connection error (attempt {attempt+1}/4), retry in {wait}s: {e}")
+                logger.warning(f"Request error (attempt {attempt+1}/4), retry in {wait}s: {e}")
                 time.sleep(wait)
             except requests.exceptions.HTTPError as e:
                 logger.error(f"HTTP error {resp.status_code}: {resp.text}")
@@ -160,3 +169,6 @@ class PlatformClient:
             'GET',
             f'/sellers/{seller_id}/imported-products?page={page}&per_page={per_page}'
         )
+
+    def get_imported_product(self, product_id: int) -> dict:
+        return self._request('GET', f'/imported-products/{product_id}')
