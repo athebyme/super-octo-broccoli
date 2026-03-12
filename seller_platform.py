@@ -34,6 +34,7 @@ from models import (
     CategoryMapping, ProductCategoryCorrection,
     CardMergeHistory, SellerReport,
     BackgroundJob, Notification,
+    ServiceAgent, AgentTask, AgentTaskStep,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -5820,6 +5821,14 @@ register_telegram_alerts_routes(app)
 from routes.returns import register_returns_routes
 register_returns_routes(app)
 
+# ============= РОУТЫ СЕРВИСНЫХ АГЕНТОВ =============
+from routes.agents import register_agents_routes
+register_agents_routes(app)
+
+# ============= INTERNAL API ДЛЯ АГЕНТОВ =============
+from routes.internal_api import register_internal_api_routes
+register_internal_api_routes(app)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
@@ -5989,6 +5998,89 @@ def _run_startup_migrations():
         except Exception as e:
             db.session.rollback()
             logger.warning(f"Could not create finance_snapshots table: {e}")
+
+    # Создаём таблицы сервисных агентов если их нет
+    for tbl_name, tbl_sql in [
+        ('service_agents', '''
+            CREATE TABLE service_agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                description TEXT,
+                agent_type TEXT NOT NULL DEFAULT 'external',
+                status TEXT NOT NULL DEFAULT 'offline',
+                version TEXT,
+                endpoint_url TEXT,
+                api_key_hash TEXT,
+                capabilities TEXT DEFAULT '[]',
+                config_json TEXT DEFAULT '{}',
+                last_heartbeat TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''),
+        ('agent_tasks', '''
+            CREATE TABLE agent_tasks (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL REFERENCES service_agents(id),
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                task_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                priority INTEGER DEFAULT 0,
+                input_data TEXT DEFAULT '{}',
+                total_steps INTEGER DEFAULT 0,
+                completed_steps INTEGER DEFAULT 0,
+                current_step_label TEXT,
+                result_data TEXT DEFAULT '{}',
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''),
+        ('agent_task_steps', '''
+            CREATE TABLE agent_task_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL REFERENCES agent_tasks(id),
+                step_number INTEGER NOT NULL,
+                step_type TEXT NOT NULL DEFAULT 'action',
+                title TEXT NOT NULL,
+                detail TEXT,
+                status TEXT DEFAULT 'completed',
+                duration_ms INTEGER,
+                metadata_json TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        '''),
+    ]:
+        if tbl_name not in insp.get_table_names():
+            try:
+                db.session.execute(db.text(tbl_sql))
+                db.session.commit()
+                logger.info(f"Created table '{tbl_name}'")
+            except Exception as e:
+                db.session.rollback()
+                logger.warning(f"Could not create {tbl_name} table: {e}")
+
+    # Индексы для таблиц агентов
+    agent_indexes = [
+        ('idx_agent_name', 'service_agents', 'name'),
+        ('idx_agent_status', 'service_agents', 'status'),
+        ('idx_atask_seller_status', 'agent_tasks', 'seller_id, status'),
+        ('idx_atask_agent_status', 'agent_tasks', 'agent_id, status'),
+        ('idx_atask_created', 'agent_tasks', 'created_at'),
+        ('idx_atstep_task_num', 'agent_task_steps', 'task_id, step_number'),
+    ]
+    for idx_name, table, columns in agent_indexes:
+        if table in insp.get_table_names():
+            try:
+                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
 
     # Индексы для таблиц аналитики и финансов
     analytics_indexes = [
