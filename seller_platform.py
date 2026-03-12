@@ -5776,6 +5776,10 @@ register_brand_routes(app)
 from routes.prohibited_words import register_prohibited_words_routes
 register_prohibited_words_routes(app)
 
+# ============= РОУТЫ ЗАПРЕЩЁННЫХ БРЕНДОВ =============
+from routes.prohibited_brands import register_prohibited_brands_routes
+register_prohibited_brands_routes(app)
+
 # ============= РОУТЫ АНАЛИТИКИ =============
 from routes.analytics import register_analytics_routes
 register_analytics_routes(app)

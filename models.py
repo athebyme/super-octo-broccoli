@@ -3649,3 +3649,49 @@ class Notification(db.Model):
 
     def __repr__(self):
         return f'<Notification {self.id} [{self.category}] {self.title[:30]}>'
+
+
+# ============================================================================
+# ProhibitedBrand — запрещённые бренды по маркетплейсам
+# ============================================================================
+class ProhibitedBrand(db.Model):
+    """Бренд, запрещённый к импорту на конкретном маркетплейсе."""
+    __tablename__ = 'prohibited_brands'
+
+    id = db.Column(db.Integer, primary_key=True)
+    brand_name = db.Column(db.String(200), nullable=False)
+    brand_name_normalized = db.Column(db.String(200), nullable=False, index=True)
+    marketplace = db.Column(db.String(50), nullable=False, index=True)  # 'wb', 'ozon', 'sber' или 'all'
+    reason = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('brand_name_normalized', 'marketplace', name='uq_prohibited_brand_mp'),
+        db.Index('idx_prohibited_brand_active', 'marketplace', 'is_active'),
+    )
+
+    @staticmethod
+    def normalize_name(name: str) -> str:
+        """Нормализует имя бренда для сравнения."""
+        import re as _re
+        if not name:
+            return ''
+        n = name.strip().lower()
+        n = _re.sub(r'[^\w\s]', '', n)  # убираем спецсимволы
+        n = _re.sub(r'\s+', ' ', n).strip()
+        return n
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'brand_name': self.brand_name,
+            'marketplace': self.marketplace,
+            'reason': self.reason,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ProhibitedBrand {self.brand_name} [{self.marketplace}]>'

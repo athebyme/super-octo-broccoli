@@ -410,6 +410,7 @@ def register_auto_import_routes(app):
             'validated': base_q.filter_by(import_status='validated').count(),
             'imported': base_q.filter_by(import_status='imported').count(),
             'failed': base_q.filter_by(import_status='failed').count(),
+            'brand_prohibited': base_q.filter_by(import_status='brand_prohibited').count(),
             'in_stock': base_q.filter(
                 ImportedProduct.supplier_quantity.isnot(None),
                 ImportedProduct.supplier_quantity > 0
@@ -1089,8 +1090,22 @@ def register_auto_import_routes(app):
             is_valid, errors = ProductValidator.validate_product(product_data)
 
             if is_valid:
-                product.import_status = 'validated'
-                product.validation_errors = None
+                # Проверяем запрещённый бренд
+                try:
+                    from services.prohibited_brands_service import is_brand_prohibited, get_prohibited_marketplaces
+                    if product.brand and is_brand_prohibited(product.brand, 'wb'):
+                        product.import_status = 'brand_prohibited'
+                        prohibited_mps = get_prohibited_marketplaces(product.brand)
+                        mp_names = {'wb': 'WB', 'ozon': 'Ozon', 'sber': 'Сбер'}
+                        mp_list = ', '.join(mp_names.get(m, m) for m in prohibited_mps)
+                        product.import_error = f'Бренд "{product.brand}" запрещён на: {mp_list}'
+                        product.validation_errors = None
+                    else:
+                        product.import_status = 'validated'
+                        product.validation_errors = None
+                except Exception:
+                    product.import_status = 'validated'
+                    product.validation_errors = None
             else:
                 product.import_status = 'failed'
                 product.validation_errors = json.dumps(errors, ensure_ascii=False)
@@ -1099,8 +1114,8 @@ def register_auto_import_routes(app):
 
             return jsonify({
                 'success': True,
-                'is_valid': is_valid,
-                'errors': errors if not is_valid else [],
+                'is_valid': is_valid if product.import_status != 'brand_prohibited' else False,
+                'errors': errors if product.import_status == 'failed' else ([product.import_error] if product.import_status == 'brand_prohibited' else []),
                 'new_status': product.import_status
             })
 

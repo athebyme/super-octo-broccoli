@@ -150,7 +150,7 @@ _DIM_COMPILED = [(re.compile(p, re.IGNORECASE), key) for p, key in _DIM_PATTERNS
 # Размеры одежды
 _CLOTHING_SIZES = {
     'xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl', 'xxxl', '2xl', '3xl', '4xl', '5xl',
-    'one size', 'os', 'uni', 'универсальный',
+    'one size', 'os', 'uni',
 }
 _RU_SIZES = re.compile(r'\b(4[02468]|5[02468]|6[02468])\b')
 _LETTER_SIZES = re.compile(r'\b(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)\b', re.IGNORECASE)
