@@ -126,6 +126,18 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             platform_client.list_imported_products(seller_id, page, per_page),
     )
 
+    registry.register(
+        name='get_imported_product',
+        description='Получить детальную информацию об одном импортированном товаре по ID.',
+        parameters={
+            'properties': {
+                'product_id': {'type': 'integer', 'description': 'ID импортированного товара'},
+            },
+            'required': ['product_id'],
+        },
+        handler=lambda product_id: platform_client.get_imported_product(product_id),
+    )
+
     # ── Продавец ───────────────────────────────────────────────
 
     registry.register(

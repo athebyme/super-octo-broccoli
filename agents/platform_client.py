@@ -167,3 +167,6 @@ class PlatformClient:
             'GET',
             f'/sellers/{seller_id}/imported-products?page={page}&per_page={per_page}'
         )
+
+    def get_imported_product(self, product_id: int) -> dict:
+        return self._request('GET', f'/imported-products/{product_id}')

@@ -233,6 +233,16 @@ def internal_list_imported_products(seller_id):
     })
 
 
+@internal_api_bp.route('/imported-products/<int:product_id>', methods=['GET'])
+@_authenticate_agent
+def internal_get_imported_product(product_id):
+    """Получить одну импортированную запись по ID."""
+    p = ImportedProduct.query.get(product_id)
+    if not p:
+        return jsonify({'error': 'Imported product not found'}), 404
+    return jsonify({'product': _imported_product_to_dict(p)})
+
+
 # ── Данные: продавцы ────────────────────────────────────────────
 
 @internal_api_bp.route('/sellers/<int:seller_id>', methods=['GET'])

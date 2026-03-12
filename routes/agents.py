@@ -262,9 +262,11 @@ def register_agents_routes(app):
     @login_required
     def agent_task_create():
         """Создать задачу для агента вручную."""
+        fallback_url = request.form.get('redirect_url') or url_for('agents_dashboard')
+
         if not current_user.seller:
             flash('Нет профиля продавца', 'danger')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         agent_id = request.form.get('agent_id')
         task_type = request.form.get('task_type', '')
@@ -272,12 +274,12 @@ def register_agents_routes(app):
 
         if not agent_id or not task_type or not title:
             flash('Заполните все поля', 'warning')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         agent = agent_service.get_agent(agent_id)
         if not agent:
             flash('Агент не найден', 'danger')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         input_data = {}
         try:
@@ -286,7 +288,7 @@ def register_agents_routes(app):
                 input_data = json.loads(raw)
         except json.JSONDecodeError:
             flash('Некорректный JSON во входных данных', 'warning')
-            return redirect(url_for('agents_dashboard'))
+            return redirect(fallback_url)
 
         task = agent_service.create_task(
             agent_id=agent_id,

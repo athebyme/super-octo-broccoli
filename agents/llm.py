@@ -291,6 +291,11 @@ class GeminiLLM(BaseLLM):
 
 # ── OpenAI-совместимый API (Cloud.ru, vLLM, Ollama, etc.) ─────────
 
+class LLMProviderError(Exception):
+    """Ошибка провайдера LLM (неверный URL, HTML вместо JSON и т.д.)."""
+    pass
+
+
 class OpenAICompatLLM(BaseLLM):
     """
     Универсальный провайдер через OpenAI-совместимый API.
@@ -315,18 +320,38 @@ class OpenAICompatLLM(BaseLLM):
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         logger.info(f"OpenAI-compat LLM initialized: {self.model} @ {self.base_url}")
 
+    def _check_api_error(self, error: Exception):
+        """Проверяет, не вернул ли API HTML вместо JSON (типичная ошибка Cloud.ru 404)."""
+        err_str = str(error)
+        # OpenAI SDK выбрасывает APIConnectionError или APIStatusError с HTML в body
+        if any(marker in err_str for marker in ['<!DOCTYPE', '<html', '<!doctype', 'Ошибка 404', 'Page not found']):
+            raise LLMProviderError(
+                f"LLM API вернул HTML вместо JSON. "
+                f"Проверьте CLOUDRU_BASE_URL ({self.base_url}) и CLOUDRU_MODEL ({self.model}). "
+                f"Текущий URL может быть некорректным — API возвращает веб-страницу с ошибкой 404."
+            ) from error
+        if 'Connection error' in err_str or 'connection' in err_str.lower():
+            raise LLMProviderError(
+                f"Не удалось подключиться к LLM API: {self.base_url}. "
+                f"Проверьте CLOUDRU_BASE_URL и доступность сервера."
+            ) from error
+
     @llm_retry()
     def chat(self, system: str, messages: list[dict],
              temperature: float = None, max_tokens: int = None) -> str:
         oai_messages = [{'role': 'system', 'content': system}]
         oai_messages.extend(messages)
 
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=oai_messages,
-            temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
-            max_tokens=max_tokens or self.cfg.MAX_TOKENS,
-        )
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=oai_messages,
+                temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
+                max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+            )
+        except Exception as e:
+            self._check_api_error(e)
+            raise
         return resp.choices[0].message.content or ''
 
     @llm_retry()
@@ -349,13 +374,17 @@ class OpenAICompatLLM(BaseLLM):
                 },
             })
 
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=oai_messages,
-            tools=oai_tools if oai_tools else None,
-            temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
-            max_tokens=max_tokens or self.cfg.MAX_TOKENS,
-        )
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=oai_messages,
+                tools=oai_tools if oai_tools else None,
+                temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
+                max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+            )
+        except Exception as e:
+            self._check_api_error(e)
+            raise
 
         msg = resp.choices[0].message
         text = msg.content or ''

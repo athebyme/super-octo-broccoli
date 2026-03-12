@@ -50,6 +50,20 @@ class CategoryMapperAgent(BaseAgent):
 
         if task_type == 'map_single':
             product_id = input_data.get('product_id')
+            imported_product_id = input_data.get('imported_product_id')
+
+            if imported_product_id:
+                return (
+                    f"Определи категорию WB для импортированного товара.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Imported Product ID: {imported_product_id}\n\n"
+                    f"1. Получи данные товара через get_imported_product (product_id={imported_product_id})\n"
+                    f"2. Проанализируй название, описание, бренд, характеристики\n"
+                    f"3. Определи наиболее подходящую категорию WB (предмет/subject)\n"
+                    f"4. Оцени уверенность (0-1)\n\n"
+                    f"Верни JSON: {{subject_id, subject_name, parent_category, confidence, reasoning}}"
+                )
+
             return (
                 f"Определи категорию WB для товара.\n"
                 f"Seller ID: {seller_id}\n"
@@ -62,6 +76,19 @@ class CategoryMapperAgent(BaseAgent):
             )
 
         elif task_type == 'map_batch':
+            imported_product_ids = input_data.get('imported_product_ids', [])
+            if imported_product_ids:
+                ids_str = ', '.join(str(i) for i in imported_product_ids[:20])
+                return (
+                    f"Пакетный маппинг категорий для импортированных товаров.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product IDs: {ids_str}\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product\n"
+                    f"2. Определи категорию WB для каждого товара\n"
+                    f"3. Верни результаты с уровнем уверенности\n\n"
+                    f"Верни JSON: {{processed: число, results: [{{product_id, subject_id, subject_name, confidence}}]}}"
+                )
+
             return (
                 f"Пакетный маппинг категорий.\n"
                 f"Seller ID: {seller_id}\n\n"
