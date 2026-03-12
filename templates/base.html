@@ -1024,9 +1024,9 @@
         {% if messages %}
         <div class="flash-container">
             {% for category, message in messages %}
-            <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)"
+            <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, {{ 30000 if 'AGENT_' in message else 5000 }})"
                 class="flash-msg {{ category }}">
-                <span>{{ message }}</span>
+                <span style="white-space: pre-line">{{ message }}</span>
                 <button @click="show = false" class="flash-close">
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>

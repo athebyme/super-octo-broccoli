@@ -260,5 +260,13 @@ def register_agents_routes(app):
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
-        flash(f'{agent.display_name} активирован. API ключ: {raw_key}', 'success')
+        # Формируем .env-переменные для docker-compose
+        env_prefix = agent_name.upper().replace('-', '_')
+        flash(
+            f'{agent.display_name} активирован! Добавьте в .env:\n'
+            f'AGENT_{env_prefix}_ID={agent.id}\n'
+            f'AGENT_{env_prefix}_KEY={raw_key}\n\n'
+            f'Запуск: docker compose --profile agents up -d agent-{agent_name}',
+            'success'
+        )
         return redirect(url_for('agents_dashboard'))
