@@ -79,7 +79,7 @@ services:
     container_name: agent-seo-writer
     environment:
       - AGENT_NAME=seo-writer
-      - PLATFORM_URL=http://seller-platform:${SELLER_PORT:-5001}
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
       - AGENT_ID=${AGENT_SEO_WRITER_ID:-}
       - AGENT_API_KEY=${AGENT_SEO_WRITER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -100,7 +100,7 @@ services:
     container_name: agent-category-mapper
     environment:
       - AGENT_NAME=category-mapper
-      - PLATFORM_URL=http://seller-platform:${SELLER_PORT:-5001}
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
       - AGENT_ID=${AGENT_CATEGORY_MAPPER_ID:-}
       - AGENT_API_KEY=${AGENT_CATEGORY_MAPPER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -121,7 +121,7 @@ services:
     container_name: agent-auto-importer
     environment:
       - AGENT_NAME=auto-importer
-      - PLATFORM_URL=http://seller-platform:${SELLER_PORT:-5001}
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
       - AGENT_ID=${AGENT_AUTO_IMPORTER_ID:-}
       - AGENT_API_KEY=${AGENT_AUTO_IMPORTER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -146,7 +146,7 @@ services:
     container_name: agent-card-doctor
     environment:
       - AGENT_NAME=card-doctor
-      - PLATFORM_URL=http://seller-platform:${SELLER_PORT:-5001}
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
       - AGENT_ID=${AGENT_CARD_DOCTOR_ID:-}
       - AGENT_API_KEY=${AGENT_CARD_DOCTOR_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -170,7 +170,7 @@ services:
     container_name: agent-price-optimizer
     environment:
       - AGENT_NAME=price-optimizer
-      - PLATFORM_URL=http://seller-platform:${SELLER_PORT:-5001}
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
       - AGENT_ID=${AGENT_PRICE_OPTIMIZER_ID:-}
       - AGENT_API_KEY=${AGENT_PRICE_OPTIMIZER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}

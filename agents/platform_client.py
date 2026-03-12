@@ -14,8 +14,12 @@ import logging
 from typing import Optional
 
 import requests
+import urllib3
 
 from .config import AgentConfig
+
+# Подавляем предупреждения о self-signed сертификатах внутри Docker-сети
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,9 @@ class PlatformClient:
         self.cfg = config or AgentConfig
         self.base_url = self.cfg.PLATFORM_URL.rstrip('/')
         self.session = requests.Session()
+        # Внутри Docker-сети seller-platform использует self-signed сертификат —
+        # верификацию отключаем для inter-service коммуникации.
+        self.session.verify = False
         self.session.headers.update({
             'X-Agent-Id': self.cfg.AGENT_ID,
             'X-Agent-Key': self.cfg.AGENT_API_KEY,
