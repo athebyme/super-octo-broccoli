@@ -389,7 +389,6 @@ class BaseAgent(ABC):
 
         # Если последнее сообщение LLM содержало текст — попробуем извлечь из него результат
         if messages and messages[-1].get('role') == 'user':
-            # Последний ответ ассистента мог содержать частичные данные
             for msg in reversed(messages):
                 if msg.get('role') == 'assistant':
                     partial = self._parse_final_answer(msg.get('content', ''))
