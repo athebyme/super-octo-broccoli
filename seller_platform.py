@@ -5892,8 +5892,9 @@ from routes.agents import register_agents_routes
 register_agents_routes(app)
 
 # ============= INTERNAL API ДЛЯ АГЕНТОВ =============
-from routes.internal_api import register_internal_api_routes
-register_internal_api_routes(app)
+from routes.internal_api import internal_api_bp
+app.register_blueprint(internal_api_bp)
+csrf.exempt(internal_api_bp)
 
 
 def _run_startup_migrations():
