@@ -44,18 +44,20 @@ class PlatformClient:
         return f"{self.base_url}/internal/v1{path}"
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
-        """Выполняет запрос с retry на сетевые ошибки."""
+        """Выполняет запрос с retry на сетевые и timeout ошибки."""
         url = self._url(path)
         last_error = None
         for attempt in range(4):
             try:
-                resp = self.session.request(method, url, timeout=30, **kwargs)
+                resp = self.session.request(method, url, timeout=90, **kwargs)
                 resp.raise_for_status()
                 return resp.json()
-            except requests.exceptions.ConnectionError as e:
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.ReadTimeout,
+                    requests.exceptions.Timeout) as e:
                 last_error = e
                 wait = 2 ** (attempt + 1)
-                logger.warning(f"Connection error (attempt {attempt+1}/4), retry in {wait}s: {e}")
+                logger.warning(f"Request error (attempt {attempt+1}/4), retry in {wait}s: {e}")
                 time.sleep(wait)
             except requests.exceptions.HTTPError as e:
                 logger.error(f"HTTP error {resp.status_code}: {resp.text}")
