@@ -1,0 +1,333 @@
+# -*- coding: utf-8 -*-
+"""
+Базовый агент с ADK-паттернами.
+
+Реализует:
+- ReAct loop (Reason → Act → Observe)
+- Автоматическое логирование шагов в платформу
+- Tool calling через LLM (Gemini / Claude)
+- Heartbeat в фоне
+- Graceful shutdown
+"""
+import json
+import logging
+import signal
+import threading
+import time
+from abc import ABC, abstractmethod
+from typing import Optional
+
+from .config import AgentConfig
+from .llm import BaseLLM, create_llm
+from .platform_client import PlatformClient
+from .tools import ToolRegistry, create_platform_tools
+
+logger = logging.getLogger(__name__)
+
+
+class BaseAgent(ABC):
+    """
+    Базовый агент с ReAct-циклом.
+
+    Наследники определяют:
+      - agent_name: str
+      - system_prompt: str
+      - get_tools() -> ToolRegistry  (дополнительные инструменты)
+      - build_task_prompt(task) -> str  (промпт для конкретной задачи)
+    """
+
+    agent_name: str = 'base'
+    system_prompt: str = 'Ты AI-агент для платформы WB-селлеров.'
+    max_iterations: int = 15  # макс. итераций ReAct
+    max_tool_retries: int = 2
+
+    def __init__(self, config: AgentConfig = None):
+        self.config = config or AgentConfig
+        self.config.validate()
+
+        self.platform = PlatformClient(self.config)
+        self.llm: BaseLLM = create_llm(self.config)
+
+        # Инструменты
+        self._tools = create_platform_tools(self.platform)
+        extra = self.get_tools()
+        if extra:
+            for name, tool_def in extra._tools.items():
+                self._tools._tools[name] = tool_def
+            for name, handler in extra._handlers.items():
+                self._tools._handlers[name] = handler
+
+        self._running = False
+        self._heartbeat_thread: Optional[threading.Thread] = None
+
+    # ── Абстрактные методы ─────────────────────────────────────────
+
+    def get_tools(self) -> Optional[ToolRegistry]:
+        """Дополнительные инструменты агента. Переопределить в наследнике."""
+        return None
+
+    @abstractmethod
+    def build_task_prompt(self, task: dict) -> str:
+        """Формирует промпт для выполнения задачи."""
+        ...
+
+    def post_process(self, task: dict, result: dict) -> dict:
+        """Постобработка результата (опционально)."""
+        return result
+
+    # ── Основной цикл ──────────────────────────────────────────────
+
+    def run(self):
+        """Запускает агента: heartbeat + poll loop."""
+        self._running = True
+        self._setup_signals()
+        self._start_heartbeat()
+
+        logger.info(f"Agent [{self.agent_name}] started. Polling every {self.config.POLL_INTERVAL}s")
+        self.platform.heartbeat('online')
+
+        try:
+            while self._running:
+                try:
+                    self._poll_and_execute()
+                except Exception as e:
+                    logger.error(f"Poll cycle error: {e}", exc_info=True)
+                time.sleep(self.config.POLL_INTERVAL)
+        finally:
+            self._running = False
+            logger.info(f"Agent [{self.agent_name}] shutting down")
+            try:
+                self.platform.heartbeat('offline')
+            except Exception:
+                pass
+
+    def stop(self):
+        """Останавливает агента."""
+        self._running = False
+
+    def _poll_and_execute(self):
+        """Один цикл: получить задачу → выполнить."""
+        tasks = self.platform.poll_tasks(limit=1)
+        if not tasks:
+            return
+
+        task = tasks[0]
+        task_id = task['id']
+        logger.info(f"Picked up task {task_id[:8]}: {task.get('title', '?')}")
+
+        try:
+            # Берём задачу в работу
+            self.platform.start_task(task_id)
+            self.platform.log_thinking(task_id, 'Анализирую задачу',
+                                       f"Тип: {task.get('task_type')}")
+
+            # Выполняем ReAct цикл
+            result = self._execute_react(task)
+
+            # Постобработка
+            result = self.post_process(task, result)
+
+            # Завершаем
+            self.platform.complete_task(task_id, result)
+            self.platform.log_result(task_id, 'Задача завершена',
+                                     json.dumps(result, ensure_ascii=False)[:500])
+            logger.info(f"Task {task_id[:8]} completed")
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Task {task_id[:8]} failed: {error_msg}", exc_info=True)
+            try:
+                self.platform.log_error(task_id, 'Ошибка выполнения', error_msg)
+                self.platform.fail_task(task_id, error_msg)
+            except Exception:
+                pass
+
+    # ── ReAct цикл ─────────────────────────────────────────────────
+
+    def _execute_react(self, task: dict) -> dict:
+        """
+        ReAct (Reason-Act) цикл:
+        1. LLM получает задачу + инструменты
+        2. LLM рассуждает (thinking) и вызывает инструменты (action)
+        3. Результат инструмента возвращается LLM (observation)
+        4. Повторяем до финального ответа
+        """
+        task_id = task['id']
+        task_prompt = self.build_task_prompt(task)
+
+        messages = [{'role': 'user', 'content': task_prompt}]
+        tool_schemas = self._tools.get_tool_schemas()
+        total_steps = 0
+
+        for iteration in range(self.max_iterations):
+            t0 = time.time()
+
+            # Вызов LLM
+            if tool_schemas:
+                response = self.llm.chat_with_tools(
+                    system=self.system_prompt,
+                    messages=messages,
+                    tools=tool_schemas,
+                )
+            else:
+                text = self.llm.chat(self.system_prompt, messages)
+                response = {'text': text, 'tool_calls': [], 'stop_reason': 'end_turn'}
+
+            duration_ms = int((time.time() - t0) * 1000)
+
+            # Логируем рассуждения
+            if response['text']:
+                total_steps += 1
+                self.platform.log_thinking(
+                    task_id,
+                    f'Рассуждение (шаг {iteration + 1})',
+                    response['text'][:2000],
+                    duration_ms=duration_ms,
+                )
+                self.platform.update_progress(
+                    task_id, completed_steps=total_steps,
+                    current_step_label=f'Рассуждение (шаг {iteration + 1})',
+                )
+
+            # Если нет tool calls — финальный ответ
+            if not response['tool_calls']:
+                return self._parse_final_answer(response['text'])
+
+            # Выполняем tool calls
+            messages.append({
+                'role': 'assistant',
+                'content': self._format_assistant_message(response),
+            })
+
+            tool_results = []
+            for call in response['tool_calls']:
+                tool_name = call['name']
+                tool_args = call['arguments']
+
+                total_steps += 1
+                self.platform.log_action(
+                    task_id,
+                    f'Вызов: {tool_name}',
+                    json.dumps(tool_args, ensure_ascii=False)[:500],
+                )
+
+                # Выполняем инструмент
+                t1 = time.time()
+                result_str = self._tools.execute(tool_name, tool_args)
+                tool_duration = int((time.time() - t1) * 1000)
+
+                self.platform.log_decision(
+                    task_id,
+                    f'Результат: {tool_name}',
+                    result_str[:1000],
+                    duration_ms=tool_duration,
+                )
+
+                tool_results.append({
+                    'tool_use_id': call.get('id', ''),
+                    'name': tool_name,
+                    'result': result_str,
+                })
+
+                self.platform.update_progress(
+                    task_id, completed_steps=total_steps,
+                    current_step_label=f'{tool_name}',
+                )
+
+            # Добавляем результаты инструментов в контекст
+            messages.append({
+                'role': 'user',
+                'content': self._format_tool_results(tool_results),
+            })
+
+        # Достигнут лимит итераций
+        logger.warning(f"Task {task_id[:8]}: max iterations reached")
+        self.platform.log_thinking(task_id, 'Достигнут лимит итераций',
+                                   f'Выполнено {self.max_iterations} итераций')
+        return {'status': 'partial', 'message': 'Достигнут лимит итераций ReAct цикла'}
+
+    def _format_assistant_message(self, response: dict) -> str:
+        """Форматирует ответ ассистента для контекста."""
+        parts = []
+        if response['text']:
+            parts.append(response['text'])
+        for call in response['tool_calls']:
+            parts.append(
+                f"[Tool Call: {call['name']}({json.dumps(call['arguments'], ensure_ascii=False)[:300]})]"
+            )
+        return '\n'.join(parts)
+
+    def _format_tool_results(self, results: list) -> str:
+        """Форматирует результаты инструментов для LLM."""
+        parts = []
+        for r in results:
+            parts.append(f"[Tool Result: {r['name']}]\n{r['result'][:2000]}")
+        return '\n\n'.join(parts)
+
+    def _parse_final_answer(self, text: str) -> dict:
+        """Пытается извлечь JSON из финального ответа LLM."""
+        if not text:
+            return {'message': 'Задача выполнена'}
+
+        # Пробуем JSON
+        clean = text.strip()
+        if clean.startswith('```'):
+            lines = clean.split('\n')
+            clean = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
+
+        try:
+            return json.loads(clean)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        return {'message': text[:3000]}
+
+    # ── Heartbeat ──────────────────────────────────────────────────
+
+    def _start_heartbeat(self):
+        """Запускает фоновый heartbeat."""
+        def _beat():
+            while self._running:
+                try:
+                    self.platform.heartbeat('online')
+                except Exception as e:
+                    logger.warning(f"Heartbeat failed: {e}")
+                time.sleep(self.config.HEARTBEAT_INTERVAL)
+
+        self._heartbeat_thread = threading.Thread(target=_beat, daemon=True)
+        self._heartbeat_thread.start()
+
+    # ── Graceful shutdown ──────────────────────────────────────────
+
+    def _setup_signals(self):
+        """Ловим SIGINT/SIGTERM для graceful shutdown."""
+        def _handler(signum, frame):
+            logger.info(f"Signal {signum} received, stopping agent...")
+            self.stop()
+
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)
+
+
+class SimpleAgent(BaseAgent):
+    """
+    Простой агент без дополнительных инструментов.
+    Использует только платформенные инструменты и LLM.
+    """
+
+    def build_task_prompt(self, task: dict) -> str:
+        input_data = task.get('input_data', '{}')
+        if isinstance(input_data, str):
+            try:
+                input_data = json.loads(input_data)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return (
+            f"Задача: {task.get('title', 'Без названия')}\n"
+            f"Тип: {task.get('task_type', 'unknown')}\n"
+            f"ID продавца: {task.get('seller_id')}\n"
+            f"Входные данные:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\n"
+            f"Выполни задачу, используя доступные инструменты. "
+            f"Когда закончишь, верни итоговый результат в JSON."
+        )

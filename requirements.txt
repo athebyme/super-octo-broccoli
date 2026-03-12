@@ -12,3 +12,6 @@ cryptography==41.0.7
 APScheduler==3.10.4
 Pillow==10.4.0
 Flask-WTF==1.2.1
+# AI Agent Runtime (LLM providers)
+anthropic>=0.40.0
+google-genai>=1.0.0
