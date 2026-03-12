@@ -145,6 +145,102 @@ def register_agents_routes(app):
             'agents': [a.to_dict() for a in agents],
         })
 
+    @app.route('/agents/api/available-actions')
+    @login_required
+    def agents_api_available_actions():
+        """API: доступные AI-действия для товаров (online агенты с task_types)."""
+        agents = agent_service.list_agents()
+        agent_service.mark_stale_agents()
+
+        # Map agent names to product-relevant actions
+        PRODUCT_ACTIONS = {
+            'seo-writer': {
+                'single': 'seo_single',
+                'batch': 'seo_batch',
+                'label': 'SEO оптимизация',
+                'label_batch': 'SEO пакетом',
+                'icon': 'pen',
+                'color': 'emerald',
+                'title_template': 'SEO: {product}',
+            },
+            'category-mapper': {
+                'single': 'map_single',
+                'batch': 'map_batch',
+                'label': 'Подобрать категорию',
+                'label_batch': 'Категории пакетом',
+                'icon': 'tag',
+                'color': 'blue',
+                'title_template': 'Категория: {product}',
+            },
+            'characteristics-filler': {
+                'single': 'fill_single',
+                'batch': 'fill_batch',
+                'label': 'Заполнить характеристики',
+                'label_batch': 'Характеристики пакетом',
+                'icon': 'list',
+                'color': 'indigo',
+                'title_template': 'Характеристики: {product}',
+            },
+            'size-normalizer': {
+                'single': 'normalize_single',
+                'batch': 'normalize_batch',
+                'label': 'Нормализовать размеры',
+                'label_batch': 'Размеры пакетом',
+                'icon': 'ruler',
+                'color': 'cyan',
+                'title_template': 'Размеры: {product}',
+            },
+            'card-doctor': {
+                'single': 'diagnose_single',
+                'batch': 'diagnose_batch',
+                'label': 'Проверить карточку',
+                'label_batch': 'Проверка пакетом',
+                'icon': 'shield',
+                'color': 'red',
+                'title_template': 'Диагностика: {product}',
+            },
+            'brand-resolver': {
+                'single': 'resolve_single',
+                'batch': 'resolve_batch',
+                'label': 'Определить бренд',
+                'label_batch': 'Бренды пакетом',
+                'icon': 'badge',
+                'color': 'amber',
+                'title_template': 'Бренд: {product}',
+            },
+            'price-optimizer': {
+                'single': 'optimize_prices',
+                'batch': 'optimize_prices',
+                'label': 'Оптимизировать цену',
+                'label_batch': 'Цены пакетом',
+                'icon': 'chart',
+                'color': 'emerald',
+                'title_template': 'Цена: {product}',
+            },
+            'review-analyst': {
+                'single': 'analyze_reviews',
+                'batch': 'analyze_reviews',
+                'label': 'Анализ отзывов',
+                'label_batch': 'Отзывы пакетом',
+                'icon': 'message',
+                'color': 'violet',
+                'title_template': 'Отзывы: {product}',
+            },
+        }
+
+        available = []
+        for a in agents:
+            action = PRODUCT_ACTIONS.get(a.name)
+            if action and a.status == 'online':
+                available.append({
+                    'agent_id': str(a.id),
+                    'agent_name': a.name,
+                    'display_name': a.display_name,
+                    **action,
+                })
+
+        return jsonify({'actions': available})
+
     # ── Действия ────────────────────────────────────────────────────
 
     @app.route('/agents/tasks/<task_id>/cancel', methods=['POST'])
