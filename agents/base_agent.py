@@ -34,7 +34,7 @@ LIVENESS_FILE = Path('/tmp/agent-alive')
 # Примерный лимит символов контекста перед сжатием
 # (грубая оценка: ~4 символа ≈ 1 токен, лимит ~80k токенов → ~300k символов,
 #  оставляем запас для системного промпта и ответа)
-CONTEXT_CHAR_LIMIT = 200_000
+CONTEXT_CHAR_LIMIT = 120_000
 
 # Макс. число провалов задачи перед пропуском (dead letter protection)
 MAX_TASK_FAILURES = 3
@@ -79,18 +79,19 @@ def _estimate_context_size(messages: list[dict]) -> int:
 
 def _summarize_old_messages(messages: list[dict]) -> list[dict]:
     """
-    Сжимает старые сообщения, оставляя первое (задачу) и последние 4.
+    Сжимает старые сообщения, оставляя первое (задачу) и последние 2.
     Промежуточные заменяются кратким резюме.
     """
-    if len(messages) <= 6:
+    if len(messages) <= 4:
         return messages
 
     first = messages[0]  # исходный промпт задачи
-    tail = messages[-4:]  # последние 2 пары (assistant + user)
+    tail = messages[-2:]  # последняя пара (assistant + user)
 
     # Собираем краткое резюме промежуточных шагов
-    middle = messages[1:-4]
+    middle = messages[1:-2]
     tool_names = set()
+    tool_call_count = 0
     for m in middle:
         content = m.get('content', '')
         # Извлекаем имена вызванных инструментов
@@ -105,12 +106,15 @@ def _summarize_old_messages(messages: list[dict]) -> list[dict]:
                     name_part = content[pos + len(marker):end].split('(')[0].strip()
                     if name_part:
                         tool_names.add(name_part)
+                        if marker == '[Tool Call:':
+                            tool_call_count += 1
                 idx = pos + 1
 
     summary = (
         f"[Контекст сжат: {len(middle)} промежуточных сообщений опущены. "
+        f"Выполнено вызовов: {tool_call_count}. "
         f"Вызванные инструменты: {', '.join(sorted(tool_names)) or 'нет'}. "
-        f"Продолжай выполнение задачи.]"
+        f"Продолжай выполнение задачи. НЕ повторяй уже выполненные вызовы.]"
     )
 
     return [first, {'role': 'user', 'content': summary}] + tail
@@ -316,7 +320,7 @@ class BaseAgent(ABC):
                 self.platform.log_thinking(
                     task_id,
                     f'Рассуждение (шаг {iteration + 1})',
-                    response['text'][:2000],
+                    response['text'][:1000],
                     duration_ms=duration_ms,
                 )
                 self.platform.update_progress(
@@ -354,7 +358,7 @@ class BaseAgent(ABC):
                 self.platform.log_decision(
                     task_id,
                     f'Результат: {tool_name}',
-                    result_str[:1000],
+                    result_str[:500],
                     duration_ms=tool_duration,
                 )
 
@@ -410,10 +414,11 @@ class BaseAgent(ABC):
         """Форматирует ответ ассистента для контекста."""
         parts = []
         if response['text']:
-            parts.append(response['text'])
+            # Обрезаем рассуждения для экономии контекста
+            parts.append(response['text'][:800])
         for call in response['tool_calls']:
             parts.append(
-                f"[Tool Call: {call['name']}({json.dumps(call['arguments'], ensure_ascii=False)[:300]})]"
+                f"[Tool Call: {call['name']}({json.dumps(call['arguments'], ensure_ascii=False)[:200]})]"
             )
         return '\n'.join(parts)
 
@@ -421,7 +426,11 @@ class BaseAgent(ABC):
         """Форматирует результаты инструментов для LLM."""
         parts = []
         for r in results:
-            parts.append(f"[Tool Result: {r['name']}]\n{r['result'][:2000]}")
+            # Ограничиваем размер результатов для экономии контекста
+            result_text = r['result']
+            if len(result_text) > 1500:
+                result_text = result_text[:1500] + '\n... (данные обрезаны для экономии контекста)'
+            parts.append(f"[Tool Result: {r['name']}]\n{result_text}")
         return '\n\n'.join(parts)
 
     def _parse_final_answer(self, text: str) -> dict:
