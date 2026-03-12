@@ -665,6 +665,94 @@ def migrate(db_path):
             print("  ⏭️  Таблица уже существует")
 
         # ============================================================
+        # Таблицы сервисных агентов (service_agents, agent_tasks, agent_task_steps)
+        # ============================================================
+        print("\n📋 Таблицы сервисных агентов")
+        print("-" * 40)
+
+        if 'service_agents' not in existing_tables:
+            cursor.execute("""
+                CREATE TABLE service_agents (
+                    id              TEXT PRIMARY KEY,
+                    name            TEXT NOT NULL,
+                    display_name    TEXT NOT NULL,
+                    description     TEXT,
+                    agent_type      TEXT NOT NULL DEFAULT 'external',
+                    category        TEXT NOT NULL DEFAULT 'general',
+                    status          TEXT NOT NULL DEFAULT 'offline',
+                    version         TEXT,
+                    endpoint_url    TEXT,
+                    api_key_hash    TEXT,
+                    capabilities    TEXT DEFAULT '[]',
+                    config_json     TEXT DEFAULT '{}',
+                    task_types      TEXT DEFAULT '[]',
+                    icon            TEXT DEFAULT 'cpu',
+                    color           TEXT DEFAULT 'blue',
+                    last_heartbeat  TIMESTAMP,
+                    last_error      TEXT,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_agent_name ON service_agents(name)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_agent_status ON service_agents(status)")
+            print("  ✅ Таблица service_agents создана")
+            total_added += 1
+        else:
+            print("  ⏭️  service_agents уже существует")
+
+        if 'agent_tasks' not in existing_tables:
+            cursor.execute("""
+                CREATE TABLE agent_tasks (
+                    id                  TEXT PRIMARY KEY,
+                    agent_id            TEXT NOT NULL REFERENCES service_agents(id),
+                    seller_id           INTEGER NOT NULL REFERENCES sellers(id),
+                    task_type           TEXT NOT NULL,
+                    title               TEXT NOT NULL,
+                    status              TEXT NOT NULL DEFAULT 'queued',
+                    priority            INTEGER DEFAULT 0,
+                    input_data          TEXT DEFAULT '{}',
+                    total_steps         INTEGER DEFAULT 0,
+                    completed_steps     INTEGER DEFAULT 0,
+                    current_step_label  TEXT,
+                    result_data         TEXT DEFAULT '{}',
+                    error_message       TEXT,
+                    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    started_at          TIMESTAMP,
+                    completed_at        TIMESTAMP,
+                    updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_atask_seller_status ON agent_tasks(seller_id, status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_atask_agent_status ON agent_tasks(agent_id, status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_atask_created ON agent_tasks(created_at)")
+            print("  ✅ Таблица agent_tasks создана")
+            total_added += 1
+        else:
+            print("  ⏭️  agent_tasks уже существует")
+
+        if 'agent_task_steps' not in existing_tables:
+            cursor.execute("""
+                CREATE TABLE agent_task_steps (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id         TEXT NOT NULL REFERENCES agent_tasks(id),
+                    step_number     INTEGER NOT NULL,
+                    step_type       TEXT NOT NULL DEFAULT 'action',
+                    title           TEXT NOT NULL,
+                    detail          TEXT,
+                    status          TEXT DEFAULT 'completed',
+                    duration_ms     INTEGER,
+                    metadata_json   TEXT DEFAULT '{}',
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_atstep_task_num ON agent_task_steps(task_id, step_number)")
+            print("  ✅ Таблица agent_task_steps создана")
+            total_added += 1
+        else:
+            print("  ⏭️  agent_task_steps уже существует")
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()
