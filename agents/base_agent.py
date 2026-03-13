@@ -375,11 +375,36 @@ class BaseAgent(ABC):
                 'content': self._format_tool_results(tool_results),
             })
 
-        # Достигнут лимит итераций
-        logger.warning(f"Task {task_id[:8]}: max iterations reached")
-        self.platform.log_thinking(task_id, 'Достигнут лимит итераций',
-                                   f'Выполнено {self.max_iterations} итераций')
-        return {'status': 'partial', 'message': 'Достигнут лимит итераций ReAct цикла'}
+        # Достигнут лимит итераций — пробуем извлечь частичный результат
+        logger.warning(f"Task {task_id[:8]}: max iterations reached ({self.max_iterations})")
+        self.platform.log_decision(
+            task_id, 'Завершение по лимиту шагов',
+            f'Агент выполнил {self.max_iterations} шагов. '
+            f'Задача завершена с частичным результатом.',
+        )
+
+        # Если последнее сообщение LLM содержало текст — попробуем извлечь из него результат
+        if messages and messages[-1].get('role') == 'user':
+            # Последний ответ ассистента мог содержать частичные данные
+            for msg in reversed(messages):
+                if msg.get('role') == 'assistant':
+                    partial = self._parse_final_answer(msg.get('content', ''))
+                    if partial and partial.get('message') != 'Задача выполнена':
+                        partial['status'] = 'partial'
+                        partial['_note'] = (
+                            f'Достигнут лимит шагов ({self.max_iterations}). '
+                            f'Результат может быть неполным.'
+                        )
+                        return partial
+                    break
+
+        return {
+            'status': 'partial',
+            'message': (
+                f'Агент выполнил максимум шагов ({self.max_iterations}) '
+                f'и не успел завершить задачу. Попробуйте выбрать меньше товаров.'
+            ),
+        }
 
     def _format_assistant_message(self, response: dict) -> str:
         """Форматирует ответ ассистента для контекста."""

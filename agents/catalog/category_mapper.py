@@ -14,7 +14,7 @@ from ..base_agent import BaseAgent
 
 class CategoryMapperAgent(BaseAgent):
     agent_name = 'category-mapper'
-    max_iterations = 12
+    max_iterations = 25
 
     system_prompt = """Ты — эксперт по категориям маркетплейса Wildberries.
 
@@ -76,14 +76,23 @@ class CategoryMapperAgent(BaseAgent):
             )
 
         elif task_type == 'map_batch':
-            imported_product_ids = input_data.get('imported_product_ids', [])
-            if imported_product_ids:
-                ids_str = ', '.join(str(i) for i in imported_product_ids[:20])
+            # Поддержка обоих ключей: product_ids (из UI) и imported_product_ids (legacy)
+            product_ids = (
+                input_data.get('product_ids')
+                or input_data.get('imported_product_ids')
+                or []
+            )
+            if product_ids:
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
+                count = len(product_ids)
                 return (
-                    f"Пакетный маппинг категорий для импортированных товаров.\n"
+                    f"Пакетный маппинг категорий для {count} импортированных товаров.\n"
                     f"Seller ID: {seller_id}\n"
-                    f"Product IDs: {ids_str}\n\n"
-                    f"1. Для каждого ID получи данные через get_imported_product\n"
+                    f"Product IDs: {ids_str}\n"
+                    f"Всего товаров: {count}\n\n"
+                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные выше товары.\n"
+                    f"НЕ загружай список всех товаров продавца.\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
                     f"2. Определи категорию WB для каждого товара\n"
                     f"3. Верни результаты с уровнем уверенности\n\n"
                     f"Верни JSON: {{processed: число, results: [{{product_id, subject_id, subject_name, confidence}}]}}"

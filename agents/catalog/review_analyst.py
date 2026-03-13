@@ -46,6 +46,22 @@ class ReviewAnalystAgent(BaseAgent):
         seller_id = task.get('seller_id')
 
         if task_type == 'analyze_reviews':
+            product_ids = input_data.get('product_ids', [])
+            if product_ids:
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
+                count = len(product_ids)
+                return (
+                    f"Анализ отзывов для {count} выбранных товаров.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product IDs: {ids_str}\n\n"
+                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"2. Проанализируй доступные отзывы\n"
+                    f"3. Классифицируй проблемы\n"
+                    f"4. Выяви тренды\n\n"
+                    f"Верни JSON: {{sentiment: {{positive, neutral, negative}}, "
+                    f"issues: [{{category, count, examples}}], recommendations: [...]}}"
+                )
             return (
                 f"Анализ отзывов по товарам продавца.\n"
                 f"Seller ID: {seller_id}\n"
