@@ -61,6 +61,8 @@ class CharacteristicsFillerAgent(BaseAgent):
 
         elif task_type == 'fill_batch':
             product_ids = input_data.get('product_ids', [])
+            limit = input_data.get('limit', 10)
+
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
@@ -70,15 +72,19 @@ class CharacteristicsFillerAgent(BaseAgent):
                     f"Product IDs: {ids_str}\n\n"
                     f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
                     f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
-                    f"2. Определи категорию и обязательные характеристики\n"
-                    f"3. Заполни максимум характеристик\n\n"
+                    f"2. Определи обязательные характеристики для категории\n"
+                    f"3. Заполни характеристики и обнови через update_product\n\n"
                     f"Верни JSON: {{processed: число, results: [{{product_id, filled_count, missing: [...]}}]}}"
                 )
+
             return (
                 f"Пакетное заполнение характеристик.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи товары через get_products\n"
-                f"2. Для каждого заполни характеристики\n\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"2. Для каждого товара определи и заполни характеристики\n"
+                f"3. Обнови через update_product\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{processed: число, results: [...]}}"
             )
 

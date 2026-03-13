@@ -84,12 +84,15 @@ class SEOWriterAgent(BaseAgent):
                     f"3. Обнови каждый товар через update_product\n\n"
                     f"Верни JSON: {{processed: число, results: [...]}}"
                 )
+            limit = input_data.get('limit', 10)
             return (
                 f"SEO-оптимизация пакета товаров.\n"
-                f"Seller ID: {seller_id}\n\n"
-                f"1. Получи список товаров через get_products (page=1, per_page=10)\n"
+                f"Seller ID: {seller_id}\n"
+                f"Лимит: обработай максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
                 f"2. Для каждого товара сгенерируй оптимизированный заголовок и описание\n"
                 f"3. Обнови каждый товар через update_product\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{processed: число, results: [...]}}"
             )
 

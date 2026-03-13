@@ -61,8 +61,11 @@ class AutoImporterAgent(BaseAgent):
                 f"   b. Сгенерируй SEO-заголовок (до 60 символов)\n"
                 f"   c. Сгенерируй описание (до 1000 символов)\n"
                 f"   d. Проверь на стоп-слова\n"
+                f"   e. Сохрани данные: update_product(product_id=ID, wb_category_id=..., ai_seo_title=..., description=...)\n"
                 f"3. Подготовь отчёт о готовности\n\n"
-                f"ВАЖНО: Загрузи товары ОДНИМ вызовом. НЕ листай страницы. Данных из списка достаточно для обработки.\n\n"
+                f"ВАЖНО:\n"
+                f"- Загрузи товары ОДНИМ вызовом. НЕ листай страницы.\n"
+                f"- ОБЯЗАТЕЛЬНО вызови update_product для каждого товара.\n\n"
                 f"Верни JSON: {{total, ready, needs_review, "
                 f"products: [{{id, title, category, status, issues}}]}}"
             )

@@ -94,7 +94,7 @@ def create_platform_tools(platform_client) -> ToolRegistry:
 
     registry.register(
         name='update_product',
-        description='Обновить данные товара (title, description, brand, характеристики, SEO-заголовок).',
+        description='Обновить данные товара: заголовок, описание, бренд, категорию WB, SEO-заголовок и др.',
         parameters={
             'properties': {
                 'seller_id': {'type': 'integer', 'description': 'ID продавца'},
@@ -102,6 +102,8 @@ def create_platform_tools(platform_client) -> ToolRegistry:
                 'title': {'type': 'string', 'description': 'Новый заголовок'},
                 'description': {'type': 'string', 'description': 'Новое описание'},
                 'brand': {'type': 'string', 'description': 'Новый бренд'},
+                'wb_category_id': {'type': 'integer', 'description': 'ID категории WB (subjectID)'},
+                'wb_category_name': {'type': 'string', 'description': 'Название категории WB'},
                 'ai_seo_title': {'type': 'string', 'description': 'SEO-оптимизированный заголовок'},
                 'tags': {'type': 'string', 'description': 'Теги через запятую'},
             },
