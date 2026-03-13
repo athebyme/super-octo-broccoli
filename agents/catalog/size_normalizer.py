@@ -14,7 +14,7 @@ from ..base_agent import BaseAgent
 
 class SizeNormalizerAgent(BaseAgent):
     agent_name = 'size-normalizer'
-    max_iterations = 10
+    max_iterations = 20
 
     system_prompt = """Ты — эксперт по размерам и габаритам товаров для Wildberries.
 
@@ -70,6 +70,21 @@ class SizeNormalizerAgent(BaseAgent):
                 f"Построй полную размерную сетку с конвертацией RU/EU/US.\n"
                 f"Верни JSON: {{grid: [{{ru_size, eu_size, us_size, measurements: {{}}}}]}}"
             )
+
+        elif task_type == 'normalize_batch':
+            product_ids = input_data.get('product_ids', [])
+            if product_ids:
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
+                count = len(product_ids)
+                return (
+                    f"Нормализация размеров для {count} выбранных товаров.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product IDs: {ids_str}\n\n"
+                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"2. Нормализуй размеры в формат WB\n\n"
+                    f"Верни JSON: {{processed: число, results: [{{product_id, sizes, dimensions}}]}}"
+                )
 
         return (
             f"Задача нормализации размеров.\n"

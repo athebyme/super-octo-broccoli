@@ -15,7 +15,7 @@ from ..tools import ToolRegistry
 
 class SEOWriterAgent(BaseAgent):
     agent_name = 'seo-writer'
-    max_iterations = 10
+    max_iterations = 20
 
     system_prompt = """Ты — SEO-эксперт для маркетплейса Wildberries (WB).
 
@@ -70,6 +70,20 @@ class SEOWriterAgent(BaseAgent):
             )
 
         elif task_type == 'seo_batch':
+            product_ids = input_data.get('product_ids', [])
+            if product_ids:
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
+                count = len(product_ids)
+                return (
+                    f"SEO-оптимизация {count} выбранных товаров.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product IDs: {ids_str}\n\n"
+                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"2. Сгенерируй оптимизированный заголовок и описание\n"
+                    f"3. Обнови каждый товар через update_product\n\n"
+                    f"Верни JSON: {{processed: число, results: [...]}}"
+                )
             return (
                 f"SEO-оптимизация пакета товаров.\n"
                 f"Seller ID: {seller_id}\n\n"

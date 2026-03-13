@@ -46,6 +46,20 @@ class PriceOptimizerAgent(BaseAgent):
         seller_id = task.get('seller_id')
 
         if task_type == 'optimize_prices':
+            product_ids = input_data.get('product_ids', [])
+            if product_ids:
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
+                count = len(product_ids)
+                return (
+                    f"Оптимизация цен для {count} выбранных товаров.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product IDs: {ids_str}\n\n"
+                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"2. Рассчитай unit-экономику\n"
+                    f"3. Предложи оптимальные цены\n\n"
+                    f"Верни JSON: {{products: [{{product_id, current_price, suggested_price, margin_pct, reasoning}}]}}"
+                )
             return (
                 f"Оптимизируй цены товаров.\n"
                 f"Seller ID: {seller_id}\n"

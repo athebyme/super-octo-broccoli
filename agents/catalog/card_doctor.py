@@ -62,7 +62,21 @@ class CardDoctorAgent(BaseAgent):
                 f"clean: bool, recommendations: [...]}}"
             )
 
-        elif task_type == 'preventive_scan':
+        elif task_type in ('diagnose_batch', 'preventive_scan'):
+            product_ids = input_data.get('product_ids', [])
+            if product_ids:
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
+                count = len(product_ids)
+                return (
+                    f"Диагностика {count} выбранных карточек.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product IDs: {ids_str}\n\n"
+                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
+                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"2. Проверь на стоп-слова и нарушения\n"
+                    f"3. Подготовь отчёт о рисках\n\n"
+                    f"Верни JSON: {{total, clean, at_risk, critical, issues: [...]}}"
+                )
             return (
                 f"Превентивный скан всех карточек.\n"
                 f"Seller ID: {seller_id}\n\n"

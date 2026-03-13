@@ -15,212 +15,307 @@
         </a>
     </div>
 
-    <!-- Заголовок задачи -->
-    <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
-        <div class="flex items-start justify-between">
-            <div class="flex items-start gap-4">
-                <div class="mt-1">
-                    {% if task.status == 'running' %}
-                    <div class="w-10 h-10 rounded-full border-2 border-brand border-t-transparent animate-spin"></div>
-                    {% elif task.status == 'completed' %}
-                    <div class="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                        </svg>
-                    </div>
-                    {% elif task.status == 'failed' %}
-                    <div class="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                        </svg>
-                    </div>
-                    {% elif task.status == 'cancelled' %}
-                    <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
-                        </svg>
-                    </div>
-                    {% else %}
-                    <div class="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                    {% endif %}
-                </div>
-                <div>
-                    <h1 class="text-xl font-semibold text-gray-900">{{ task.title }}</h1>
-                    <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
-                        <span>{{ task.agent.display_name if task.agent else 'Неизвестный агент' }}</span>
-                        <span>{{ task.task_type }}</span>
-                        <span>{{ task.created_at.strftime('%d.%m.%Y %H:%M:%S') if task.created_at else '' }}</span>
-                        {% if task.duration_seconds > 0 %}
-                        <span>{{ task.duration_seconds }}с</span>
+    <!-- Карточка задачи -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+        <!-- Цветная полоска статуса сверху -->
+        <div class="h-1
+            {% if task.status == 'running' %}bg-brand
+            {% elif task.status == 'completed' %}bg-emerald-500
+            {% elif task.status == 'failed' %}bg-red-500
+            {% elif task.status == 'cancelled' %}bg-gray-400
+            {% else %}bg-amber-400{% endif %}">
+        </div>
+
+        <div class="p-6">
+            <div class="flex items-start justify-between gap-4">
+                <div class="flex items-start gap-4 min-w-0">
+                    <!-- Анимированная иконка статуса -->
+                    <div class="mt-0.5 flex-shrink-0">
+                        {% if task.status == 'running' %}
+                        <div class="relative w-12 h-12">
+                            <div class="absolute inset-0 rounded-full bg-brand/10 animate-ping"></div>
+                            <div class="relative w-12 h-12 rounded-full bg-brand/10 flex items-center justify-center">
+                                <svg class="w-6 h-6 text-brand animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"/>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                </svg>
+                            </div>
+                        </div>
+                        {% elif task.status == 'completed' %}
+                        <div class="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        {% elif task.status == 'failed' %}
+                        <div class="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        {% elif task.status == 'cancelled' %}
+                        <div class="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                            </svg>
+                        </div>
+                        {% else %}
+                        <div class="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center">
+                            <svg class="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
                         {% endif %}
                     </div>
+                    <div class="min-w-0">
+                        <h1 class="text-xl font-semibold text-gray-900 truncate">{{ task.title }}</h1>
+                        <p class="mt-1 text-sm text-gray-500">
+                            {% if task.status == 'running' %}
+                                <span class="text-brand font-medium">Выполняется</span> —
+                            {% elif task.status == 'completed' %}
+                                <span class="text-emerald-600 font-medium">Завершена</span> —
+                            {% elif task.status == 'failed' %}
+                                <span class="text-red-600 font-medium">Ошибка</span> —
+                            {% elif task.status == 'cancelled' %}
+                                <span class="text-gray-500 font-medium">Отменена</span> —
+                            {% else %}
+                                <span class="text-amber-600 font-medium">В очереди</span> —
+                            {% endif %}
+                            {{ task.agent.display_name if task.agent else 'Агент' }}
+                        </p>
+                        <!-- Мета-информация -->
+                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                            <span class="inline-flex items-center gap-1">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                {{ task.created_at.strftime('%d.%m.%Y %H:%M') if task.created_at else '' }}
+                            </span>
+                            {% if task.duration_seconds > 0 %}
+                            <span class="inline-flex items-center gap-1">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                {% if task.duration_seconds >= 60 %}{{ (task.duration_seconds // 60) }}м {{ (task.duration_seconds % 60) }}с
+                                {% else %}{{ task.duration_seconds }}с{% endif %}
+                            </span>
+                            {% endif %}
+                            <span class="text-gray-300">{{ task.id[:8] }}</span>
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="flex items-center gap-3">
-                <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium
-                    {% if task.status == 'running' %}bg-brand/10 text-brand
-                    {% elif task.status == 'completed' %}bg-emerald-50 text-emerald-700
-                    {% elif task.status == 'failed' %}bg-red-50 text-red-700
-                    {% elif task.status == 'cancelled' %}bg-gray-100 text-gray-600
-                    {% else %}bg-amber-50 text-amber-700{% endif %}">
-                    {% if task.status == 'running' %}Выполняется
-                    {% elif task.status == 'completed' %}Завершена
-                    {% elif task.status == 'failed' %}Ошибка
-                    {% elif task.status == 'cancelled' %}Отменена
-                    {% else %}В очереди{% endif %}
-                </span>
                 {% if task.status in ('queued', 'running') %}
-                <form action="{{ url_for('agent_task_cancel', task_id=task.id) }}" method="POST" class="inline">
+                <form action="{{ url_for('agent_task_cancel', task_id=task.id) }}" method="POST" class="flex-shrink-0">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" onclick="return confirm('Отменить задачу?')"
-                            class="px-3 py-1 text-xs text-red-600 border border-red-200 rounded-md hover:bg-red-50 transition-colors">
+                            class="px-4 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
                         Отменить
                     </button>
                 </form>
                 {% endif %}
             </div>
+
+            <!-- Прогресс-бар -->
+            {% if task.status == 'running' %}
+            <div class="mt-5">
+                <div class="flex items-center justify-between text-sm mb-2">
+                    <span class="text-gray-600 font-medium" x-text="currentLabel || '{{ task.current_step_label or 'Выполняется...' }}'">{{ task.current_step_label or 'Выполняется...' }}</span>
+                    <span class="text-gray-400 text-xs tabular-nums">шаг <span x-text="completedSteps">{{ task.completed_steps }}</span> из <span x-text="totalSteps">{{ task.total_steps }}</span></span>
+                </div>
+                <div class="w-full h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-brand to-brand/80 rounded-full transition-all duration-700 ease-out"
+                         :style="`width: ${progressPercent}%`"
+                         style="width: {{ task.progress_percent }}%"></div>
+                </div>
+            </div>
+            {% endif %}
         </div>
 
-        <!-- Прогресс -->
-        {% if task.status == 'running' and task.total_steps > 0 %}
-        <div class="mt-4">
-            <div class="flex items-center justify-between text-xs text-gray-500 mb-1.5">
-                <span x-text="currentLabel || '{{ task.current_step_label or 'Выполняется...' }}'">{{ task.current_step_label or 'Выполняется...' }}</span>
-                <span><span x-text="completedSteps">{{ task.completed_steps }}</span> / <span x-text="totalSteps">{{ task.total_steps }}</span></span>
-            </div>
-            <div class="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div class="h-full bg-brand rounded-full transition-all duration-700 ease-out"
-                     :style="`width: ${progressPercent}%`"
-                     style="width: {{ task.progress_percent }}%"></div>
+        <!-- Результат задачи -->
+        {% if task.status == 'completed' and task.get_result() %}
+        {% set result = task.get_result() %}
+        {% if result %}
+        <div class="border-t border-gray-100 bg-emerald-50/50 px-6 py-4">
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-emerald-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <div class="min-w-0">
+                    <p class="text-sm font-medium text-emerald-800 mb-2">Результат</p>
+                    {% if result.get('message') %}
+                    <p class="text-sm text-emerald-700">{{ result['message'][:500] }}</p>
+                    {% elif result.get('processed') is not none %}
+                    <p class="text-sm text-emerald-700">Обработано товаров: <strong>{{ result['processed'] }}</strong></p>
+                    {% endif %}
+                    {% if result.get('results') and result['results'] is iterable %}
+                    <div class="mt-2 space-y-1">
+                        {% for r in result['results'][:10] %}
+                        <div class="text-xs text-emerald-600 bg-emerald-50 rounded px-2 py-1">
+                            {% if r.get('product_id') %}#{{ r.product_id }}{% endif %}
+                            {% if r.get('subject_name') %} → {{ r.subject_name }}{% endif %}
+                            {% if r.get('confidence') %} ({{ (r.confidence * 100)|int }}%){% endif %}
+                            {% if r.get('normalized_brand') %} → {{ r.normalized_brand }}{% endif %}
+                        </div>
+                        {% endfor %}
+                        {% if result['results']|length > 10 %}
+                        <p class="text-xs text-emerald-500">... и ещё {{ result['results']|length - 10 }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    <!-- Сырые данные (сворачиваемый блок) -->
+                    <details class="mt-3">
+                        <summary class="text-xs text-emerald-500 cursor-pointer hover:text-emerald-700">Показать полные данные</summary>
+                        <pre class="mt-2 text-[11px] text-emerald-600 bg-emerald-50 rounded-lg p-3 overflow-x-auto max-h-60 whitespace-pre-wrap">{{ result | tojson(indent=2) }}</pre>
+                    </details>
+                </div>
             </div>
         </div>
+        {% endif %}
         {% endif %}
 
         <!-- Ошибка -->
         {% if task.error_message %}
-        <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
-            <p class="text-sm text-red-700 font-medium mb-1">Ошибка</p>
-            <p class="text-xs text-red-600 font-mono whitespace-pre-wrap">{{ task.error_message }}</p>
-        </div>
-        {% endif %}
-
-        <!-- Результат -->
-        {% if task.status == 'completed' and task.get_result() %}
-        {% set result = task.get_result() %}
-        {% if result %}
-        <div class="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-md">
-            <p class="text-sm text-emerald-700 font-medium mb-1">Результат</p>
-            <div class="text-xs text-emerald-600 font-mono">
-                {% for key, val in result.items() %}
-                <div><span class="text-emerald-500">{{ key }}:</span> {{ val }}</div>
-                {% endfor %}
+        <div class="border-t border-gray-100 bg-red-50/50 px-6 py-4">
+            <div class="flex items-start gap-3">
+                <svg class="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <div>
+                    <p class="text-sm font-medium text-red-800 mb-1">Ошибка выполнения</p>
+                    <p class="text-sm text-red-600">{{ task.error_message }}</p>
+                </div>
             </div>
         </div>
-        {% endif %}
         {% endif %}
     </div>
 
-    <!-- Timeline шагов -->
-    <div class="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 class="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-            </svg>
-            Ход выполнения
-            {% if task.status == 'running' %}
-            <span class="text-xs text-gray-400 font-normal">(обновляется автоматически)</span>
-            {% endif %}
-        </h2>
-
-        {% if steps %}
-        <div class="relative">
-            <!-- Линия timeline -->
-            <div class="absolute left-[15px] top-0 bottom-0 w-px bg-gray-200"></div>
-
-            <div class="space-y-0" id="steps-container">
-                {% for step in steps %}
-                <div class="relative flex gap-4 pb-4">
-                    <!-- Иконка шага -->
-                    <div class="relative z-10 flex-shrink-0 w-[31px] flex justify-center">
-                        {% if step.step_type == 'thinking' %}
-                        <div class="w-7 h-7 rounded-full bg-violet-50 border-2 border-violet-200 flex items-center justify-center">
-                            <svg class="w-3.5 h-3.5 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-                            </svg>
-                        </div>
-                        {% elif step.step_type == 'decision' %}
-                        <div class="w-7 h-7 rounded-full bg-blue-50 border-2 border-blue-200 flex items-center justify-center">
-                            <svg class="w-3.5 h-3.5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/>
-                            </svg>
-                        </div>
-                        {% elif step.step_type == 'error' %}
-                        <div class="w-7 h-7 rounded-full bg-red-50 border-2 border-red-200 flex items-center justify-center">
-                            <svg class="w-3.5 h-3.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                            </svg>
-                        </div>
-                        {% elif step.step_type == 'result' %}
-                        <div class="w-7 h-7 rounded-full bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center">
-                            <svg class="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                            </svg>
-                        </div>
-                        {% else %}
-                        <div class="w-7 h-7 rounded-full bg-gray-50 border-2 border-gray-200 flex items-center justify-center">
-                            <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                            </svg>
-                        </div>
-                        {% endif %}
-                    </div>
-
-                    <!-- Контент шага -->
-                    <div class="flex-1 min-w-0 pt-0.5">
-                        <div class="flex items-center justify-between gap-2 mb-0.5">
-                            <h4 class="text-sm font-medium text-gray-900">{{ step.title }}</h4>
-                            <div class="flex items-center gap-2 flex-shrink-0">
-                                {% if step.duration_ms %}
-                                <span class="text-[10px] text-gray-400">{{ step.duration_ms }}ms</span>
-                                {% endif %}
-                                <span class="text-[10px] text-gray-400">{{ step.created_at.strftime('%H:%M:%S') if step.created_at else '' }}</span>
-                            </div>
-                        </div>
-                        {% if step.detail %}
-                        <div class="text-xs text-gray-600 mt-1 {% if step.step_type in ('thinking', 'error') %}bg-gray-50 rounded-md p-2.5 font-mono whitespace-pre-wrap{% endif %}">{{ step.detail }}</div>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-
-            <!-- Пульсирующий индикатор (если задача ещё выполняется) -->
-            {% if task.status == 'running' %}
-            <div class="relative flex gap-4 pb-2">
-                <div class="relative z-10 flex-shrink-0 w-[31px] flex justify-center">
-                    <div class="w-3 h-3 mt-2 rounded-full bg-brand animate-pulse"></div>
-                </div>
-                <div class="flex-1 pt-1">
-                    <p class="text-xs text-gray-400 italic">Агент думает...</p>
-                </div>
-            </div>
+    <!-- Ход выполнения -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <h2 class="text-base font-semibold text-gray-900 flex items-center gap-2">
+                Ход выполнения
+                {% if task.status == 'running' %}
+                <span class="relative flex h-2.5 w-2.5">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
+                </span>
+                {% endif %}
+            </h2>
+            {% if steps %}
+            <button @click="showDetails = !showDetails"
+                    class="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+                <span x-text="showDetails ? 'Скрыть детали' : 'Показать детали'">Показать детали</span>
+            </button>
             {% endif %}
         </div>
+
+        {% if steps %}
+        <div class="divide-y divide-gray-50" id="steps-container">
+            {% for step in steps %}
+            <div class="px-6 py-3 flex items-start gap-3 hover:bg-gray-50/50 transition-colors step-item"
+                 data-step-type="{{ step.step_type }}">
+                <!-- Иконка типа шага -->
+                <div class="flex-shrink-0 mt-0.5">
+                    {% if step.step_type == 'thinking' %}
+                    <div class="w-8 h-8 rounded-lg bg-violet-50 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                        </svg>
+                    </div>
+                    {% elif step.step_type == 'action' %}
+                    <div class="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    {% elif step.step_type == 'decision' %}
+                    <div class="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+                        </svg>
+                    </div>
+                    {% elif step.step_type == 'error' %}
+                    <div class="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                    </div>
+                    {% elif step.step_type == 'result' %}
+                    <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                    </div>
+                    {% else %}
+                    <div class="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Контент -->
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center justify-between gap-2">
+                        <h4 class="text-sm font-medium text-gray-800">
+                            {{ step.title | replace('Вызов: ', '') | replace('Результат: ', '') }}
+                        </h4>
+                        <div class="flex items-center gap-2 flex-shrink-0 text-[11px] text-gray-400">
+                            {% if step.duration_ms %}
+                            <span class="tabular-nums">
+                                {% if step.duration_ms >= 1000 %}{{ '%.1f' | format(step.duration_ms / 1000) }}с
+                                {% else %}{{ step.duration_ms }}мс{% endif %}
+                            </span>
+                            {% endif %}
+                            <span class="tabular-nums">{{ step.created_at.strftime('%H:%M:%S') if step.created_at else '' }}</span>
+                        </div>
+                    </div>
+                    {% if step.detail %}
+                    <div x-show="showDetails"
+                         x-transition:enter="transition ease-out duration-200"
+                         x-transition:enter-start="opacity-0 -translate-y-1"
+                         x-transition:enter-end="opacity-1 translate-y-0"
+                         class="mt-1.5">
+                        {% if step.step_type == 'thinking' %}
+                        <p class="text-xs text-gray-500 leading-relaxed line-clamp-4">{{ step.detail[:800] }}</p>
+                        {% elif step.step_type == 'error' %}
+                        <div class="text-xs text-red-600 bg-red-50 rounded-lg p-2.5 font-mono whitespace-pre-wrap">{{ step.detail[:500] }}</div>
+                        {% elif step.step_type in ('action', 'decision') %}
+                        <details class="group">
+                            <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600 transition-colors">Данные запроса</summary>
+                            <pre class="mt-1.5 text-[11px] text-gray-500 bg-gray-50 rounded-lg p-2.5 overflow-x-auto max-h-40 whitespace-pre-wrap">{{ step.detail[:1000] }}</pre>
+                        </details>
+                        {% else %}
+                        <p class="text-xs text-gray-500">{{ step.detail[:500] }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Пульсирующий индикатор -->
+        {% if task.status == 'running' %}
+        <div class="px-6 py-4 flex items-center gap-3 bg-gray-50/30">
+            <div class="flex-shrink-0">
+                <div class="w-8 h-8 rounded-lg bg-brand/5 flex items-center justify-center">
+                    <div class="w-3 h-3 rounded-full bg-brand animate-pulse"></div>
+                </div>
+            </div>
+            <p class="text-sm text-gray-400">Агент обрабатывает данные...</p>
+        </div>
+        {% endif %}
+
         {% else %}
-        <div class="text-center py-8">
+        <div class="px-6 py-12 text-center">
             {% if task.status == 'queued' %}
-            <div class="w-8 h-8 mx-auto mb-3 rounded-full bg-amber-50 flex items-center justify-center">
-                <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-amber-50 flex items-center justify-center">
+                <svg class="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
             </div>
-            <p class="text-sm text-gray-500">Задача в очереди, ожидает начала выполнения</p>
+            <p class="text-sm text-gray-500 font-medium">Задача в очереди</p>
+            <p class="text-xs text-gray-400 mt-1">Ожидает свободного агента для начала выполнения</p>
             {% else %}
-            <p class="text-sm text-gray-500">Нет записей о шагах выполнения</p>
+            <p class="text-sm text-gray-400">Нет записей о ходе выполнения</p>
             {% endif %}
         </div>
         {% endif %}
@@ -235,6 +330,7 @@ function taskDetail() {
         totalSteps: {{ task.total_steps }},
         currentLabel: '{{ task.current_step_label or "" }}',
         taskStatus: '{{ task.status }}',
+        showDetails: false,
 
         get progressPercent() {
             if (this.totalSteps <= 0) return 0;
@@ -263,13 +359,11 @@ function taskDetail() {
                 this.currentLabel = t.current_step_label || '';
                 this.taskStatus = t.status;
 
-                // Если задача завершилась — перезагрузить для отображения финального состояния
                 if (t.status !== 'running' && t.status !== 'queued') {
                     clearInterval(this._poll);
                     setTimeout(() => window.location.reload(), 1000);
                 }
 
-                // Обновляем шаги (добавляем новые)
                 this.renderNewSteps(data.steps);
             } catch (e) { /* ignore */ }
         },
@@ -278,44 +372,61 @@ function taskDetail() {
             const container = document.getElementById('steps-container');
             if (!container) return;
 
-            const existingCount = container.children.length;
+            const existingCount = container.querySelectorAll('.step-item').length;
             const newSteps = steps.slice(existingCount);
 
             for (const step of newSteps) {
                 const el = document.createElement('div');
-                el.className = 'relative flex gap-4 pb-4';
-                el.style.animation = 'fadeIn 0.3s ease-out';
+                el.className = 'px-6 py-3 flex items-start gap-3 hover:bg-gray-50/50 transition-colors step-item';
+                el.dataset.stepType = step.step_type;
+                el.style.animation = 'fadeSlideIn 0.4s ease-out';
 
-                const iconColors = {
-                    thinking: { bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-500', icon: 'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z' },
-                    decision: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-500', icon: 'M8 9l4-4 4 4m0 6l-4 4-4-4' },
-                    error: { bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-500', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
-                    result: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-500', icon: 'M5 13l4 4L19 7' },
+                const icons = {
+                    thinking: { bg: 'bg-violet-50', text: 'text-violet-500', icon: 'M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z' },
+                    action: { bg: 'bg-sky-50', text: 'text-sky-500', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
+                    decision: { bg: 'bg-blue-50', text: 'text-blue-500', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
+                    error: { bg: 'bg-red-50', text: 'text-red-500', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
+                    result: { bg: 'bg-emerald-50', text: 'text-emerald-500', icon: 'M5 13l4 4L19 7' },
                 };
-                const c = iconColors[step.step_type] || { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-400', icon: 'M13 10V3L4 14h7v7l9-11h-7z' };
+                const c = icons[step.step_type] || { bg: 'bg-gray-50', text: 'text-gray-400', icon: 'M13 10V3L4 14h7v7l9-11h-7z' };
 
                 const time = step.created_at ? new Date(step.created_at).toLocaleTimeString('ru-RU') : '';
-                const dur = step.duration_ms ? `<span class="text-[10px] text-gray-400">${step.duration_ms}ms</span>` : '';
-                const detailClass = ['thinking', 'error'].includes(step.step_type) ? 'bg-gray-50 rounded-md p-2.5 font-mono whitespace-pre-wrap' : '';
-                const detail = step.detail ? `<div class="text-xs text-gray-600 mt-1 ${detailClass}">${this.escapeHtml(step.detail)}</div>` : '';
+                const durMs = step.duration_ms || 0;
+                const dur = durMs ? (durMs >= 1000 ? `${(durMs/1000).toFixed(1)}с` : `${durMs}мс`) : '';
+                const durHtml = dur ? `<span class="tabular-nums">${dur}</span>` : '';
+
+                // Очищаем title от технических префиксов
+                const cleanTitle = (step.title || '').replace(/^Вызов: /, '').replace(/^Результат: /, '');
+
+                let detailHtml = '';
+                if (step.detail && this.showDetails) {
+                    const escaped = this.escapeHtml(step.detail.substring(0, 800));
+                    if (step.step_type === 'thinking') {
+                        detailHtml = `<p class="text-xs text-gray-500 leading-relaxed mt-1.5">${escaped}</p>`;
+                    } else if (step.step_type === 'error') {
+                        detailHtml = `<div class="text-xs text-red-600 bg-red-50 rounded-lg p-2.5 font-mono whitespace-pre-wrap mt-1.5">${escaped}</div>`;
+                    } else {
+                        detailHtml = `<details class="mt-1.5"><summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600">Данные запроса</summary><pre class="mt-1.5 text-[11px] text-gray-500 bg-gray-50 rounded-lg p-2.5 overflow-x-auto max-h-40 whitespace-pre-wrap">${escaped}</pre></details>`;
+                    }
+                }
 
                 el.innerHTML = `
-                    <div class="relative z-10 flex-shrink-0 w-[31px] flex justify-center">
-                        <div class="w-7 h-7 rounded-full ${c.bg} border-2 ${c.border} flex items-center justify-center">
-                            <svg class="w-3.5 h-3.5 ${c.text}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="flex-shrink-0 mt-0.5">
+                        <div class="w-8 h-8 rounded-lg ${c.bg} flex items-center justify-center">
+                            <svg class="w-4 h-4 ${c.text}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${c.icon}"/>
                             </svg>
                         </div>
                     </div>
-                    <div class="flex-1 min-w-0 pt-0.5">
-                        <div class="flex items-center justify-between gap-2 mb-0.5">
-                            <h4 class="text-sm font-medium text-gray-900">${this.escapeHtml(step.title)}</h4>
-                            <div class="flex items-center gap-2 flex-shrink-0">
-                                ${dur}
-                                <span class="text-[10px] text-gray-400">${time}</span>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center justify-between gap-2">
+                            <h4 class="text-sm font-medium text-gray-800">${this.escapeHtml(cleanTitle)}</h4>
+                            <div class="flex items-center gap-2 flex-shrink-0 text-[11px] text-gray-400">
+                                ${durHtml}
+                                <span class="tabular-nums">${time}</span>
                             </div>
                         </div>
-                        ${detail}
+                        ${detailHtml}
                     </div>
                 `;
                 container.appendChild(el);
@@ -332,9 +443,16 @@ function taskDetail() {
 </script>
 
 <style>
-@keyframes fadeIn {
+@keyframes fadeSlideIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
+}
+
+.line-clamp-4 {
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 </style>
 {% endblock %}
