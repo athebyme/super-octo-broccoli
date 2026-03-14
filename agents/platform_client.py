@@ -172,3 +172,27 @@ class PlatformClient:
 
     def get_imported_product(self, product_id: int) -> dict:
         return self._request('GET', f'/imported-products/{product_id}')
+
+    def update_imported_product(self, product_id: int, updates: dict) -> dict:
+        return self._request('PATCH', f'/imported-products/{product_id}',
+                             json=updates)
+
+    # ── Задачи (для оркестратора) ────────────────────────────────
+
+    def create_subtask(self, agent_name: str, task_type: str,
+                       seller_id: int, title: str,
+                       input_data: dict = None,
+                       parent_task_id: str = None) -> dict:
+        """Создаёт подзадачу для другого агента."""
+        return self._request('POST', '/tasks/create', json={
+            'agent_name': agent_name,
+            'task_type': task_type,
+            'seller_id': seller_id,
+            'title': title,
+            'input_data': input_data or {},
+            'parent_task_id': parent_task_id,
+        })
+
+    def get_task_status(self, task_id: str) -> dict:
+        """Получает статус задачи."""
+        return self._request('GET', f'/tasks/{task_id}')

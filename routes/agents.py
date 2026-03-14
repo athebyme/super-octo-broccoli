@@ -118,9 +118,17 @@ def register_agents_routes(app):
         if not task:
             return jsonify({'error': 'Not found'}), 404
         steps = agent_service.get_task_steps(task_id, limit=50)
+
+        # Если это pipeline-задача — добавляем статус подзадач
+        subtasks_data = []
+        if task.subtasks.count() > 0:
+            for st in task.subtasks.order_by(AgentTask.created_at.asc()).all():
+                subtasks_data.append(st.to_dict())
+
         return jsonify({
             'task': task.to_dict(),
             'steps': [s.to_dict() for s in steps],
+            'subtasks': subtasks_data,
         })
 
     @app.route('/agents/api/stats')
@@ -229,7 +237,10 @@ def register_agents_routes(app):
         }
 
         available = []
+        orchestrator_id = None
         for a in agents:
+            if a.name == 'orchestrator' and a.status == 'online':
+                orchestrator_id = str(a.id)
             action = PRODUCT_ACTIONS.get(a.name)
             if action and a.status == 'online':
                 available.append({
@@ -239,7 +250,45 @@ def register_agents_routes(app):
                     **action,
                 })
 
-        return jsonify({'actions': available})
+        # Добавляем pipeline-пресеты если оркестратор online
+        pipelines = []
+        if orchestrator_id:
+            pipelines = [
+                {
+                    'id': 'full_prepare',
+                    'label': 'Подготовить к WB',
+                    'description': 'Категория → Характеристики → SEO → Модерация',
+                    'icon': 'rocket',
+                    'color': 'brand',
+                },
+                {
+                    'id': 'seo_boost',
+                    'label': 'SEO тексты',
+                    'description': 'SEO-оптимизация → Проверка модерации',
+                    'icon': 'pen',
+                    'color': 'emerald',
+                },
+                {
+                    'id': 'audit',
+                    'label': 'Аудит карточек',
+                    'description': 'Модерация → Цены → Отзывы',
+                    'icon': 'shield',
+                    'color': 'amber',
+                },
+                {
+                    'id': 'category_fix',
+                    'label': 'Исправить категории',
+                    'description': 'Категория → Характеристики',
+                    'icon': 'tag',
+                    'color': 'blue',
+                },
+            ]
+
+        return jsonify({
+            'actions': available,
+            'pipelines': pipelines,
+            'orchestrator_id': orchestrator_id,
+        })
 
     # ── Действия ────────────────────────────────────────────────────
 

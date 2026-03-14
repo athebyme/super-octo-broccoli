@@ -3791,6 +3791,7 @@ class AgentTask(db.Model):
     id = db.Column(db.String(36), primary_key=True)  # UUID
     agent_id = db.Column(db.String(36), db.ForeignKey('service_agents.id'), nullable=False, index=True)
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    parent_task_id = db.Column(db.String(36), db.ForeignKey('agent_tasks.id'), nullable=True, index=True)
 
     task_type = db.Column(db.String(50), nullable=False)  # 'import_products', 'optimize_prices', 'fix_card'
     title = db.Column(db.String(300), nullable=False)  # Человекочитаемое описание
@@ -3817,6 +3818,8 @@ class AgentTask(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     seller = db.relationship('Seller', foreign_keys=[seller_id])
+    subtasks = db.relationship('AgentTask', backref=db.backref('parent_task', remote_side='AgentTask.id'),
+                               lazy='dynamic', foreign_keys=[parent_task_id])
     steps = db.relationship('AgentTaskStep', backref='task', lazy='dynamic',
                             cascade='all, delete-orphan', order_by='AgentTaskStep.step_number')
 
@@ -3853,8 +3856,13 @@ class AgentTask(db.Model):
         except Exception:
             return {}
 
+    @property
+    def is_pipeline(self):
+        """True если это задача-оркестратор с подзадачами."""
+        return self.subtasks.count() > 0
+
     def to_dict(self):
-        return {
+        d = {
             'id': self.id,
             'agent_id': self.agent_id,
             'agent_name': self.agent.display_name if self.agent else None,
@@ -3870,10 +3878,12 @@ class AgentTask(db.Model):
             'duration_seconds': self.duration_seconds,
             'result': self.get_result(),
             'error_message': self.error_message,
+            'parent_task_id': self.parent_task_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
         }
+        return d
 
     def __repr__(self):
         return f'<AgentTask {self.id[:8]} [{self.status}] {self.title[:40]}>'

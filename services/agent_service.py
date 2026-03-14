@@ -174,6 +174,24 @@ AGENT_CATALOG = [
         'hint': 'Если карточку заблокировали или скрыли — агент найдёт причину и предложит исправление. Также может проверить карточки заранее.',
     },
 
+    # ── Оркестрация ──
+    {
+        'name': 'orchestrator',
+        'display_name': 'AI-помощник',
+        'description': 'Умный оркестратор: разбивает задачу на шаги и делегирует специализированным агентам. Поддерживает готовые pipeline (подготовка к WB, SEO, аудит) и свободные текстовые запросы.',
+        'category': 'catalog',
+        'icon': 'cpu',
+        'color': 'brand',
+        'capabilities': ['Pipeline', 'Координация агентов', 'Свободный текст', 'Подготовка к WB'],
+        'task_types': ['pipeline', 'smart', 'custom'],
+        'task_types_labels': {
+            'pipeline': 'Готовый pipeline',
+            'smart': 'Умный запрос',
+            'custom': 'Свой набор агентов',
+        },
+        'hint': 'Главная точка входа: опишите что нужно сделать или выберите готовый pipeline. AI-помощник сам подберёт нужных агентов и выполнит задачу.',
+    },
+
     # ── Аналитика ──
     {
         'name': 'review-analyst',
@@ -367,6 +385,7 @@ def create_task(
     input_data: dict = None,
     priority: int = 0,
     total_steps: int = 0,
+    parent_task_id: str = None,
 ) -> AgentTask:
     """Создаёт новую задачу для агента."""
     task = AgentTask(
@@ -379,6 +398,7 @@ def create_task(
         priority=priority,
         total_steps=total_steps,
         input_data=json.dumps(input_data or {}, ensure_ascii=False),
+        parent_task_id=parent_task_id,
     )
     db.session.add(task)
     db.session.commit()

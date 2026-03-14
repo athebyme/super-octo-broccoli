@@ -155,3 +155,57 @@ def create_platform_tools(platform_client) -> ToolRegistry:
     )
 
     return registry
+
+
+def create_orchestrator_tools(platform_client) -> ToolRegistry:
+    """Создаёт инструменты для агента-оркестратора."""
+    registry = ToolRegistry()
+
+    registry.register(
+        name='create_subtask',
+        description='Создать подзадачу для специализированного агента. Возвращает task_id созданной задачи.',
+        parameters={
+            'properties': {
+                'agent_name': {'type': 'string', 'description': 'Имя агента (category-mapper, seo-writer, и т.д.)'},
+                'task_type': {'type': 'string', 'description': 'Тип задачи (map_batch, seo_batch, и т.д.)'},
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+                'title': {'type': 'string', 'description': 'Название подзадачи'},
+                'input_data': {'type': 'string', 'description': 'JSON строка с входными данными (product_ids, limit и т.д.)'},
+            },
+            'required': ['agent_name', 'task_type', 'seller_id', 'title'],
+        },
+        handler=lambda agent_name, task_type, seller_id, title, input_data='{}':
+            platform_client.create_subtask(
+                agent_name=agent_name,
+                task_type=task_type,
+                seller_id=int(seller_id),
+                title=title,
+                input_data=json.loads(input_data) if isinstance(input_data, str) else input_data,
+            ),
+    )
+
+    registry.register(
+        name='get_subtask_status',
+        description='Проверить статус подзадачи. Возвращает task с полями status, completed_steps, result.',
+        parameters={
+            'properties': {
+                'task_id': {'type': 'string', 'description': 'ID задачи'},
+            },
+            'required': ['task_id'],
+        },
+        handler=lambda task_id: platform_client.get_task_status(task_id),
+    )
+
+    registry.register(
+        name='get_subtask_result',
+        description='Получить результат завершённой подзадачи.',
+        parameters={
+            'properties': {
+                'task_id': {'type': 'string', 'description': 'ID задачи'},
+            },
+            'required': ['task_id'],
+        },
+        handler=lambda task_id: platform_client.get_task_status(task_id),
+    )
+
+    return registry

@@ -204,10 +204,21 @@ def internal_update_product(seller_id, product_id):
     allowed_fields = [
         'title', 'description', 'brand', 'vendor_code',
         'characteristics', 'tags', 'ai_seo_title',
+        'wb_category_id', 'wb_category_name',
     ]
     for field in allowed_fields:
         if field in data:
-            setattr(product, field, data[field])
+            # Маппинг полей агентов на поля модели
+            if field == 'wb_category_id':
+                if hasattr(product, 'subject_id'):
+                    product.subject_id = data[field]
+                elif hasattr(product, 'wb_category_id'):
+                    product.wb_category_id = data[field]
+            elif field == 'wb_category_name':
+                if hasattr(product, 'category'):
+                    product.category = data[field]
+            else:
+                setattr(product, field, data[field])
 
     product.updated_at = datetime.utcnow()
     db.session.commit()
@@ -241,6 +252,77 @@ def internal_get_imported_product(product_id):
     if not p:
         return jsonify({'error': 'Imported product not found'}), 404
     return jsonify({'product': _imported_product_to_dict(p)})
+
+
+@internal_api_bp.route('/imported-products/<int:product_id>', methods=['PATCH'])
+@_authenticate_agent
+def internal_update_imported_product(product_id):
+    """Агент обновляет данные импортированного товара."""
+    p = ImportedProduct.query.get(product_id)
+    if not p:
+        return jsonify({'error': 'Imported product not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    allowed_fields = [
+        'title', 'description', 'brand', 'mapped_wb_category',
+        'wb_subject_id', 'category_confidence',
+        'ai_seo_title', 'ai_keywords', 'ai_bullets',
+    ]
+    for field in allowed_fields:
+        if field in data:
+            setattr(p, field, data[field])
+
+    # Также принимаем wb_category_id/wb_category_name от агентов
+    if 'wb_category_id' in data:
+        p.wb_subject_id = data['wb_category_id']
+    if 'wb_category_name' in data:
+        p.mapped_wb_category = data['wb_category_name']
+
+    p.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'ok': True, 'product': _imported_product_to_dict(p)})
+
+
+# ── Задачи: создание подзадач (для оркестратора) ───────────────
+
+@internal_api_bp.route('/tasks/create', methods=['POST'])
+@_authenticate_agent
+def internal_create_task():
+    """Агент-оркестратор создаёт подзадачу для другого агента."""
+    data = request.get_json(silent=True) or {}
+
+    agent_name = data.get('agent_name')
+    if not agent_name:
+        return jsonify({'error': 'agent_name is required'}), 400
+
+    target_agent = ServiceAgent.query.filter_by(name=agent_name).first()
+    if not target_agent:
+        return jsonify({'error': f'Agent "{agent_name}" not found'}), 404
+
+    seller_id = data.get('seller_id')
+    if not seller_id:
+        return jsonify({'error': 'seller_id is required'}), 400
+
+    task = agent_service.create_task(
+        agent_id=target_agent.id,
+        seller_id=seller_id,
+        task_type=data.get('task_type', 'unknown'),
+        title=data.get('title', f'Подзадача: {agent_name}'),
+        input_data=data.get('input_data', {}),
+        priority=data.get('priority', 0),
+        parent_task_id=data.get('parent_task_id'),
+    )
+    return jsonify({'ok': True, 'task': task.to_dict()})
+
+
+@internal_api_bp.route('/tasks/<task_id>', methods=['GET'])
+@_authenticate_agent
+def internal_get_task(task_id):
+    """Получить статус задачи (для оркестратора)."""
+    task = agent_service.get_task(task_id)
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
+    return jsonify({'task': task.to_dict()})
 
 
 # ── Данные: продавцы ────────────────────────────────────────────
