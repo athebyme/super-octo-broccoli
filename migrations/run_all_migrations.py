@@ -753,6 +753,15 @@ def migrate(db_path):
             print("  ⏭️  agent_task_steps уже существует")
 
         # ============================================================
+        # Добавление недостающих колонок в agent_tasks
+        # ============================================================
+        if 'agent_tasks' in existing_tables:
+            print("\n📋 Проверяю колонки agent_tasks...")
+            at_cols = {row[1] for row in cursor.execute("PRAGMA table_info(agent_tasks)").fetchall()}
+            add_column_if_missing(cursor, 'agent_tasks', 'retry_count', 'INTEGER DEFAULT 0', at_cols)
+            add_column_if_missing(cursor, 'agent_tasks', 'parent_task_id', 'TEXT', at_cols)
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()
