@@ -125,14 +125,6 @@ python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || 
 python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
-else
-echo "🚀 Инициализация wb-calculator..."
-python - <<'PYCODE'
-from app import ensure_directories
-
-ensure_directories()
-print("✅ Инициализация wb-calculator завершена")
-PYCODE
 fi
 
 echo "🌐 Запуск gunicorn на порту ${PORT}..."

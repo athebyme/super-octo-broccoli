@@ -181,6 +181,27 @@ def create_platform_tools(platform_client) -> ToolRegistry:
         handler=lambda product_id: platform_client.get_imported_product(product_id),
     )
 
+    registry.register(
+        name='update_imported_product',
+        description='Обновить данные импортированного товара: категорию WB, бренд, характеристики и др.',
+        parameters={
+            'properties': {
+                'product_id': {'type': 'integer', 'description': 'ID импортированного товара'},
+                'mapped_wb_category': {'type': 'string', 'description': 'Название категории WB'},
+                'wb_subject_id': {'type': 'integer', 'description': 'ID категории WB (subjectID)'},
+                'brand': {'type': 'string', 'description': 'Бренд'},
+                'title': {'type': 'string', 'description': 'Заголовок товара'},
+                'description': {'type': 'string', 'description': 'Описание товара'},
+                'characteristics': {'type': 'string', 'description': 'JSON характеристик'},
+                'sizes': {'type': 'string', 'description': 'JSON размеров'},
+                'gender': {'type': 'string', 'description': 'Пол (мужской/женский/унисекс)'},
+            },
+            'required': ['product_id'],
+        },
+        handler=lambda product_id, **updates:
+            platform_client.update_imported_product(product_id, updates),
+    )
+
     # ── Продавец ───────────────────────────────────────────────
 
     registry.register(

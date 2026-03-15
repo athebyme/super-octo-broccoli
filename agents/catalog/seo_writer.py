@@ -37,8 +37,13 @@ class SEOWriterAgent(BaseAgent):
 - Преимущества товара, материал, назначение
 - Без контактов, ссылок, запрещённых слов
 
-Используй инструменты для получения данных о товарах, затем генерируй оптимизированный контент.
-Финальный результат отдай в JSON с полями: title, description, keywords, changes_summary."""
+ПРАВИЛА РАБОТЫ:
+- Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
+- Не вызывай get_imported_products если ID товаров уже известны
+- Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
+- Сразу после генерации контента — сохрани через update_imported_product
+
+Результат: JSON с полями: title, description, keywords, changes_summary."""
 
     def get_tools(self) -> ToolRegistry:
         """SEO-специфичные инструменты обрабатываются внутри LLM через промпт."""
@@ -51,43 +56,80 @@ class SEOWriterAgent(BaseAgent):
 
         if task_type == 'seo_single':
             product_id = input_data.get('product_id')
-            return (
-                f"Оптимизируй SEO для товара.\n"
-                f"Seller ID: {seller_id}\n"
-                f"Product ID: {product_id}\n\n"
-                f"1. Получи данные товара через get_product\n"
-                f"2. Проанализируй текущий заголовок и описание\n"
-                f"3. Сгенерируй оптимизированный заголовок (до 60 символов)\n"
-                f"4. Сгенерируй SEO-описание (до 1000 символов)\n"
-                f"5. Обнови товар через update_product\n\n"
-                f"Верни JSON: {{title, description, keywords: [...], changes_summary}}"
-            )
+            imported_product_id = input_data.get('imported_product_id')
+
+            if imported_product_id:
+                return (
+                    f"Оптимизируй SEO для импортированного товара.\n"
+                    f"Imported Product ID: {imported_product_id}\n\n"
+                    f"1. get_imported_product(product_id={imported_product_id})\n"
+                    f"2. Проанализируй текущий заголовок и описание\n"
+                    f"3. Сгенерируй оптимизированный заголовок (до 60 символов)\n"
+                    f"4. Сгенерируй SEO-описание (до 1000 символов)\n"
+                    f"5. update_imported_product(product_id={imported_product_id}, title=..., description=...)\n\n"
+                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
+                    f"Верни JSON: {{title, description, keywords: [...], changes_summary}}"
+                )
+
+            if product_id:
+                return (
+                    f"Оптимизируй SEO для товара.\n"
+                    f"Seller ID: {seller_id}\n"
+                    f"Product ID: {product_id}\n\n"
+                    f"1. Получи данные товара через get_product\n"
+                    f"2. Проанализируй текущий заголовок и описание\n"
+                    f"3. Сгенерируй оптимизированный заголовок (до 60 символов)\n"
+                    f"4. Сгенерируй SEO-описание (до 1000 символов)\n"
+                    f"5. Обнови товар через update_product\n\n"
+                    f"Верни JSON: {{title, description, keywords: [...], changes_summary}}"
+                )
+
+            return f"Ошибка: не указан product_id или imported_product_id."
 
         elif task_type == 'seo_batch':
-            product_ids = input_data.get('product_ids', [])
+            product_ids = (
+                input_data.get('product_ids')
+                or input_data.get('imported_product_ids')
+                or []
+            )
+
+            # 1 товар → делегируем в single
+            if len(product_ids) == 1:
+                return self.build_task_prompt({
+                    **task,
+                    'task_type': 'seo_single',
+                    'input_data': json.dumps({
+                        'imported_product_id': product_ids[0],
+                        'seller_id': seller_id,
+                    }),
+                })
+
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
                 return (
                     f"SEO-оптимизация {count} выбранных товаров.\n"
-                    f"Seller ID: {seller_id}\n"
-                    f"Product IDs: {ids_str}\n\n"
-                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
-                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"Product IDs: [{ids_str}]\n\n"
+                    f"ЗАПРЕЩЕНО вызывать get_imported_products.\n\n"
+                    f"Для каждого ID:\n"
+                    f"1. get_imported_product(product_id=ID)\n"
                     f"2. Сгенерируй оптимизированный заголовок и описание\n"
-                    f"3. Обнови каждый товар через update_product\n\n"
-                    f"Верни JSON: {{processed: число, results: [...]}}"
+                    f"3. update_imported_product(product_id=ID, title=..., description=...)\n\n"
+                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                    f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
                 )
+
             limit = input_data.get('limit', 10)
             return (
                 f"SEO-оптимизация пакета товаров.\n"
                 f"Seller ID: {seller_id}\n"
                 f"Лимит: обработай максимум {limit} товаров.\n\n"
-                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"1. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
                 f"2. Для каждого товара сгенерируй оптимизированный заголовок и описание\n"
-                f"3. Обнови каждый товар через update_product\n\n"
-                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
-                f"Верни JSON: {{processed: число, results: [...]}}"
+                f"3. Для каждого: update_imported_product(product_id=ID, title=..., description=...)\n\n"
+                f"ЗАПРЕЩЕНО вызывать get_imported_products повторно.\n"
+                f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
             )
 
         elif task_type == 'rewrite_titles':
@@ -96,11 +138,12 @@ class SEOWriterAgent(BaseAgent):
                 f"Перепиши заголовки товаров по правилам WB.\n"
                 f"Seller ID: {seller_id}\n"
                 f"Лимит: обработай максимум {limit} товаров.\n\n"
-                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"1. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
                 f"2. Проанализируй заголовки на соответствие правилам WB\n"
                 f"3. Перепиши несоответствующие заголовки\n"
-                f"4. Обнови через update_product\n\n"
-                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
+                f"4. Для каждого: update_imported_product(product_id=ID, title=...)\n\n"
+                f"ЗАПРЕЩЕНО вызывать get_imported_products повторно.\n"
+                f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                 f"Верни JSON: {{rewritten: число, skipped: число, details: [...]}}"
             )
 
@@ -108,5 +151,5 @@ class SEOWriterAgent(BaseAgent):
             f"Задача: {task.get('title')}\nТип: {task_type}\n"
             f"Seller ID: {seller_id}\n"
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
-            f"Выполни SEO-оптимизацию и верни результат в JSON."
+            f"Выполни SEO-оптимизацию, сохрани через update_imported_product и верни результат в JSON."
         )

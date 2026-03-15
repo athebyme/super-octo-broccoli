@@ -32,6 +32,12 @@ class BrandResolverAgent(BaseAgent):
 - "Самсунг" → "Samsung"
 - "Без бренда" → "Нет бренда"
 
+ПРАВИЛА РАБОТЫ:
+- Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
+- Не вызывай get_imported_products если ID товаров уже известны
+- Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
+- Сразу после нормализации бренда — сохрани через update_imported_product
+
 Результат: JSON с нормализованными брендами."""
 
     def build_task_prompt(self, task: dict) -> str:
@@ -41,45 +47,80 @@ class BrandResolverAgent(BaseAgent):
 
         if task_type == 'resolve_single':
             product_id = input_data.get('product_id')
-            return (
-                f"Определи и нормализуй бренд товара.\n"
-                f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
-                f"1. Получи данные товара через get_product\n"
-                f"2. Определи бренд из названия/описания\n"
-                f"3. Нормализуй написание\n"
-                f"4. Обнови товар через update_product\n\n"
-                f"Верни JSON: {{original_brand, normalized_brand, "
-                f"confidence, wb_registered: bool}}"
-            )
+            imported_product_id = input_data.get('imported_product_id')
+
+            if imported_product_id:
+                return (
+                    f"Определи и нормализуй бренд импортированного товара.\n"
+                    f"Imported Product ID: {imported_product_id}\n\n"
+                    f"1. get_imported_product(product_id={imported_product_id})\n"
+                    f"2. Определи бренд из названия/описания\n"
+                    f"3. Нормализуй написание\n"
+                    f"4. update_imported_product(product_id={imported_product_id}, brand=...)\n\n"
+                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
+                    f"Верни JSON: {{original_brand, normalized_brand, "
+                    f"confidence, wb_registered: bool}}"
+                )
+
+            if product_id:
+                return (
+                    f"Определи и нормализуй бренд товара.\n"
+                    f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
+                    f"1. Получи данные товара через get_product\n"
+                    f"2. Определи бренд из названия/описания\n"
+                    f"3. Нормализуй написание\n"
+                    f"4. Обнови товар через update_product\n\n"
+                    f"Верни JSON: {{original_brand, normalized_brand, "
+                    f"confidence, wb_registered: bool}}"
+                )
+
+            return f"Ошибка: не указан product_id или imported_product_id."
 
         elif task_type == 'resolve_batch':
-            product_ids = input_data.get('product_ids', [])
-            limit = input_data.get('limit', 10)
+            product_ids = (
+                input_data.get('product_ids')
+                or input_data.get('imported_product_ids')
+                or []
+            )
+
+            # 1 товар → делегируем в single
+            if len(product_ids) == 1:
+                return self.build_task_prompt({
+                    **task,
+                    'task_type': 'resolve_single',
+                    'input_data': json.dumps({
+                        'imported_product_id': product_ids[0],
+                        'seller_id': seller_id,
+                    }),
+                })
 
             if product_ids:
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
                 return (
                     f"Пакетная нормализация брендов для {count} товаров.\n"
-                    f"Seller ID: {seller_id}\n"
-                    f"Product IDs: {ids_str}\n\n"
-                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
-                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
+                    f"Product IDs: [{ids_str}]\n\n"
+                    f"ЗАПРЕЩЕНО вызывать get_imported_products.\n\n"
+                    f"Для каждого ID:\n"
+                    f"1. get_imported_product(product_id=ID)\n"
                     f"2. Нормализуй бренд\n"
-                    f"3. Обнови каждый товар через update_product\n\n"
-                    f"Верни JSON: {{total, updated, skipped, "
+                    f"3. update_imported_product(product_id=ID, brand=...)\n\n"
+                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                    f"Верни JSON: {{total, updated, skipped, saved: число, "
                     f"results: [{{product_id, original, normalized}}]}}"
                 )
 
+            limit = input_data.get('limit', 10)
             return (
                 f"Пакетная нормализация брендов.\n"
                 f"Seller ID: {seller_id}\n"
                 f"Лимит: обработай максимум {limit} товаров.\n\n"
-                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"1. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
                 f"2. Для каждого товара нормализуй бренд\n"
-                f"3. Обнови товары с исправленными брендами через update_product\n\n"
-                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
-                f"Верни JSON: {{total, updated, skipped, "
+                f"3. Для каждого: update_imported_product(product_id=ID, brand=...)\n\n"
+                f"ЗАПРЕЩЕНО вызывать get_imported_products повторно.\n"
+                f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                f"Верни JSON: {{total, updated, skipped, saved: число, "
                 f"results: [{{product_id, original, normalized}}]}}"
             )
 
@@ -89,10 +130,10 @@ class BrandResolverAgent(BaseAgent):
                 f"Аудит брендов.\n"
                 f"Seller ID: {seller_id}\n"
                 f"Лимит: проверь максимум {limit} товаров.\n\n"
-                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
+                f"1. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
                 f"2. Проверь бренды на корректность\n"
                 f"3. Найди потенциальные проблемы\n\n"
-                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
+                f"ЗАПРЕЩЕНО вызывать get_imported_products повторно.\n\n"
                 f"Верни JSON: {{total, correct, issues: [{{product_id, brand, issue}}]}}"
             )
 
@@ -100,5 +141,5 @@ class BrandResolverAgent(BaseAgent):
             f"Задача по брендам.\n"
             f"Seller ID: {seller_id}\n"
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
-            f"Нормализуй бренды и верни результат в JSON."
+            f"Нормализуй бренды, сохрани через update_imported_product и верни результат в JSON."
         )
