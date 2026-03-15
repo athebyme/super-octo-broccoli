@@ -718,8 +718,8 @@ class EnrichmentService:
                                      auth_cookies=auth_cookies,
                                      fallback_urls=fallbacks)
 
-        # Ждём кэширования
-        cached_paths = self._wait_for_cached_photos(selected_photos, supplier_type, external_id, cache, timeout=60)
+        # Ждём кэширования (max 30 сек, early exit при stall)
+        cached_paths = self._wait_for_cached_photos(selected_photos, supplier_type, external_id, cache, timeout=30)
 
         if not cached_paths:
             return {'success': False, 'error': 'Не удалось загрузить фото поставщика'}
@@ -824,8 +824,8 @@ class EnrichmentService:
                                      auth_cookies=auth_cookies,
                                      fallback_urls=fallbacks)
 
-        # Ждём пока фото скачаются (max 90 сек)
-        cached_paths = self._wait_for_cached_photos(photo_urls, supplier_type, external_id, cache, timeout=90)
+        # Ждём пока фото скачаются (max 30 сек, early exit при stall)
+        cached_paths = self._wait_for_cached_photos(photo_urls, supplier_type, external_id, cache, timeout=30)
 
         if not cached_paths:
             return {'skipped': True, 'reason': 'photos_not_cached_after_timeout'}
@@ -857,11 +857,22 @@ class EnrichmentService:
         supplier_type: str,
         external_id: str,
         cache,
-        timeout: int = 90
+        timeout: int = 30
     ) -> List[str]:
-        """Ожидает кэширования фото, возвращает пути к закэшированным файлам"""
+        """Ожидает кэширования фото, возвращает пути к закэшированным файлам.
+
+        Уменьшен таймаут (было 90с). Добавлен early exit если прогресс
+        остановился (скачивание не продвигается 3 итерации подряд).
+        """
         deadline = time.time() + timeout
         cached_paths = []
+        prev_count = 0
+        stall_count = 0
+
+        total = sum(1 for ph in photo_urls if isinstance(ph, dict) and
+                    (ph.get('sexoptovik') or ph.get('original') or ph.get('blur')))
+        if total == 0:
+            return []
 
         while time.time() < deadline:
             cached_paths = []
@@ -875,11 +886,26 @@ class EnrichmentService:
                     path = cache.get_cache_path(supplier_type, external_id, url)
                     cached_paths.append(path)
 
-            # Если хотя бы половина фото закэшировалась — возвращаем
-            total = sum(1 for ph in photo_urls if isinstance(ph, dict) and
-                        (ph.get('sexoptovik') or ph.get('original') or ph.get('blur')))
-            if total > 0 and len(cached_paths) >= max(1, total // 2):
+            # Все фото скачаны
+            if len(cached_paths) >= total:
                 break
+
+            # Хотя бы 1 фото есть — достаточно для продолжения
+            if len(cached_paths) >= max(1, total // 2):
+                break
+
+            # Early exit: если 3 итерации подряд нет прогресса — не ждём
+            if len(cached_paths) == prev_count:
+                stall_count += 1
+                if stall_count >= 3:
+                    logger.warning(
+                        f"[Enrich] Photo download stalled: {len(cached_paths)}/{total} "
+                        f"after {stall_count} checks, giving up early"
+                    )
+                    break
+            else:
+                stall_count = 0
+            prev_count = len(cached_paths)
 
             time.sleep(2)
 
@@ -1028,7 +1054,6 @@ class EnrichmentService:
                     results.append({'product_id': product_id, 'status': 'skipped', 'reason': 'not_found'})
                     job.processed = i + 1
                     job.skipped = skipped
-                    db.session.commit()
                     continue
 
                 imp = self.find_supplier_data(product, seller_id)
@@ -1043,7 +1068,6 @@ class EnrichmentService:
                     })
                     job.processed = i + 1
                     job.skipped = skipped
-                    db.session.commit()
                     continue
 
                 try:
@@ -1082,13 +1106,14 @@ class EnrichmentService:
                         'error': str(e),
                     })
 
-                # Обновляем прогресс
+                # Обновляем прогресс (коммит каждые 5 товаров для снижения нагрузки на БД)
                 job.processed = i + 1
                 job.succeeded = succeeded
                 job.failed = failed
                 job.skipped = skipped
-                job.results = json.dumps(results, ensure_ascii=False)
-                db.session.commit()
+                if (i + 1) % 5 == 0 or (i + 1) == len(product_ids):
+                    job.results = json.dumps(results, ensure_ascii=False)
+                    db.session.commit()
 
                 # Небольшая пауза чтобы не перегружать WB API
                 if (i + 1) % 10 == 0:
