@@ -305,7 +305,15 @@ class BaseAgent(ABC):
         _touch_liveness()
 
         logger.info(f"Agent [{self.agent_name}] started. Polling every {self.config.POLL_INTERVAL}s")
-        self.platform.heartbeat('online')
+
+        # Ждём готовности платформы перед первым heartbeat
+        for attempt in range(1, 13):  # до 2 минут (12 * 10с)
+            try:
+                self.platform.heartbeat('online')
+                break
+            except Exception as e:
+                logger.warning(f"Platform not ready (attempt {attempt}/12): {e}")
+                time.sleep(10)
 
         try:
             while self._running:
