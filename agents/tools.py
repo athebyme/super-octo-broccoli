@@ -190,8 +190,9 @@ def create_platform_tools(platform_client) -> ToolRegistry:
         parameters={
             'properties': {
                 'product_id': {'type': 'integer', 'description': 'ID импортированного товара'},
-                'mapped_wb_category': {'type': 'string', 'description': 'Название категории WB'},
-                'wb_subject_id': {'type': 'integer', 'description': 'ID категории WB (subjectID)'},
+                'mapped_wb_category': {'type': 'string', 'description': 'Название конечной (leaf) категории WB (subject_name из search_wb_categories)'},
+                'wb_subject_id': {'type': 'integer', 'description': 'ID конечной категории WB (subject_id из search_wb_categories)'},
+                'category_confidence': {'type': 'number', 'description': 'Уверенность в выборе категории (0.0-1.0)'},
                 'brand': {'type': 'string', 'description': 'Бренд'},
                 'title': {'type': 'string', 'description': 'Заголовок товара'},
                 'description': {'type': 'string', 'description': 'Описание товара'},
