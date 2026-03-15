@@ -213,7 +213,14 @@ def create_platform_tools(platform_client) -> ToolRegistry:
 
     registry.register(
         name='search_wb_categories',
-        description='Поиск категорий WB по названию из локального справочника. Возвращает subject_id, subject_name, parent_name. ОБЯЗАТЕЛЬНО используй для определения правильной категории.',
+        description=(
+            'Поиск КОНЕЧНЫХ (leaf) категорий WB по названию из локального справочника. '
+            'Возвращает ТОЛЬКО leaf-категории, которые WB API реально принимает. '
+            'subject_id и subject_name — это конечная категория для карточки. '
+            'parent_name — родительский раздел (для информации, НЕ для записи в карточку). '
+            'Ищет и по subject_name, и по parent_name — запрос "Товары для взрослых" вернёт '
+            'все конечные категории этого раздела.'
+        ),
         parameters={
             'properties': {
                 'query': {'type': 'string', 'description': 'Поисковый запрос (название товара или категории, минимум 2 символа)'},

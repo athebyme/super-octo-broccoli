@@ -402,6 +402,11 @@ def internal_get_seller(seller_id):
 def internal_search_categories():
     """Поиск по локальному справочнику категорий WB (MarketplaceCategory).
 
+    Ищет ТОЛЬКО конечные (leaf) категории — именно их принимает WB API.
+    Поиск выполняется и по subject_name (дочерняя), и по parent_name
+    (родительская) — чтобы запрос "Товары для взрослых" вернул все
+    дочерние leaf-категории этого раздела.
+
     Параметры:
         q: поисковый запрос (подстрока названия категории)
         limit: макс. количество результатов (по умолчанию 20)
@@ -412,11 +417,23 @@ def internal_search_categories():
     if not q or len(q) < 2:
         return jsonify({'error': 'Parameter q is required (min 2 chars)'}), 400
 
-    # Ищем только включённые категории по subject_name
+    # Ищем ТОЛЬКО включённые LEAF-категории (конечные предметы).
+    # Родительские категории (is_leaf=False) WB API не принимает.
+    # Ищем и по subject_name, и по parent_name — чтобы поиск
+    # "Товары для взрослых" вернул все leaf-категории этого раздела.
     categories = MarketplaceCategory.query.filter(
         MarketplaceCategory.is_enabled == True,
-        MarketplaceCategory.subject_name.ilike(f'%{q}%')
+        MarketplaceCategory.is_leaf == True,
+        db.or_(
+            MarketplaceCategory.subject_name.ilike(f'%{q}%'),
+            MarketplaceCategory.parent_name.ilike(f'%{q}%'),
+        )
     ).order_by(
+        # Точное совпадение по subject_name выше
+        db.case(
+            (MarketplaceCategory.subject_name.ilike(f'%{q}%'), 0),
+            else_=1
+        ),
         MarketplaceCategory.subject_name
     ).limit(limit).all()
 
@@ -426,7 +443,7 @@ def internal_search_categories():
                 'subject_id': c.subject_id,
                 'subject_name': c.subject_name,
                 'parent_name': c.parent_name,
-                'is_enabled': c.is_enabled,
+                'is_leaf': c.is_leaf,
             }
             for c in categories
         ],

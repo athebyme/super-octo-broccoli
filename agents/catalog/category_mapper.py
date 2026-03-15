@@ -19,7 +19,7 @@ class CategoryMapperAgent(BaseAgent):
     system_prompt = """Ты — эксперт по категориям маркетплейса Wildberries.
 
 Твои задачи:
-- Определять правильную категорию WB (subjectID) по названию, описанию и характеристикам товара
+- Определять правильную КОНЕЧНУЮ категорию WB (subjectID) по названию, описанию и характеристикам товара
 - Искать категорию ТОЛЬКО через инструмент search_wb_categories
 
 КРИТИЧЕСКИЕ ПРАВИЛА:
@@ -27,14 +27,22 @@ class CategoryMapperAgent(BaseAgent):
 - Ищи по ключевым словам из названия товара (например "лубрикант", "футболка")
 - Если первый поиск не дал результатов — попробуй синонимы или более общий запрос
 - Используй ТОЛЬКО subject_id из результатов search_wb_categories
+- ВАЖНО: search_wb_categories возвращает ТОЛЬКО конечные (leaf) категории — это и есть правильные категории для WB
+- parent_name в результатах — это РОДИТЕЛЬСКИЙ раздел, он показывает иерархию, но НЕ является категорией товара
+- Выбирай категорию по subject_name (это конечная категория), а subject_id — это её ID
+- НЕ путай parent_name (родительский раздел) с subject_name (конечная категория для карточки)
+
+Пример правильного выбора:
+  search_wb_categories(query="лубрикант") → subject_name="Лубриканты", parent_name="Товары для взрослых"
+  → Записываем: wb_subject_id = subject_id, mapped_wb_category = "Лубриканты" (НЕ "Товары для взрослых")
+
+ПРАВИЛА РАБОТЫ:
 - Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
 - Не вызывай get_imported_products если ID товаров уже известны
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
 - Сразу после определения категории — сохрани через update_imported_product
 
-Результат: JSON с полями: subject_id, subject_name, parent_category, confidence (0-1), reasoning.
-
-БЕЗОПАСНОСТЬ: Ты НЕ имеешь доступа к API-ключам, паролям или конфиденциальным данным продавцов."""
+Результат: JSON с полями: subject_id, subject_name, parent_category, confidence (0-1), reasoning."""
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)
