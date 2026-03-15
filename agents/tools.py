@@ -252,22 +252,18 @@ def create_platform_tools(platform_client) -> ToolRegistry:
     registry.register(
         name='get_category_characteristics',
         description=(
-            'Получить характеристики (обязательные и рекомендованные) для категории WB по subject_id. '
-            'Возвращает: название, тип (Число/Строка), единицу измерения, допустимые значения из словаря, '
-            'AI-инструкции для заполнения. ОБЯЗАТЕЛЬНО используй для заполнения характеристик — '
-            'данные берутся из реального справочника WB.'
+            'Получить ВСЕ характеристики категории WB по subject_id. '
+            'Возвращает: название, тип (Число/Строка), единицу измерения, допустимые значения из словаря. '
+            'Всегда возвращает полный список — заполняй МАКСИМУМ характеристик из описания товара.'
         ),
         parameters={
             'properties': {
                 'subject_id': {'type': 'integer', 'description': 'ID категории WB (subjectID)'},
-                'required_only': {'type': 'string', 'description': 'Только обязательные: true/false (default: false)'},
             },
             'required': ['subject_id'],
         },
-        handler=lambda subject_id, required_only='false':
-            platform_client.get_category_characteristics(
-                int(subject_id), required_only == 'true'
-            ),
+        handler=lambda subject_id:
+            platform_client.get_category_characteristics(int(subject_id), False),
     )
 
     # ── Справочники WB (цвета, страны, сезоны) ─────────────────
