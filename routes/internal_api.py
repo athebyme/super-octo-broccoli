@@ -282,6 +282,9 @@ def internal_get_imported_products_brief():
         ImportedProduct.id.in_(product_ids)
     ).all()
 
+    # Опционально расширенные поля (для агента характеристик)
+    include_description = data.get('include_description', False)
+
     return jsonify({
         'products': [
             {
@@ -291,6 +294,12 @@ def internal_get_imported_products_brief():
                 'category': p.category or '',
                 'mapped_wb_category': p.mapped_wb_category or '',
                 'wb_subject_id': p.wb_subject_id,
+                **(
+                    {
+                        'description': (p.description or '')[:500],
+                        'country': p.country or '',
+                    } if include_description else {}
+                ),
             }
             for p in products
         ],
@@ -487,17 +496,22 @@ def internal_search_categories():
     # Родительские категории (is_leaf=False) WB API не принимает.
     # Ищем и по subject_name, и по parent_name — чтобы поиск
     # "Товары для взрослых" вернул все leaf-категории этого раздела.
+    #
+    # ВАЖНО: SQLite ilike() не работает с кириллицей (case-insensitive
+    # только для ASCII). Используем db.func.lower() для Unicode-безопасного
+    # сравнения.
+    q_lower = q.lower()
     categories = MarketplaceCategory.query.filter(
         MarketplaceCategory.is_enabled == True,
         MarketplaceCategory.is_leaf == True,
         db.or_(
-            MarketplaceCategory.subject_name.ilike(f'%{q}%'),
-            MarketplaceCategory.parent_name.ilike(f'%{q}%'),
+            db.func.lower(MarketplaceCategory.subject_name).contains(q_lower),
+            db.func.lower(MarketplaceCategory.parent_name).contains(q_lower),
         )
     ).order_by(
         # Точное совпадение по subject_name выше
         db.case(
-            (MarketplaceCategory.subject_name.ilike(f'%{q}%'), 0),
+            (db.func.lower(MarketplaceCategory.subject_name).contains(q_lower), 0),
             else_=1
         ),
         MarketplaceCategory.subject_name

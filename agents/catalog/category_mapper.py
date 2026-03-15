@@ -21,31 +21,35 @@ class CategoryMapperAgent(BaseAgent):
 
     system_prompt = """Ты — эксперт по категориям маркетплейса Wildberries.
 
-Твои задачи:
-- Определять правильную КОНЕЧНУЮ категорию WB (subjectID) по названию, описанию и характеристикам товара
-- Искать категорию ТОЛЬКО через инструмент search_wb_categories
+Задача: определить правильную КОНЕЧНУЮ категорию WB (subjectID) через search_wb_categories.
 
-КРИТИЧЕСКИЕ ПРАВИЛА:
-- ЗАПРЕЩЕНО выдумывать категории! ОБЯЗАТЕЛЬНО используй search_wb_categories для поиска
-- Ищи по ключевым словам из названия товара (например "лубрикант", "футболка")
-- Если первый поиск не дал результатов — попробуй синонимы или более общий запрос
-- Используй ТОЛЬКО subject_id из результатов search_wb_categories
-- ВАЖНО: search_wb_categories возвращает ТОЛЬКО конечные (leaf) категории — это и есть правильные категории для WB
-- parent_name в результатах — это РОДИТЕЛЬСКИЙ раздел, он показывает иерархию, но НЕ является категорией товара
-- Выбирай категорию по subject_name (это конечная категория), а subject_id — это её ID
-- НЕ путай parent_name (родительский раздел) с subject_name (конечная категория для карточки)
+СТРАТЕГИЯ ПОИСКА (в порядке приоритета):
+1. Сначала ищи по словам из поля category поставщика (например category="Вакуумные помпы > ..." → ищи "Вакуумные помпы")
+2. Если не нашёл — ищи по типу товара из названия (1-2 ключевых слова)
+3. Если не нашёл — попробуй более общее слово
+4. Максимум 3 попытки поиска на товар!
 
-Пример правильного выбора:
-  search_wb_categories(query="лубрикант") → subject_name="Лубриканты", parent_name="Товары для взрослых"
-  → Записываем: wb_subject_id = subject_id, mapped_wb_category = "Лубриканты" (НЕ "Товары для взрослых")
+ПРАВИЛА:
+- subject_name = конечная категория для карточки. parent_name = раздел (НЕ записывай в карточку)
+- mapped_wb_category = subject_name, wb_subject_id = subject_id
+- ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения
+- ЗАПРЕЩЕНО выдумывать категории — ТОЛЬКО из результатов search_wb_categories
 
-ПРАВИЛА РАБОТЫ:
-- Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
-- Не вызывай get_imported_products если ID товаров уже известны
-- Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
-- Сразу после определения категории — сохрани через update_imported_product
+Результат: JSON с полями: subject_id, subject_name, parent_name, confidence, reasoning."""
 
-Результат: JSON с полями: subject_id, subject_name, parent_category, confidence (0-1), reasoning."""
+    def execute_task(self, task: dict) -> dict:
+        """Автоматически разбивает большие батчи на чанки."""
+        input_data = self.parse_input_data(task)
+        task_type = task.get('task_type', 'map_single')
+        if task_type in ('map_batch',):
+            product_ids = (
+                input_data.get('product_ids')
+                or input_data.get('imported_product_ids')
+                or []
+            )
+            if len(product_ids) > self.max_batch_size:
+                return self._run_chunked_batch(task, product_ids)
+        return self._execute_react(task)
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)
@@ -57,25 +61,7 @@ class CategoryMapperAgent(BaseAgent):
             imported_product_id = input_data.get('imported_product_id')
 
             if imported_product_id:
-                return (
-                    f"Определи категорию WB для импортированного товара.\n"
-                    f"Imported Product ID: {imported_product_id}\n\n"
-                    f"Шаги:\n"
-                    f"1. get_imported_product(product_id={imported_product_id})\n"
-                    f"2. search_wb_categories(query=<ключевое слово из названия товара>)\n"
-                    f"3. Выбери наиболее подходящую КОНЕЧНУЮ категорию (subject_name) из результатов\n"
-                    f"   parent_name — это только информация о разделе, НЕ категория для карточки!\n"
-                    f"4. update_imported_product(\n"
-                    f"     product_id={imported_product_id},\n"
-                    f"     wb_subject_id=<subject_id из результата>,\n"
-                    f"     mapped_wb_category=<subject_name из результата>,\n"
-                    f"     category_confidence=<уверенность 0.0-1.0>\n"
-                    f"   )\n\n"
-                    f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
-                    f"ОБЯЗАТЕЛЬНО запиши ВСЕ три поля: wb_subject_id, mapped_wb_category, category_confidence.\n"
-                    f"mapped_wb_category = subject_name (конечная категория), НЕ parent_name (раздел).\n"
-                    f"Верни JSON: {{subject_id, subject_name, parent_name, confidence, reasoning}}"
-                )
+                return self._build_single_prompt(imported_product_id)
 
             if product_id:
                 return (
@@ -102,16 +88,9 @@ class CategoryMapperAgent(BaseAgent):
             products_data = input_data.get('products_data', [])
             limit = input_data.get('limit', 10)
 
-            # 1 товар → делегируем в single
+            # 1 товар → делегируем в single с предзагрузкой
             if len(product_ids) == 1 and not products_data:
-                return self.build_task_prompt({
-                    **task,
-                    'task_type': 'map_single',
-                    'input_data': json.dumps({
-                        'imported_product_id': product_ids[0],
-                        'seller_id': seller_id,
-                    }),
-                })
+                return self._build_single_prompt(product_ids[0])
 
             # Данные уже переданы
             if products_data:
@@ -132,21 +111,18 @@ class CategoryMapperAgent(BaseAgent):
             # Конкретные IDs — предзагружаем данные в промпт (экономия токенов)
             if product_ids:
                 count = len(product_ids)
-                # Загружаем краткие данные товаров прямо в промпт,
-                # чтобы агент НЕ вызывал get_imported_product для каждого
                 products_brief = self._prefetch_products_brief(product_ids)
                 if products_brief:
                     products_text = json.dumps(products_brief, ensure_ascii=False, indent=2)
                     return (
                         f"Пакетный маппинг категорий для {count} товаров.\n"
                         f"Данные товаров уже загружены:\n{products_text}\n\n"
-                        f"ОПТИМИЗАЦИЯ: данные уже загружены выше. ЗАПРЕЩЕНО вызывать get_imported_product.\n\n"
+                        f"НЕ вызывай get_imported_product — данные уже выше.\n\n"
                         f"Алгоритм:\n"
-                        f"1. Сгруппируй товары по похожим категориям\n"
-                        f"2. Для каждой группы: search_wb_categories(query=<ключевое слово>) — ОДИН поиск на группу\n"
+                        f"1. Сгруппируй товары по полю category поставщика\n"
+                        f"2. Для каждой группы: search_wb_categories — ищи по словам из category поставщика (до знака '>'), потом по названию\n"
                         f"3. Для каждого товара: update_imported_product(product_id=ID, wb_subject_id=<subject_id>, mapped_wb_category=<subject_name>, category_confidence=<0.0-1.0>)\n\n"
-                        f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
-                        f"mapped_wb_category = subject_name (конечная категория), НЕ parent_name (раздел).\n"
+                        f"mapped_wb_category = subject_name (конечная), НЕ parent_name (раздел).\n"
                         f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                         f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
                     )
@@ -189,6 +165,63 @@ class CategoryMapperAgent(BaseAgent):
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
             f"Определи категории через search_wb_categories, сохрани через update_imported_product и верни результат."
         )
+
+    def _build_single_prompt(self, imported_product_id: int) -> str:
+        """Строит промпт для одного товара с предзагрузкой данных."""
+        product_data = self._prefetch_product(imported_product_id)
+
+        if product_data:
+            # Извлекаем подсказку для поиска из категории поставщика
+            supplier_category = product_data.get('category', '')
+            title = product_data.get('title', '')
+            search_hints = []
+            if supplier_category:
+                # Берём первую часть категории поставщика (до ">")
+                main_cat = supplier_category.split('>')[0].strip()
+                if main_cat:
+                    search_hints.append(main_cat)
+            if title:
+                # Первые 2-3 слова из названия
+                words = title.split()[:3]
+                search_hints.append(' '.join(words))
+
+            product_text = json.dumps(product_data, ensure_ascii=False, indent=2)
+            hints_text = ', '.join(f'"{h}"' for h in search_hints) if search_hints else '"ключевое слово из названия"'
+
+            return (
+                f"Определи категорию WB для импортированного товара.\n"
+                f"Imported Product ID: {imported_product_id}\n\n"
+                f"=== ДАННЫЕ ТОВАРА (уже загружены) ===\n{product_text}\n\n"
+                f"НЕ вызывай get_imported_product — данные уже выше.\n\n"
+                f"Шаги (максимум 4 вызова):\n"
+                f"1. search_wb_categories(query=...) — НАЧНИ с: {hints_text}\n"
+                f"2. Если 0 результатов — попробуй синоним или более общее слово (макс 3 попытки)\n"
+                f"3. update_imported_product(product_id={imported_product_id}, wb_subject_id=<subject_id>, mapped_wb_category=<subject_name>, category_confidence=<0.0-1.0>)\n\n"
+                f"mapped_wb_category = subject_name (конечная), НЕ parent_name (раздел).\n"
+                f"ОБЯЗАТЕЛЬНО вызови update_imported_product!\n"
+                f"Верни JSON: {{subject_id, subject_name, parent_name, confidence, reasoning}}"
+            )
+
+        # Не удалось предзагрузить — fallback
+        return (
+            f"Определи категорию WB для импортированного товара.\n"
+            f"Imported Product ID: {imported_product_id}\n\n"
+            f"1. get_imported_product(product_id={imported_product_id})\n"
+            f"2. search_wb_categories — ищи сначала по словам из category поставщика, потом по названию\n"
+            f"3. update_imported_product(product_id={imported_product_id}, wb_subject_id=..., mapped_wb_category=..., category_confidence=...)\n\n"
+            f"mapped_wb_category = subject_name (конечная), НЕ parent_name (раздел).\n"
+            f"ОБЯЗАТЕЛЬНО вызови update_imported_product!\n"
+            f"Верни JSON: {{subject_id, subject_name, parent_name, confidence, reasoning}}"
+        )
+
+    def _prefetch_product(self, product_id: int) -> dict:
+        """Предзагрузка данных одного товара."""
+        try:
+            data = self.platform.get_imported_product(product_id)
+            return data.get('product', data) if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"Failed to prefetch product {product_id}: {e}")
+            return {}
 
     def _prefetch_products_brief(self, product_ids: list) -> list:
         """Предзагрузка кратких данных товаров для встраивания в промпт.

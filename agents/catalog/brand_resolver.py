@@ -42,6 +42,20 @@ class BrandResolverAgent(BaseAgent):
 
 Результат: JSON с нормализованными брендами."""
 
+    def execute_task(self, task: dict) -> dict:
+        """Автоматически разбивает большие батчи на чанки."""
+        input_data = self.parse_input_data(task)
+        task_type = task.get('task_type', 'resolve_single')
+        if task_type in ('resolve_batch',):
+            product_ids = (
+                input_data.get('product_ids')
+                or input_data.get('imported_product_ids')
+                or []
+            )
+            if len(product_ids) > self.max_batch_size:
+                return self._run_chunked_batch(task, product_ids)
+        return self._execute_react(task)
+
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'resolve_single')

@@ -217,6 +217,7 @@ class BaseAgent(ABC):
     max_iterations: int = 15  # макс. итераций ReAct
     max_tool_retries: int = 2
     use_fallback_llm: bool = False  # True → использовать Claude/Sonnet для сложных задач
+    max_batch_size: int = 10  # макс. товаров в одном промпте (чтобы не переполнить контекст)
 
     def __init__(self, config: AgentConfig = None):
         self.config = config or AgentConfig
@@ -259,9 +260,80 @@ class BaseAgent(ABC):
         """Формирует промпт для выполнения задачи."""
         ...
 
+    def execute_task(self, task: dict) -> dict:
+        """Выполняет задачу. Агенты могут переопределить для chunked batch."""
+        return self._execute_react(task)
+
     def post_process(self, task: dict, result: dict) -> dict:
         """Постобработка результата (опционально)."""
         return result
+
+    def _run_chunked_batch(self, task: dict, product_ids: list,
+                           chunk_size: int = None) -> dict:
+        """Разбивает большой batch на чанки и обрабатывает каждый отдельным ReAct-циклом.
+
+        Полезно для пакетных задач с большим кол-вом товаров,
+        чтобы не переполнить контекст LLM.
+        Возвращает объединённый результат.
+        """
+        chunk_size = chunk_size or self.max_batch_size
+        task_id = task['id']
+        seller_id = task.get('seller_id')
+        task_type = task.get('task_type', 'fill_batch')
+
+        chunks = [product_ids[i:i + chunk_size]
+                  for i in range(0, len(product_ids), chunk_size)]
+
+        total_processed = 0
+        total_saved = 0
+        all_results = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        for chunk_idx, chunk_ids in enumerate(chunks):
+            self.platform.log_thinking(
+                task_id,
+                f'Чанк {chunk_idx + 1}/{len(chunks)}',
+                f'Обрабатываю товары {chunk_ids[:5]}... ({len(chunk_ids)} шт)',
+            )
+
+            # Создаём виртуальную задачу для чанка
+            chunk_task = {
+                **task,
+                'input_data': json.dumps({
+                    'product_ids': chunk_ids,
+                    'imported_product_ids': chunk_ids,
+                    'seller_id': seller_id,
+                }),
+                'task_type': task_type,
+            }
+
+            chunk_result = self._execute_react(chunk_task)
+
+            # Собираем статистику
+            usage = chunk_result.pop('_usage', {})
+            total_input_tokens += usage.get('input_tokens', 0)
+            total_output_tokens += usage.get('output_tokens', 0)
+
+            total_processed += chunk_result.get('processed', chunk_result.get('saved', 0))
+            total_saved += chunk_result.get('saved', chunk_result.get('processed', 0))
+            chunk_results = chunk_result.get('results', [])
+            if isinstance(chunk_results, list):
+                all_results.extend(chunk_results)
+
+        return {
+            'processed': total_processed,
+            'saved': total_saved,
+            'results': all_results,
+            'chunks': len(chunks),
+            'message': f'Обработано {total_processed} товаров ({len(chunks)} чанков)',
+            '_usage': {
+                'input_tokens': total_input_tokens,
+                'output_tokens': total_output_tokens,
+                'total_tokens': total_input_tokens + total_output_tokens,
+                'react_iterations': len(chunks),
+            },
+        }
 
     # ── Утилиты ────────────────────────────────────────────────────
 
@@ -370,8 +442,8 @@ class BaseAgent(ABC):
             self.platform.log_thinking(task_id, 'Анализирую задачу',
                                        f"Тип: {task.get('task_type')}")
 
-            # Выполняем ReAct цикл
-            result = self._execute_react(task)
+            # Выполняем задачу (по умолчанию ReAct цикл, агенты могут переопределить)
+            result = self.execute_task(task)
 
             # Если задача была отменена во время выполнения
             if isinstance(result, dict) and result.get('status') == 'cancelled':
