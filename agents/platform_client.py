@@ -41,13 +41,22 @@ class PlatformClient:
             'X-Agent-Key': self.cfg.AGENT_API_KEY,
             'Content-Type': 'application/json',
         })
+        self._current_task_id: Optional[str] = None
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}/internal/v1{path}"
 
+    def set_task_id(self, task_id: Optional[str]):
+        """Устанавливает текущий task_id для передачи в X-Task-Id заголовке."""
+        self._current_task_id = task_id
+
     def _request(self, method: str, path: str, **kwargs) -> dict:
         """Выполняет запрос с retry на сетевые и timeout ошибки."""
         url = self._url(path)
+        if self._current_task_id:
+            headers = kwargs.pop('headers', {})
+            headers['X-Task-Id'] = self._current_task_id
+            kwargs['headers'] = headers
         last_error = None
         for attempt in range(4):
             try:

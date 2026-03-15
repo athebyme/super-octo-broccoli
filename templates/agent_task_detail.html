@@ -85,6 +85,17 @@
                     Отменить
                 </button>
             </form>
+            {% elif task.status == 'completed' %}
+            <form action="{{ url_for('agent_task_rollback', task_id=task.id) }}" method="POST" class="flex-shrink-0">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" onclick="return confirm('Откатить все изменения этой задачи? Значения полей товаров будут восстановлены.')"
+                        class="px-4 py-2 text-xs text-white/80 bg-red-500/20 rounded-md hover:bg-red-500/30 transition-colors font-medium inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                    </svg>
+                    Откатить
+                </button>
+            </form>
             {% endif %}
         </div>
 

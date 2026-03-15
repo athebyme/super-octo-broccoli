@@ -361,6 +361,9 @@ class BaseAgent(ABC):
 
         logger.info(f"Picked up task {task_id[:8]}: {task.get('title', '?')}")
 
+        # Устанавливаем task_id для передачи в X-Task-Id (нужен для снимков отката)
+        self.platform.set_task_id(task_id)
+
         try:
             # Берём задачу в работу
             self.platform.start_task(task_id)
@@ -399,6 +402,8 @@ class BaseAgent(ABC):
                 self.platform.fail_task(task_id, error_msg)
             except Exception:
                 pass
+        finally:
+            self.platform.set_task_id(None)
 
     # ── ReAct цикл ─────────────────────────────────────────────────
 

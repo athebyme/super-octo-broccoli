@@ -753,6 +753,34 @@ def migrate(db_path):
             print("  ⏭️  agent_task_steps уже существует")
 
         # ============================================================
+        # Таблица agent_change_snapshots (откат изменений агентов)
+        # ============================================================
+        print("\n📋 Таблица: agent_change_snapshots")
+        print("-" * 40)
+
+        if 'agent_change_snapshots' not in existing_tables:
+            cursor.execute("""
+                CREATE TABLE agent_change_snapshots (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id             TEXT REFERENCES agent_tasks(id),
+                    imported_product_id INTEGER NOT NULL REFERENCES imported_products(id),
+                    agent_id            TEXT,
+                    previous_values     TEXT NOT NULL,
+                    new_values          TEXT NOT NULL,
+                    is_rolled_back      BOOLEAN DEFAULT 0,
+                    rolled_back_at      TIMESTAMP,
+                    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_acs_task_id ON agent_change_snapshots(task_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_acs_product_id ON agent_change_snapshots(imported_product_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_acs_task_product ON agent_change_snapshots(task_id, imported_product_id)")
+            print("  ✅ Таблица agent_change_snapshots создана")
+            total_added += 1
+        else:
+            print("  ⏭️  agent_change_snapshots уже существует")
+
+        # ============================================================
         # Добавление недостающих колонок в agent_tasks
         # ============================================================
         if 'agent_tasks' in existing_tables:
