@@ -583,10 +583,10 @@ class BaseAgent(ABC):
         parts = []
         if response['text']:
             # Обрезаем рассуждения для экономии контекста
-            parts.append(response['text'][:800])
+            parts.append(response['text'][:500])
         for call in response['tool_calls']:
             parts.append(
-                f"[Tool Call: {call['name']}({json.dumps(call['arguments'], ensure_ascii=False)[:200]})]"
+                f"[Tool Call: {call['name']}({json.dumps(call['arguments'], ensure_ascii=False)[:150]})]"
             )
         return '\n'.join(parts)
 
@@ -596,8 +596,8 @@ class BaseAgent(ABC):
         for r in results:
             # Ограничиваем размер результатов для экономии контекста
             result_text = r['result']
-            if len(result_text) > 1500:
-                result_text = result_text[:1500] + '\n... (данные обрезаны для экономии контекста)'
+            if len(result_text) > 1200:
+                result_text = result_text[:1200] + '\n... (обрезано)'
             parts.append(f"[Tool Result: {r['name']}]\n{result_text}")
         return '\n\n'.join(parts)
 
