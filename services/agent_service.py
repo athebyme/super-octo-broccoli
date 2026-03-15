@@ -360,6 +360,39 @@ def list_agents(status: str = None) -> list:
     return q.order_by(ServiceAgent.name).all()
 
 
+def requeue_stuck_tasks(timeout_minutes: int = 30, max_retries: int = 3):
+    """Переставляет зависшие задачи (running дольше timeout) обратно в очередь.
+
+    Если задача зависла больше max_retries раз — помечается как failed.
+    Вызывать периодически через APScheduler.
+    """
+    threshold = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    stuck = AgentTask.query.filter(
+        AgentTask.status == 'running',
+        AgentTask.started_at < threshold,
+    ).all()
+    requeued = 0
+    failed = 0
+    for task in stuck:
+        task.retry_count = (task.retry_count or 0) + 1
+        if task.retry_count >= max_retries:
+            task.status = 'failed'
+            task.completed_at = datetime.utcnow()
+            task.error_message = (
+                f'Задача зависла {task.retry_count} раз подряд (таймаут {timeout_minutes} мин)'
+            )
+            failed += 1
+            logger.warning(f"Task {task.id[:8]} permanently failed: stuck {task.retry_count} times")
+        else:
+            task.status = 'queued'
+            task.started_at = None
+            requeued += 1
+            logger.info(f"Task {task.id[:8]} requeued (retry {task.retry_count})")
+    if stuck:
+        db.session.commit()
+    return {'requeued': requeued, 'failed': failed, 'total': len(stuck)}
+
+
 def mark_stale_agents(timeout_seconds: int = 120):
     """Помечает агентов как offline, если heartbeat устарел."""
     threshold = datetime.utcnow() - timedelta(seconds=timeout_seconds)
@@ -509,13 +542,17 @@ def list_tasks(
 
 
 def get_pending_tasks(agent_id: str, limit: int = 10) -> list:
-    """Получает очередь задач для агента (FIFO по приоритету)."""
+    """Получает очередь задач для агента (FIFO по приоритету).
+
+    Использует SELECT FOR UPDATE SKIP LOCKED для предотвращения
+    race condition при горизонтальном масштабировании агентов.
+    """
     return AgentTask.query.filter_by(
         agent_id=agent_id, status='queued'
     ).order_by(
         AgentTask.priority.desc(),
         AgentTask.created_at.asc(),
-    ).limit(limit).all()
+    ).with_for_update(skip_locked=True).limit(limit).all()
 
 
 # ── Шаги задач ──────────────────────────────────────────────────────

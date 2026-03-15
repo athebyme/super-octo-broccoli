@@ -188,25 +188,22 @@ class OrchestratorAgent(BaseAgent):
 - review-analyst: анализ отзывов
 
 Порядок работы:
-1. Создай подзадачу через create_subtask
+1. Создай подзадачу через create_subtask (ОБЯЗАТЕЛЬНО передавай parent_task_id!)
 2. Проверь статус через get_subtask_status
 3. Когда подзадача завершена — получи результат через get_subtask_result
 4. Создай следующую подзадачу (если есть)
 5. Когда все шаги выполнены — верни итоговый JSON
 
 ВАЖНО: Выполняй шаги ПОСЛЕДОВАТЕЛЬНО. Жди завершения текущего шага
-перед запуском следующего."""
+перед запуском следующего.
+ВАЖНО: Всегда передавай parent_task_id при создании подзадач."""
 
     def build_task_prompt(self, task: dict) -> str:
-        input_data = task.get('input_data', '{}')
-        if isinstance(input_data, str):
-            try:
-                input_data = json.loads(input_data)
-            except (json.JSONDecodeError, ValueError):
-                input_data = {}
+        input_data = self.parse_input_data(task)
 
         task_type = task.get('task_type', 'pipeline')
         seller_id = task.get('seller_id')
+        parent_task_id = task.get('id', '')
         product_ids = input_data.get('product_ids', [])
         is_batch = len(product_ids) > 1
 
@@ -252,6 +249,7 @@ class OrchestratorAgent(BaseAgent):
         return (
             f"Pipeline: {label}\n"
             f"Seller ID: {seller_id}\n"
+            f"Parent Task ID: {parent_task_id}\n"
             f"Товары: {ids_str}\n"
             f"Всего товаров: {len(product_ids) if product_ids else 'определить автоматически'}\n\n"
             f"Шаги:\n{steps_description}\n\n"
@@ -261,7 +259,8 @@ class OrchestratorAgent(BaseAgent):
             f"     task_type='...',\n"
             f"     seller_id={seller_id},\n"
             f"     title='...',\n"
-            f"     input_data={input_json}\n"
+            f"     input_data={input_json},\n"
+            f"     parent_task_id='{parent_task_id}'\n"
             f"   )\n"
             f"2. Дождись завершения: вызывай get_subtask_status(task_id=...) пока статус не станет 'completed' или 'failed'\n"
             f"3. Получи результат: get_subtask_result(task_id=...)\n"
@@ -269,7 +268,8 @@ class OrchestratorAgent(BaseAgent):
             f"ВАЖНО:\n"
             f"- Выполняй шаги СТРОГО ПО ПОРЯДКУ\n"
             f"- НЕ запускай следующий шаг пока текущий не завершён\n"
-            f"- Если шаг завершился с ошибкой — продолжай со следующим, но отметь ошибку\n\n"
+            f"- Если шаг завершился с ошибкой — продолжай со следующим, но отметь ошибку\n"
+            f"- ОБЯЗАТЕЛЬНО передавай parent_task_id='{parent_task_id}' в каждую подзадачу\n\n"
             f"Верни итоговый JSON:\n"
             f"{{\n"
             f"  pipeline: '{label}',\n"

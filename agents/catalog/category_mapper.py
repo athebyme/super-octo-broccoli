@@ -39,13 +39,7 @@ class CategoryMapperAgent(BaseAgent):
 Результат: JSON с полями: subject_id, subject_name, parent_category, confidence (0-1), reasoning."""
 
     def build_task_prompt(self, task: dict) -> str:
-        input_data = task.get('input_data', '{}')
-        if isinstance(input_data, str):
-            try:
-                input_data = json.loads(input_data)
-            except (json.JSONDecodeError, ValueError):
-                input_data = {}
-
+        input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'map_single')
         seller_id = task.get('seller_id')
 

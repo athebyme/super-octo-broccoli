@@ -3807,6 +3807,9 @@ class AgentTask(db.Model):
     completed_steps = db.Column(db.Integer, default=0)
     current_step_label = db.Column(db.String(300))  # 'Обогащение товара 45 из 120'
 
+    # Retry tracking
+    retry_count = db.Column(db.Integer, default=0)
+
     # Результат
     result_data = db.Column(db.Text, default='{}')  # JSON
     error_message = db.Column(db.Text)

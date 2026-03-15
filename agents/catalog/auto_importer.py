@@ -39,13 +39,7 @@ class AutoImporterAgent(BaseAgent):
 Результат: JSON с обработанными товарами и статусом готовности."""
 
     def build_task_prompt(self, task: dict) -> str:
-        input_data = task.get('input_data', '{}')
-        if isinstance(input_data, str):
-            try:
-                input_data = json.loads(input_data)
-            except (json.JSONDecodeError, ValueError):
-                input_data = {}
-
+        input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'import_batch')
         seller_id = task.get('seller_id')
 

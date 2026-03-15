@@ -9,10 +9,12 @@
   - Любой OpenAI-совместимый API (vLLM, Ollama, LM Studio, etc.)
 
 Унифицированный интерфейс: chat(), chat_with_tools(), structured_output()
+Все методы chat_with_tools() возвращают usage (input_tokens, output_tokens).
 """
 import functools
 import json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -87,6 +89,10 @@ class BaseLLM(ABC):
                 {'name': str, 'arguments': dict, 'id': str}
             ],
             'stop_reason': str,    # 'end_turn' | 'tool_use' | 'stop'
+            'usage': {             # трекинг токенов
+                'input_tokens': int,
+                'output_tokens': int,
+            },
         }
         """
         ...
@@ -96,6 +102,43 @@ class BaseLLM(ABC):
                           schema: dict) -> dict:
         """Возвращает JSON по заданной схеме."""
         ...
+
+
+def _extract_json_from_text(text: str) -> dict:
+    """Надёжное извлечение JSON из текстового ответа LLM."""
+    text = text.strip()
+
+    # 1. Весь текст как JSON
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 2. Из code block
+    match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1).strip())
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # 3. Первый { ... } блок
+    brace_depth = 0
+    start_idx = None
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if brace_depth == 0:
+                start_idx = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and start_idx is not None:
+                try:
+                    return json.loads(text[start_idx:i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    start_idx = None
+
+    raise ValueError(f"Cannot extract JSON from LLM response: {text[:200]}")
 
 
 # ── Claude ─────────────────────────────────────────────────────────
@@ -148,10 +191,19 @@ class ClaudeLLM(BaseLLM):
                     'id': block.id,
                 })
 
+        # Извлекаем usage из ответа Claude
+        usage = {}
+        if hasattr(resp, 'usage') and resp.usage:
+            usage = {
+                'input_tokens': getattr(resp.usage, 'input_tokens', 0),
+                'output_tokens': getattr(resp.usage, 'output_tokens', 0),
+            }
+
         return {
             'text': '\n'.join(text_parts),
             'tool_calls': tool_calls,
             'stop_reason': resp.stop_reason,
+            'usage': usage,
         }
 
     def structured_output(self, system: str, prompt: str,
@@ -163,13 +215,7 @@ class ClaudeLLM(BaseLLM):
             f"Без комментариев, только валидный JSON."
         )
         text = self.chat(system, [{'role': 'user', 'content': full_prompt}])
-
-        # Извлекаем JSON из ответа
-        text = text.strip()
-        if text.startswith('```'):
-            lines = text.split('\n')
-            text = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
-        return json.loads(text)
+        return _extract_json_from_text(text)
 
 
 # ── Gemini ─────────────────────────────────────────────────────────
@@ -260,13 +306,22 @@ class GeminiLLM(BaseLLM):
                     'id': f"call_{part.function_call.name}_{int(time.time())}",
                 })
 
-        stop = resp.candidates[0].finish_reason
         stop_reason = 'tool_use' if tool_calls else 'end_turn'
+
+        # Извлекаем usage из ответа Gemini
+        usage = {}
+        if hasattr(resp, 'usage_metadata') and resp.usage_metadata:
+            um = resp.usage_metadata
+            usage = {
+                'input_tokens': getattr(um, 'prompt_token_count', 0) or 0,
+                'output_tokens': getattr(um, 'candidates_token_count', 0) or 0,
+            }
 
         return {
             'text': '\n'.join(text_parts),
             'tool_calls': tool_calls,
             'stop_reason': stop_reason,
+            'usage': usage,
         }
 
     def structured_output(self, system: str, prompt: str,
@@ -405,10 +460,20 @@ class OpenAICompatLLM(BaseLLM):
                 })
 
         stop_reason = 'tool_use' if tool_calls else 'end_turn'
+
+        # Извлекаем usage из ответа OpenAI-совместимого API
+        usage = {}
+        if hasattr(resp, 'usage') and resp.usage:
+            usage = {
+                'input_tokens': getattr(resp.usage, 'prompt_tokens', 0) or 0,
+                'output_tokens': getattr(resp.usage, 'completion_tokens', 0) or 0,
+            }
+
         return {
             'text': text,
             'tool_calls': tool_calls,
             'stop_reason': stop_reason,
+            'usage': usage,
         }
 
     def structured_output(self, system: str, prompt: str,
@@ -420,11 +485,7 @@ class OpenAICompatLLM(BaseLLM):
             f"Без комментариев, только валидный JSON."
         )
         text = self.chat(system, [{'role': 'user', 'content': full_prompt}])
-        text = text.strip()
-        if text.startswith('```'):
-            lines = text.split('\n')
-            text = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
-        return json.loads(text)
+        return _extract_json_from_text(text)
 
 
 class CloudRuLLM(OpenAICompatLLM):

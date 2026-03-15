@@ -35,20 +35,61 @@ class ToolRegistry:
         }
         self._handlers[name] = handler
 
+    def merge(self, other: 'ToolRegistry'):
+        """Объединяет инструменты из другого реестра в текущий."""
+        self._tools.update(other._tools)
+        self._handlers.update(other._handlers)
+
     def get_tool_schemas(self) -> list[dict]:
         """Возвращает схемы всех инструментов для LLM."""
         return list(self._tools.values())
 
     def execute(self, name: str, arguments: dict) -> str:
-        """Выполняет инструмент по имени."""
+        """Выполняет инструмент по имени с валидацией аргументов."""
         handler = self._handlers.get(name)
         if not handler:
             return json.dumps({'error': f'Unknown tool: {name}'})
+
+        # Валидация аргументов по схеме
+        schema = self._tools.get(name, {}).get('input_schema', {})
+        required = schema.get('required', [])
+        properties = schema.get('properties', {})
+
+        # Проверяем обязательные аргументы
+        missing = [f for f in required if f not in arguments]
+        if missing:
+            return json.dumps({
+                'error': f'Missing required arguments: {", ".join(missing)}',
+                'tool': name,
+            })
+
+        # Фильтруем неизвестные аргументы (защита от LLM-галлюцинаций)
+        if properties:
+            filtered_args = {k: v for k, v in arguments.items() if k in properties}
+        else:
+            filtered_args = arguments
+
+        # Приведение типов для числовых полей
+        for arg_name, arg_value in list(filtered_args.items()):
+            prop_schema = properties.get(arg_name, {})
+            expected_type = prop_schema.get('type')
+            if expected_type == 'integer' and isinstance(arg_value, (str, float)):
+                try:
+                    filtered_args[arg_name] = int(arg_value)
+                except (ValueError, TypeError):
+                    pass
+            elif expected_type == 'string' and not isinstance(arg_value, str):
+                filtered_args[arg_name] = str(arg_value)
+
         try:
-            result = handler(**arguments)
+            result = handler(**filtered_args)
             if isinstance(result, dict) or isinstance(result, list):
                 return json.dumps(result, ensure_ascii=False, indent=2)
             return str(result)
+        except TypeError as e:
+            # Логируем с деталями для дебага
+            logger.error(f"Tool {name} type error: {e} (args: {list(filtered_args.keys())})")
+            return json.dumps({'error': f'Invalid arguments for {name}: {e}'})
         except Exception as e:
             logger.error(f"Tool {name} error: {e}")
             return json.dumps({'error': str(e)})
@@ -171,16 +212,18 @@ def create_orchestrator_tools(platform_client) -> ToolRegistry:
                 'seller_id': {'type': 'integer', 'description': 'ID продавца'},
                 'title': {'type': 'string', 'description': 'Название подзадачи'},
                 'input_data': {'type': 'string', 'description': 'JSON строка с входными данными (product_ids, limit и т.д.)'},
+                'parent_task_id': {'type': 'string', 'description': 'ID родительской задачи (для связи подзадач)'},
             },
             'required': ['agent_name', 'task_type', 'seller_id', 'title'],
         },
-        handler=lambda agent_name, task_type, seller_id, title, input_data='{}':
+        handler=lambda agent_name, task_type, seller_id, title, input_data='{}', parent_task_id=None:
             platform_client.create_subtask(
                 agent_name=agent_name,
                 task_type=task_type,
                 seller_id=int(seller_id),
                 title=title,
                 input_data=json.loads(input_data) if isinstance(input_data, str) else input_data,
+                parent_task_id=parent_task_id,
             ),
     )
 

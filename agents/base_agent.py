@@ -10,14 +10,18 @@
 - Graceful shutdown
 - Защита от переполнения контекста LLM
 - Пропуск задач, которые уже провалились слишком много раз
+- Cancel propagation — проверка отмены задачи на лету
+- Robust JSON parsing из ответов LLM
 """
 import json
 import logging
 import os
+import re
 import signal
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +46,35 @@ MAX_TASK_FAILURES = 3
 # Максимальная длина сообщения об ошибке для платформы
 MAX_ERROR_LENGTH = 500
 
+# Интервал проверки отмены задачи (каждые N итераций ReAct)
+CANCEL_CHECK_INTERVAL = 3
+
+
+# ── Bounded failure tracker ────────────────────────────────────────
+
+class _BoundedFailureTracker(OrderedDict):
+    """LRU-ограниченный трекер провалов задач.
+
+    Предотвращает утечку памяти при длительной работе агента.
+    Хранит не более maxsize записей, вытесняя самые старые.
+    """
+
+    def __init__(self, maxsize: int = 1000):
+        super().__init__()
+        self.maxsize = maxsize
+
+    def increment(self, key: str) -> int:
+        """Инкрементирует счётчик и возвращает новое значение."""
+        if key in self:
+            self.move_to_end(key)
+        self[key] = self.get(key, 0) + 1
+        # Вытесняем самые старые записи при переполнении
+        while len(self) > self.maxsize:
+            self.popitem(last=False)
+        return self[key]
+
+
+# ── Утилиты ────────────────────────────────────────────────────────
 
 def _sanitize_error(error_msg: str) -> str:
     """Очищает сообщение об ошибке от HTML и обрезает до разумной длины."""
@@ -120,6 +153,54 @@ def _summarize_old_messages(messages: list[dict]) -> list[dict]:
     return [first, {'role': 'user', 'content': summary}] + tail
 
 
+def _extract_json(text: str) -> dict:
+    """Надёжное извлечение JSON из текстового ответа LLM.
+
+    Поддерживает:
+    - Чистый JSON
+    - JSON в ```json ... ``` блоке
+    - JSON в ``` ... ``` блоке (без указания языка)
+    - JSON внутри текстового ответа (первый { ... } блок)
+    """
+    if not text:
+        return {'message': 'Задача выполнена'}
+
+    clean = text.strip()
+
+    # 1. Пробуем весь текст как JSON
+    try:
+        return json.loads(clean)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 2. Извлекаем из code block (```json ... ``` или ``` ... ```)
+    match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', clean, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1).strip())
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # 3. Ищем первый { ... } блок (с вложенными объектами)
+    brace_depth = 0
+    start_idx = None
+    for i, ch in enumerate(clean):
+        if ch == '{':
+            if brace_depth == 0:
+                start_idx = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and start_idx is not None:
+                try:
+                    return json.loads(clean[start_idx:i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    start_idx = None
+
+    # 4. Возвращаем как текстовое сообщение
+    return {'message': text[:3000]}
+
+
 class BaseAgent(ABC):
     """
     Базовый агент с ReAct-циклом.
@@ -159,16 +240,13 @@ class BaseAgent(ABC):
         self._tools = create_platform_tools(self.platform)
         extra = self.get_tools()
         if extra:
-            for name, tool_def in extra._tools.items():
-                self._tools._tools[name] = tool_def
-            for name, handler in extra._handlers.items():
-                self._tools._handlers[name] = handler
+            self._tools.merge(extra)
 
         self._running = False
         self._heartbeat_thread: Optional[threading.Thread] = None
 
-        # Трекинг провалов задач (task_id → failure_count)
-        self._task_failures: dict[str, int] = {}
+        # Трекинг провалов задач — bounded LRU для предотвращения утечки памяти
+        self._task_failures = _BoundedFailureTracker(maxsize=1000)
 
     # ── Абстрактные методы ─────────────────────────────────────────
 
@@ -184,6 +262,38 @@ class BaseAgent(ABC):
     def post_process(self, task: dict, result: dict) -> dict:
         """Постобработка результата (опционально)."""
         return result
+
+    # ── Утилиты ────────────────────────────────────────────────────
+
+    @staticmethod
+    def parse_input_data(task: dict) -> dict:
+        """Парсит input_data из задачи. Убирает дублирование в наследниках."""
+        input_data = task.get('input_data', '{}')
+        if isinstance(input_data, str):
+            try:
+                return json.loads(input_data)
+            except (json.JSONDecodeError, ValueError):
+                return {}
+        return input_data or {}
+
+    def wait_for_subtask(self, task_id: str, timeout: int = 600,
+                         poll_interval: int = 10) -> dict:
+        """Ожидание завершения подзадачи БЕЗ LLM-итераций.
+
+        Используется оркестратором для экономии токенов.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                status = self.platform.get_task_status(task_id)
+                task_data = status.get('task', status)
+                task_status = task_data.get('status', '')
+                if task_status in ('completed', 'failed', 'cancelled'):
+                    return status
+            except Exception as e:
+                logger.warning(f"Subtask poll error for {task_id[:8]}: {e}")
+            time.sleep(poll_interval)
+        return {'error': f'Таймаут ожидания подзадачи ({timeout}с)', 'task_id': task_id}
 
     # ── Основной цикл ──────────────────────────────────────────────
 
@@ -207,6 +317,7 @@ class BaseAgent(ABC):
         finally:
             self._running = False
             logger.info(f"Agent [{self.agent_name}] shutting down")
+            self._stop_heartbeat()
             try:
                 self.platform.heartbeat('offline')
             except Exception:
@@ -251,6 +362,11 @@ class BaseAgent(ABC):
             # Выполняем ReAct цикл
             result = self._execute_react(task)
 
+            # Если задача была отменена во время выполнения
+            if isinstance(result, dict) and result.get('status') == 'cancelled':
+                logger.info(f"Task {task_id[:8]} cancelled during execution")
+                return
+
             # Постобработка
             result = self.post_process(task, result)
 
@@ -267,8 +383,8 @@ class BaseAgent(ABC):
             error_msg = _sanitize_error(str(e))
             logger.error(f"Task {task_id[:8]} failed: {error_msg}", exc_info=True)
 
-            # Инкрементируем счётчик провалов
-            self._task_failures[task_id] = self._task_failures.get(task_id, 0) + 1
+            # Инкрементируем счётчик провалов (bounded)
+            self._task_failures.increment(task_id)
 
             try:
                 self.platform.log_error(task_id, 'Ошибка выполнения', error_msg)
@@ -277,6 +393,15 @@ class BaseAgent(ABC):
                 pass
 
     # ── ReAct цикл ─────────────────────────────────────────────────
+
+    def _check_task_cancelled(self, task_id: str) -> bool:
+        """Проверяет, не была ли задача отменена."""
+        try:
+            status = self.platform.get_task_status(task_id)
+            task_data = status.get('task', status)
+            return task_data.get('status') == 'cancelled'
+        except Exception:
+            return False
 
     def _execute_react(self, task: dict) -> dict:
         """
@@ -292,8 +417,20 @@ class BaseAgent(ABC):
         messages = [{'role': 'user', 'content': task_prompt}]
         tool_schemas = self._tools.get_tool_schemas()
         total_steps = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         for iteration in range(self.max_iterations):
+            # Cancel propagation: проверяем отмену каждые N итераций
+            if iteration > 0 and iteration % CANCEL_CHECK_INTERVAL == 0:
+                if self._check_task_cancelled(task_id):
+                    logger.info(f"Task {task_id[:8]}: cancelled by user, stopping ReAct")
+                    self.platform.log_decision(
+                        task_id, 'Задача отменена',
+                        'Задача была отменена пользователем во время выполнения.',
+                    )
+                    return {'status': 'cancelled', 'message': 'Задача отменена пользователем'}
+
             # Защита от переполнения контекста
             if _estimate_context_size(messages) > CONTEXT_CHAR_LIMIT:
                 logger.info(f"Task {task_id[:8]}: context overflow, summarizing")
@@ -314,6 +451,11 @@ class BaseAgent(ABC):
 
             duration_ms = int((time.time() - t0) * 1000)
 
+            # Трекинг токенов
+            usage = response.get('usage', {})
+            total_input_tokens += usage.get('input_tokens', 0)
+            total_output_tokens += usage.get('output_tokens', 0)
+
             # Логируем рассуждения
             if response['text']:
                 total_steps += 1
@@ -330,7 +472,14 @@ class BaseAgent(ABC):
 
             # Если нет tool calls — финальный ответ
             if not response['tool_calls']:
-                return self._parse_final_answer(response['text'])
+                result = _extract_json(response['text'])
+                result['_usage'] = {
+                    'input_tokens': total_input_tokens,
+                    'output_tokens': total_output_tokens,
+                    'total_tokens': total_input_tokens + total_output_tokens,
+                    'react_iterations': iteration + 1,
+                }
+                return result
 
             # Выполняем tool calls
             messages.append({
@@ -391,13 +540,19 @@ class BaseAgent(ABC):
         if messages and messages[-1].get('role') == 'user':
             for msg in reversed(messages):
                 if msg.get('role') == 'assistant':
-                    partial = self._parse_final_answer(msg.get('content', ''))
+                    partial = _extract_json(msg.get('content', ''))
                     if partial and partial.get('message') != 'Задача выполнена':
                         partial['status'] = 'partial'
                         partial['_note'] = (
                             f'Достигнут лимит шагов ({self.max_iterations}). '
                             f'Результат может быть неполным.'
                         )
+                        partial['_usage'] = {
+                            'input_tokens': total_input_tokens,
+                            'output_tokens': total_output_tokens,
+                            'total_tokens': total_input_tokens + total_output_tokens,
+                            'react_iterations': self.max_iterations,
+                        }
                         return partial
                     break
 
@@ -407,6 +562,12 @@ class BaseAgent(ABC):
                 f'Агент выполнил максимум шагов ({self.max_iterations}) '
                 f'и не успел завершить задачу. Попробуйте выбрать меньше товаров.'
             ),
+            '_usage': {
+                'input_tokens': total_input_tokens,
+                'output_tokens': total_output_tokens,
+                'total_tokens': total_input_tokens + total_output_tokens,
+                'react_iterations': self.max_iterations,
+            },
         }
 
     def _format_assistant_message(self, response: dict) -> str:
@@ -432,24 +593,6 @@ class BaseAgent(ABC):
             parts.append(f"[Tool Result: {r['name']}]\n{result_text}")
         return '\n\n'.join(parts)
 
-    def _parse_final_answer(self, text: str) -> dict:
-        """Пытается извлечь JSON из финального ответа LLM."""
-        if not text:
-            return {'message': 'Задача выполнена'}
-
-        # Пробуем JSON
-        clean = text.strip()
-        if clean.startswith('```'):
-            lines = clean.split('\n')
-            clean = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
-
-        try:
-            return json.loads(clean)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        return {'message': text[:3000]}
-
     # ── Heartbeat ──────────────────────────────────────────────────
 
     def _start_heartbeat(self):
@@ -465,6 +608,11 @@ class BaseAgent(ABC):
 
         self._heartbeat_thread = threading.Thread(target=_beat, daemon=True)
         self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self):
+        """Graceful stop для heartbeat thread."""
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=5)
 
     # ── Graceful shutdown ──────────────────────────────────────────
 
@@ -485,12 +633,7 @@ class SimpleAgent(BaseAgent):
     """
 
     def build_task_prompt(self, task: dict) -> str:
-        input_data = task.get('input_data', '{}')
-        if isinstance(input_data, str):
-            try:
-                input_data = json.loads(input_data)
-            except (json.JSONDecodeError, ValueError):
-                pass
+        input_data = self.parse_input_data(task)
 
         return (
             f"Задача: {task.get('title', 'Без названия')}\n"
