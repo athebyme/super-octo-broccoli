@@ -177,6 +177,141 @@ services:
     profiles:
       - agents
 
+  agent-size-normalizer:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: agent-size-normalizer
+    environment:
+      - AGENT_NAME=size-normalizer
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_ID=${AGENT_SIZE_NORMALIZER_ID:-}
+      - AGENT_API_KEY=${AGENT_SIZE_NORMALIZER_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
+      - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
+      - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
+      - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  agent-characteristics-filler:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: agent-characteristics-filler
+    environment:
+      - AGENT_NAME=characteristics-filler
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_ID=${AGENT_CHARACTERISTICS_FILLER_ID:-}
+      - AGENT_API_KEY=${AGENT_CHARACTERISTICS_FILLER_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
+      - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
+      - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
+      - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  agent-brand-resolver:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: agent-brand-resolver
+    environment:
+      - AGENT_NAME=brand-resolver
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_ID=${AGENT_BRAND_RESOLVER_ID:-}
+      - AGENT_API_KEY=${AGENT_BRAND_RESOLVER_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
+      - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
+      - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
+      - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  agent-photo-optimizer:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: agent-photo-optimizer
+    environment:
+      - AGENT_NAME=photo-optimizer
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_ID=${AGENT_PHOTO_OPTIMIZER_ID:-}
+      - AGENT_API_KEY=${AGENT_PHOTO_OPTIMIZER_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
+      - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
+      - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
+      - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  agent-review-analyst:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: agent-review-analyst
+    environment:
+      - AGENT_NAME=review-analyst
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_ID=${AGENT_REVIEW_ANALYST_ID:-}
+      - AGENT_API_KEY=${AGENT_REVIEW_ANALYST_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
+      - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
+      - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
+      - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.agents
+    container_name: agent-orchestrator
+    environment:
+      - AGENT_NAME=orchestrator
+      - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_ID=${AGENT_ORCHESTRATOR_ID:-}
+      - AGENT_API_KEY=${AGENT_ORCHESTRATOR_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
+      - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
+      - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
+      - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - FALLBACK_LLM_PROVIDER=${FALLBACK_LLM_PROVIDER:-}
+      - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-claude-haiku-4-5-20251001}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - agents
+
 volumes:
   seller_platform_data:
     driver: local
