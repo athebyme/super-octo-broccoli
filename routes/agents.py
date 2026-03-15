@@ -349,6 +349,86 @@ def register_agents_routes(app):
         flash(f'Задача создана: {task.id[:8]}', 'success')
         return redirect(url_for('agent_task_detail', task_id=task.id))
 
+    # ── Откат изменений агента ───────────────────────────────────────
+
+    @app.route('/agents/tasks/<task_id>/rollback', methods=['POST'])
+    @login_required
+    def agent_task_rollback(task_id):
+        """Откатить все изменения, сделанные задачей агента."""
+        from models import AgentChangeSnapshot, ImportedProduct
+
+        task = agent_service.get_task(task_id)
+        if not task:
+            abort(404)
+        seller_id = current_user.seller.id if current_user.seller else None
+        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+            abort(403)
+
+        snapshots = AgentChangeSnapshot.query.filter_by(
+            task_id=task_id,
+            is_rolled_back=False,
+        ).all()
+
+        if not snapshots:
+            flash('Нет изменений для отката (или уже откачено)', 'warning')
+            return redirect(url_for('agent_task_detail', task_id=task_id))
+
+        rolled_back = 0
+        for snap in snapshots:
+            product = ImportedProduct.query.get(snap.imported_product_id)
+            if not product:
+                continue
+
+            try:
+                prev = json.loads(snap.previous_values)
+                for field, old_value in prev.items():
+                    setattr(product, field, old_value)
+                product.updated_at = datetime.utcnow()
+                snap.is_rolled_back = True
+                snap.rolled_back_at = datetime.utcnow()
+                rolled_back += 1
+            except Exception as e:
+                logger.error(f"Rollback error for product {snap.imported_product_id}: {e}")
+
+        db.session.commit()
+        flash(f'Откачено изменений: {rolled_back} товаров', 'success')
+        return redirect(url_for('agent_task_detail', task_id=task_id))
+
+    @app.route('/agents/api/tasks/<task_id>/changes')
+    @login_required
+    def agents_api_task_changes(task_id):
+        """API: получить историю изменений задачи (для отображения в UI)."""
+        from models import AgentChangeSnapshot
+
+        task = agent_service.get_task(task_id)
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        seller_id = current_user.seller.id if current_user.seller else None
+        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+            return jsonify({'error': 'Access denied'}), 403
+
+        snapshots = AgentChangeSnapshot.query.filter_by(task_id=task_id).order_by(
+            AgentChangeSnapshot.created_at
+        ).all()
+
+        return jsonify({
+            'changes': [
+                {
+                    'id': s.id,
+                    'product_id': s.imported_product_id,
+                    'previous_values': json.loads(s.previous_values),
+                    'new_values': json.loads(s.new_values),
+                    'is_rolled_back': s.is_rolled_back,
+                    'rolled_back_at': s.rolled_back_at.isoformat() if s.rolled_back_at else None,
+                    'created_at': s.created_at.isoformat() if s.created_at else None,
+                }
+                for s in snapshots
+            ],
+            'count': len(snapshots),
+            'has_rollback': any(not s.is_rolled_back for s in snapshots),
+        })
+
     # ── Админ: управление агентами ──────────────────────────────────
 
     @app.route('/agents/admin/register', methods=['POST'])

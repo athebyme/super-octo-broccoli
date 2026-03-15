@@ -1946,6 +1946,40 @@ class AIHistory(db.Model):
     )
 
 
+class AgentChangeSnapshot(db.Model):
+    """Снимок значений полей до изменения агентом — для отката.
+
+    Каждая запись хранит старые значения полей одного товара,
+    которые были изменены конкретной задачей агента.
+    """
+    __tablename__ = 'agent_change_snapshots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.String(36), db.ForeignKey('agent_tasks.id'), nullable=True, index=True)
+    imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=False, index=True)
+    agent_id = db.Column(db.String(36), nullable=True)
+
+    # JSON: {"field_name": old_value, ...}
+    previous_values = db.Column(db.Text, nullable=False)
+    # JSON: {"field_name": new_value, ...}
+    new_values = db.Column(db.Text, nullable=False)
+
+    is_rolled_back = db.Column(db.Boolean, default=False)
+    rolled_back_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    imported_product = db.relationship('ImportedProduct', backref=db.backref(
+        'agent_changes', lazy='dynamic', order_by='AgentChangeSnapshot.created_at.desc()'))
+
+    __table_args__ = (
+        db.Index('idx_acs_task_product', 'task_id', 'imported_product_id'),
+    )
+
+    def __repr__(self):
+        return f'<AgentChangeSnapshot task={self.task_id[:8] if self.task_id else "?"} product={self.imported_product_id}>'
+
+
 class BlockedCard(db.Model):
     """Заблокированная карточка товара WB (кэш из seller-analytics-api)"""
     __tablename__ = 'blocked_cards'

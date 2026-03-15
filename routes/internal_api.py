@@ -20,6 +20,7 @@ from models import (
     MarketplaceCategory, MarketplaceCategoryCharacteristic,
     MarketplaceDirectory, PricingSettings, ProhibitedWord,
     Brand, BrandAlias, MarketplaceBrand, BrandCategoryLink,
+    AgentChangeSnapshot,
 )
 from services import agent_service
 
@@ -319,17 +320,44 @@ def internal_update_imported_product(product_id):
         'calculated_price', 'calculated_discount_price',
         'calculated_price_before_discount',
     ]
+
+    # Также принимаем wb_category_id/wb_category_name от агентов
+    if 'wb_category_id' in data:
+        data['wb_subject_id'] = data.pop('wb_category_id')
+    if 'wb_category_name' in data:
+        data['mapped_wb_category'] = data.pop('wb_category_name')
+
+    # ── Сохраняем снимок предыдущих значений для отката ──
+    previous_values = {}
+    new_values = {}
+    for field in allowed_fields:
+        if field in data:
+            old_val = getattr(p, field, None)
+            new_val = data[field]
+            # Записываем только реально изменённые поля
+            if str(old_val) != str(new_val):
+                previous_values[field] = old_val
+                new_values[field] = new_val
+
+    # Применяем изменения
     for field in allowed_fields:
         if field in data:
             setattr(p, field, data[field])
 
-    # Также принимаем wb_category_id/wb_category_name от агентов
-    if 'wb_category_id' in data:
-        p.wb_subject_id = data['wb_category_id']
-    if 'wb_category_name' in data:
-        p.mapped_wb_category = data['wb_category_name']
-
     p.updated_at = datetime.utcnow()
+
+    # Сохраняем снимок если были реальные изменения
+    if previous_values:
+        task_id = request.headers.get('X-Task-Id')
+        snapshot = AgentChangeSnapshot(
+            task_id=task_id,
+            imported_product_id=p.id,
+            agent_id=request._agent.id if hasattr(request, '_agent') else None,
+            previous_values=json.dumps(previous_values, ensure_ascii=False, default=str),
+            new_values=json.dumps(new_values, ensure_ascii=False, default=str),
+        )
+        db.session.add(snapshot)
+
     db.session.commit()
     return jsonify({'ok': True, 'product': _imported_product_to_dict(p)})
 
