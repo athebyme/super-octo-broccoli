@@ -179,6 +179,12 @@ class PlatformClient:
         return self._request('PATCH', f'/imported-products/{product_id}',
                              json=updates)
 
+    # ── Справочник категорий ──────────────────────────────────────
+
+    def search_categories(self, query: str, limit: int = 20) -> dict:
+        """Поиск категорий WB по локальному справочнику."""
+        return self._request('GET', f'/categories/search?q={query}&limit={limit}')
+
     # ── Задачи (для оркестратора) ────────────────────────────────
 
     def create_subtask(self, agent_name: str, task_type: str,

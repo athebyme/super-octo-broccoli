@@ -15,7 +15,7 @@ from datetime import datetime
 from flask import request, jsonify, abort, Blueprint
 from werkzeug.security import check_password_hash
 
-from models import db, ServiceAgent, Product, ImportedProduct, SupplierProduct, Seller
+from models import db, ServiceAgent, Product, ImportedProduct, SupplierProduct, Seller, MarketplaceCategory
 from services import agent_service
 
 logger = logging.getLogger(__name__)
@@ -341,6 +341,45 @@ def internal_get_seller(seller_id):
             'wb_seller_id': seller.wb_seller_id,
             'has_api_key': bool(seller._wb_api_key_encrypted),
         }
+    })
+
+
+# ── Справочник категорий WB ─────────────────────────────────────
+
+@internal_api_bp.route('/categories/search', methods=['GET'])
+@_authenticate_agent
+def internal_search_categories():
+    """Поиск по локальному справочнику категорий WB (MarketplaceCategory).
+
+    Параметры:
+        q: поисковый запрос (подстрока названия категории)
+        limit: макс. количество результатов (по умолчанию 20)
+    """
+    q = request.args.get('q', '').strip()
+    limit = min(request.args.get('limit', 20, type=int), 50)
+
+    if not q or len(q) < 2:
+        return jsonify({'error': 'Parameter q is required (min 2 chars)'}), 400
+
+    # Ищем только включённые категории по subject_name
+    categories = MarketplaceCategory.query.filter(
+        MarketplaceCategory.is_enabled == True,
+        MarketplaceCategory.subject_name.ilike(f'%{q}%')
+    ).order_by(
+        MarketplaceCategory.subject_name
+    ).limit(limit).all()
+
+    return jsonify({
+        'categories': [
+            {
+                'subject_id': c.subject_id,
+                'subject_name': c.subject_name,
+                'parent_name': c.parent_name,
+                'is_enabled': c.is_enabled,
+            }
+            for c in categories
+        ],
+        'count': len(categories),
     })
 
 

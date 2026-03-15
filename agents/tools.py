@@ -202,6 +202,22 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             platform_client.update_imported_product(product_id, updates),
     )
 
+    # ── Справочник категорий WB ──────────────────────────────────
+
+    registry.register(
+        name='search_wb_categories',
+        description='Поиск категорий WB по названию из локального справочника. Возвращает subject_id, subject_name, parent_name. ОБЯЗАТЕЛЬНО используй для определения правильной категории.',
+        parameters={
+            'properties': {
+                'query': {'type': 'string', 'description': 'Поисковый запрос (название товара или категории, минимум 2 символа)'},
+                'limit': {'type': 'integer', 'description': 'Макс. количество результатов (по умолчанию 10)'},
+            },
+            'required': ['query'],
+        },
+        handler=lambda query, limit=10:
+            platform_client.search_categories(query, min(int(limit), 20)),
+    )
+
     # ── Продавец ───────────────────────────────────────────────
 
     registry.register(

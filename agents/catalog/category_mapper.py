@@ -20,14 +20,13 @@ class CategoryMapperAgent(BaseAgent):
 
 Твои задачи:
 - Определять правильную категорию WB (subjectID) по названию, описанию и характеристикам товара
-- Анализировать дерево категорий WB и подбирать наиболее точное соответствие
+- Искать категорию ТОЛЬКО через инструмент search_wb_categories
 
-Знания:
-- Дерево категорий WB: Категория → Подкатегория → Предмет (subject)
-- У каждого предмета есть subjectID (числовой)
-- Правильная категория критична для ранжирования и комиссии
-
-ПРАВИЛА РАБОТЫ:
+КРИТИЧЕСКИЕ ПРАВИЛА:
+- ЗАПРЕЩЕНО выдумывать категории! ОБЯЗАТЕЛЬНО используй search_wb_categories для поиска
+- Ищи по ключевым словам из названия товара (например "лубрикант", "футболка")
+- Если первый поиск не дал результатов — попробуй синонимы или более общий запрос
+- Используй ТОЛЬКО subject_id из результатов search_wb_categories
 - Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
 - Не вызывай get_imported_products если ID товаров уже известны
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
@@ -50,8 +49,10 @@ class CategoryMapperAgent(BaseAgent):
                     f"Imported Product ID: {imported_product_id}\n\n"
                     f"Шаги:\n"
                     f"1. get_imported_product(product_id={imported_product_id})\n"
-                    f"2. По названию и описанию определи категорию WB\n"
-                    f"3. update_imported_product(product_id={imported_product_id}, wb_subject_id=..., mapped_wb_category=...)\n\n"
+                    f"2. search_wb_categories(query=<ключевое слово из названия товара>)\n"
+                    f"3. Выбери наиболее подходящую категорию из результатов поиска\n"
+                    f"4. update_imported_product(product_id={imported_product_id}, wb_subject_id=<subject_id из поиска>, mapped_wb_category=<subject_name>)\n\n"
+                    f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
                     f"Верни JSON: {{subject_id, subject_name, confidence, reasoning}}"
                 )
@@ -62,8 +63,10 @@ class CategoryMapperAgent(BaseAgent):
                     f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
                     f"Шаги:\n"
                     f"1. get_product(seller_id={seller_id}, product_id={product_id})\n"
-                    f"2. По названию и описанию определи категорию WB\n"
-                    f"3. update_product(seller_id={seller_id}, product_id={product_id}, wb_category_id=..., wb_category_name=...)\n\n"
+                    f"2. search_wb_categories(query=<ключевое слово из названия>)\n"
+                    f"3. Выбери наиболее подходящую категорию из результатов\n"
+                    f"4. update_product(seller_id={seller_id}, product_id={product_id}, wb_category_id=<subject_id>, wb_category_name=<subject_name>)\n\n"
+                    f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_product для сохранения.\n"
                     f"Верни JSON: {{subject_id, subject_name, confidence, reasoning}}"
                 )
@@ -97,8 +100,9 @@ class CategoryMapperAgent(BaseAgent):
                     f"Пакетный маппинг категорий. Данные уже загружены.\n\n"
                     f"Товары:\n{products_json}\n\n"
                     f"Для каждого товара:\n"
-                    f"1. Определи категорию WB по названию и описанию\n"
-                    f"2. Сохрани: update_imported_product(product_id=ID, wb_subject_id=..., mapped_wb_category=...)\n\n"
+                    f"1. search_wb_categories(query=<ключевое слово из названия>) — найди категорию\n"
+                    f"2. update_imported_product(product_id=ID, wb_subject_id=<subject_id из поиска>, mapped_wb_category=<subject_name>)\n\n"
+                    f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
                     f"ЗАПРЕЩЕНО вызывать get_imported_products — данные уже есть выше.\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                     f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
@@ -114,8 +118,9 @@ class CategoryMapperAgent(BaseAgent):
                     f"ЗАПРЕЩЕНО вызывать get_imported_products.\n\n"
                     f"Для каждого ID:\n"
                     f"1. get_imported_product(product_id=ID)\n"
-                    f"2. Определи категорию WB\n"
-                    f"3. update_imported_product(product_id=ID, wb_subject_id=..., mapped_wb_category=...)\n\n"
+                    f"2. search_wb_categories(query=<ключевое слово из названия>) — найди категорию\n"
+                    f"3. update_imported_product(product_id=ID, wb_subject_id=<subject_id из поиска>, mapped_wb_category=<subject_name>)\n\n"
+                    f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                     f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
                 )
@@ -126,8 +131,10 @@ class CategoryMapperAgent(BaseAgent):
                 f"Seller ID: {seller_id}, лимит: {limit}\n\n"
                 f"Шаги:\n"
                 f"1. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
-                f"2. Для каждого товара определи категорию WB\n"
-                f"3. Для каждого: update_imported_product(product_id=ID, wb_subject_id=..., mapped_wb_category=...)\n\n"
+                f"2. Для каждого товара:\n"
+                f"   a. search_wb_categories(query=<ключевое слово>) — найди категорию\n"
+                f"   b. update_imported_product(product_id=ID, wb_subject_id=<subject_id из поиска>, mapped_wb_category=<subject_name>)\n\n"
+                f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
                 f"ЗАПРЕЩЕНО вызывать get_imported_products повторно.\n"
                 f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                 f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
@@ -137,5 +144,5 @@ class CategoryMapperAgent(BaseAgent):
             f"Задача: {task.get('title')}\nТип: {task_type}\n"
             f"Seller ID: {seller_id}\n"
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
-            f"Определи категории, сохрани через update_imported_product и верни результат."
+            f"Определи категории через search_wb_categories, сохрани через update_imported_product и верни результат."
         )
