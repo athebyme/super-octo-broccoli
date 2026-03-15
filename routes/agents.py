@@ -321,7 +321,7 @@ def register_agents_routes(app):
         task_type = request.form.get('task_type', '')
         title = request.form.get('title', '')
 
-        if not agent_id or not task_type or not title:
+        if not agent_id or not task_type:
             flash('Заполните все поля', 'warning')
             return redirect(fallback_url)
 

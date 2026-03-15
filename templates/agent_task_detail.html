@@ -160,14 +160,121 @@
             </div>
             <div class="flex-1 min-w-0">
                 <h3 class="text-sm font-semibold" style="color:var(--text)">Результат</h3>
-                <div class="text-sm mt-1 space-y-1" style="color:var(--text-secondary)">
+                <div class="text-sm mt-2 space-y-2" style="color:var(--text-secondary)">
                     {% if result.message and 'лимит' not in result.message and 'ReAct' not in result.message %}
                     <p>{{ result.message }}</p>
                     {% else %}
                     <p>Задача выполнена успешно.</p>
                     {% endif %}
+
+                    {# Счётчики: processed, saved, failed и т.д. #}
+                    {% set counters = [] %}
+                    {% for key in ['processed', 'saved', 'total', 'succeeded', 'failed', 'skipped', 'updated', 'rewritten'] %}
+                        {% if result.get(key) is not none %}
+                            {% set _ = counters.append((key, result[key])) %}
+                        {% endif %}
+                    {% endfor %}
+                    {% if counters %}
+                    <div class="flex flex-wrap gap-3 mt-2">
+                        {% set counter_labels = {'processed': 'Обработано', 'saved': 'Сохранено', 'total': 'Всего', 'succeeded': 'Успешно', 'failed': 'Ошибки', 'skipped': 'Пропущено', 'updated': 'Обновлено', 'rewritten': 'Перезаписано'} %}
+                        {% set counter_colors = {'failed': 'bg-red-100 text-red-700', 'skipped': 'bg-gray-100 text-gray-700', 'saved': 'bg-emerald-100 text-emerald-700', 'succeeded': 'bg-emerald-100 text-emerald-700'} %}
+                        {% for key, val in counters %}
+                        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium {{ counter_colors.get(key, 'bg-blue-100 text-blue-700') }}">
+                            {{ counter_labels.get(key, key) }}: {{ val }}
+                        </span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    {# Результаты по товарам — таблица #}
+                    {% if result.results is iterable and result.results is not string and result.results|length > 0 %}
+                    <div class="mt-3 border rounded-lg overflow-hidden" style="border-color:var(--border)">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr style="background:var(--bg-secondary)">
+                                    <th class="px-3 py-2 text-left font-medium" style="color:var(--text)">ID</th>
+                                    {% if result.results[0].get('subject_name') or result.results[0].get('category') %}
+                                    <th class="px-3 py-2 text-left font-medium" style="color:var(--text)">Категория</th>
+                                    {% endif %}
+                                    {% if result.results[0].get('title') %}
+                                    <th class="px-3 py-2 text-left font-medium" style="color:var(--text)">Заголовок</th>
+                                    {% endif %}
+                                    {% if result.results[0].get('normalized_brand') or result.results[0].get('original_brand') %}
+                                    <th class="px-3 py-2 text-left font-medium" style="color:var(--text)">Бренд</th>
+                                    {% endif %}
+                                    {% if result.results[0].get('confidence') is not none %}
+                                    <th class="px-3 py-2 text-left font-medium" style="color:var(--text)">Уверенность</th>
+                                    {% endif %}
+                                    {% if result.results[0].get('status') %}
+                                    <th class="px-3 py-2 text-left font-medium" style="color:var(--text)">Статус</th>
+                                    {% endif %}
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y" style="border-color:var(--border)">
+                                {% for item in result.results %}
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-3 py-2 font-mono text-xs">{{ item.get('product_id', '-') }}</td>
+                                    {% if result.results[0].get('subject_name') or result.results[0].get('category') %}
+                                    <td class="px-3 py-2">
+                                        <span class="font-medium">{{ item.get('subject_name') or item.get('category', '-') }}</span>
+                                        {% if item.get('parent_category') %}
+                                        <br><span class="text-xs" style="color:var(--text-muted)">{{ item.parent_category }}</span>
+                                        {% endif %}
+                                    </td>
+                                    {% endif %}
+                                    {% if result.results[0].get('title') %}
+                                    <td class="px-3 py-2">{{ item.get('title', '-') }}</td>
+                                    {% endif %}
+                                    {% if result.results[0].get('normalized_brand') or result.results[0].get('original_brand') %}
+                                    <td class="px-3 py-2">
+                                        {{ item.get('normalized_brand') or item.get('original_brand', '-') }}
+                                        {% if item.get('original_brand') and item.get('normalized_brand') and item.original_brand != item.normalized_brand %}
+                                        <br><span class="text-xs line-through" style="color:var(--text-muted)">{{ item.original_brand }}</span>
+                                        {% endif %}
+                                    </td>
+                                    {% endif %}
+                                    {% if result.results[0].get('confidence') is not none %}
+                                    <td class="px-3 py-2">
+                                        {% set conf = item.get('confidence', 0) %}
+                                        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                                            {% if conf >= 0.9 %}bg-emerald-100 text-emerald-700{% elif conf >= 0.7 %}bg-amber-100 text-amber-700{% else %}bg-red-100 text-red-700{% endif %}">
+                                            {{ (conf * 100)|int }}%
+                                        </span>
+                                    </td>
+                                    {% endif %}
+                                    {% if result.results[0].get('status') %}
+                                    <td class="px-3 py-2">
+                                        {% if item.get('status') == 'success' %}
+                                        <span class="text-emerald-600">OK</span>
+                                        {% elif item.get('status') == 'failed' %}
+                                        <span class="text-red-600">{{ item.get('error', 'Ошибка')[:50] }}</span>
+                                        {% elif item.get('status') == 'skipped' %}
+                                        <span style="color:var(--text-muted)">Пропущен</span>
+                                        {% else %}
+                                        <span>{{ item.get('status', '-') }}</span>
+                                        {% endif %}
+                                    </td>
+                                    {% endif %}
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+
+                    {# _usage — компактно #}
+                    {% if result.get('_usage') %}
+                    <div class="mt-3 flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
+                        {% set u = result._usage %}
+                        {% if u.get('react_iterations') %}<span>Итераций: {{ u.react_iterations }}</span>{% endif %}
+                        {% if u.get('total_tokens') %}<span class="ml-2">Токенов: {{ '{:,}'.format(u.total_tokens) }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+
+                    {# Остальные поля (кроме уже показанных) #}
+                    {% set shown_keys = ['message', 'status', 'processed', 'saved', 'total', 'succeeded', 'failed', 'skipped', 'updated', 'rewritten', 'results', '_usage'] %}
                     {% for key, val in result.items() %}
-                        {% if key not in ('message', 'status') %}
+                        {% if key not in shown_keys %}
                         <div class="flex gap-2 text-sm"><span class="font-medium" style="color:var(--text)">{{ key }}:</span> <span>{{ val }}</span></div>
                         {% endif %}
                     {% endfor %}

@@ -410,17 +410,56 @@ def mark_stale_agents(timeout_seconds: int = 120):
 
 # ── Задачи ──────────────────────────────────────────────────────────
 
+def _auto_title(agent_id: str, task_type: str, input_data: dict) -> str:
+    """Генерирует человекочитаемое название задачи."""
+    agent = ServiceAgent.query.get(agent_id)
+    agent_label = agent.display_name if agent else 'Агент'
+
+    # Считаем кол-во товаров
+    ids = input_data.get('product_ids') or input_data.get('imported_product_ids') or []
+    count = len(ids)
+
+    type_labels = {
+        'map_single': 'Категория',
+        'map_batch': 'Категории пакетом',
+        'seo_single': 'SEO',
+        'seo_batch': 'SEO пакетом',
+        'rewrite_titles': 'Перезапись заголовков',
+        'resolve_single': 'Бренд',
+        'resolve_batch': 'Бренды пакетом',
+        'audit_brands': 'Аудит брендов',
+        'fill_single': 'Характеристики',
+        'fill_batch': 'Характеристики пакетом',
+        'validate_existing': 'Валидация характеристик',
+        'import_single': 'Импорт товара',
+        'import_batch': 'Импорт пакетом',
+        'optimize_single': 'Оптимизация фото',
+        'optimize_batch': 'Оптимизация фото пакетом',
+        'quality_check': 'Проверка качества фото',
+        'analyze_reviews': 'Анализ отзывов',
+        'product_insights': 'Инсайты по товару',
+    }
+    action = type_labels.get(task_type, task_type)
+
+    if count:
+        return f"{action} ({count} тов.)"
+    return action
+
+
 def create_task(
     agent_id: str,
     seller_id: int,
     task_type: str,
-    title: str,
+    title: str = '',
     input_data: dict = None,
     priority: int = 0,
     total_steps: int = 0,
     parent_task_id: str = None,
 ) -> AgentTask:
     """Создаёт новую задачу для агента."""
+    if not title:
+        title = _auto_title(agent_id, task_type, input_data or {})
+
     task = AgentTask(
         id=str(uuid.uuid4()),
         agent_id=agent_id,

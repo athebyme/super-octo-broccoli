@@ -3874,6 +3874,7 @@ class AgentTask(db.Model):
             'title': self.title,
             'status': self.status,
             'priority': self.priority,
+            'input_data': self.input_data or '{}',
             'total_steps': self.total_steps,
             'completed_steps': self.completed_steps,
             'current_step_label': self.current_step_label,
