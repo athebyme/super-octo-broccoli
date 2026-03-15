@@ -461,7 +461,8 @@ class EnrichmentService:
         photo_strategy: str,
         seller,
         wb_client,
-        bulk_edit_id: int = None
+        bulk_edit_id: int = None,
+        is_bulk: bool = False
     ) -> Dict[str, Any]:
         """
         Применяет выбранные поля из ImportedProduct к WB-карточке.
@@ -552,7 +553,8 @@ class EnrichmentService:
         # --- Фото ---
         photo_result = {'skipped': True}
         if 'photos' in fields:
-            photo_result = self._apply_photos(product, imp, photo_strategy, seller, wb_client)
+            photo_result = self._apply_photos(product, imp, photo_strategy, seller, wb_client,
+                                                  is_bulk=is_bulk)
             if photo_result.get('uploaded', 0) > 0:
                 fields_applied.append('photos')
 
@@ -766,7 +768,8 @@ class EnrichmentService:
             logger.error(f"[Enrich] Selective photo upload error for nmID={product.nm_id}: {e}")
             return {'success': False, 'uploaded': 0, 'error': str(e)}
 
-    def _apply_photos(self, product, imp, strategy: str, seller, wb_client) -> Dict:
+    def _apply_photos(self, product, imp, strategy: str, seller, wb_client,
+                      is_bulk: bool = False) -> Dict:
         """
         Скачивает фото поставщика (через кэш) и загружает в карточку WB.
 
@@ -775,6 +778,9 @@ class EnrichmentService:
             'append'       - добавить в конец
             'only_if_empty' - только если у карточки нет фото
             'selective'    - пропустить (фото обрабатываются через apply_selective_photos)
+        is_bulk:
+            True при вызове из _run_bulk_job — использует синхронную загрузку
+            для надёжности (queue_download ненадёжен в bulk-режиме)
         """
         from services.photo_cache import get_photo_cache, PhotoCacheManager
 
@@ -809,23 +815,33 @@ class EnrichmentService:
         if supplier_type == 'sexoptovik':
             auth_cookies = self._get_sexoptovik_auth(seller)
 
-        # Ставим в очередь загрузки незакэшированные фото
-        for ph in photo_urls:
-            if not isinstance(ph, dict):
-                continue
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
-            if url and not cache.is_cached(supplier_type, external_id, url):
-                fallbacks = []
-                if ph.get('blur') and ph['blur'] != url:
-                    fallbacks.append(ph['blur'])
-                if ph.get('original') and ph['original'] != url:
-                    fallbacks.append(ph['original'])
-                cache.queue_download(supplier_type, external_id, url,
-                                     auth_cookies=auth_cookies,
-                                     fallback_urls=fallbacks)
+        if is_bulk:
+            # BULK-РЕЖИМ: синхронная загрузка каждого фото по очереди.
+            # Не используем queue_download — в bulk-режиме очередь забивается
+            # фотками от разных товаров, и _wait_for_cached_photos "зависает"
+            # потому что воркеры заняты чужими фотками.
+            cached_paths = self._download_photos_sync(
+                photo_urls, supplier_type, external_id, cache, auth_cookies
+            )
+        else:
+            # SINGLE-РЕЖИМ: ставим в очередь + ждём (быстрее для одного товара)
+            for ph in photo_urls:
+                if not isinstance(ph, dict):
+                    continue
+                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+                if url and not cache.is_cached(supplier_type, external_id, url):
+                    fallbacks = []
+                    if ph.get('blur') and ph['blur'] != url:
+                        fallbacks.append(ph['blur'])
+                    if ph.get('original') and ph['original'] != url:
+                        fallbacks.append(ph['original'])
+                    cache.queue_download(supplier_type, external_id, url,
+                                         auth_cookies=auth_cookies,
+                                         fallback_urls=fallbacks)
 
-        # Ждём пока фото скачаются (max 30 сек, early exit при stall)
-        cached_paths = self._wait_for_cached_photos(photo_urls, supplier_type, external_id, cache, timeout=30)
+            cached_paths = self._wait_for_cached_photos(
+                photo_urls, supplier_type, external_id, cache, timeout=30
+            )
 
         if not cached_paths:
             return {'skipped': True, 'reason': 'photos_not_cached_after_timeout'}
@@ -909,6 +925,61 @@ class EnrichmentService:
 
             time.sleep(2)
 
+        return cached_paths
+
+    def _download_photos_sync(
+        self,
+        photo_urls: List[Dict],
+        supplier_type: str,
+        external_id: str,
+        cache,
+        auth_cookies: Optional[Dict] = None
+    ) -> List[str]:
+        """Синхронная загрузка фото для bulk-режима.
+
+        В отличие от queue_download + _wait_for_cached_photos, скачивает фото
+        по одному напрямую. Это надёжнее для bulk-обработки: не зависит от
+        общей очереди воркеров, гарантирует загрузку всех фото текущего товара
+        перед переходом к следующему.
+        """
+        cached_paths = []
+
+        for ph in photo_urls:
+            if not isinstance(ph, dict):
+                continue
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            if not url:
+                continue
+
+            # Уже в кэше — сразу берём
+            if cache.is_cached(supplier_type, external_id, url):
+                cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                continue
+
+            # Скачиваем синхронно с fallbacks
+            fallbacks = []
+            if ph.get('blur') and ph['blur'] != url:
+                fallbacks.append(ph['blur'])
+            if ph.get('original') and ph['original'] != url:
+                fallbacks.append(ph['original'])
+
+            try:
+                success = cache.download_now(
+                    supplier_type, external_id, url,
+                    auth_cookies=auth_cookies,
+                    fallback_urls=fallbacks
+                )
+                if success:
+                    cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                else:
+                    logger.debug(f"[Enrich] Photo download failed (sync): {url[:60]}")
+            except Exception as e:
+                logger.debug(f"[Enrich] Photo download error (sync): {e}")
+
+        logger.info(
+            f"[Enrich] Sync photo download: {len(cached_paths)}/{len(photo_urls)} "
+            f"for {supplier_type}/{external_id}"
+        )
         return cached_paths
 
     def _get_sexoptovik_auth(self, seller) -> Optional[Dict]:
@@ -1073,7 +1144,8 @@ class EnrichmentService:
                 try:
                     result = self.apply_enrichment(
                         product, imp, fields, photo_strategy,
-                        seller, wb_client, bulk_edit_id=bulk_edit_id
+                        seller, wb_client, bulk_edit_id=bulk_edit_id,
+                        is_bulk=True
                     )
 
                     if result['success']:
