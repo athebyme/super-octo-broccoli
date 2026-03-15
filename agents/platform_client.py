@@ -179,6 +179,12 @@ class PlatformClient:
         return self._request('PATCH', f'/imported-products/{product_id}',
                              json=updates)
 
+    def get_imported_products_brief(self, product_ids: list) -> list:
+        """Получает краткие данные товаров пакетно (только id, title, brand, category)."""
+        data = self._request('POST', '/imported-products/brief',
+                             json={'product_ids': product_ids})
+        return data.get('products', [])
+
     # ── Справочник категорий ──────────────────────────────────────
 
     def search_categories(self, query: str, limit: int = 20) -> dict:

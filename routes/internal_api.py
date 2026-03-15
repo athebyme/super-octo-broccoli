@@ -260,6 +260,44 @@ def internal_get_imported_product(product_id):
     return jsonify({'product': _imported_product_to_dict(p)})
 
 
+@internal_api_bp.route('/imported-products/brief', methods=['POST'])
+@_authenticate_agent
+def internal_get_imported_products_brief():
+    """Пакетное получение краткой информации о товарах (экономия токенов).
+
+    Возвращает только id, title, brand, category — минимум для маппинга.
+    Максимум 50 товаров за раз.
+
+    Body: { "product_ids": [1, 2, 3] }
+    """
+    data = request.get_json(silent=True) or {}
+    product_ids = data.get('product_ids', [])
+
+    if not product_ids or not isinstance(product_ids, list):
+        return jsonify({'error': 'product_ids array is required'}), 400
+
+    product_ids = product_ids[:50]
+
+    products = ImportedProduct.query.filter(
+        ImportedProduct.id.in_(product_ids)
+    ).all()
+
+    return jsonify({
+        'products': [
+            {
+                'id': p.id,
+                'title': p.title or '',
+                'brand': p.brand or '',
+                'category': p.category or '',
+                'mapped_wb_category': p.mapped_wb_category or '',
+                'wb_subject_id': p.wb_subject_id,
+            }
+            for p in products
+        ],
+        'count': len(products),
+    })
+
+
 @internal_api_bp.route('/imported-products/<int:product_id>', methods=['PATCH'])
 @_authenticate_agent
 def internal_update_imported_product(product_id):
@@ -796,6 +834,97 @@ def internal_get_pricing_settings(seller_id):
             'inflated_multiplier': ps.inflated_multiplier,
             'price_ranges': price_ranges,
         }
+    })
+
+
+# ── Валидация характеристик ─────────────────────────────────
+
+@internal_api_bp.route('/imported-products/<int:product_id>/validate', methods=['POST'])
+@_authenticate_agent
+def internal_validate_imported_product(product_id):
+    """Валидация данных товара перед сохранением.
+
+    Проверяет характеристики, размеры, заголовок, описание по схеме WB.
+    Используется агентами для проверки своей работы.
+
+    Body: { "characteristics": {...}, "title": "...", "sizes": {...} }
+    """
+    p = ImportedProduct.query.get(product_id)
+    if not p:
+        return jsonify({'error': 'Imported product not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    errors = []
+    warnings = []
+
+    # Validate title
+    title = data.get('title', p.title or '')
+    if title and len(title) > 60:
+        errors.append(f'Заголовок {len(title)} символов (макс. 60)')
+
+    # Validate description
+    desc = data.get('description', p.description or '')
+    if desc and len(desc) > 5000:
+        errors.append(f'Описание {len(desc)} символов (макс. 5000)')
+
+    # Validate characteristics against category schema
+    chars = data.get('characteristics')
+    if chars and p.wb_subject_id:
+        category = MarketplaceCategory.query.filter_by(
+            subject_id=p.wb_subject_id
+        ).first()
+        if category:
+            schema_charcs = MarketplaceCategoryCharacteristic.query.filter_by(
+                category_id=category.id,
+                is_enabled=True,
+            ).all()
+
+            if isinstance(chars, str):
+                try:
+                    chars = json.loads(chars)
+                except Exception:
+                    errors.append('characteristics: невалидный JSON')
+                    chars = {}
+
+            if isinstance(chars, dict):
+                schema_names = {c.name.lower(): c for c in schema_charcs}
+                filled_required = 0
+                total_required = 0
+
+                for c in schema_charcs:
+                    if c.charc_type == 0:
+                        continue
+                    if c.required:
+                        total_required += 1
+                        if c.name in chars or c.name.lower() in {k.lower() for k in chars}:
+                            filled_required += 1
+                        else:
+                            warnings.append(f'Обязательная характеристика "{c.name}" не заполнена')
+
+                # Check that provided keys match schema
+                for key in chars:
+                    if key.lower() not in schema_names:
+                        warnings.append(f'Характеристика "{key}" не найдена в схеме категории')
+
+                result_chars = {
+                    'total_required': total_required,
+                    'filled_required': filled_required,
+                    'provided_count': len(chars),
+                }
+            else:
+                errors.append('characteristics: должен быть JSON-объект')
+                result_chars = {}
+        else:
+            warnings.append(f'Категория subject_id={p.wb_subject_id} не найдена для валидации')
+            result_chars = {}
+    else:
+        result_chars = {}
+
+    return jsonify({
+        'valid': len(errors) == 0,
+        'errors': errors,
+        'warnings': warnings,
+        'characteristics_validation': result_chars,
     })
 
 

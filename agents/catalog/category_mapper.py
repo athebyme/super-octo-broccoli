@@ -8,13 +8,16 @@
   - remap_incorrect: исправить некорректные категории
 """
 import json
+import logging
 
 from ..base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 
 class CategoryMapperAgent(BaseAgent):
     agent_name = 'category-mapper'
-    max_iterations = 25
+    max_iterations = 15
 
     system_prompt = """Ты — эксперт по категориям маркетплейса Wildberries.
 
@@ -126,10 +129,30 @@ class CategoryMapperAgent(BaseAgent):
                     f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
                 )
 
-            # Конкретные IDs
+            # Конкретные IDs — предзагружаем данные в промпт (экономия токенов)
             if product_ids:
-                ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
+                # Загружаем краткие данные товаров прямо в промпт,
+                # чтобы агент НЕ вызывал get_imported_product для каждого
+                products_brief = self._prefetch_products_brief(product_ids)
+                if products_brief:
+                    products_text = json.dumps(products_brief, ensure_ascii=False, indent=2)
+                    return (
+                        f"Пакетный маппинг категорий для {count} товаров.\n"
+                        f"Данные товаров уже загружены:\n{products_text}\n\n"
+                        f"ОПТИМИЗАЦИЯ: данные уже загружены выше. ЗАПРЕЩЕНО вызывать get_imported_product.\n\n"
+                        f"Алгоритм:\n"
+                        f"1. Сгруппируй товары по похожим категориям\n"
+                        f"2. Для каждой группы: search_wb_categories(query=<ключевое слово>) — ОДИН поиск на группу\n"
+                        f"3. Для каждого товара: update_imported_product(product_id=ID, wb_subject_id=<subject_id>, mapped_wb_category=<subject_name>, category_confidence=<0.0-1.0>)\n\n"
+                        f"ЗАПРЕЩЕНО выдумывать категории — используй ТОЛЬКО результаты search_wb_categories.\n"
+                        f"mapped_wb_category = subject_name (конечная категория), НЕ parent_name (раздел).\n"
+                        f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                        f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
+                    )
+
+                # Fallback если предзагрузка не удалась
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
                 return (
                     f"Пакетный маппинг категорий для {count} товаров.\n"
                     f"Product IDs: [{ids_str}]\n\n"
@@ -166,3 +189,15 @@ class CategoryMapperAgent(BaseAgent):
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
             f"Определи категории через search_wb_categories, сохрани через update_imported_product и верни результат."
         )
+
+    def _prefetch_products_brief(self, product_ids: list) -> list:
+        """Предзагрузка кратких данных товаров для встраивания в промпт.
+
+        Возвращает только id, title, brand, category — минимум для маппинга.
+        Экономит ~80% токенов по сравнению с N вызовами get_imported_product.
+        """
+        try:
+            return self.platform.get_imported_products_brief(product_ids)
+        except Exception as e:
+            logger.warning(f"Failed to prefetch products brief: {e}")
+            return []

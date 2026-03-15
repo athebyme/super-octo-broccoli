@@ -8,14 +8,17 @@
   - rewrite_titles: переписать заголовки
 """
 import json
+import logging
 
 from ..base_agent import BaseAgent
 from ..tools import ToolRegistry
 
+logger = logging.getLogger(__name__)
+
 
 class SEOWriterAgent(BaseAgent):
     agent_name = 'seo-writer'
-    max_iterations = 20
+    max_iterations = 12
 
     system_prompt = """Ты — SEO-эксперт для маркетплейса Wildberries (WB).
 
@@ -120,8 +123,23 @@ class SEOWriterAgent(BaseAgent):
                 })
 
             if product_ids:
-                ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
+                products_brief = self._prefetch_products_brief(product_ids)
+                if products_brief:
+                    products_text = json.dumps(products_brief, ensure_ascii=False, indent=2)
+                    return (
+                        f"SEO-оптимизация {count} товаров.\n"
+                        f"Данные товаров уже загружены:\n{products_text}\n\n"
+                        f"ОПТИМИЗАЦИЯ: данные уже загружены выше. ЗАПРЕЩЕНО вызывать get_imported_product.\n\n"
+                        f"Для каждого товара:\n"
+                        f"1. Сгенерируй оптимизированный заголовок (до 60 символов) и описание (до 1000 символов)\n"
+                        f"2. check_text_prohibited(text=<заголовок>) — проверь на стоп-слова\n"
+                        f"3. update_imported_product(product_id=ID, title=..., description=...)\n\n"
+                        f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                        f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
+                    )
+
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
                 return (
                     f"SEO-оптимизация {count} выбранных товаров.\n"
                     f"Product IDs: [{ids_str}]\n\n"
@@ -168,3 +186,11 @@ class SEOWriterAgent(BaseAgent):
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
             f"Выполни SEO-оптимизацию, сохрани через update_imported_product и верни результат в JSON."
         )
+
+    def _prefetch_products_brief(self, product_ids: list) -> list:
+        """Предзагрузка кратких данных товаров для встраивания в промпт."""
+        try:
+            return self.platform.get_imported_products_brief(product_ids)
+        except Exception as e:
+            logger.warning(f"Failed to prefetch products brief: {e}")
+            return []

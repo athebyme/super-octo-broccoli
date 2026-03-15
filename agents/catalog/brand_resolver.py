@@ -3,13 +3,16 @@
 Агент брендов — распознавание, нормализация, валидация брендов.
 """
 import json
+import logging
 
 from ..base_agent import BaseAgent
+
+logger = logging.getLogger(__name__)
 
 
 class BrandResolverAgent(BaseAgent):
     agent_name = 'brand-resolver'
-    max_iterations = 20
+    max_iterations = 12
 
     system_prompt = """Ты — эксперт по брендам на маркетплейсе Wildberries.
 
@@ -97,15 +100,30 @@ class BrandResolverAgent(BaseAgent):
                 })
 
             if product_ids:
-                ids_str = ', '.join(str(i) for i in product_ids[:20])
                 count = len(product_ids)
+                products_brief = self._prefetch_products_brief(product_ids)
+                if products_brief:
+                    products_text = json.dumps(products_brief, ensure_ascii=False, indent=2)
+                    return (
+                        f"Пакетная нормализация брендов для {count} товаров.\n"
+                        f"Данные товаров уже загружены:\n{products_text}\n\n"
+                        f"ОПТИМИЗАЦИЯ: данные уже загружены выше. ЗАПРЕЩЕНО вызывать get_imported_product.\n\n"
+                        f"Для каждого товара:\n"
+                        f"1. validate_brand(brand_name=<бренд из данных>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО\n"
+                        f"2. update_imported_product(product_id=ID, brand=<каноническое написание из validate_brand>)\n\n"
+                        f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                        f"Верни JSON: {{total, updated, skipped, saved: число, "
+                        f"results: [{{product_id, original, normalized}}]}}"
+                    )
+
+                ids_str = ', '.join(str(i) for i in product_ids[:20])
                 return (
                     f"Пакетная нормализация брендов для {count} товаров.\n"
                     f"Product IDs: [{ids_str}]\n\n"
                     f"ЗАПРЕЩЕНО вызывать get_imported_products.\n\n"
                     f"Для каждого ID:\n"
                     f"1. get_imported_product(product_id=ID)\n"
-                    f"2. Нормализуй бренд\n"
+                    f"2. validate_brand(brand_name=<бренд>) — ОБЯЗАТЕЛЬНО\n"
                     f"3. update_imported_product(product_id=ID, brand=...)\n\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                     f"Верни JSON: {{total, updated, skipped, saved: число, "
@@ -145,3 +163,11 @@ class BrandResolverAgent(BaseAgent):
             f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n"
             f"Нормализуй бренды, сохрани через update_imported_product и верни результат в JSON."
         )
+
+    def _prefetch_products_brief(self, product_ids: list) -> list:
+        """Предзагрузка кратких данных товаров для встраивания в промпт."""
+        try:
+            return self.platform.get_imported_products_brief(product_ids)
+        except Exception as e:
+            logger.warning(f"Failed to prefetch products brief: {e}")
+            return []
