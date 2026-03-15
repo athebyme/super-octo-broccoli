@@ -183,7 +183,10 @@ def create_platform_tools(platform_client) -> ToolRegistry:
 
     registry.register(
         name='update_imported_product',
-        description='Обновить данные импортированного товара: категорию WB, бренд, характеристики и др.',
+        description=(
+            'Обновить данные импортированного товара: категорию WB, бренд, характеристики и др. '
+            'ЗАЩИТА ЦЕН: платформа запрещает установку цены ниже закупочной + минимальная наценка (по умолчанию 20%).'
+        ),
         parameters={
             'properties': {
                 'product_id': {'type': 'integer', 'description': 'ID импортированного товара'},
@@ -195,6 +198,10 @@ def create_platform_tools(platform_client) -> ToolRegistry:
                 'characteristics': {'type': 'string', 'description': 'JSON характеристик'},
                 'sizes': {'type': 'string', 'description': 'JSON размеров'},
                 'gender': {'type': 'string', 'description': 'Пол (мужской/женский/унисекс)'},
+                'country': {'type': 'string', 'description': 'Страна производства'},
+                'calculated_price': {'type': 'number', 'description': 'Рассчитанная цена (защита: не ниже закупка + min_profit%)'},
+                'calculated_discount_price': {'type': 'number', 'description': 'Цена со скидкой SPP (защита: не ниже закупка + min_profit%)'},
+                'calculated_price_before_discount': {'type': 'number', 'description': 'Цена до скидки (защита: не ниже закупка + min_profit%)'},
             },
             'required': ['product_id'],
         },
@@ -230,6 +237,135 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             'required': ['seller_id'],
         },
         handler=lambda seller_id: platform_client.get_seller(seller_id),
+    )
+
+    # ── Характеристики категории ────────────────────────────────
+
+    registry.register(
+        name='get_category_characteristics',
+        description=(
+            'Получить характеристики (обязательные и рекомендованные) для категории WB по subject_id. '
+            'Возвращает: название, тип (Число/Строка), единицу измерения, допустимые значения из словаря, '
+            'AI-инструкции для заполнения. ОБЯЗАТЕЛЬНО используй для заполнения характеристик — '
+            'данные берутся из реального справочника WB.'
+        ),
+        parameters={
+            'properties': {
+                'subject_id': {'type': 'integer', 'description': 'ID категории WB (subjectID)'},
+                'required_only': {'type': 'string', 'description': 'Только обязательные: true/false (default: false)'},
+            },
+            'required': ['subject_id'],
+        },
+        handler=lambda subject_id, required_only='false':
+            platform_client.get_category_characteristics(
+                int(subject_id), required_only == 'true'
+            ),
+    )
+
+    # ── Справочники WB (цвета, страны, сезоны) ─────────────────
+
+    registry.register(
+        name='get_directory',
+        description=(
+            'Получить справочник WB: colors (цвета), countries (страны), kinds (пол), seasons (сезоны). '
+            'Используй для заполнения характеристик значениями из реального справочника WB. '
+            'Можно фильтровать по подстроке.'
+        ),
+        parameters={
+            'properties': {
+                'directory_type': {
+                    'type': 'string',
+                    'description': 'Тип справочника: colors, countries, kinds, seasons',
+                },
+                'query': {'type': 'string', 'description': 'Поисковый запрос для фильтрации (опционально)'},
+                'limit': {'type': 'integer', 'description': 'Максимум записей (default: 50)'},
+            },
+            'required': ['directory_type'],
+        },
+        handler=lambda directory_type, query=None, limit=50:
+            platform_client.get_directory(directory_type, query, min(int(limit), 200)),
+    )
+
+    # ── Запрещённые слова ───────────────────────────────────────
+
+    registry.register(
+        name='get_prohibited_words',
+        description=(
+            'Получить список запрещённых слов WB (стоп-слова). '
+            'Возвращает слова и их безопасные замены. Используй для проверки '
+            'и очистки заголовков и описаний перед публикацией.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца для персональных стоп-слов (опционально)'},
+                'query': {'type': 'string', 'description': 'Поиск по конкретному слову (опционально)'},
+            },
+            'required': [],
+        },
+        handler=lambda seller_id=None, query=None:
+            platform_client.get_prohibited_words(
+                int(seller_id) if seller_id else None, query
+            ),
+    )
+
+    registry.register(
+        name='check_text_prohibited',
+        description=(
+            'Проверить текст на запрещённые слова WB. Возвращает найденные стоп-слова '
+            'и очищенный текст с заменами. Используй для проверки заголовков и описаний.'
+        ),
+        parameters={
+            'properties': {
+                'text': {'type': 'string', 'description': 'Текст для проверки'},
+                'seller_id': {'type': 'integer', 'description': 'ID продавца (опционально)'},
+            },
+            'required': ['text'],
+        },
+        handler=lambda text, seller_id=None:
+            platform_client.check_prohibited_words(
+                text, int(seller_id) if seller_id else None
+            ),
+    )
+
+    # ── Валидация бренда ────────────────────────────────────────
+
+    registry.register(
+        name='validate_brand',
+        description=(
+            'Проверить бренд по реестру WB. Возвращает: найден ли бренд, каноническое написание, '
+            'уверенность, похожие варианты. Проверяет доступность бренда в категории (если указана). '
+            'ОБЯЗАТЕЛЬНО используй для нормализации брендов вместо угадывания.'
+        ),
+        parameters={
+            'properties': {
+                'brand_name': {'type': 'string', 'description': 'Название бренда для проверки'},
+                'category_id': {'type': 'integer', 'description': 'subject_id категории для проверки доступности (опционально)'},
+            },
+            'required': ['brand_name'],
+        },
+        handler=lambda brand_name, category_id=None:
+            platform_client.validate_brand(
+                brand_name, int(category_id) if category_id else None
+            ),
+    )
+
+    # ── Настройки ценообразования ───────────────────────────────
+
+    registry.register(
+        name='get_pricing_settings',
+        description=(
+            'Получить настройки ценообразования продавца: комиссию WB (%), налоговый коэффициент, '
+            'стоимость логистики, упаковки, хранения, таблицу наценок. '
+            'ОБЯЗАТЕЛЬНО используй для расчёта unit-экономики вместо стандартных значений.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+            },
+            'required': ['seller_id'],
+        },
+        handler=lambda seller_id:
+            platform_client.get_pricing_settings(int(seller_id)),
     )
 
     return registry

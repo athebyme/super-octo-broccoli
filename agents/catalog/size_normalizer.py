@@ -24,12 +24,11 @@ class SizeNormalizerAgent(BaseAgent):
 - Нормализовать в формат WB
 - Заполнять размерные сетки для одежды/обуви
 
-Знания:
-- WB требует размеры в конкретном формате для каждой категории
-- Одежда: российские размеры (42, 44, 46...) или международные (XS, S, M, L, XL)
-- Обувь: российский размер (35, 36, 37...) + размер стельки в см
-- Габариты: длина × ширина × высота в см, вес в кг
-- Размер упаковки обязателен для расчёта логистики
+КРИТИЧЕСКИЕ ПРАВИЛА:
+- Для определения допустимых размеров в категории используй get_category_characteristics(subject_id=...)
+  чтобы узнать формат и допустимые значения размеров
+- Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
+- Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
 
 Таблица конвертации одежды (женская):
   XS=40-42, S=42-44, M=44-46, L=46-48, XL=48-50, XXL=50-52
@@ -46,13 +45,21 @@ class SizeNormalizerAgent(BaseAgent):
 
         if task_type == 'normalize_single':
             product_id = input_data.get('product_id')
+            imported_product_id = input_data.get('imported_product_id')
+
+            target_id = imported_product_id or product_id
+            get_cmd = f"get_imported_product(product_id={target_id})" if imported_product_id else f"get_product(seller_id={seller_id}, product_id={product_id})"
+
             return (
                 f"Нормализуй размеры товара для WB.\n"
-                f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
-                f"1. Получи данные товара через get_product\n"
-                f"2. Проанализируй текущие размеры/габариты\n"
-                f"3. Нормализуй в формат WB\n"
-                f"4. Предложи размерную сетку если применимо\n\n"
+                f"{'Imported Product' if imported_product_id else 'Product'} ID: {target_id}\n\n"
+                f"Шаги:\n"
+                f"1. {get_cmd} — получи данные товара\n"
+                f"2. get_category_characteristics(subject_id=<wb_subject_id>) — узнай допустимые характеристики размеров\n"
+                f"3. Проанализируй текущие размеры/габариты\n"
+                f"4. Нормализуй в формат WB согласно характеристикам категории\n"
+                f"5. update_imported_product(product_id={target_id}, sizes=<JSON размеров>)\n\n"
+                f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
                 f"Верни JSON: {{sizes: [...], dimensions: {{length, width, height, weight}}, size_grid: [...]}}"
             )
 

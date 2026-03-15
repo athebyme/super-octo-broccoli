@@ -20,17 +20,25 @@ class PriceOptimizerAgent(BaseAgent):
 - Обнаружение ценовых аномалий
 - Рекомендации по оптимальной цене
 
-Знания:
-- Комиссия WB зависит от категории (5-25%)
-- Логистика: базовая ставка + доплата за объёмный/тяжёлый груз
-- Обратная логистика (возвраты) = ~5% от заказов
-- Хранение на складе WB: ~5-15 руб/литр в день
-- Минимальная маржа для устойчивого бизнеса: 25-30%
-- Скидки WB вычитаются из маржи продавца
+КРИТИЧЕСКИЕ ПРАВИЛА:
+- ЗАПРЕЩЕНО использовать стандартные/выдуманные коэффициенты!
+- ОБЯЗАТЕЛЬНО получи реальные настройки через get_pricing_settings(seller_id=...)
+- Используй РЕАЛЬНЫЕ данные: комиссию WB, логистику, налоги, таблицу наценок из настроек продавца
+- Закупочная цена (supplier_price) есть в данных товара — используй её
 
-Формула unit-экономики:
-  Прибыль = Цена продажи - Закупка - Комиссия WB - Логистика - Хранение - Налоги
-  Маржа % = (Прибыль / Цена продажи) × 100
+Формула unit-экономики (используй коэффициенты из get_pricing_settings):
+  R = Закупка × tax_rate + logistics_cost + storage_cost + packaging_cost
+  S = max(delivery_min, min(R × delivery_pct/100, delivery_max))
+  Z = R + acquiring_cost + extra_cost + S + Наценка(из price_ranges)
+  Y = Z × inflated_multiplier (цена до скидки)
+  X = Z - SPP (цена со скидкой)
+
+ЗАЩИТА ЦЕН (enforcement на уровне API):
+- Платформа ЗАПРЕЩАЕТ установку цены ниже закупочной (supplier_price)
+- Платформа ЗАПРЕЩАЕТ установку цены ниже порога: supplier_price × (1 + min_profit/100)
+- min_profit берётся из настроек продавца (по умолчанию 20%)
+- Если попытаться установить цену ниже порога — API вернёт ошибку 400
+- Всегда проверяй расчёты перед сохранением
 
 Результат: JSON с расчётами и рекомендациями."""
 
@@ -50,23 +58,28 @@ class PriceOptimizerAgent(BaseAgent):
                     f"Оптимизация цен для {count} выбранных товаров.\n"
                     f"Seller ID: {seller_id}\n"
                     f"Product IDs: {ids_str}\n\n"
-                    f"ВАЖНО: Обрабатывай ТОЛЬКО перечисленные товары.\n\n"
-                    f"1. Для каждого ID получи данные через get_imported_product (product_id=ID)\n"
-                    f"2. Рассчитай unit-экономику\n"
-                    f"3. Предложи оптимальные цены\n\n"
-                    f"Верни JSON: {{products: [{{product_id, current_price, suggested_price, margin_pct, reasoning}}]}}"
+                    f"Шаги:\n"
+                    f"1. get_pricing_settings(seller_id={seller_id}) — ОБЯЗАТЕЛЬНО получи реальные коэффициенты\n"
+                    f"2. Для каждого ID: get_imported_product(product_id=ID) — получи данные и supplier_price\n"
+                    f"3. Рассчитай unit-экономику по РЕАЛЬНОЙ формуле из настроек\n"
+                    f"4. Предложи оптимальные цены\n\n"
+                    f"ЗАПРЕЩЕНО использовать стандартные коэффициенты — бери ТОЛЬКО из get_pricing_settings.\n"
+                    f"Верни JSON: {{products: [{{product_id, supplier_price, calculated_price, margin_pct, reasoning}}]}}"
                 )
 
             return (
                 f"Оптимизируй цены товаров.\n"
                 f"Seller ID: {seller_id}\n"
                 f"Лимит: обработай максимум {limit} товаров.\n\n"
-                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
-                f"2. Рассчитай unit-экономику для каждого товара\n"
-                f"3. Определи товары с отрицательной/низкой маржой\n"
-                f"4. Предложи оптимальные цены\n\n"
+                f"Шаги:\n"
+                f"1. get_pricing_settings(seller_id={seller_id}) — ОБЯЗАТЕЛЬНО получи реальные коэффициенты\n"
+                f"2. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
+                f"3. Рассчитай unit-экономику по РЕАЛЬНОЙ формуле из настроек\n"
+                f"4. Определи товары с отрицательной/низкой маржой\n"
+                f"5. Предложи оптимальные цены\n\n"
+                f"ЗАПРЕЩЕНО использовать стандартные коэффициенты — бери ТОЛЬКО из get_pricing_settings.\n"
                 f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
-                f"Верни JSON: {{products: [{{product_id, current_price, suggested_price, margin_pct, reasoning}}]}}"
+                f"Верни JSON: {{products: [{{product_id, supplier_price, calculated_price, margin_pct, reasoning}}]}}"
             )
 
         elif task_type == 'margin_audit':
@@ -75,10 +88,13 @@ class PriceOptimizerAgent(BaseAgent):
                 f"Аудит маржинальности.\n"
                 f"Seller ID: {seller_id}\n"
                 f"Лимит: проверь максимум {limit} товаров.\n\n"
-                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
-                f"2. Рассчитай маржу по каждому\n"
-                f"3. Выдели проблемные (маржа < 20%)\n"
-                f"4. Подготовь отчёт\n\n"
+                f"Шаги:\n"
+                f"1. get_pricing_settings(seller_id={seller_id}) — ОБЯЗАТЕЛЬНО получи реальные коэффициенты\n"
+                f"2. get_imported_products(seller_id={seller_id}, page=1, per_page={limit}) — ОДИН раз\n"
+                f"3. Рассчитай маржу по каждому товару используя РЕАЛЬНЫЕ коэффициенты\n"
+                f"4. Выдели проблемные (маржа < min_profit из настроек)\n"
+                f"5. Подготовь отчёт\n\n"
+                f"ЗАПРЕЩЕНО использовать стандартные коэффициенты — бери ТОЛЬКО из get_pricing_settings.\n"
                 f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{total, avg_margin, problematic: [...], recommendations: [...]}}"
             )

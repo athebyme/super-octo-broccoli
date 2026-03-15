@@ -185,6 +185,63 @@ class PlatformClient:
         """Поиск категорий WB по локальному справочнику."""
         return self._request('GET', f'/categories/search?q={query}&limit={limit}')
 
+    # ── Характеристики категории ─────────────────────────────────
+
+    def get_category_characteristics(self, subject_id: int,
+                                      required_only: bool = False) -> dict:
+        """Получает характеристики категории WB."""
+        params = f'?required_only=true' if required_only else ''
+        return self._request(
+            'GET', f'/categories/{subject_id}/characteristics{params}'
+        )
+
+    # ── Справочники ────────────────────────────────────────────────
+
+    def get_directory(self, directory_type: str, query: str = None,
+                      limit: int = 50) -> dict:
+        """Получает справочник WB (colors, countries, kinds, seasons)."""
+        params = f'?limit={limit}'
+        if query:
+            params += f'&q={query}'
+        return self._request('GET', f'/directories/{directory_type}{params}')
+
+    # ── Запрещённые слова ──────────────────────────────────────────
+
+    def get_prohibited_words(self, seller_id: int = None,
+                              query: str = None) -> dict:
+        """Получает список стоп-слов."""
+        params = []
+        if seller_id:
+            params.append(f'seller_id={seller_id}')
+        if query:
+            params.append(f'q={query}')
+        qs = '?' + '&'.join(params) if params else ''
+        return self._request('GET', f'/prohibited-words{qs}')
+
+    def check_prohibited_words(self, text: str,
+                                seller_id: int = None) -> dict:
+        """Проверяет текст на стоп-слова."""
+        payload = {'text': text}
+        if seller_id:
+            payload['seller_id'] = seller_id
+        return self._request('POST', '/prohibited-words/check', json=payload)
+
+    # ── Бренды ─────────────────────────────────────────────────────
+
+    def validate_brand(self, brand_name: str,
+                       category_id: int = None) -> dict:
+        """Проверяет бренд по реестру."""
+        params = f'?brand={brand_name}'
+        if category_id:
+            params += f'&category_id={category_id}'
+        return self._request('GET', f'/brands/validate{params}')
+
+    # ── Настройки ценообразования ──────────────────────────────────
+
+    def get_pricing_settings(self, seller_id: int) -> dict:
+        """Получает формулы и коэффициенты ценообразования."""
+        return self._request('GET', f'/sellers/{seller_id}/pricing')
+
     # ── Задачи (для оркестратора) ────────────────────────────────
 
     def create_subtask(self, agent_name: str, task_type: str,

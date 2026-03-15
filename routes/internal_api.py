@@ -15,7 +15,12 @@ from datetime import datetime
 from flask import request, jsonify, abort, Blueprint
 from werkzeug.security import check_password_hash
 
-from models import db, ServiceAgent, Product, ImportedProduct, SupplierProduct, Seller, MarketplaceCategory
+from models import (
+    db, ServiceAgent, Product, ImportedProduct, SupplierProduct, Seller,
+    MarketplaceCategory, MarketplaceCategoryCharacteristic,
+    MarketplaceDirectory, PricingSettings, ProhibitedWord,
+    Brand, BrandAlias, MarketplaceBrand, BrandCategoryLink,
+)
 from services import agent_service
 
 logger = logging.getLogger(__name__)
@@ -257,16 +262,62 @@ def internal_get_imported_product(product_id):
 @internal_api_bp.route('/imported-products/<int:product_id>', methods=['PATCH'])
 @_authenticate_agent
 def internal_update_imported_product(product_id):
-    """Агент обновляет данные импортированного товара."""
+    """Агент обновляет данные импортированного товара.
+
+    БЕЗОПАСНОСТЬ ЦЕН: Если агент устанавливает calculated_price,
+    проверяем что цена >= supplier_price * (1 + min_price_margin_pct/100).
+    По умолчанию min_price_margin_pct = 20% (настраивается в PricingSettings).
+    """
     p = ImportedProduct.query.get(product_id)
     if not p:
         return jsonify({'error': 'Imported product not found'}), 404
 
     data = request.get_json(silent=True) or {}
+
+    # ── Защита цен: агент НЕ может установить цену ниже порога ──
+    price_fields = ('calculated_price', 'calculated_discount_price',
+                    'calculated_price_before_discount')
+    for pf in price_fields:
+        if pf in data and data[pf] is not None:
+            try:
+                new_price = float(data[pf])
+            except (ValueError, TypeError):
+                return jsonify({'error': f'Invalid {pf} value'}), 400
+
+            if p.supplier_price and p.supplier_price > 0:
+                # Получаем минимальный порог из настроек продавца
+                min_margin_pct = 20.0  # fallback по умолчанию
+                ps = PricingSettings.query.filter_by(seller_id=p.seller_id).first()
+                if ps and ps.min_profit is not None:
+                    min_margin_pct = ps.min_profit
+
+                min_allowed = p.supplier_price * (1 + min_margin_pct / 100)
+
+                if new_price < p.supplier_price:
+                    return jsonify({
+                        'error': f'ЗАПРЕЩЕНО: цена {new_price} ниже закупочной {p.supplier_price}',
+                        'min_allowed': round(min_allowed, 2),
+                        'supplier_price': p.supplier_price,
+                    }), 400
+
+                if new_price < min_allowed:
+                    return jsonify({
+                        'error': (
+                            f'ЗАПРЕЩЕНО: цена {new_price} ниже минимального порога '
+                            f'{round(min_allowed, 2)} (закупка {p.supplier_price} + {min_margin_pct}%)'
+                        ),
+                        'min_allowed': round(min_allowed, 2),
+                        'supplier_price': p.supplier_price,
+                        'min_margin_pct': min_margin_pct,
+                    }), 400
+
     allowed_fields = [
         'title', 'description', 'brand', 'mapped_wb_category',
         'wb_subject_id', 'category_confidence',
         'ai_seo_title', 'ai_keywords', 'ai_bullets',
+        'characteristics', 'sizes', 'gender', 'country',
+        'calculated_price', 'calculated_discount_price',
+        'calculated_price_before_discount',
     ]
     for field in allowed_fields:
         if field in data:
@@ -380,6 +431,326 @@ def internal_search_categories():
             for c in categories
         ],
         'count': len(categories),
+    })
+
+
+# ── Характеристики категории ──────────────────────────────────
+
+@internal_api_bp.route('/categories/<int:subject_id>/characteristics', methods=['GET'])
+@_authenticate_agent
+def internal_get_category_characteristics(subject_id):
+    """Получить характеристики категории WB (обязательные/рекомендованные).
+
+    Возвращает список характеристик с типами, допустимыми значениями
+    и AI-инструкциями. НЕ раскрывает конфиденциальные данные.
+
+    Параметры:
+        required_only: если true — вернуть только обязательные (default: false)
+    """
+    category = MarketplaceCategory.query.filter_by(subject_id=subject_id).first()
+    if not category:
+        return jsonify({'error': f'Category {subject_id} not found'}), 404
+
+    required_only = request.args.get('required_only', 'false').lower() == 'true'
+
+    q = MarketplaceCategoryCharacteristic.query.filter_by(
+        category_id=category.id,
+        is_enabled=True,
+    )
+    if required_only:
+        q = q.filter_by(required=True)
+
+    charcs = q.order_by(
+        MarketplaceCategoryCharacteristic.required.desc(),
+        MarketplaceCategoryCharacteristic.display_order,
+    ).all()
+
+    return jsonify({
+        'subject_id': subject_id,
+        'subject_name': category.subject_name,
+        'characteristics': [
+            {
+                'charc_id': c.charc_id,
+                'name': c.name,
+                'type': c.type_label,
+                'required': c.required,
+                'unit_name': c.unit_name or '',
+                'max_count': c.max_count,
+                'popular': c.popular,
+                'dictionary': json.loads(c.dictionary_json) if c.dictionary_json else None,
+                'ai_instruction': c.ai_instruction or '',
+                'ai_example_value': c.ai_example_value or '',
+            }
+            for c in charcs
+        ],
+        'count': len(charcs),
+    })
+
+
+# ── Справочники (цвета, страны, сезоны) ─────────────────────
+
+@internal_api_bp.route('/directories/<directory_type>', methods=['GET'])
+@_authenticate_agent
+def internal_get_directory(directory_type):
+    """Получить справочник WB (colors, countries, kinds, seasons).
+
+    Параметры:
+        q: поисковый запрос для фильтрации (опционально)
+        limit: максимум записей (default: 50)
+    """
+    allowed_types = ('colors', 'countries', 'kinds', 'seasons', 'vat', 'tnved')
+    if directory_type not in allowed_types:
+        return jsonify({'error': f'Unknown directory type. Allowed: {", ".join(allowed_types)}'}), 400
+
+    directory = MarketplaceDirectory.query.filter_by(
+        directory_type=directory_type,
+    ).first()
+
+    if not directory or not directory.data_json:
+        return jsonify({'error': f'Directory "{directory_type}" not found or empty'}), 404
+
+    try:
+        items = json.loads(directory.data_json)
+    except Exception:
+        return jsonify({'error': 'Failed to parse directory data'}), 500
+
+    # Опциональная фильтрация по подстроке
+    q = request.args.get('q', '').strip().lower()
+    if q and len(q) >= 2:
+        filtered = []
+        for item in items:
+            # Ищем по любому строковому значению в записи
+            match = False
+            if isinstance(item, dict):
+                for v in item.values():
+                    if isinstance(v, str) and q in v.lower():
+                        match = True
+                        break
+            elif isinstance(item, str) and q in item.lower():
+                match = True
+            if match:
+                filtered.append(item)
+        items = filtered
+
+    limit = min(request.args.get('limit', 50, type=int), 200)
+    items = items[:limit]
+
+    return jsonify({
+        'directory_type': directory_type,
+        'items': items,
+        'count': len(items),
+    })
+
+
+# ── Запрещённые слова ────────────────────────────────────────
+
+@internal_api_bp.route('/prohibited-words', methods=['GET'])
+@_authenticate_agent
+def internal_get_prohibited_words():
+    """Получить список запрещённых слов (глобальные + продавца).
+
+    БЕЗОПАСНОСТЬ: возвращает только слова и замены, без user IDs и метаданных.
+
+    Параметры:
+        seller_id: ID продавца для персональных стоп-слов (опционально)
+        q: поиск по слову (опционально)
+    """
+    seller_id = request.args.get('seller_id', type=int)
+
+    # Глобальные стоп-слова
+    q_filter = ProhibitedWord.query.filter_by(is_active=True)
+
+    if seller_id:
+        # Глобальные + персональные для этого продавца
+        q_filter = q_filter.filter(
+            db.or_(
+                ProhibitedWord.scope == 'global',
+                db.and_(
+                    ProhibitedWord.scope == 'seller',
+                    ProhibitedWord.seller_id == seller_id,
+                ),
+            )
+        )
+    else:
+        q_filter = q_filter.filter_by(scope='global')
+
+    # Поиск по подстроке
+    search = request.args.get('q', '').strip()
+    if search and len(search) >= 2:
+        q_filter = q_filter.filter(ProhibitedWord.word.ilike(f'%{search}%'))
+
+    words = q_filter.order_by(ProhibitedWord.word).limit(500).all()
+
+    # БЕЗОПАСНОСТЬ: возвращаем ТОЛЬКО слово и замену, без created_by, seller_id и т.д.
+    return jsonify({
+        'words': [
+            {'word': w.word, 'replacement': w.replacement}
+            for w in words
+        ],
+        'count': len(words),
+    })
+
+
+# ── Проверка текста на стоп-слова ────────────────────────────
+
+@internal_api_bp.route('/prohibited-words/check', methods=['POST'])
+@_authenticate_agent
+def internal_check_prohibited_words():
+    """Проверить текст на запрещённые слова.
+
+    Body: { "text": "...", "seller_id": 123 (optional) }
+    """
+    data = request.get_json(silent=True) or {}
+    text = data.get('text', '')
+    if not text:
+        return jsonify({'error': 'text is required'}), 400
+
+    seller_id = data.get('seller_id')
+
+    try:
+        from services.prohibited_words_filter import get_prohibited_words_filter
+        pf = get_prohibited_words_filter(seller_id)
+        found = pf.has_prohibited_words(text)
+        filtered = pf.filter_text(text)
+    except Exception as e:
+        logger.error(f"Prohibited words check error: {e}")
+        return jsonify({'error': 'Filter unavailable'}), 500
+
+    return jsonify({
+        'has_prohibited': len(found) > 0,
+        'found_words': found,
+        'filtered_text': filtered,
+    })
+
+
+# ── Валидация бренда ─────────────────────────────────────────
+
+@internal_api_bp.route('/brands/validate', methods=['GET'])
+@_authenticate_agent
+def internal_validate_brand():
+    """Проверить бренд по локальному реестру (без обращения к WB API).
+
+    БЕЗОПАСНОСТЬ: НЕ раскрывает API-ключи, внутренние ID пользователей.
+    Возвращает только публичные данные бренда.
+
+    Параметры:
+        brand: название бренда для проверки (обязательно)
+        category_id: subject_id категории для проверки доступности (опционально)
+    """
+    brand_name = request.args.get('brand', '').strip()
+    if not brand_name or len(brand_name) < 2:
+        return jsonify({'error': 'brand parameter required (min 2 chars)'}), 400
+
+    category_id = request.args.get('category_id', type=int)
+
+    # Точный поиск по алиасам
+    normalized = brand_name.strip().lower()
+    alias = BrandAlias.query.filter(
+        db.func.lower(BrandAlias.alias_normalized) == normalized
+    ).first()
+
+    if alias and alias.brand:
+        brand = alias.brand
+        result = {
+            'status': 'found',
+            'brand_name': brand.name,
+            'confidence': 1.0,
+            'source': 'exact_match',
+        }
+
+        # Проверяем привязку к маркетплейсу
+        mp_brand = MarketplaceBrand.query.filter_by(brand_id=brand.id).first()
+        if mp_brand:
+            result['marketplace_brand_name'] = mp_brand.marketplace_brand_name
+            result['marketplace_brand_id'] = mp_brand.marketplace_brand_id
+
+            # Проверяем доступность в категории
+            if category_id:
+                link = BrandCategoryLink.query.filter_by(
+                    marketplace_brand_id=mp_brand.id,
+                    category_id=category_id,
+                ).first()
+                result['category_available'] = link.is_available if link else None
+
+        return jsonify({'result': result})
+
+    # Нечёткий поиск: ищем похожие бренды
+    suggestions = []
+    all_aliases = BrandAlias.query.join(Brand).filter(
+        Brand.status != 'rejected',
+    ).limit(5000).all()
+
+    from difflib import SequenceMatcher
+    for a in all_aliases:
+        ratio = SequenceMatcher(None, normalized, a.alias_normalized or '').ratio()
+        if ratio >= 0.7:
+            suggestions.append({
+                'brand_name': a.brand.name if a.brand else a.alias,
+                'confidence': round(ratio, 2),
+            })
+
+    suggestions.sort(key=lambda x: x['confidence'], reverse=True)
+
+    return jsonify({
+        'result': {
+            'status': 'not_found' if not suggestions else 'suggestions',
+            'brand_name': None,
+            'confidence': 0.0,
+            'suggestions': suggestions[:5],
+        }
+    })
+
+
+# ── Настройки ценообразования ────────────────────────────────
+
+@internal_api_bp.route('/sellers/<int:seller_id>/pricing', methods=['GET'])
+@_authenticate_agent
+def internal_get_pricing_settings(seller_id):
+    """Получить настройки ценообразования продавца.
+
+    БЕЗОПАСНОСТЬ: НЕ возвращает URL файлов поставщика, хеши, user IDs.
+    Только формулы и коэффициенты, нужные для расчёта цен.
+    """
+    ps = PricingSettings.query.filter_by(seller_id=seller_id).first()
+    if not ps:
+        return jsonify({'error': 'Pricing settings not found for this seller'}), 404
+
+    if not ps.is_enabled:
+        return jsonify({'error': 'Pricing is not enabled for this seller'}), 404
+
+    # Таблица наценок
+    price_ranges = []
+    if ps.price_ranges:
+        try:
+            price_ranges = json.loads(ps.price_ranges)
+        except Exception:
+            pass
+
+    # БЕЗОПАСНОСТЬ: возвращаем ТОЛЬКО формулы и коэффициенты
+    # НЕ возвращаем: supplier_price_url, supplier_price_inf_url,
+    # last_price_file_hash и другие внутренние поля
+    return jsonify({
+        'pricing': {
+            'formula_type': ps.formula_type,
+            'wb_commission_pct': ps.wb_commission_pct,
+            'tax_rate': ps.tax_rate,
+            'logistics_cost': ps.logistics_cost,
+            'storage_cost': ps.storage_cost,
+            'packaging_cost': ps.packaging_cost,
+            'acquiring_cost': ps.acquiring_cost,
+            'extra_cost': ps.extra_cost,
+            'delivery_pct': ps.delivery_pct,
+            'delivery_min': ps.delivery_min,
+            'delivery_max': ps.delivery_max,
+            'profit_column': ps.profit_column,
+            'min_profit': ps.min_profit,
+            'max_profit': ps.max_profit,
+            'spp_pct': ps.spp_pct,
+            'spp_min': ps.spp_min,
+            'spp_max': ps.spp_max,
+            'inflated_multiplier': ps.inflated_multiplier,
+            'price_ranges': price_ranges,
+        }
     })
 
 

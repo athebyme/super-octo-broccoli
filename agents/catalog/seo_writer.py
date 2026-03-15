@@ -23,6 +23,7 @@ class SEOWriterAgent(BaseAgent):
 - Генерировать SEO-оптимизированные заголовки карточек (до 60 символов)
 - Писать описания с ключевыми словами (до 1000 символов)
 - Анализировать и улучшать существующий контент
+- Проверять тексты на запрещённые слова WB
 
 Правила WB для заголовков:
 - Максимум 60 символов
@@ -37,11 +38,20 @@ class SEOWriterAgent(BaseAgent):
 - Преимущества товара, материал, назначение
 - Без контактов, ссылок, запрещённых слов
 
-ПРАВИЛА РАБОТЫ:
+КРИТИЧЕСКИЕ ПРАВИЛА:
+- ОБЯЗАТЕЛЬНО проверяй сгенерированный текст на стоп-слова через check_text_prohibited
 - Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
 - Не вызывай get_imported_products если ID товаров уже известны
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
 - Сразу после генерации контента — сохрани через update_imported_product
+
+Алгоритм работы:
+1. Получить товар
+2. Сгенерировать заголовок и описание
+3. check_text_prohibited(text=<заголовок>) — проверить заголовок на стоп-слова
+4. check_text_prohibited(text=<описание>) — проверить описание на стоп-слова
+5. Если найдены стоп-слова — использовать очищенный текст из ответа
+6. Сохранить через update_imported_product
 
 Результат: JSON с полями: title, description, keywords, changes_summary."""
 
@@ -62,11 +72,16 @@ class SEOWriterAgent(BaseAgent):
                 return (
                     f"Оптимизируй SEO для импортированного товара.\n"
                     f"Imported Product ID: {imported_product_id}\n\n"
+                    f"Шаги:\n"
                     f"1. get_imported_product(product_id={imported_product_id})\n"
                     f"2. Проанализируй текущий заголовок и описание\n"
                     f"3. Сгенерируй оптимизированный заголовок (до 60 символов)\n"
                     f"4. Сгенерируй SEO-описание (до 1000 символов)\n"
-                    f"5. update_imported_product(product_id={imported_product_id}, title=..., description=...)\n\n"
+                    f"5. check_text_prohibited(text=<заголовок>) — ОБЯЗАТЕЛЬНО проверь на стоп-слова\n"
+                    f"6. check_text_prohibited(text=<описание>) — ОБЯЗАТЕЛЬНО проверь на стоп-слова\n"
+                    f"7. Если найдены стоп-слова — используй filtered_text из ответа\n"
+                    f"8. update_imported_product(product_id={imported_product_id}, title=..., description=...)\n\n"
+                    f"ОБЯЗАТЕЛЬНО проверь тексты через check_text_prohibited перед сохранением.\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
                     f"Верни JSON: {{title, description, keywords: [...], changes_summary}}"
                 )

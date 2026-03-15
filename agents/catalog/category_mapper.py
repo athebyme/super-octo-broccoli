@@ -32,7 +32,9 @@ class CategoryMapperAgent(BaseAgent):
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
 - Сразу после определения категории — сохрани через update_imported_product
 
-Результат: JSON с полями: subject_id, subject_name, parent_category, confidence (0-1), reasoning."""
+Результат: JSON с полями: subject_id, subject_name, parent_category, confidence (0-1), reasoning.
+
+БЕЗОПАСНОСТЬ: Ты НЕ имеешь доступа к API-ключам, паролям или конфиденциальным данным продавцов."""
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

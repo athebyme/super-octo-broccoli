@@ -16,27 +16,26 @@ class BrandResolverAgent(BaseAgent):
 Твои задачи:
 - Распознавать бренды из названий товаров поставщика
 - Нормализовать написание (транслитерация, исправление ошибок)
-- Проверять наличие бренда в реестре WB
+- Проверять наличие бренда в реестре WB через validate_brand
 - Подбирать корректное написание для карточки
 
-Знания:
-- WB имеет справочник брендов с точным написанием
-- Неправильный бренд = блокировка карточки
-- Частые ошибки: кириллица vs латиница, регистр, пробелы
-- Некоторые бренды запрещены (контрафакт, фармацевтика)
-- Если бренд неизвестен — можно указать "Нет бренда"
-
-Примеры нормализации:
-- "найк" → "Nike"
-- "ADIDAS ORIGINALS" → "adidas Originals"
-- "Самсунг" → "Samsung"
-- "Без бренда" → "Нет бренда"
-
-ПРАВИЛА РАБОТЫ:
+КРИТИЧЕСКИЕ ПРАВИЛА:
+- ЗАПРЕЩЕНО угадывать написание бренда! ОБЯЗАТЕЛЬНО используй validate_brand(brand_name=...)
+  чтобы проверить бренд по реальному реестру WB
+- validate_brand вернёт: точное совпадение, каноническое написание или похожие варианты
+- Если validate_brand вернул category_available=false — бренд недоступен в этой категории
+- Если бренд не найден — используй "Нет бренда"
 - Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
 - Не вызывай get_imported_products если ID товаров уже известны
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
 - Сразу после нормализации бренда — сохрани через update_imported_product
+
+Алгоритм работы:
+1. Получить товар (get_imported_product)
+2. Извлечь бренд из названия/описания
+3. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО
+4. Использовать каноническое написание из результата validate_brand
+5. Сохранить (update_imported_product)
 
 Результат: JSON с нормализованными брендами."""
 
@@ -53,10 +52,13 @@ class BrandResolverAgent(BaseAgent):
                 return (
                     f"Определи и нормализуй бренд импортированного товара.\n"
                     f"Imported Product ID: {imported_product_id}\n\n"
+                    f"Шаги:\n"
                     f"1. get_imported_product(product_id={imported_product_id})\n"
-                    f"2. Определи бренд из названия/описания\n"
-                    f"3. Нормализуй написание\n"
-                    f"4. update_imported_product(product_id={imported_product_id}, brand=...)\n\n"
+                    f"2. Извлеки бренд из названия/описания товара\n"
+                    f"3. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО проверь по реестру WB\n"
+                    f"4. Используй каноническое написание из результата validate_brand\n"
+                    f"5. update_imported_product(product_id={imported_product_id}, brand=<каноническое написание>)\n\n"
+                    f"ЗАПРЕЩЕНО угадывать бренд — используй ТОЛЬКО результат validate_brand.\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
                     f"Верни JSON: {{original_brand, normalized_brand, "
                     f"confidence, wb_registered: bool}}"
