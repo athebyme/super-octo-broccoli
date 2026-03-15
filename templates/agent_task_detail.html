@@ -3,7 +3,7 @@
 {% block title %}Задача {{ task.id[:8] }} — Агенты{% endblock %}
 
 {% block content %}
-<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="taskDetail()">
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="taskDetail()" aria-live="polite">
 
     <!-- Навигация -->
     <div class="mb-6">
@@ -90,12 +90,14 @@
 
         <!-- Прогресс-бар внутри шапки -->
         {% if task.status == 'running' and task.total_steps > 0 %}
-        <div class="mt-5">
+        <div class="mt-5" aria-live="polite">
             <div class="flex items-center justify-between text-xs text-gray-400 mb-1.5">
                 <span x-text="friendlyLabel(currentLabel) || 'Выполняется...'">{{ task.current_step_label or 'Выполняется...' }}</span>
                 <span><span x-text="completedSteps">{{ task.completed_steps }}</span> / <span x-text="totalSteps">{{ task.total_steps }}</span></span>
             </div>
-            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden" role="progressbar"
+                 :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100"
+                 :aria-label="'Прогресс: ' + progressPercent + '%'">
                 <div class="h-full bg-brand rounded-full transition-all duration-700 ease-out"
                      :style="`width: ${progressPercent}%`"
                      style="width: {{ task.progress_percent }}%"></div>
@@ -106,7 +108,7 @@
 
     <!-- Результат / Ошибка -->
     {% if task.error_message %}
-    <div class="mb-6 bg-white rounded-lg border border-gray-200 border-l-4 border-l-red-500 p-5">
+    <div class="mb-6 bg-white rounded-lg border border-gray-200 border-l-4 border-l-red-500 p-5" role="alert">
         <div class="flex items-start gap-3">
             <div class="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0 mt-0.5">
                 <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">

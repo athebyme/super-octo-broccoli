@@ -715,13 +715,18 @@
     {% block extra_head %}{% endblock %}
 </head>
 
-<body x-data="{ sidebarOpen: true, mobileMenuOpen: false }">
+<body x-data="{ sidebarOpen: true, mobileMenuOpen: false }" @keydown.escape="mobileMenuOpen = false">
     {% if current_user.is_authenticated %}
 
+    <!-- Skip to content -->
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-4 focus:py-2 focus:bg-white focus:text-[var(--text)] focus:rounded-lg focus:shadow-lg focus:text-sm focus:font-medium">
+        Перейти к содержимому
+    </a>
+
     <!-- Mobile header -->
-    <div class="mobile-header">
-        <button @click="mobileMenuOpen = !mobileMenuOpen">
-            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div class="mobile-header" role="banner">
+        <button @click="mobileMenuOpen = !mobileMenuOpen" aria-label="Открыть меню" :aria-expanded="mobileMenuOpen">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
         </button>
@@ -730,26 +735,26 @@
     </div>
 
     <!-- Mobile overlay -->
-    <div class="mobile-overlay" :class="{ 'active': mobileMenuOpen }" @click="mobileMenuOpen = false"></div>
+    <div class="mobile-overlay" :class="{ 'active': mobileMenuOpen }" @click="mobileMenuOpen = false" aria-hidden="true"></div>
 
     <!-- Sidebar -->
-    <aside class="sidebar" :class="{ 'expanded': sidebarOpen, 'collapsed': !sidebarOpen, 'mobile-open': mobileMenuOpen }">
+    <aside class="sidebar" :class="{ 'expanded': sidebarOpen, 'collapsed': !sidebarOpen, 'mobile-open': mobileMenuOpen }" role="complementary" aria-label="Боковая панель">
 
-        <a href="{{ url_for('dashboard') }}" class="sidebar-logo">
-            <div class="sidebar-logo-mark">S</div>
+        <a href="{{ url_for('dashboard') }}" class="sidebar-logo" aria-label="Seller Hub — на главную">
+            <div class="sidebar-logo-mark" aria-hidden="true">S</div>
             <span x-show="sidebarOpen" x-cloak class="sidebar-logo-text">Seller Hub</span>
         </a>
 
-        <button @click="sidebarOpen = !sidebarOpen" class="sidebar-toggle" style="display:none" x-init="if(window.innerWidth >= 1024) $el.style.display='block'">
-            <svg x-show="sidebarOpen" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="sidebarOpen = !sidebarOpen" class="sidebar-toggle" style="display:none" x-init="if(window.innerWidth >= 1024) $el.style.display='block'" :aria-label="sidebarOpen ? 'Свернуть панель' : 'Развернуть панель'" :aria-expanded="sidebarOpen">
+            <svg x-show="sidebarOpen" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
             </svg>
-            <svg x-show="!sidebarOpen" x-cloak width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg x-show="!sidebarOpen" x-cloak width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
             </svg>
         </button>
 
-        <nav class="sidebar-nav">
+        <nav class="sidebar-nav" aria-label="Основная навигация">
 
             {% if current_user.seller %}
             {# ── Seller Navigation ── #}
@@ -767,12 +772,12 @@
             <!-- Товары -->
             {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if products_active else 'false' }} }">
-                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }" :aria-expanded="open" aria-label="Товары">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                     </svg>
                     <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Товары</span>
-                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
@@ -787,12 +792,12 @@
             <!-- Цены -->
             {% set prices_active = (request.endpoint and request.endpoint.startswith('prices.')) or request.endpoint in ['auto_import_pricing', 'price_monitor_settings', 'suspicious_price_changes'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if prices_active else 'false' }} }">
-                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if prices_active else 'false' }} }">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if prices_active else 'false' }} }" :aria-expanded="open" aria-label="Цены">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Цены</span>
-                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
@@ -806,12 +811,12 @@
             <!-- Поставщики -->
             {% set suppliers_active = request.endpoint and ('supplier_catalog' in request.endpoint or request.endpoint in ['seller_my_products', 'seller_product_wb_preview']) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if suppliers_active else 'false' }} }">
-                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if suppliers_active else 'false' }} }">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if suppliers_active else 'false' }} }" :aria-expanded="open" aria-label="Поставщики">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
                     <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Поставщики</span>
-                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
@@ -840,12 +845,12 @@
             <!-- Аналитика -->
             {% set analytics_active = request.endpoint in ['analytics_page', 'finances_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'inventory_page', 'finance_detail_page', 'sentiment_page', 'returns_page', 'telegram_alerts_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
-                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }" :aria-expanded="open" aria-label="Аналитика">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
                     </svg>
                     <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Аналитика</span>
-                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
@@ -867,8 +872,8 @@
             <!-- Настройки -->
             {% set settings_active = request.endpoint in ['api_settings', 'api_logs', 'product_defaults_page'] or (request.endpoint and request.endpoint.startswith('prohibited_words.seller')) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if settings_active else 'false' }} }">
-                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if settings_active else 'false' }} }">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if settings_active else 'false' }} }" :aria-expanded="open" aria-label="Настройки">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
@@ -932,12 +937,12 @@
             <!-- Система -->
             {% set system_active = request.endpoint in ['admin_system_settings', 'admin_activity_logs', 'admin_audit_logs', 'admin_api_debug'] or (request.endpoint and request.endpoint.startswith('prohibited_words.admin')) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if system_active else 'false' }} }">
-                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if system_active else 'false' }} }">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if system_active else 'false' }} }" :aria-expanded="open" aria-label="Система">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
                     </svg>
                     <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Система</span>
-                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
@@ -984,7 +989,7 @@
         <!-- User -->
         <div class="sidebar-footer">
             <div x-data="{ userMenuOpen: false }" style="position:relative">
-                <button @click="userMenuOpen = !userMenuOpen" class="sidebar-user">
+                <button @click="userMenuOpen = !userMenuOpen" class="sidebar-user" :aria-expanded="userMenuOpen" aria-haspopup="true" aria-label="Меню пользователя">
                     <div class="sidebar-user-avatar">{{ current_user.username[0].upper() }}</div>
                     <div x-show="sidebarOpen" x-cloak style="overflow:hidden;flex:1">
                         <div class="sidebar-user-name">{{ current_user.username }}</div>
@@ -994,7 +999,7 @@
                     </div>
                 </button>
 
-                <div x-show="userMenuOpen" x-cloak @click.away="userMenuOpen = false" class="sidebar-dropdown">
+                <div x-show="userMenuOpen" x-cloak @click.away="userMenuOpen = false" @keydown.escape.window="userMenuOpen = false" class="sidebar-dropdown" role="menu" aria-label="Действия пользователя">
                     <a href="{{ url_for('profile_page') }}">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                         Профиль
@@ -1022,13 +1027,13 @@
         <!-- Flash -->
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-        <div class="flash-container">
+        <div class="flash-container" role="status" aria-live="polite">
             {% for category, message in messages %}
             <div x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, {{ 30000 if 'AGENT_' in message else 5000 }})"
-                class="flash-msg {{ category }}">
+                class="flash-msg {{ category }}" role="alert">
                 <span style="white-space: pre-line">{{ message }}</span>
-                <button @click="show = false" class="flash-close">
-                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                <button @click="show = false" class="flash-close" aria-label="Закрыть уведомление">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
             </div>
             {% endfor %}
@@ -1036,13 +1041,13 @@
         {% endif %}
         {% endwith %}
 
-        <main>
+        <main id="main-content" role="main">
             {% block content %}{% endblock %}
         </main>
     </div>
 
     <!-- Toast container -->
-    <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none" style="max-width:380px">
+    <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none" style="max-width:380px" role="status" aria-live="polite" aria-label="Уведомления">
         <template x-for="toast in $store.notif.toasts" :key="toast.id">
             <div x-show="toast.visible"
                 x-transition:enter="transition ease-out duration-300"
@@ -1074,8 +1079,8 @@
                         <p class="text-xs text-gray-500 mt-0.5 line-clamp-2" x-text="toast.message"></p>
                     </div>
                     <button @click.stop="$store.notif.dismissToast(toast.id)"
-                        class="flex-shrink-0 text-gray-400 hover:text-gray-600 p-0.5">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                        class="flex-shrink-0 text-gray-400 hover:text-gray-600 p-0.5" aria-label="Закрыть">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
             </div>
