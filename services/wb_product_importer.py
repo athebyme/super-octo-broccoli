@@ -162,13 +162,14 @@ class WBProductImporter:
                 sizes_list = []
                 has_real_sizes = False
 
-            # Формируем артикул: id-<айди товара в базе>-<айди продавца>
-            from services.auto_import_manager import AutoImportManager
+            # Формируем артикул по шаблону из настроек
+            # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}
             settings = self.seller.auto_import_settings
             if settings and settings.vendor_code_pattern:
                 pattern = settings.vendor_code_pattern
                 vendor_code = pattern.replace('{product_id}', str(imported_product.external_id))
                 vendor_code = vendor_code.replace('{supplier_code}', settings.supplier_code or '')
+                vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
             else:
                 vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 

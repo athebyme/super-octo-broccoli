@@ -1113,14 +1113,20 @@ class AutoImportManager:
             # Формируем артикул по шаблону из настроек
             vendor_code_pattern = self.settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}'
 
-            # Извлекаем числовой ID из external_id (формат: id-12345-код)
+            # Извлекаем ID товара из external_id
+            # Для формата "id-12345-код" извлекаем числовой ID
+            # Для других форматов (например "0t-00010550" от sex-opt) используем как есть
             import re
             match = re.search(r'id-(\d+)', external_id)
-            numeric_product_id = match.group(1) if match else external_id
+            product_id = match.group(1) if match else external_id
+
+            # Артикул поставщика из CSV (колонка vendor_code / article)
+            external_vendor_code = product_data.get('external_vendor_code', '')
 
             generated_vendor_code = vendor_code_pattern.format(
-                product_id=numeric_product_id,
-                supplier_code=self.settings.supplier_code or ''
+                product_id=product_id,
+                supplier_code=self.settings.supplier_code or '',
+                external_vendor_code=external_vendor_code
             )
 
             # ПРОВЕРКА ДУБЛИКАТОВ: проверяем, есть ли уже товар с таким артикулом в WB

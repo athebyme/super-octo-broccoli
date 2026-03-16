@@ -1264,18 +1264,21 @@ def register_supplier_routes(app):
             vc_pattern = 'id-{product_id}-{supplier_code}'
             vc_supplier_code = conn.supplier_code or ''
 
-        # Получаем все external_id поставщика и вычисляем vendor_code'ы
-        all_sp_external_ids = dict(
-            db.session.query(SupplierProduct.id, SupplierProduct.external_id).filter(
-                SupplierProduct.supplier_id == supplier_id,
-                ~SupplierProduct.id.in_(wb_existing_sp_ids) if wb_existing_sp_ids else True
-            ).all()
-        )
+        # Получаем все external_id и vendor_code поставщика и вычисляем артикулы WB
+        all_sp_data = db.session.query(
+            SupplierProduct.id, SupplierProduct.external_id, SupplierProduct.vendor_code
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            ~SupplierProduct.id.in_(wb_existing_sp_ids) if wb_existing_sp_ids else True
+        ).all()
+        all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
+        all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
         if all_sp_external_ids:
             vc_to_sp = {}
             for sp_id, ext_id in all_sp_external_ids.items():
                 vc = vc_pattern.replace('{product_id}', str(ext_id or ''))
                 vc = vc.replace('{supplier_code}', vc_supplier_code)
+                vc = vc.replace('{external_vendor_code}', str(all_sp_vendor_codes.get(sp_id) or ''))
                 if vc:
                     vc_to_sp[vc] = sp_id
 
