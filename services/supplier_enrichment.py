@@ -461,7 +461,8 @@ class EnrichmentService:
         photo_strategy: str,
         seller,
         wb_client,
-        bulk_edit_id: int = None
+        bulk_edit_id: int = None,
+        is_bulk: bool = False
     ) -> Dict[str, Any]:
         """
         Применяет выбранные поля из ImportedProduct к WB-карточке.
@@ -552,7 +553,8 @@ class EnrichmentService:
         # --- Фото ---
         photo_result = {'skipped': True}
         if 'photos' in fields:
-            photo_result = self._apply_photos(product, imp, photo_strategy, seller, wb_client)
+            photo_result = self._apply_photos(product, imp, photo_strategy, seller, wb_client,
+                                                  is_bulk=is_bulk)
             if photo_result.get('uploaded', 0) > 0:
                 fields_applied.append('photos')
 
@@ -718,8 +720,8 @@ class EnrichmentService:
                                      auth_cookies=auth_cookies,
                                      fallback_urls=fallbacks)
 
-        # Ждём кэширования
-        cached_paths = self._wait_for_cached_photos(selected_photos, supplier_type, external_id, cache, timeout=60)
+        # Ждём кэширования (max 30 сек, early exit при stall)
+        cached_paths = self._wait_for_cached_photos(selected_photos, supplier_type, external_id, cache, timeout=30)
 
         if not cached_paths:
             return {'success': False, 'error': 'Не удалось загрузить фото поставщика'}
@@ -766,7 +768,8 @@ class EnrichmentService:
             logger.error(f"[Enrich] Selective photo upload error for nmID={product.nm_id}: {e}")
             return {'success': False, 'uploaded': 0, 'error': str(e)}
 
-    def _apply_photos(self, product, imp, strategy: str, seller, wb_client) -> Dict:
+    def _apply_photos(self, product, imp, strategy: str, seller, wb_client,
+                      is_bulk: bool = False) -> Dict:
         """
         Скачивает фото поставщика (через кэш) и загружает в карточку WB.
 
@@ -775,6 +778,9 @@ class EnrichmentService:
             'append'       - добавить в конец
             'only_if_empty' - только если у карточки нет фото
             'selective'    - пропустить (фото обрабатываются через apply_selective_photos)
+        is_bulk:
+            True при вызове из _run_bulk_job — использует синхронную загрузку
+            для надёжности (queue_download ненадёжен в bulk-режиме)
         """
         from services.photo_cache import get_photo_cache, PhotoCacheManager
 
@@ -809,23 +815,33 @@ class EnrichmentService:
         if supplier_type == 'sexoptovik':
             auth_cookies = self._get_sexoptovik_auth(seller)
 
-        # Ставим в очередь загрузки незакэшированные фото
-        for ph in photo_urls:
-            if not isinstance(ph, dict):
-                continue
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
-            if url and not cache.is_cached(supplier_type, external_id, url):
-                fallbacks = []
-                if ph.get('blur') and ph['blur'] != url:
-                    fallbacks.append(ph['blur'])
-                if ph.get('original') and ph['original'] != url:
-                    fallbacks.append(ph['original'])
-                cache.queue_download(supplier_type, external_id, url,
-                                     auth_cookies=auth_cookies,
-                                     fallback_urls=fallbacks)
+        if is_bulk:
+            # BULK-РЕЖИМ: синхронная загрузка каждого фото по очереди.
+            # Не используем queue_download — в bulk-режиме очередь забивается
+            # фотками от разных товаров, и _wait_for_cached_photos "зависает"
+            # потому что воркеры заняты чужими фотками.
+            cached_paths = self._download_photos_sync(
+                photo_urls, supplier_type, external_id, cache, auth_cookies
+            )
+        else:
+            # SINGLE-РЕЖИМ: ставим в очередь + ждём (быстрее для одного товара)
+            for ph in photo_urls:
+                if not isinstance(ph, dict):
+                    continue
+                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+                if url and not cache.is_cached(supplier_type, external_id, url):
+                    fallbacks = []
+                    if ph.get('blur') and ph['blur'] != url:
+                        fallbacks.append(ph['blur'])
+                    if ph.get('original') and ph['original'] != url:
+                        fallbacks.append(ph['original'])
+                    cache.queue_download(supplier_type, external_id, url,
+                                         auth_cookies=auth_cookies,
+                                         fallback_urls=fallbacks)
 
-        # Ждём пока фото скачаются (max 90 сек)
-        cached_paths = self._wait_for_cached_photos(photo_urls, supplier_type, external_id, cache, timeout=90)
+            cached_paths = self._wait_for_cached_photos(
+                photo_urls, supplier_type, external_id, cache, timeout=30
+            )
 
         if not cached_paths:
             return {'skipped': True, 'reason': 'photos_not_cached_after_timeout'}
@@ -857,11 +873,22 @@ class EnrichmentService:
         supplier_type: str,
         external_id: str,
         cache,
-        timeout: int = 90
+        timeout: int = 30
     ) -> List[str]:
-        """Ожидает кэширования фото, возвращает пути к закэшированным файлам"""
+        """Ожидает кэширования фото, возвращает пути к закэшированным файлам.
+
+        Уменьшен таймаут (было 90с). Добавлен early exit если прогресс
+        остановился (скачивание не продвигается 3 итерации подряд).
+        """
         deadline = time.time() + timeout
         cached_paths = []
+        prev_count = 0
+        stall_count = 0
+
+        total = sum(1 for ph in photo_urls if isinstance(ph, dict) and
+                    (ph.get('sexoptovik') or ph.get('original') or ph.get('blur')))
+        if total == 0:
+            return []
 
         while time.time() < deadline:
             cached_paths = []
@@ -875,14 +902,84 @@ class EnrichmentService:
                     path = cache.get_cache_path(supplier_type, external_id, url)
                     cached_paths.append(path)
 
-            # Если хотя бы половина фото закэшировалась — возвращаем
-            total = sum(1 for ph in photo_urls if isinstance(ph, dict) and
-                        (ph.get('sexoptovik') or ph.get('original') or ph.get('blur')))
-            if total > 0 and len(cached_paths) >= max(1, total // 2):
+            # Все фото скачаны
+            if len(cached_paths) >= total:
                 break
+
+            # Хотя бы 1 фото есть — достаточно для продолжения
+            if len(cached_paths) >= max(1, total // 2):
+                break
+
+            # Early exit: если 3 итерации подряд нет прогресса — не ждём
+            if len(cached_paths) == prev_count:
+                stall_count += 1
+                if stall_count >= 3:
+                    logger.warning(
+                        f"[Enrich] Photo download stalled: {len(cached_paths)}/{total} "
+                        f"after {stall_count} checks, giving up early"
+                    )
+                    break
+            else:
+                stall_count = 0
+            prev_count = len(cached_paths)
 
             time.sleep(2)
 
+        return cached_paths
+
+    def _download_photos_sync(
+        self,
+        photo_urls: List[Dict],
+        supplier_type: str,
+        external_id: str,
+        cache,
+        auth_cookies: Optional[Dict] = None
+    ) -> List[str]:
+        """Синхронная загрузка фото для bulk-режима.
+
+        В отличие от queue_download + _wait_for_cached_photos, скачивает фото
+        по одному напрямую. Это надёжнее для bulk-обработки: не зависит от
+        общей очереди воркеров, гарантирует загрузку всех фото текущего товара
+        перед переходом к следующему.
+        """
+        cached_paths = []
+
+        for ph in photo_urls:
+            if not isinstance(ph, dict):
+                continue
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            if not url:
+                continue
+
+            # Уже в кэше — сразу берём
+            if cache.is_cached(supplier_type, external_id, url):
+                cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                continue
+
+            # Скачиваем синхронно с fallbacks
+            fallbacks = []
+            if ph.get('blur') and ph['blur'] != url:
+                fallbacks.append(ph['blur'])
+            if ph.get('original') and ph['original'] != url:
+                fallbacks.append(ph['original'])
+
+            try:
+                success = cache.download_now(
+                    supplier_type, external_id, url,
+                    auth_cookies=auth_cookies,
+                    fallback_urls=fallbacks
+                )
+                if success:
+                    cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
+                else:
+                    logger.debug(f"[Enrich] Photo download failed (sync): {url[:60]}")
+            except Exception as e:
+                logger.debug(f"[Enrich] Photo download error (sync): {e}")
+
+        logger.info(
+            f"[Enrich] Sync photo download: {len(cached_paths)}/{len(photo_urls)} "
+            f"for {supplier_type}/{external_id}"
+        )
         return cached_paths
 
     def _get_sexoptovik_auth(self, seller) -> Optional[Dict]:
@@ -1028,7 +1125,6 @@ class EnrichmentService:
                     results.append({'product_id': product_id, 'status': 'skipped', 'reason': 'not_found'})
                     job.processed = i + 1
                     job.skipped = skipped
-                    db.session.commit()
                     continue
 
                 imp = self.find_supplier_data(product, seller_id)
@@ -1043,13 +1139,13 @@ class EnrichmentService:
                     })
                     job.processed = i + 1
                     job.skipped = skipped
-                    db.session.commit()
                     continue
 
                 try:
                     result = self.apply_enrichment(
                         product, imp, fields, photo_strategy,
-                        seller, wb_client, bulk_edit_id=bulk_edit_id
+                        seller, wb_client, bulk_edit_id=bulk_edit_id,
+                        is_bulk=True
                     )
 
                     if result['success']:
@@ -1082,13 +1178,14 @@ class EnrichmentService:
                         'error': str(e),
                     })
 
-                # Обновляем прогресс
+                # Обновляем прогресс (коммит каждые 5 товаров для снижения нагрузки на БД)
                 job.processed = i + 1
                 job.succeeded = succeeded
                 job.failed = failed
                 job.skipped = skipped
-                job.results = json.dumps(results, ensure_ascii=False)
-                db.session.commit()
+                if (i + 1) % 5 == 0 or (i + 1) == len(product_ids):
+                    job.results = json.dumps(results, ensure_ascii=False)
+                    db.session.commit()
 
                 # Небольшая пауза чтобы не перегружать WB API
                 if (i + 1) % 10 == 0:

@@ -48,6 +48,8 @@ from agents.catalog.card_doctor import CardDoctorAgent
 from agents.catalog.review_analyst import ReviewAnalystAgent
 from agents.catalog.auto_importer import AutoImporterAgent
 from agents.catalog.brand_resolver import BrandResolverAgent
+from agents.catalog.orchestrator import OrchestratorAgent
+from agents.catalog.photo_optimizer import PhotoOptimizerAgent
 
 
 # ── Реестр агентов ─────────────────────────────────────────────────
@@ -106,6 +108,18 @@ AGENT_REGISTRY = {
         'display_name': 'Агент брендов',
         'description': 'Распознавание и нормализация брендов',
         'category': 'content',
+    },
+    'photo-optimizer': {
+        'class': PhotoOptimizerAgent,
+        'display_name': 'Агент фото',
+        'description': 'Анализ и оптимизация фотографий товаров',
+        'category': 'content',
+    },
+    'orchestrator': {
+        'class': OrchestratorAgent,
+        'display_name': 'AI-помощник',
+        'description': 'Оркестратор: координирует агентов через pipeline',
+        'category': 'orchestration',
     },
 }
 

@@ -35,13 +35,7 @@ class ReviewAnalystAgent(BaseAgent):
 Результат: JSON с аналитикой и рекомендациями."""
 
     def build_task_prompt(self, task: dict) -> str:
-        input_data = task.get('input_data', '{}')
-        if isinstance(input_data, str):
-            try:
-                input_data = json.loads(input_data)
-            except (json.JSONDecodeError, ValueError):
-                input_data = {}
-
+        input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'analyze_reviews')
         seller_id = task.get('seller_id')
 
@@ -62,14 +56,16 @@ class ReviewAnalystAgent(BaseAgent):
                     f"Верни JSON: {{sentiment: {{positive, neutral, negative}}, "
                     f"issues: [{{category, count, examples}}], recommendations: [...]}}"
                 )
+            limit = input_data.get('limit', 10)
             return (
                 f"Анализ отзывов по товарам продавца.\n"
                 f"Seller ID: {seller_id}\n"
-                f"Данные: {json.dumps(input_data, ensure_ascii=False)}\n\n"
-                f"1. Получи товары через get_products\n"
+                f"Лимит: проанализируй максимум {limit} товаров.\n\n"
+                f"1. Загрузи ОДНУ страницу: get_products(seller_id={seller_id}, page=1, per_page={limit})\n"
                 f"2. Проанализируй доступные отзывы\n"
                 f"3. Классифицируй проблемы\n"
                 f"4. Выяви тренды\n\n"
+                f"ВАЖНО: НЕ листай страницы. Загрузи товары ОДНИМ вызовом.\n\n"
                 f"Верни JSON: {{sentiment: {{positive, neutral, negative}}, "
                 f"issues: [{{category, count, examples}}], recommendations: [...]}}"
             )

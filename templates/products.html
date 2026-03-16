@@ -381,51 +381,10 @@
                 </svg>
                 Обогатить
             </button>
-            <!-- AI Агенты (пакетные действия) -->
-            <div x-data="bulkAiActions()" class="relative">
-                <button type="button" @click="toggle()"
-                        class="px-4 py-2 bg-gradient-to-r from-violet-500 to-purple-500 text-white rounded-lg hover:from-violet-600 hover:to-purple-600 transition-colors flex items-center font-medium">
-                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                    </svg>
-                    AI
-                    <svg class="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                    </svg>
-                </button>
-                <div x-show="open" x-cloak @click.outside="open = false" x-transition
-                     class="absolute bottom-full mb-2 right-0 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
-                    <div class="px-3 py-2 bg-gray-50 border-b border-gray-100">
-                        <p class="text-xs font-medium text-gray-500">AI-обработка выбранных товаров</p>
-                    </div>
-                    <div x-show="loading" class="p-4 text-center">
-                        <svg class="w-5 h-5 mx-auto text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                        </svg>
-                    </div>
-                    <div x-show="!loading && actions.length === 0" class="p-4 text-center">
-                        <p class="text-xs text-gray-500">Нет доступных агентов</p>
-                        <a href="/agents" class="text-xs text-indigo-600 hover:underline mt-1 inline-block">Активировать</a>
-                    </div>
-                    <div x-show="!loading && actions.length > 0" class="py-1">
-                        <template x-for="action in actions" :key="action.agent_id">
-                            <button type="button" @click="submitBulk(action)"
-                                    class="w-full text-left px-3 py-2.5 hover:bg-gray-50 transition-colors flex items-center gap-3 group">
-                                <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-violet-50 text-violet-600">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                                    </svg>
-                                </div>
-                                <div class="min-w-0">
-                                    <p class="text-sm font-medium text-gray-900 group-hover:text-indigo-600 transition-colors" x-text="action.label_batch"></p>
-                                    <p class="text-[10px] text-gray-400" x-text="action.display_name"></p>
-                                </div>
-                            </button>
-                        </template>
-                    </div>
-                </div>
-            </div>
+            <!-- AI-помощник (пакетный режим) -->
+            {% with ai_mode='batch', ai_product_id=0, ai_product_title='', ai_seller_id=0 %}
+                {% include "partials/ai_assistant.html" %}
+            {% endwith %}
             <button type="button" onclick="bulkEdit()"
                     class="px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors flex items-center font-medium">
                 <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -861,66 +820,5 @@ function productsExport() {
     return { open: false, fmt: 'csv' };
 }
 
-// AI-агенты (пакетные действия)
-function bulkAiActions() {
-    return {
-        open: false,
-        loading: false,
-        actions: [],
-        loaded: false,
-
-        toggle() {
-            this.open = !this.open;
-            if (this.open && !this.loaded) {
-                this.loadActions();
-            }
-        },
-
-        async loadActions() {
-            this.loading = true;
-            try {
-                const resp = await fetch('/agents/api/available-actions');
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this.actions = data.actions || [];
-                }
-            } catch (e) { console.error('Failed to load AI actions:', e); }
-            this.loading = false;
-            this.loaded = true;
-        },
-
-        submitBulk(action) {
-            const checkboxes = document.querySelectorAll('.product-checkbox:checked');
-            const ids = Array.from(checkboxes).map(cb => cb.value);
-            if (ids.length === 0) {
-                alert('Выберите хотя бы один товар');
-                return;
-            }
-
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content')
-                           || document.querySelector('input[name="csrf_token"]')?.value;
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '/agents/tasks/create';
-
-            const fields = {
-                csrf_token: csrfToken,
-                agent_id: action.agent_id,
-                task_type: action.batch,
-                title: action.label_batch + ' (' + ids.length + ' товаров)',
-                input_data: JSON.stringify({ product_ids: ids.map(Number) }),
-            };
-            for (const [k, v] of Object.entries(fields)) {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = k;
-                input.value = v || '';
-                form.appendChild(input);
-            }
-            document.body.appendChild(form);
-            form.submit();
-        }
-    };
-}
 </script>
 {% endblock %}

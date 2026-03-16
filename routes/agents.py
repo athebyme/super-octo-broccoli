@@ -118,9 +118,17 @@ def register_agents_routes(app):
         if not task:
             return jsonify({'error': 'Not found'}), 404
         steps = agent_service.get_task_steps(task_id, limit=50)
+
+        # Если это pipeline-задача — добавляем статус подзадач
+        subtasks_data = []
+        if task.subtasks.count() > 0:
+            for st in task.subtasks.order_by(AgentTask.created_at.asc()).all():
+                subtasks_data.append(st.to_dict())
+
         return jsonify({
             'task': task.to_dict(),
             'steps': [s.to_dict() for s in steps],
+            'subtasks': subtasks_data,
         })
 
     @app.route('/agents/api/stats')
@@ -229,7 +237,10 @@ def register_agents_routes(app):
         }
 
         available = []
+        orchestrator_id = None
         for a in agents:
+            if a.name == 'orchestrator' and a.status == 'online':
+                orchestrator_id = str(a.id)
             action = PRODUCT_ACTIONS.get(a.name)
             if action and a.status == 'online':
                 available.append({
@@ -239,7 +250,45 @@ def register_agents_routes(app):
                     **action,
                 })
 
-        return jsonify({'actions': available})
+        # Добавляем pipeline-пресеты если оркестратор online
+        pipelines = []
+        if orchestrator_id:
+            pipelines = [
+                {
+                    'id': 'full_prepare',
+                    'label': 'Подготовить к WB',
+                    'description': 'Категория → Характеристики → SEO → Модерация',
+                    'icon': 'rocket',
+                    'color': 'brand',
+                },
+                {
+                    'id': 'seo_boost',
+                    'label': 'SEO тексты',
+                    'description': 'SEO-оптимизация → Проверка модерации',
+                    'icon': 'pen',
+                    'color': 'emerald',
+                },
+                {
+                    'id': 'audit',
+                    'label': 'Аудит карточек',
+                    'description': 'Модерация → Цены → Отзывы',
+                    'icon': 'shield',
+                    'color': 'amber',
+                },
+                {
+                    'id': 'category_fix',
+                    'label': 'Исправить категории',
+                    'description': 'Категория → Характеристики',
+                    'icon': 'tag',
+                    'color': 'blue',
+                },
+            ]
+
+        return jsonify({
+            'actions': available,
+            'pipelines': pipelines,
+            'orchestrator_id': orchestrator_id,
+        })
 
     # ── Действия ────────────────────────────────────────────────────
 
@@ -272,7 +321,7 @@ def register_agents_routes(app):
         task_type = request.form.get('task_type', '')
         title = request.form.get('title', '')
 
-        if not agent_id or not task_type or not title:
+        if not agent_id or not task_type:
             flash('Заполните все поля', 'warning')
             return redirect(fallback_url)
 
@@ -299,6 +348,86 @@ def register_agents_routes(app):
         )
         flash(f'Задача создана: {task.id[:8]}', 'success')
         return redirect(url_for('agent_task_detail', task_id=task.id))
+
+    # ── Откат изменений агента ───────────────────────────────────────
+
+    @app.route('/agents/tasks/<task_id>/rollback', methods=['POST'])
+    @login_required
+    def agent_task_rollback(task_id):
+        """Откатить все изменения, сделанные задачей агента."""
+        from models import AgentChangeSnapshot, ImportedProduct
+
+        task = agent_service.get_task(task_id)
+        if not task:
+            abort(404)
+        seller_id = current_user.seller.id if current_user.seller else None
+        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+            abort(403)
+
+        snapshots = AgentChangeSnapshot.query.filter_by(
+            task_id=task_id,
+            is_rolled_back=False,
+        ).all()
+
+        if not snapshots:
+            flash('Нет изменений для отката (или уже откачено)', 'warning')
+            return redirect(url_for('agent_task_detail', task_id=task_id))
+
+        rolled_back = 0
+        for snap in snapshots:
+            product = ImportedProduct.query.get(snap.imported_product_id)
+            if not product:
+                continue
+
+            try:
+                prev = json.loads(snap.previous_values)
+                for field, old_value in prev.items():
+                    setattr(product, field, old_value)
+                product.updated_at = datetime.utcnow()
+                snap.is_rolled_back = True
+                snap.rolled_back_at = datetime.utcnow()
+                rolled_back += 1
+            except Exception as e:
+                logger.error(f"Rollback error for product {snap.imported_product_id}: {e}")
+
+        db.session.commit()
+        flash(f'Откачено изменений: {rolled_back} товаров', 'success')
+        return redirect(url_for('agent_task_detail', task_id=task_id))
+
+    @app.route('/agents/api/tasks/<task_id>/changes')
+    @login_required
+    def agents_api_task_changes(task_id):
+        """API: получить историю изменений задачи (для отображения в UI)."""
+        from models import AgentChangeSnapshot
+
+        task = agent_service.get_task(task_id)
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        seller_id = current_user.seller.id if current_user.seller else None
+        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+            return jsonify({'error': 'Access denied'}), 403
+
+        snapshots = AgentChangeSnapshot.query.filter_by(task_id=task_id).order_by(
+            AgentChangeSnapshot.created_at
+        ).all()
+
+        return jsonify({
+            'changes': [
+                {
+                    'id': s.id,
+                    'product_id': s.imported_product_id,
+                    'previous_values': json.loads(s.previous_values),
+                    'new_values': json.loads(s.new_values),
+                    'is_rolled_back': s.is_rolled_back,
+                    'rolled_back_at': s.rolled_back_at.isoformat() if s.rolled_back_at else None,
+                    'created_at': s.created_at.isoformat() if s.created_at else None,
+                }
+                for s in snapshots
+            ],
+            'count': len(snapshots),
+            'has_rollback': any(not s.is_rolled_back for s in snapshots),
+        })
 
     # ── Админ: управление агентами ──────────────────────────────────
 

@@ -122,16 +122,9 @@ python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace 
 python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
+python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
-else
-echo "🚀 Инициализация wb-calculator..."
-python - <<'PYCODE'
-from app import ensure_directories
-
-ensure_directories()
-print("✅ Инициализация wb-calculator завершена")
-PYCODE
 fi
 
 echo "🌐 Запуск gunicorn на порту ${PORT}..."

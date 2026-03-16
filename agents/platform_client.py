@@ -18,9 +18,6 @@ import urllib3
 
 from .config import AgentConfig
 
-# Подавляем предупреждения о self-signed сертификатах внутри Docker-сети
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 logger = logging.getLogger(__name__)
 
 
@@ -31,21 +28,35 @@ class PlatformClient:
         self.cfg = config or AgentConfig
         self.base_url = self.cfg.PLATFORM_URL.rstrip('/')
         self.session = requests.Session()
-        # Внутри Docker-сети seller-platform использует self-signed сертификат —
-        # верификацию отключаем для inter-service коммуникации.
-        self.session.verify = False
+
+        # TLS верификация: отключена по умолчанию для Docker inter-service,
+        # управляется через PLATFORM_SKIP_TLS_VERIFY (0 — включить верификацию).
+        skip_tls = bool(self.cfg.PLATFORM_SKIP_TLS_VERIFY)
+        self.session.verify = not skip_tls
+        if skip_tls:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
         self.session.headers.update({
             'X-Agent-Id': self.cfg.AGENT_ID,
             'X-Agent-Key': self.cfg.AGENT_API_KEY,
             'Content-Type': 'application/json',
         })
+        self._current_task_id: Optional[str] = None
 
     def _url(self, path: str) -> str:
         return f"{self.base_url}/internal/v1{path}"
 
+    def set_task_id(self, task_id: Optional[str]):
+        """Устанавливает текущий task_id для передачи в X-Task-Id заголовке."""
+        self._current_task_id = task_id
+
     def _request(self, method: str, path: str, **kwargs) -> dict:
         """Выполняет запрос с retry на сетевые и timeout ошибки."""
         url = self._url(path)
+        if self._current_task_id:
+            headers = kwargs.pop('headers', {})
+            headers['X-Task-Id'] = self._current_task_id
+            kwargs['headers'] = headers
         last_error = None
         for attempt in range(4):
             try:
@@ -172,3 +183,96 @@ class PlatformClient:
 
     def get_imported_product(self, product_id: int) -> dict:
         return self._request('GET', f'/imported-products/{product_id}')
+
+    def update_imported_product(self, product_id: int, updates: dict) -> dict:
+        return self._request('PATCH', f'/imported-products/{product_id}',
+                             json=updates)
+
+    def get_imported_products_brief(self, product_ids: list) -> list:
+        """Получает краткие данные товаров пакетно (только id, title, brand, category)."""
+        data = self._request('POST', '/imported-products/brief',
+                             json={'product_ids': product_ids})
+        return data.get('products', [])
+
+    # ── Справочник категорий ──────────────────────────────────────
+
+    def search_categories(self, query: str, limit: int = 20) -> dict:
+        """Поиск категорий WB по локальному справочнику."""
+        return self._request('GET', f'/categories/search?q={query}&limit={limit}')
+
+    # ── Характеристики категории ─────────────────────────────────
+
+    def get_category_characteristics(self, subject_id: int,
+                                      required_only: bool = False) -> dict:
+        """Получает характеристики категории WB."""
+        params = f'?required_only=true' if required_only else ''
+        return self._request(
+            'GET', f'/categories/{subject_id}/characteristics{params}'
+        )
+
+    # ── Справочники ────────────────────────────────────────────────
+
+    def get_directory(self, directory_type: str, query: str = None,
+                      limit: int = 50) -> dict:
+        """Получает справочник WB (colors, countries, kinds, seasons)."""
+        params = f'?limit={limit}'
+        if query:
+            params += f'&q={query}'
+        return self._request('GET', f'/directories/{directory_type}{params}')
+
+    # ── Запрещённые слова ──────────────────────────────────────────
+
+    def get_prohibited_words(self, seller_id: int = None,
+                              query: str = None) -> dict:
+        """Получает список стоп-слов."""
+        params = []
+        if seller_id:
+            params.append(f'seller_id={seller_id}')
+        if query:
+            params.append(f'q={query}')
+        qs = '?' + '&'.join(params) if params else ''
+        return self._request('GET', f'/prohibited-words{qs}')
+
+    def check_prohibited_words(self, text: str,
+                                seller_id: int = None) -> dict:
+        """Проверяет текст на стоп-слова."""
+        payload = {'text': text}
+        if seller_id:
+            payload['seller_id'] = seller_id
+        return self._request('POST', '/prohibited-words/check', json=payload)
+
+    # ── Бренды ─────────────────────────────────────────────────────
+
+    def validate_brand(self, brand_name: str,
+                       category_id: int = None) -> dict:
+        """Проверяет бренд по реестру."""
+        params = f'?brand={brand_name}'
+        if category_id:
+            params += f'&category_id={category_id}'
+        return self._request('GET', f'/brands/validate{params}')
+
+    # ── Настройки ценообразования ──────────────────────────────────
+
+    def get_pricing_settings(self, seller_id: int) -> dict:
+        """Получает формулы и коэффициенты ценообразования."""
+        return self._request('GET', f'/sellers/{seller_id}/pricing')
+
+    # ── Задачи (для оркестратора) ────────────────────────────────
+
+    def create_subtask(self, agent_name: str, task_type: str,
+                       seller_id: int, title: str,
+                       input_data: dict = None,
+                       parent_task_id: str = None) -> dict:
+        """Создаёт подзадачу для другого агента."""
+        return self._request('POST', '/tasks/create', json={
+            'agent_name': agent_name,
+            'task_type': task_type,
+            'seller_id': seller_id,
+            'title': title,
+            'input_data': input_data or {},
+            'parent_task_id': parent_task_id,
+        })
+
+    def get_task_status(self, task_id: str) -> dict:
+        """Получает статус задачи."""
+        return self._request('GET', f'/tasks/{task_id}')

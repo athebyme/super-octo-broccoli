@@ -14,5 +14,8 @@ COPY . .
 
 RUN chmod +x /app/docker-entrypoint.sh
 
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('https://localhost:${PORT:-5001}/login', context=__import__('ssl')._create_unverified_context())" || exit 1
+
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 

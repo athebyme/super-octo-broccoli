@@ -73,6 +73,9 @@ _FIELD_DEFS = {
     # LLM параметры
     'MAX_TOKENS':         ('LLM_MAX_TOKENS', '4096', int),
     'TEMPERATURE':        ('LLM_TEMPERATURE', '0.3', float),
+
+    # Безопасность
+    'PLATFORM_SKIP_TLS_VERIFY': ('PLATFORM_SKIP_TLS_VERIFY', '1', int),  # 1=skip (Docker default), 0=verify
 }
 
 

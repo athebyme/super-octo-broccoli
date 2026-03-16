@@ -181,7 +181,7 @@
   </div>
 
   <!-- ПРОГРЕСС -->
-  <div x-show="phase === 'running' || phase === 'done'" x-transition class="space-y-5">
+  <div x-show="phase === 'running' || phase === 'done'" x-transition class="space-y-5" aria-live="polite">
 
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
       <div class="flex items-center justify-between mb-4">
@@ -222,7 +222,9 @@
       </div>
 
       <!-- Прогресс-бар -->
-      <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden mb-5">
+      <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden mb-5" role="progressbar"
+           :aria-valuenow="progress.pct" aria-valuemin="0" aria-valuemax="100"
+           :aria-label="'Обогащение: ' + progress.pct + '%'">
         <div class="h-2.5 rounded-full bg-indigo-500 transition-all duration-500 ease-out"
              :style="`width: ${progress.pct}%`"></div>
       </div>

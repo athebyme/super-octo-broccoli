@@ -174,6 +174,24 @@ AGENT_CATALOG = [
         'hint': 'Если карточку заблокировали или скрыли — агент найдёт причину и предложит исправление. Также может проверить карточки заранее.',
     },
 
+    # ── Оркестрация ──
+    {
+        'name': 'orchestrator',
+        'display_name': 'AI-помощник',
+        'description': 'Умный оркестратор: разбивает задачу на шаги и делегирует специализированным агентам. Поддерживает готовые pipeline (подготовка к WB, SEO, аудит) и свободные текстовые запросы.',
+        'category': 'catalog',
+        'icon': 'cpu',
+        'color': 'brand',
+        'capabilities': ['Pipeline', 'Координация агентов', 'Свободный текст', 'Подготовка к WB'],
+        'task_types': ['pipeline', 'smart', 'custom'],
+        'task_types_labels': {
+            'pipeline': 'Готовый pipeline',
+            'smart': 'Умный запрос',
+            'custom': 'Свой набор агентов',
+        },
+        'hint': 'Главная точка входа: опишите что нужно сделать или выберите готовый pipeline. AI-помощник сам подберёт нужных агентов и выполнит задачу.',
+    },
+
     # ── Аналитика ──
     {
         'name': 'review-analyst',
@@ -342,6 +360,39 @@ def list_agents(status: str = None) -> list:
     return q.order_by(ServiceAgent.name).all()
 
 
+def requeue_stuck_tasks(timeout_minutes: int = 30, max_retries: int = 3):
+    """Переставляет зависшие задачи (running дольше timeout) обратно в очередь.
+
+    Если задача зависла больше max_retries раз — помечается как failed.
+    Вызывать периодически через APScheduler.
+    """
+    threshold = datetime.utcnow() - timedelta(minutes=timeout_minutes)
+    stuck = AgentTask.query.filter(
+        AgentTask.status == 'running',
+        AgentTask.started_at < threshold,
+    ).all()
+    requeued = 0
+    failed = 0
+    for task in stuck:
+        task.retry_count = (task.retry_count or 0) + 1
+        if task.retry_count >= max_retries:
+            task.status = 'failed'
+            task.completed_at = datetime.utcnow()
+            task.error_message = (
+                f'Задача зависла {task.retry_count} раз подряд (таймаут {timeout_minutes} мин)'
+            )
+            failed += 1
+            logger.warning(f"Task {task.id[:8]} permanently failed: stuck {task.retry_count} times")
+        else:
+            task.status = 'queued'
+            task.started_at = None
+            requeued += 1
+            logger.info(f"Task {task.id[:8]} requeued (retry {task.retry_count})")
+    if stuck:
+        db.session.commit()
+    return {'requeued': requeued, 'failed': failed, 'total': len(stuck)}
+
+
 def mark_stale_agents(timeout_seconds: int = 120):
     """Помечает агентов как offline, если heartbeat устарел."""
     threshold = datetime.utcnow() - timedelta(seconds=timeout_seconds)
@@ -359,16 +410,56 @@ def mark_stale_agents(timeout_seconds: int = 120):
 
 # ── Задачи ──────────────────────────────────────────────────────────
 
+def _auto_title(agent_id: str, task_type: str, input_data: dict) -> str:
+    """Генерирует человекочитаемое название задачи."""
+    agent = ServiceAgent.query.get(agent_id)
+    agent_label = agent.display_name if agent else 'Агент'
+
+    # Считаем кол-во товаров
+    ids = input_data.get('product_ids') or input_data.get('imported_product_ids') or []
+    count = len(ids)
+
+    type_labels = {
+        'map_single': 'Категория',
+        'map_batch': 'Категории пакетом',
+        'seo_single': 'SEO',
+        'seo_batch': 'SEO пакетом',
+        'rewrite_titles': 'Перезапись заголовков',
+        'resolve_single': 'Бренд',
+        'resolve_batch': 'Бренды пакетом',
+        'audit_brands': 'Аудит брендов',
+        'fill_single': 'Характеристики',
+        'fill_batch': 'Характеристики пакетом',
+        'validate_existing': 'Валидация характеристик',
+        'import_single': 'Импорт товара',
+        'import_batch': 'Импорт пакетом',
+        'optimize_single': 'Оптимизация фото',
+        'optimize_batch': 'Оптимизация фото пакетом',
+        'quality_check': 'Проверка качества фото',
+        'analyze_reviews': 'Анализ отзывов',
+        'product_insights': 'Инсайты по товару',
+    }
+    action = type_labels.get(task_type, task_type)
+
+    if count:
+        return f"{action} ({count} тов.)"
+    return action
+
+
 def create_task(
     agent_id: str,
     seller_id: int,
     task_type: str,
-    title: str,
+    title: str = '',
     input_data: dict = None,
     priority: int = 0,
     total_steps: int = 0,
+    parent_task_id: str = None,
 ) -> AgentTask:
     """Создаёт новую задачу для агента."""
+    if not title:
+        title = _auto_title(agent_id, task_type, input_data or {})
+
     task = AgentTask(
         id=str(uuid.uuid4()),
         agent_id=agent_id,
@@ -379,6 +470,7 @@ def create_task(
         priority=priority,
         total_steps=total_steps,
         input_data=json.dumps(input_data or {}, ensure_ascii=False),
+        parent_task_id=parent_task_id,
     )
     db.session.add(task)
     db.session.commit()
@@ -489,13 +581,17 @@ def list_tasks(
 
 
 def get_pending_tasks(agent_id: str, limit: int = 10) -> list:
-    """Получает очередь задач для агента (FIFO по приоритету)."""
+    """Получает очередь задач для агента (FIFO по приоритету).
+
+    Использует SELECT FOR UPDATE SKIP LOCKED для предотвращения
+    race condition при горизонтальном масштабировании агентов.
+    """
     return AgentTask.query.filter_by(
         agent_id=agent_id, status='queued'
     ).order_by(
         AgentTask.priority.desc(),
         AgentTask.created_at.asc(),
-    ).limit(limit).all()
+    ).with_for_update(skip_locked=True).limit(limit).all()
 
 
 # ── Шаги задач ──────────────────────────────────────────────────────
