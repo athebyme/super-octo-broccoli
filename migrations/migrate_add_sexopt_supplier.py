@@ -188,6 +188,7 @@ def run_migration():
                     name, code, description, website,
                     csv_source_url, csv_delimiter, csv_encoding, csv_has_header, csv_column_mapping,
                     resize_images, image_target_size, image_background_color,
+                    ai_enabled,
                     is_active, auto_sync_prices, total_products,
                     created_at, created_by_user_id
                 ) VALUES (
@@ -196,6 +197,7 @@ def run_migration():
                     'https://old.sex-opt.ru',
                     ?, ';', 'utf-8', 1, ?,
                     1, 1200, 'white',
+                    0,
                     1, 0, 0,
                     ?, ?
                 )
