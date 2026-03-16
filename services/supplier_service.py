@@ -230,7 +230,8 @@ class SupplierCSVParser:
 
         csv_column_mapping формат:
         {
-            "external_id": {"column": 0, "type": "string"},
+            "external_id": {"column": 0, "type": "string"},          # по индексу
+            "external_id": {"column": "code", "type": "string"},     # по имени заголовка (csv_has_header=True)
             "vendor_code": {"column": 1, "type": "string"},
             "title": {"column": 2, "type": "string"},
             "categories": {"column": 3, "type": "list", "separator": "#"},
@@ -243,7 +244,11 @@ class SupplierCSVParser:
             "barcodes": {"column": 14, "type": "list", "separator": "#"},
             "materials": {"column": 15, "type": "list", "separator": ","},
             "description": {"column": 16, "type": "string"},
-            "price": {"column": 7, "type": "number"}
+            "price": {"column": 7, "type": "number"},
+            # Составные типы (несколько колонок):
+            "supplier_quantity": {"columns": ["msk", "spb"], "type": "stock_sum"},
+            "photo_urls": {"columns": ["image", "image1"], "type": "photo_urls"},
+            "characteristics": {"columns": {"length": "Длина"}, "type": "characteristics"}
         }
         """
         mapping = self.supplier.csv_column_mapping
@@ -254,29 +259,71 @@ class SupplierCSVParser:
         products = []
         reader = csv.reader(StringIO(csv_content), delimiter=self.delimiter, quotechar='"')
 
-        # Определяем минимальное количество колонок
-        max_col = max(
-            (m.get('column', 0) for m in mapping.values() if isinstance(m, dict)),
-            default=0
+        has_header = getattr(self.supplier, 'csv_has_header', False)
+        header_index = {}  # имя заголовка → индекс колонки
+
+        # Резолвим маппинг: строковые имена колонок → числовые индексы
+        resolved_mapping = {}
+        uses_header_names = any(
+            isinstance(m.get('column'), str) or isinstance(m.get('columns'), (list, dict))
+            for m in mapping.values() if isinstance(m, dict)
         )
 
-        has_header = getattr(self.supplier, 'csv_has_header', False)
+        if has_header and uses_header_names:
+            # Читаем первую строку как заголовки
+            try:
+                header_row = next(reader)
+                header_index = {
+                    col.strip().strip('"'): idx for idx, col in enumerate(header_row)
+                }
+                logger.debug(f"CSV headers ({self.supplier.code}): {list(header_index.keys())[:20]}...")
+            except StopIteration:
+                logger.error(f"CSV is empty for {self.supplier.code}")
+                return []
+
+            # Резолвим каждое поле маппинга
+            for field_name, config in mapping.items():
+                if not isinstance(config, dict):
+                    continue
+                resolved_mapping[field_name] = self._resolve_mapping_config(
+                    config, header_index
+                )
+        else:
+            resolved_mapping = mapping
+
+        # Определяем минимальное количество колонок для валидации строк
+        max_col = 0
+        for m in resolved_mapping.values():
+            if not isinstance(m, dict):
+                continue
+            col = m.get('column')
+            if isinstance(col, int):
+                max_col = max(max_col, col)
+            cols = m.get('columns')
+            if isinstance(cols, list):
+                for c in cols:
+                    if isinstance(c, int):
+                        max_col = max(max_col, c)
+            elif isinstance(cols, dict):
+                for c in cols.keys():
+                    if isinstance(c, int):
+                        max_col = max(max_col, c)
 
         for row_num, row in enumerate(reader, 1):
             try:
-                # Пропускаем заголовок если указано
-                if has_header and row_num == 1:
+                # Пропускаем заголовок если header ещё не был прочитан выше
+                if has_header and not uses_header_names and row_num == 1:
                     continue
 
                 if len(row) <= max_col:
                     continue
 
-                product = self._extract_fields_by_mapping(row, mapping)
+                product = self._extract_fields_by_mapping(row, resolved_mapping)
                 if not product:
                     continue
 
-                # Фото — специальная обработка
-                if 'photo_codes' in mapping and product.get('_photo_codes'):
+                # Фото — специальная обработка (legacy photo_codes)
+                if 'photo_codes' in resolved_mapping and product.get('_photo_codes'):
                     product['photo_urls'] = self._build_photo_urls(
                         product.get('external_id', ''),
                         product['_photo_codes']
@@ -294,6 +341,50 @@ class SupplierCSVParser:
         )
         return products
 
+    def _resolve_mapping_config(self, config: dict, header_index: dict) -> dict:
+        """Резолвит строковые имена колонок в числовые индексы."""
+        resolved = dict(config)
+
+        # Одиночная колонка: "column": "code" → "column": 0
+        col = config.get('column')
+        if isinstance(col, str):
+            idx = header_index.get(col)
+            if idx is not None:
+                resolved['column'] = idx
+            else:
+                logger.warning(f"Header '{col}' not found in CSV, skipping field")
+                resolved['column'] = -1  # будет пропущен
+
+        # Множественные колонки (list): ["msk", "spb"] → [8, 34]
+        cols = config.get('columns')
+        if isinstance(cols, list):
+            resolved['columns'] = []
+            for c in cols:
+                if isinstance(c, str):
+                    idx = header_index.get(c)
+                    if idx is not None:
+                        resolved['columns'].append(idx)
+                    else:
+                        logger.warning(f"Header '{c}' not found in CSV")
+                else:
+                    resolved['columns'].append(c)
+
+        # Множественные колонки (dict): {"length": "Длина"} → {18: "Длина"}
+        if isinstance(cols, dict):
+            resolved_cols = {}
+            for col_key, label in cols.items():
+                if isinstance(col_key, str):
+                    idx = header_index.get(col_key)
+                    if idx is not None:
+                        resolved_cols[idx] = label
+                    else:
+                        logger.warning(f"Header '{col_key}' not found in CSV")
+                else:
+                    resolved_cols[col_key] = label
+            resolved['columns'] = resolved_cols
+
+        return resolved
+
     def _extract_fields_by_mapping(self, row: list, mapping: dict) -> Optional[Dict]:
         """Извлечь поля из строки CSV по маппингу."""
         product = {}
@@ -302,9 +393,56 @@ class SupplierCSVParser:
             if not isinstance(config, dict):
                 continue
 
-            col_idx = config.get('column', 0)
             field_type = config.get('type', 'string')
             separator = config.get('separator', ',')
+
+            # --- Составные типы (несколько колонок) ---
+            if field_type == 'stock_sum':
+                # Суммирование остатков по нескольким складам
+                columns = config.get('columns', [])
+                total = 0
+                for col_idx in columns:
+                    if isinstance(col_idx, int) and col_idx < len(row):
+                        raw = row[col_idx].strip()
+                        if raw:
+                            try:
+                                total += int(float(raw.replace(',', '.').replace(' ', '')))
+                            except (ValueError, TypeError):
+                                pass
+                product[field_name] = total
+                continue
+
+            if field_type == 'photo_urls':
+                # Сборка фото из нескольких колонок (прямые URL)
+                columns = config.get('columns', [])
+                photos = []
+                for col_idx in columns:
+                    if isinstance(col_idx, int) and col_idx < len(row):
+                        url = row[col_idx].strip()
+                        if url and url.startswith('http'):
+                            photos.append({'original': url})
+                product['photo_urls'] = photos
+                continue
+
+            if field_type == 'characteristics':
+                # Сборка характеристик из отдельных колонок
+                columns = config.get('columns', {})
+                chars = product.get('_extra_characteristics', [])
+                if isinstance(columns, dict):
+                    for col_idx, char_name in columns.items():
+                        col_idx = int(col_idx) if isinstance(col_idx, str) and col_idx.isdigit() else col_idx
+                        if isinstance(col_idx, int) and col_idx < len(row):
+                            val = row[col_idx].strip()
+                            if val:
+                                chars.append({'name': char_name, 'value': val})
+                product['_extra_characteristics'] = chars
+                continue
+
+            # --- Одиночные колонки ---
+            col_idx = config.get('column', 0)
+
+            if col_idx == -1 or not isinstance(col_idx, int):
+                continue
 
             if col_idx >= len(row):
                 continue
@@ -327,6 +465,18 @@ class SupplierCSVParser:
                     product[field_name] = None
             else:
                 product[field_name] = raw_value
+
+        # Финализация характеристик
+        if product.get('_extra_characteristics'):
+            existing = []
+            if product.get('characteristics_json'):
+                try:
+                    existing = json.loads(product['characteristics_json'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            existing.extend(product['_extra_characteristics'])
+            product['characteristics'] = existing
+            del product['_extra_characteristics']
 
         # Валидация минимальных полей
         if not product.get('external_id') or not product.get('title'):
@@ -3414,6 +3564,18 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
     if 'supplier_price' in data and data['supplier_price']:
         sp.supplier_price = data['supplier_price']
 
+    # Остатки из CSV (суммированные или прямые)
+    if 'supplier_quantity' in data and data['supplier_quantity'] is not None:
+        sp.supplier_quantity = data['supplier_quantity']
+
+    # РРЦ из CSV
+    if 'recommended_retail_price' in data and data['recommended_retail_price']:
+        sp.recommended_retail_price = data['recommended_retail_price']
+
+    # Характеристики из CSV (составной тип characteristics)
+    if 'characteristics' in data and data['characteristics']:
+        sp.characteristics_json = json.dumps(data['characteristics'], ensure_ascii=False)
+
     # Контент хеш для отслеживания изменений
     content_str = f"{sp.title}|{sp.brand}|{sp.category}|{sp.supplier_price}"
     sp.content_hash = hashlib.md5(content_str.encode()).hexdigest()
@@ -3429,7 +3591,7 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
             description=data.get('description', ''),
             all_categories=all_cats,
             external_id=data.get('external_id', ''),
-            source_type='sexoptovik',
+            source_type=sp.supplier.code if sp.supplier else 'unknown',
         )
         sp.wb_subject_id = subj_id
         sp.wb_subject_name = subj_name
