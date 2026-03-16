@@ -231,17 +231,14 @@ class SupplierPriceLoader:
             if len(row) < 4:
                 continue
             raw_id = row[0].strip()
-            # Пропускаем заголовок
+            # Пропускаем заголовок — если не содержит числового ID
             if not header_skipped:
-                # Заголовок — строка, которая не содержит числового ID
-                product_id = extract_supplier_product_id(raw_id)
-                if product_id is None:
+                if extract_supplier_product_id(raw_id) is None:
                     header_skipped = True
                     continue
                 header_skipped = True
 
-            product_id = extract_supplier_product_id(raw_id)
-            if product_id is None:
+            if not raw_id:
                 continue
 
             try:
@@ -255,7 +252,8 @@ class SupplierPriceLoader:
                 quantity = 0
 
             if price > 0:
-                prices[product_id] = {
+                # Ключ — сырой ID из CSV (строка), совпадает с external_id товара
+                prices[raw_id] = {
                     'price': price,
                     'quantity': quantity,
                     'vendor_code': row[1].strip() if len(row) > 1 else '',

@@ -1071,16 +1071,15 @@ class AutoImportManager:
             logger.warning(f"Не удалось загрузить цены поставщика: {e}")
             return {}
 
-    def _attach_supplier_price(self, product_data: Dict, supplier_prices: Dict[int, Dict]):
+    def _attach_supplier_price(self, product_data: Dict, supplier_prices: Dict[str, Dict]):
         """Подставить цену поставщика и рассчитать розничную цену."""
         if not supplier_prices:
             return
 
         ext_id = product_data.get('external_id', '')
-        supplier_id = extract_supplier_product_id(ext_id)
-        if supplier_id and supplier_id in supplier_prices:
-            product_data['supplier_price'] = supplier_prices[supplier_id]['price']
-            product_data['supplier_quantity'] = supplier_prices[supplier_id].get('quantity', 0)
+        if ext_id and ext_id in supplier_prices:
+            product_data['supplier_price'] = supplier_prices[ext_id]['price']
+            product_data['supplier_quantity'] = supplier_prices[ext_id].get('quantity', 0)
         else:
             product_data['supplier_price'] = None
             product_data['supplier_quantity'] = 0
