@@ -22,8 +22,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_ROOT = BASE_DIR / 'data'
 DEFAULT_DB_PATH = DATA_ROOT / 'seller_platform.db'
 
-SUPPLIER_CODE = 'sexopt'
-SUPPLIER_NAME = 'Andrey (sex-opt.ru)'
+SUPPLIER_CODE = 'andrey'
+SUPPLIER_NAME = 'Андрей (sex-opt.ru)'
 
 SEXOPT_CSV_COLUMN_MAPPING = {
     # Идентификация
