@@ -233,16 +233,15 @@ class SupplierPriceLoader:
             raw_id = row[0].strip()
             # Пропускаем заголовок
             if not header_skipped:
-                try:
-                    int(raw_id)
-                except ValueError:
+                # Заголовок — строка, которая не содержит числового ID
+                product_id = extract_supplier_product_id(raw_id)
+                if product_id is None:
                     header_skipped = True
                     continue
                 header_skipped = True
 
-            try:
-                product_id = int(raw_id)
-            except ValueError:
+            product_id = extract_supplier_product_id(raw_id)
+            if product_id is None:
                 continue
 
             try:
@@ -267,13 +266,24 @@ class SupplierPriceLoader:
 
 
 def extract_supplier_product_id(external_id_or_vendor_code: str) -> Optional[int]:
-    """Извлечь числовой ID поставщика из external_id/vendor_code вида 'id-1841-SELLER'."""
+    """Извлечь числовой ID поставщика из external_id/vendor_code.
+
+    Поддерживаемые форматы:
+        'id-1841-SELLER' → 1841
+        '0T-00000877'    → 877 (sex-opt формат)
+        '12345'          → 12345
+    """
     if not external_id_or_vendor_code:
         return None
+    # Формат: id-12345 или id_12345
     m = re.search(r'id[_-](\d+)', external_id_or_vendor_code)
     if m:
         return int(m.group(1))
-    # Попробуем просто число
+    # Формат sex-opt: 0T-00000877 (буквы-цифры)
+    m = re.search(r'[A-Za-z]+-(\d+)', external_id_or_vendor_code)
+    if m:
+        return int(m.group(1))
+    # Просто число
     m = re.match(r'^(\d+)$', external_id_or_vendor_code.strip())
     if m:
         return int(m.group(1))

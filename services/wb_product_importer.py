@@ -164,10 +164,16 @@ class WBProductImporter:
 
             # Формируем артикул по шаблону из настроек
             # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}
+            # ВАЖНО: логика извлечения product_id должна совпадать с auto_import_manager._process_product()
+            import re as _re
             settings = self.seller.auto_import_settings
             if settings and settings.vendor_code_pattern:
                 pattern = settings.vendor_code_pattern
-                vendor_code = pattern.replace('{product_id}', str(imported_product.external_id))
+                ext_id = str(imported_product.external_id or '')
+                # Извлекаем product_id так же как в auto_import_manager
+                _m = _re.search(r'id-(\d+)', ext_id)
+                product_id_val = _m.group(1) if _m else ext_id
+                vendor_code = pattern.replace('{product_id}', product_id_val)
                 vendor_code = vendor_code.replace('{supplier_code}', settings.supplier_code or '')
                 vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
             else:

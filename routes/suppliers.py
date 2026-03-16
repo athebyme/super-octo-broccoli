@@ -1274,9 +1274,14 @@ def register_supplier_routes(app):
         all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
         all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
         if all_sp_external_ids:
+            import re as _re
             vc_to_sp = {}
             for sp_id, ext_id in all_sp_external_ids.items():
-                vc = vc_pattern.replace('{product_id}', str(ext_id or ''))
+                # Извлекаем product_id так же как в auto_import_manager._process_product()
+                ext_id_str = str(ext_id or '')
+                _m = _re.search(r'id-(\d+)', ext_id_str)
+                product_id_val = _m.group(1) if _m else ext_id_str
+                vc = vc_pattern.replace('{product_id}', product_id_val)
                 vc = vc.replace('{supplier_code}', vc_supplier_code)
                 vc = vc.replace('{external_vendor_code}', str(all_sp_vendor_codes.get(sp_id) or ''))
                 if vc:

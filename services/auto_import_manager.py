@@ -362,13 +362,21 @@ class CSVProductParser:
             # Разделяем по пробелам (один или несколько)
             photo_nums = [p.strip() for p in photo_codes.split() if p.strip()]
 
-        # Извлекаем числовой ID из external_id (формат: id-12345-код)
+        # Извлекаем числовой ID из external_id
+        # Поддерживаемые форматы:
+        #   "id-12345-код" → 12345
+        #   "0T-00000877"  → 00000877 (sex-opt формат)
+        #   "12345"        → 12345
         match = re.search(r'id-(\d+)', product_id)
-        if not match:
-            # Пытаемся использовать сам product_id как числовой
-            numeric_id = product_id
-        else:
+        if match:
             numeric_id = match.group(1)
+        else:
+            # Пытаемся извлечь числовую часть после дефиса (sex-opt: "0T-00000877" → "00000877")
+            match_sexopt = re.search(r'[A-Za-z]+-(\d+)', product_id)
+            if match_sexopt:
+                numeric_id = match_sexopt.group(1)
+            else:
+                numeric_id = product_id
 
         for num in photo_nums:
             # Формируем все варианты URL
