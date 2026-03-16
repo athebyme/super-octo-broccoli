@@ -26,7 +26,7 @@ MAPPING = {
     "categories": {"column": "category_title", "type": "list", "separator": "/"},
     "description": {"column": "description", "type": "string"},
     "country": {"column": "country", "type": "string"},
-    "price": {"column": "price", "type": "number"},
+    "supplier_price": {"column": "price", "type": "number"},
     "recommended_retail_price": {"column": "retail_price", "type": "number"},
     "colors": {"column": "color", "type": "list", "separator": ","},
     "materials": {"column": "material", "type": "list", "separator": ","},
@@ -128,7 +128,7 @@ def test_parsing():
         print(f"  brand: {p.get('brand')}")
         print(f"  category: {p.get('category')}")
         print(f"  all_categories: {p.get('all_categories')}")
-        print(f"  price (supplier_price): {p.get('price')}")
+        print(f"  supplier_price: {p.get('supplier_price')}")
         print(f"  recommended_retail_price: {p.get('recommended_retail_price')}")
         print(f"  supplier_quantity: {p.get('supplier_quantity')}")
         print(f"  photo_urls: {len(p.get('photo_urls', []))} photos")
@@ -145,7 +145,7 @@ def test_parsing():
     assert p1['external_id'] == '0T-00000877', f"Wrong external_id: {p1['external_id']}"
     assert p1['vendor_code'] == '44032', f"Wrong vendor_code: {p1['vendor_code']}"
     assert p1['brand'] == 'HOT', f"Wrong brand: {p1['brand']}"
-    assert p1['price'] == 596.70, f"Wrong price: {p1['price']}"
+    assert p1['supplier_price'] == 596.70, f"Wrong price: {p1['supplier_price']}"
     assert p1['supplier_quantity'] == 22, f"Wrong quantity: {p1['supplier_quantity']}"
     assert len(p1['photo_urls']) >= 1, "No photos parsed"
     assert p1['all_categories'] == ['Лубриканты', 'Анальные'], f"Wrong categories: {p1['all_categories']}"

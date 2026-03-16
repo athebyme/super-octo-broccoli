@@ -52,7 +52,7 @@ SEXOPT_SUPPLIER_DATA = {
         "country": {"column": "country", "type": "string"},
 
         # Цены
-        "price": {"column": "price", "type": "number"},
+        "supplier_price": {"column": "price", "type": "number"},
         "recommended_retail_price": {"column": "retail_price", "type": "number"},
 
         # Характеристики товара
