@@ -740,6 +740,13 @@ def internal_validate_brand():
 
     category_id = request.args.get('category_id', type=int)
 
+    # category_id обязателен — без него нельзя проверить доступность бренда в категории
+    if not category_id:
+        return jsonify({
+            'error': 'category_id (wb_subject_id) is required',
+            'hint': 'Run category-mapper first to assign a category, then validate brand.',
+        }), 400
+
     # Точный поиск по алиасам
     normalized = brand_name.strip().lower()
     alias = BrandAlias.query.filter(
@@ -761,13 +768,12 @@ def internal_validate_brand():
             result['marketplace_brand_name'] = mp_brand.marketplace_brand_name
             result['marketplace_brand_id'] = mp_brand.marketplace_brand_id
 
-            # Проверяем доступность в категории
-            if category_id:
-                link = BrandCategoryLink.query.filter_by(
-                    marketplace_brand_id=mp_brand.id,
-                    category_id=category_id,
-                ).first()
-                result['category_available'] = link.is_available if link else None
+            # Проверяем доступность бренда в указанной категории
+            link = BrandCategoryLink.query.filter_by(
+                marketplace_brand_id=mp_brand.id,
+                category_id=category_id,
+            ).first()
+            result['category_available'] = link.is_available if link else None
 
         return jsonify({'result': result})
 

@@ -41,15 +41,16 @@ PIPELINES = {
              'label': 'Проверка модерации'},
         ],
     },
-    # Полный импорт: бренд + категория + характеристики + размеры + SEO + модерация
+    # Полный импорт: категория → бренд → характеристики → размеры → SEO → модерация
+    # ВАЖНО: категория ПЕРЕД брендом — бренд валидируется в контексте категории (WB subject_id)
     'import_ready': {
         'label': 'Полный импорт',
-        'description': 'Бренд → Категория → Характеристики → Размеры → SEO → Модерация',
+        'description': 'Категория → Бренд → Характеристики → Размеры → SEO → Модерация',
         'steps': [
-            {'agent': 'brand-resolver', 'task_type': 'resolve_batch',
-             'label': 'Определение брендов'},
             {'agent': 'category-mapper', 'task_type': 'map_batch',
              'label': 'Определение категорий'},
+            {'agent': 'brand-resolver', 'task_type': 'resolve_batch',
+             'label': 'Определение брендов'},
             {'agent': 'characteristics-filler', 'task_type': 'fill_batch',
              'label': 'Заполнение характеристик'},
             {'agent': 'size-normalizer', 'task_type': 'normalize_batch',

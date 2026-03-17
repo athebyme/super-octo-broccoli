@@ -46,18 +46,90 @@ class BrandResolverAgent(BaseAgent):
 Результат: JSON с нормализованными брендами."""
 
     def execute_task(self, task: dict) -> dict:
-        """Автоматически разбивает большие батчи на чанки."""
+        """Автоматически разбивает большие батчи на чанки.
+
+        Перед запуском проверяет наличие category (wb_subject_id) у товаров —
+        без категории валидация бренда бессмысленна на любом маркетплейсе.
+        """
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'resolve_single')
-        if task_type in ('resolve_batch',):
+
+        if task_type == 'resolve_single':
+            product_ids = []
+            pid = input_data.get('imported_product_id') or input_data.get('product_id')
+            if pid:
+                product_ids = [pid]
+        elif task_type in ('resolve_batch',):
             product_ids = (
                 input_data.get('product_ids')
                 or input_data.get('imported_product_ids')
                 or []
             )
-            if len(product_ids) > self.max_batch_size:
-                return self._run_chunked_batch(task, product_ids)
+        else:
+            product_ids = []
+
+        # Проверяем наличие категории у товаров перед запуском LLM
+        if product_ids:
+            product_ids, skipped = self._filter_products_without_category(product_ids)
+            if not product_ids:
+                return {
+                    'error': 'no_category',
+                    'message': (
+                        'Ни у одного товара нет категории (wb_subject_id). '
+                        'Сначала запустите category-mapper для определения категорий.'
+                    ),
+                    'skipped': skipped,
+                }
+            if skipped:
+                logger.warning(
+                    f"Brand resolver: {len(skipped)} products skipped (no category), "
+                    f"{len(product_ids)} products will be processed"
+                )
+                # Обновляем input_data с отфильтрованными ID
+                if 'product_ids' in input_data:
+                    input_data['product_ids'] = product_ids
+                elif 'imported_product_ids' in input_data:
+                    input_data['imported_product_ids'] = product_ids
+                task = {**task, 'input_data': json.dumps(input_data)}
+
+        if task_type in ('resolve_batch',) and len(product_ids) > self.max_batch_size:
+            return self._run_chunked_batch(task, product_ids)
         return self._execute_react(task)
+
+    def _filter_products_without_category(self, product_ids: list) -> tuple:
+        """Разделяет товары на имеющие и не имеющие категорию.
+
+        Returns:
+            (valid_ids, skipped_info): список ID с категорией и инфо о пропущенных
+        """
+        try:
+            products = self.platform.get_imported_products_brief(product_ids)
+        except Exception as e:
+            logger.warning(f"Cannot prefetch products for category check: {e}")
+            return product_ids, []  # не блокируем если API недоступен
+
+        valid = []
+        skipped = []
+        for p in products:
+            if p.get('wb_subject_id'):
+                valid.append(p['id'])
+            else:
+                skipped.append({
+                    'product_id': p['id'],
+                    'title': p.get('title', '')[:80],
+                    'reason': 'no_category (wb_subject_id is empty)',
+                })
+
+        # Товары, которые не нашлись в ответе — пропускаем тоже
+        found_ids = {p['id'] for p in products}
+        for pid in product_ids:
+            if pid not in found_ids:
+                skipped.append({
+                    'product_id': pid,
+                    'reason': 'product_not_found',
+                })
+
+        return valid, skipped
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)
