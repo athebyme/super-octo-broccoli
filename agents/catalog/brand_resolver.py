@@ -25,6 +25,9 @@ class BrandResolverAgent(BaseAgent):
 КРИТИЧЕСКИЕ ПРАВИЛА:
 - ЗАПРЕЩЕНО угадывать написание бренда! ОБЯЗАТЕЛЬНО используй validate_brand(brand_name=...)
   чтобы проверить бренд по реальному реестру WB
+- ОБЯЗАТЕЛЬНО передавай category_id=<wb_subject_id> в validate_brand!
+  Бренд может быть зарегистрирован в WB, но НЕДОСТУПЕН в конкретной категории товара.
+  Без category_id проверка бессмысленна — WB отклонит карточку.
 - validate_brand вернёт: точное совпадение, каноническое написание или похожие варианты
 - Если validate_brand вернул category_available=false — бренд недоступен в этой категории
 - Если бренд не найден — используй "Нет бренда"
@@ -72,10 +75,12 @@ class BrandResolverAgent(BaseAgent):
                     f"Шаги:\n"
                     f"1. get_imported_product(product_id={imported_product_id})\n"
                     f"2. Извлеки бренд из названия/описания товара\n"
-                    f"3. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО проверь по реестру WB\n"
+                    f"3. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id из данных товара>) — "
+                    f"ОБЯЗАТЕЛЬНО передай category_id! Без него WB отклонит карточку\n"
                     f"4. Используй каноническое написание из результата validate_brand\n"
                     f"5. update_imported_product(product_id={imported_product_id}, brand=<каноническое написание>)\n\n"
                     f"ЗАПРЕЩЕНО угадывать бренд — используй ТОЛЬКО результат validate_brand.\n"
+                    f"ОБЯЗАТЕЛЬНО передавай category_id=wb_subject_id в validate_brand!\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
                     f"Верни JSON: {{original_brand, normalized_brand, "
                     f"confidence, wb_registered: bool}}"
@@ -123,7 +128,8 @@ class BrandResolverAgent(BaseAgent):
                         f"Данные товаров уже загружены:\n{products_text}\n\n"
                         f"ОПТИМИЗАЦИЯ: данные уже загружены выше. ЗАПРЕЩЕНО вызывать get_imported_product.\n\n"
                         f"Для каждого товара:\n"
-                        f"1. validate_brand(brand_name=<бренд из данных>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО\n"
+                        f"1. validate_brand(brand_name=<бренд из данных>, category_id=<wb_subject_id из данных товара>) — "
+                        f"ОБЯЗАТЕЛЬНО передай category_id! Бренд может быть в WB, но недоступен в категории\n"
                         f"2. update_imported_product(product_id=ID, brand=<каноническое написание из validate_brand>)\n\n"
                         f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                         f"Верни JSON: {{total, updated, skipped, saved: число, "
@@ -137,7 +143,8 @@ class BrandResolverAgent(BaseAgent):
                     f"ЗАПРЕЩЕНО вызывать get_imported_products.\n\n"
                     f"Для каждого ID:\n"
                     f"1. get_imported_product(product_id=ID)\n"
-                    f"2. validate_brand(brand_name=<бренд>) — ОБЯЗАТЕЛЬНО\n"
+                    f"2. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id из данных товара>) — "
+                    f"ОБЯЗАТЕЛЬНО с category_id!\n"
                     f"3. update_imported_product(product_id=ID, brand=...)\n\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                     f"Верни JSON: {{total, updated, skipped, saved: число, "
