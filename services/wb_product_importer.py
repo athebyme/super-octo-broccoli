@@ -1170,22 +1170,48 @@ class WBProductImporter:
                 if brand and brand.status != 'rejected':
                     # Ищем маркетплейс-специфичное имя для WB
                     wb_mp = Marketplace.query.filter_by(code='wb').first()
+                    resolved_name = None
                     if wb_mp:
                         mp_brand = MarketplaceBrand.query.filter_by(
                             brand_id=brand.id,
                             marketplace_id=wb_mp.id
                         ).first()
                         if mp_brand and mp_brand.status != 'rejected' and mp_brand.marketplace_brand_name:
-                            logger.info(
-                                f"Бренд '{raw_brand}' → MarketplaceBrand: '{mp_brand.marketplace_brand_name}' "
-                                f"(brand_id={brand.id}, mp_brand_id={mp_brand.marketplace_brand_id})"
+                            resolved_name = mp_brand.marketplace_brand_name
+
+                    if not resolved_name:
+                        resolved_name = brand.name
+
+                    # Валидируем бренд в конкретной категории через WB API
+                    # (бренд может быть зарегистрирован, но недоступен в данной категории)
+                    if imported_product.wb_subject_id and self.api_client:
+                        try:
+                            check = self.api_client.validate_brand(
+                                resolved_name, subject_id=imported_product.wb_subject_id
                             )
-                            return mp_brand.marketplace_brand_name
-                    # Нет MarketplaceBrand для WB — используем каноническое имя
-                    logger.info(
-                        f"Бренд '{raw_brand}' → каноническое имя: '{brand.name}' (brand_id={brand.id})"
-                    )
-                    return brand.name
+                            if check.get('valid') and check.get('exact_match'):
+                                wb_name = check['exact_match'].get('name', resolved_name)
+                                logger.info(
+                                    f"Бренд '{raw_brand}' → WB-валидирован: '{wb_name}' "
+                                    f"(brand_id={brand.id}, subject_id={imported_product.wb_subject_id})"
+                                )
+                                return wb_name
+                            else:
+                                logger.warning(
+                                    f"Бренд '{resolved_name}' (brand_id={brand.id}) не найден в WB "
+                                    f"для категории subject_id={imported_product.wb_subject_id}, "
+                                    f"пробуем BrandEngine.resolve()"
+                                )
+                                # Не возвращаем — пусть Step 2 попробует найти бренд
+                        except Exception as e:
+                            logger.warning(f"Ошибка WB-валидации бренда: {e}, используем resolved")
+                            return resolved_name
+                    else:
+                        logger.info(
+                            f"Бренд '{raw_brand}' → '{resolved_name}' (brand_id={brand.id})"
+                        )
+                        return resolved_name
+
                 elif brand and brand.status == 'rejected':
                     logger.warning(
                         f"Бренд '{raw_brand}' (brand_id={brand.id}) отклонён, используем сырое имя"
@@ -1606,6 +1632,9 @@ class WBProductImporter:
         """
         Форматирует одиночное значение характеристики.
         charc_type: int (1=массив строк, 4=число) или str для legacy
+
+        Для справочных характеристик (с dictionary): если значение не найдено
+        в справочнике — возвращает None (WB отклонит карточку с невалидным значением).
         """
         import re
 
@@ -1663,7 +1692,14 @@ class WBProductImporter:
                 if str_value_lower in dict_value.lower() or dict_value.lower() in str_value_lower:
                     return dict_value
 
-        # Возвращаем как есть
+            # Значение не найдено в справочнике — WB отклонит карточку
+            logger.warning(
+                f"Характеристика '{char_name}': значение '{str_value}' не найдено в справочнике "
+                f"({len(dictionary)} записей), пропускаем"
+            )
+            return None
+
+        # Возвращаем как есть (нет справочника — свободный ввод)
         return str_value
 
     def _load_wb_directories(self) -> Dict[str, list]:
