@@ -172,10 +172,16 @@ class WBProductImporter:
                 ext_id = str(imported_product.external_id or '')
                 # Извлекаем product_id так же как в auto_import_manager
                 _m = _re.search(r'id-(\d+)', ext_id)
-                product_id_val = _m.group(1) if _m else ext_id
+                if _m:
+                    product_id_val = _m.group(1)
+                else:
+                    # Извлекаем числовую часть из кодов вида "0T-00003031"
+                    _num = _re.search(r'(\d+)', ext_id)
+                    product_id_val = _num.group(1) if _num else ext_id
                 vendor_code = pattern.replace('{product_id}', product_id_val)
                 vendor_code = vendor_code.replace('{supplier_code}', settings.supplier_code or '')
                 vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
+                vendor_code = vendor_code.replace('{external_id}', ext_id)
             else:
                 vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 
