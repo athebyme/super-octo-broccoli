@@ -336,21 +336,22 @@ def create_platform_tools(platform_client) -> ToolRegistry:
     registry.register(
         name='validate_brand',
         description=(
-            'Проверить бренд по реестру WB. Возвращает: найден ли бренд, каноническое написание, '
-            'уверенность, похожие варианты. Проверяет доступность бренда в категории (если указана). '
-            'ОБЯЗАТЕЛЬНО используй для нормализации брендов вместо угадывания.'
+            'Проверить бренд по реестру WB в конкретной категории. '
+            'category_id (wb_subject_id товара) ОБЯЗАТЕЛЕН — без него результат бессмысленен, '
+            'т.к. бренд может быть в WB глобально, но недоступен в категории товара. '
+            'Возвращает: найден ли бренд, каноническое написание, похожие варианты.'
         ),
         parameters={
             'properties': {
                 'brand_name': {'type': 'string', 'description': 'Название бренда для проверки'},
-                'category_id': {'type': 'integer', 'description': 'subject_id категории для проверки доступности (опционально)'},
+                'category_id': {'type': 'integer', 'description': 'wb_subject_id категории товара (ОБЯЗАТЕЛЕН)'},
             },
-            'required': ['brand_name'],
+            'required': ['brand_name', 'category_id'],
         },
         handler=lambda brand_name, category_id=None:
-            platform_client.validate_brand(
-                brand_name, int(category_id) if category_id else None
-            ),
+            ({'error': 'category_id (wb_subject_id) обязателен! Возьми его из данных товара (поле wb_subject_id).'}
+             if not category_id else
+             platform_client.validate_brand(brand_name, int(category_id))),
     )
 
     # ── Настройки ценообразования ───────────────────────────────
