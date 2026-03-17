@@ -52,8 +52,8 @@
                        class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md"
                        placeholder="id-{product_id}-{supplier_code}">
                 <p class="mt-1 text-xs text-gray-500">
-                    Доступные переменные: {product_id} — код товара, {supplier_code} — код продавца, {external_vendor_code} — артикул поставщика<br>
-                    Пример для sex-opt: <code>{supplier_code}Z1C1A{product_id}</code> → 9580Z1C1A0t-00010550
+                    Доступные переменные: {product_id} — числовая часть кода, {supplier_code} — код продавца, {external_id} — полный код товара (напр. 0T-00003031), {external_vendor_code} — артикул поставщика<br>
+                    Пример для sex-opt: <code>Code{supplier_code}&lt;{external_id}&gt;</code> → CodeZ1C1A&lt;0T-00003031&gt;
                 </p>
             </div>
 
