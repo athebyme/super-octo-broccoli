@@ -374,6 +374,48 @@ def internal_update_imported_product(product_id):
     if 'wb_category_name' in data:
         data['mapped_wb_category'] = data.pop('wb_category_name')
 
+    # ── Валидация категории: проверяем что она существует и включена ──
+    if 'wb_subject_id' in data and data['wb_subject_id'] is not None:
+        subject_id = data['wb_subject_id']
+        cat = MarketplaceCategory.query.filter_by(subject_id=subject_id).first()
+        if not cat:
+            return jsonify({
+                'error': f'Категория WB с subject_id={subject_id} не найдена в справочнике',
+                'hint': 'Используйте search_wb_categories для поиска валидных категорий',
+            }), 400
+        if not cat.is_leaf:
+            return jsonify({
+                'error': f'Категория "{cat.subject_name}" (id={subject_id}) не является конечной (leaf). WB API не примет её.',
+                'hint': 'Используйте search_wb_categories — он возвращает только leaf-категории',
+            }), 400
+        if not cat.is_enabled:
+            return jsonify({
+                'error': f'Категория "{cat.subject_name}" (id={subject_id}) не включена в системе',
+                'hint': 'Включите категорию в разделе Маркетплейсы → Категории, затем повторите',
+                'category_name': cat.subject_name,
+                'parent_name': cat.parent_name,
+            }), 400
+
+        # Валидация confidence: слишком низкая → отклоняем
+        confidence = data.get('category_confidence')
+        if confidence is not None:
+            try:
+                confidence = float(confidence)
+            except (ValueError, TypeError):
+                confidence = None
+            if confidence is not None and confidence < 0.5:
+                return jsonify({
+                    'error': f'Уверенность в категории слишком низкая ({confidence}). '
+                             f'Минимум 0.5 для автоматического назначения.',
+                    'hint': 'Попробуйте другой поисковый запрос или передайте задачу на ручную модерацию',
+                }), 400
+
+        # Проверяем совпадение mapped_wb_category с реальным subject_name
+        if 'mapped_wb_category' in data and data['mapped_wb_category']:
+            if data['mapped_wb_category'] != cat.subject_name:
+                # Автокоррекция: агент мог передать неточное название — берём из БД
+                data['mapped_wb_category'] = cat.subject_name
+
     # ── Сохраняем снимок предыдущих значений для отката ──
     previous_values = {}
     new_values = {}
@@ -500,22 +542,74 @@ def internal_search_categories():
     # ВАЖНО: SQLite ilike() не работает с кириллицей (case-insensitive
     # только для ASCII). Используем db.func.lower() для Unicode-безопасного
     # сравнения.
+    #
+    # Русская морфология: "пробка" не совпадёт с "Пробки" через substring.
+    # Используем стемминг — обрезаем окончания у слов > 3 символов,
+    # чтобы "пробка" → "пробк" совпало с "Пробки".
     q_lower = q.lower()
+
+    # Простой стемминг: обрезаем типичные русские окончания
+    _RU_ENDINGS = (
+        'ами', 'ями', 'ого', 'его', 'ому', 'ему', 'ной', 'ный', 'ная', 'ное',
+        'ые', 'ие', 'ой', 'ей', 'ом', 'ем', 'ов', 'ев', 'ам', 'ям',
+        'ах', 'ях', 'ую', 'юю', 'ий', 'ый',
+        'а', 'я', 'о', 'е', 'и', 'ы', 'у', 'ю', 'ь', 'й',
+    )
+
+    def _stem_word(word):
+        """Простой русский стемминг — обрезаем окончание, минимум 3 символа в основе."""
+        if len(word) <= 3:
+            return word
+        for ending in _RU_ENDINGS:
+            if word.endswith(ending) and len(word) - len(ending) >= 3:
+                return word[:-len(ending)]
+        return word
+
+    # Строим поисковые термы: стемы отдельных слов
+    words = q_lower.split()
+    stems = [_stem_word(w) for w in words if len(w) >= 2]
+
+    def _build_search_condition():
+        """Строит условие поиска: каждый стем должен быть в subject_name ИЛИ parent_name."""
+        if not stems:
+            return db.or_(
+                db.func.lower(MarketplaceCategory.subject_name).contains(q_lower),
+                db.func.lower(MarketplaceCategory.parent_name).contains(q_lower),
+            )
+
+        # Для одного слова — ищем стем в subject_name или parent_name
+        if len(stems) == 1:
+            stem = stems[0]
+            return db.or_(
+                db.func.lower(MarketplaceCategory.subject_name).contains(stem),
+                db.func.lower(MarketplaceCategory.parent_name).contains(stem),
+            )
+
+        # Для нескольких слов — каждый стем в name или parent
+        # (AND между стемами: все слова должны присутствовать)
+        conditions = []
+        for stem in stems:
+            conditions.append(db.or_(
+                db.func.lower(MarketplaceCategory.subject_name).contains(stem),
+                db.func.lower(MarketplaceCategory.parent_name).contains(stem),
+            ))
+        return db.and_(*conditions)
+
+    search_condition = _build_search_condition()
 
     def _search_categories(enabled_only: bool):
         query = MarketplaceCategory.query.filter(
             MarketplaceCategory.is_leaf == True,
-            db.or_(
-                db.func.lower(MarketplaceCategory.subject_name).contains(q_lower),
-                db.func.lower(MarketplaceCategory.parent_name).contains(q_lower),
-            )
+            search_condition,
         )
         if enabled_only:
             query = query.filter(MarketplaceCategory.is_enabled == True)
+        # Приоритет: точное вхождение оригинального запроса в subject_name — выше
         return query.order_by(
             db.case(
                 (db.func.lower(MarketplaceCategory.subject_name).contains(q_lower), 0),
-                else_=1
+                (db.func.lower(MarketplaceCategory.subject_name).contains(stems[0]) if stems else db.literal(False), 1),
+                else_=2
             ),
             MarketplaceCategory.subject_name
         ).limit(limit).all()
