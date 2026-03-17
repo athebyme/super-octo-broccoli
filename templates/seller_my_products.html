@@ -378,7 +378,14 @@
                     <td class="px-3 py-2 text-sm text-gray-600">
                         {{ p.brand or '—' }}
                         {% if p.resolved_brand_id %}
-                        <span class="inline-block w-1.5 h-1.5 bg-gray-900 rounded-full ml-1" title="Бренд подтверждён"></span>
+                            {% set cat_ok = brand_category_map.get(p.id) %}
+                            {% if cat_ok is sameas true %}
+                            <span class="inline-block w-1.5 h-1.5 bg-green-600 rounded-full ml-1" title="Бренд подтверждён в категории"></span>
+                            {% elif cat_ok is sameas false %}
+                            <span class="inline-block w-1.5 h-1.5 bg-red-500 rounded-full ml-1" title="Бренд недоступен в категории"></span>
+                            {% else %}
+                            <span class="inline-block w-1.5 h-1.5 bg-gray-900 rounded-full ml-1" title="Бренд подтверждён"></span>
+                            {% endif %}
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-sm text-gray-600">

@@ -270,7 +270,13 @@
                         <p class="mt-1 text-sm bg-gray-50 rounded-lg px-3 py-2">
                             <span class="font-medium">{{ preview.card.brand or '—' }}</span>
                             {% if preview.card.brand_resolved %}
-                            <span class="ml-2 text-xs text-green-600">Подтверждён</span>
+                                {% if preview.card.brand_category_ok is sameas true %}
+                                <span class="ml-2 text-xs text-green-600">Подтверждён в категории</span>
+                                {% elif preview.card.brand_category_ok is sameas false %}
+                                <span class="ml-2 text-xs text-red-600">Недоступен в категории</span>
+                                {% else %}
+                                <span class="ml-2 text-xs text-green-600">Подтверждён</span>
+                                {% endif %}
                             {% else %}
                             <span class="ml-2 text-xs text-yellow-600">Не подтверждён</span>
                             {% endif %}

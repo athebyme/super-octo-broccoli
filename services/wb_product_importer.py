@@ -2191,10 +2191,31 @@ class WBProductImporter:
         # --- Brand ---
         product_brand = imported_product.brand or ''
         brand_resolved = bool(imported_product.resolved_brand_id)
+        brand_category_ok = None  # None = не проверялось, True = доступен, False = недоступен
+
+        # Проверяем доступность бренда в категории товара
+        if brand_resolved and imported_product.wb_subject_id:
+            try:
+                from models import MarketplaceBrand, BrandCategoryLink
+                mp_brand = MarketplaceBrand.query.filter_by(
+                    brand_id=imported_product.resolved_brand_id
+                ).first()
+                if mp_brand:
+                    link = BrandCategoryLink.query.filter_by(
+                        marketplace_brand_id=mp_brand.id,
+                        category_id=imported_product.wb_subject_id,
+                    ).first()
+                    if link:
+                        brand_category_ok = link.is_available
+            except Exception:
+                pass  # Таблица может не существовать
+
         if not product_brand:
             issues.append({'field': 'brand', 'level': 'error', 'message': 'Бренд не указан'})
         elif not brand_resolved:
             issues.append({'field': 'brand', 'level': 'warning', 'message': f'Бренд "{product_brand}" не подтверждён в реестре'})
+        elif brand_category_ok is False:
+            issues.append({'field': 'brand', 'level': 'warning', 'message': f'Бренд "{product_brand}" недоступен в выбранной категории WB'})
 
         # --- Category ---
         if not imported_product.wb_subject_id:
@@ -2402,6 +2423,7 @@ class WBProductImporter:
                 'description': description,
                 'brand': product_brand,
                 'brand_resolved': brand_resolved,
+                'brand_category_ok': brand_category_ok,
                 'subjectID': imported_product.wb_subject_id,
                 'subjectName': imported_product.mapped_wb_category or '',
                 'dimensions': {

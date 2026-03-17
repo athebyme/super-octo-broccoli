@@ -1455,6 +1455,42 @@ def register_supplier_routes(app):
             ImportedProduct.updated_at.isnot(None)
         ).order_by(ImportedProduct.updated_at.desc()).limit(10).all()
 
+        # Предзагрузка статуса бренда по категории для товаров на странице
+        brand_category_map = {}  # product_id -> True/False/None
+        products_with_brand = [
+            p for p in pagination.items
+            if p.resolved_brand_id and p.wb_subject_id
+        ]
+        if products_with_brand:
+            try:
+                from models import MarketplaceBrand, BrandCategoryLink
+                brand_ids = list({p.resolved_brand_id for p in products_with_brand})
+                mp_brands = MarketplaceBrand.query.filter(
+                    MarketplaceBrand.brand_id.in_(brand_ids)
+                ).all()
+                mp_brand_map = {mb.brand_id: mb.id for mb in mp_brands}
+
+                # Собираем все пары (mp_brand_id, category_id) для проверки
+                check_pairs = []
+                for p in products_with_brand:
+                    mp_id = mp_brand_map.get(p.resolved_brand_id)
+                    if mp_id:
+                        check_pairs.append((p.id, mp_id, p.wb_subject_id))
+
+                if check_pairs:
+                    mp_ids = list({pair[1] for pair in check_pairs})
+                    cat_ids = list({pair[2] for pair in check_pairs})
+                    links = BrandCategoryLink.query.filter(
+                        BrandCategoryLink.marketplace_brand_id.in_(mp_ids),
+                        BrandCategoryLink.category_id.in_(cat_ids),
+                    ).all()
+                    link_map = {(l.marketplace_brand_id, l.category_id): l.is_available for l in links}
+
+                    for pid, mp_id, cat_id in check_pairs:
+                        brand_category_map[pid] = link_map.get((mp_id, cat_id))
+            except Exception:
+                pass  # Таблица может не существовать
+
         return render_template(
             'seller_my_products.html',
             pagination=pagination,
@@ -1463,6 +1499,7 @@ def register_supplier_routes(app):
             search=search,
             has_wb_key=seller.has_valid_api_key(),
             recent_imports=recent_imports,
+            brand_category_map=brand_category_map,
         )
 
     # -------------------------------------------------------------------
