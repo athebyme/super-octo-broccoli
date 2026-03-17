@@ -30,6 +30,7 @@ from models import (
     ImportedProduct, Seller, CategoryMapping,
     Notification, log_admin_action
 )
+from services.pricing_engine import extract_supplier_product_id
 
 logger = logging.getLogger(__name__)
 
@@ -593,8 +594,8 @@ class SupplierCSVParser:
             return []
 
         photos = []
-        match = re.search(r'id-(\d+)', product_id)
-        numeric_id = match.group(1) if match else product_id
+        extracted = extract_supplier_product_id(product_id)
+        numeric_id = str(extracted) if extracted else product_id
 
         if ',' in photo_codes:
             photo_nums = [p.strip() for p in photo_codes.split(',') if p.strip()]
@@ -1167,11 +1168,7 @@ class SupplierService:
             for sp in products:
                 try:
                     # Извлекаем числовой ID из external_id
-                    numeric_id = None
-                    if sp.external_id:
-                        match = re.search(r'(\d+)', sp.external_id)
-                        if match:
-                            numeric_id = int(match.group(1))
+                    numeric_id = extract_supplier_product_id(sp.external_id) if sp.external_id else None
 
                     if numeric_id is None:
                         continue
@@ -3561,10 +3558,9 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
     if price_data and sp.external_id:
         ext_id = sp.external_id
         # Пробуем найти цену по числовому ID
-        match = re.search(r'(\d+)', ext_id)
-        if match:
-            numeric_id = match.group(1)
-            price = price_data.get(numeric_id) or price_data.get(ext_id)
+        numeric_id = extract_supplier_product_id(ext_id)
+        if numeric_id is not None:
+            price = price_data.get(numeric_id) or price_data.get(str(numeric_id)) or price_data.get(ext_id)
             if price:
                 sp.supplier_price = price
 
