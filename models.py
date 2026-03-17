@@ -1970,7 +1970,8 @@ class AgentChangeSnapshot(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     imported_product = db.relationship('ImportedProduct', backref=db.backref(
-        'agent_changes', lazy='dynamic', order_by='AgentChangeSnapshot.created_at.desc()'))
+        'agent_changes', lazy='dynamic', order_by='AgentChangeSnapshot.created_at.desc()',
+        cascade='all, delete-orphan'))
 
     __table_args__ = (
         db.Index('idx_acs_task_product', 'task_id', 'imported_product_id'),

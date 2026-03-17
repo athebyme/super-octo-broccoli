@@ -17,7 +17,7 @@ from flask_login import login_required, current_user
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, AIHistory, log_admin_action, Product,
-    BackgroundJob, Notification,
+    BackgroundJob, Notification, AgentChangeSnapshot,
 )
 from services.supplier_service import SupplierService
 
@@ -1927,6 +1927,11 @@ def register_supplier_routes(app):
 
         if not product_ids:
             return jsonify({'error': 'Не выбраны товары'}), 400
+
+        # Удаляем связанные agent_change_snapshots перед удалением товаров
+        AgentChangeSnapshot.query.filter(
+            AgentChangeSnapshot.imported_product_id.in_(product_ids)
+        ).delete(synchronize_session=False)
 
         deleted = ImportedProduct.query.filter(
             ImportedProduct.id.in_(product_ids),
