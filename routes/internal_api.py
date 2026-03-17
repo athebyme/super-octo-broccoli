@@ -774,10 +774,18 @@ def internal_validate_brand():
                     marketplace_brand_id=mp_brand.id,
                     category_id=category_id,
                 ).first()
-                result['category_available'] = link.is_available if link else None
+                if link:
+                    result['category_available'] = link.is_available
+                else:
+                    result['category_available'] = None
+                    result['category_warning'] = (
+                        f'Нет данных о доступности бренда в категории {category_id}. '
+                        f'Бренд НЕ подтверждён в этой категории — wb_registered=false.'
+                    )
             except Exception:
                 # Таблица brand_category_links может не существовать (миграция не применена)
                 result['category_available'] = None
+                result['category_warning'] = 'Невозможно проверить доступность бренда в категории.'
 
         return jsonify({'result': result})
 

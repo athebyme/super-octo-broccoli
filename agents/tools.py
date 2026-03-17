@@ -40,6 +40,11 @@ class ToolRegistry:
         self._tools.update(other._tools)
         self._handlers.update(other._handlers)
 
+    def remove(self, name: str):
+        """Удаляет инструмент из реестра."""
+        self._tools.pop(name, None)
+        self._handlers.pop(name, None)
+
     def get_tool_schemas(self) -> list[dict]:
         """Возвращает схемы всех инструментов для LLM."""
         return list(self._tools.values())

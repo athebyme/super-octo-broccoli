@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class BrandResolverAgent(BaseAgent):
     agent_name = 'brand-resolver'
     max_iterations = 12
+    # Brand resolver НЕ должен сам искать категории — это задача category-mapper
+    excluded_tools = ('search_wb_categories',)
 
     system_prompt = """Ты — эксперт по брендам на маркетплейсе Wildberries.
 
@@ -29,8 +31,11 @@ class BrandResolverAgent(BaseAgent):
   Бренд может быть зарегистрирован в WB, но НЕДОСТУПЕН в конкретной категории товара.
   Без category_id проверка бессмысленна — WB отклонит карточку.
 - validate_brand вернёт: точное совпадение, каноническое написание или похожие варианты
-- Если validate_brand вернул category_available=false — бренд недоступен в этой категории
+- Если validate_brand вернул category_available=false — бренд НЕДОСТУПЕН в этой категории, wb_registered=false
+- Если validate_brand вернул category_available=null — данных нет, бренд НЕ ПОДТВЕРЖДЁН в категории, wb_registered=false
+- Бренд считается подтверждённым (wb_registered=true) ТОЛЬКО если category_available=true
 - Если бренд не найден — используй "Нет бренда"
+- ЗАПРЕЩЕНО самостоятельно искать категории через search_wb_categories! Если у товара нет wb_subject_id — верни ошибку.
 - Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
 - Не вызывай get_imported_products если ID товаров уже известны
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
@@ -59,7 +64,7 @@ class BrandResolverAgent(BaseAgent):
             pid = input_data.get('imported_product_id') or input_data.get('product_id')
             if pid:
                 product_ids = [pid]
-        elif task_type in ('resolve_batch',):
+        elif task_type in ('resolve_batch', ):
             product_ids = (
                 input_data.get('product_ids')
                 or input_data.get('imported_product_ids')
@@ -153,9 +158,16 @@ class BrandResolverAgent(BaseAgent):
                     f"5. update_imported_product(product_id={imported_product_id}, brand=<каноническое написание>)\n\n"
                     f"ЗАПРЕЩЕНО угадывать бренд — используй ТОЛЬКО результат validate_brand.\n"
                     f"ОБЯЗАТЕЛЬНО передавай category_id=wb_subject_id в validate_brand!\n"
-                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
+                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n\n"
+                    f"ЗАПРЕЩЕНО самостоятельно искать категории через search_wb_categories!\n"
+                    f"Если wb_subject_id пуст или отсутствует — верни ошибку: "
+                    f"{{\"error\": \"no_category\", \"message\": \"Сначала запустите category-mapper\"}}.\n\n"
+                    f"validate_brand вернёт поле category_available:\n"
+                    f"- category_available=true → бренд подтверждён, wb_registered=true\n"
+                    f"- category_available=false → бренд НЕДОСТУПЕН в категории, wb_registered=false\n"
+                    f"- category_available=null → данных нет, бренд НЕ подтверждён в категории, wb_registered=false\n\n"
                     f"Верни JSON: {{original_brand, normalized_brand, "
-                    f"confidence, wb_registered: bool}}"
+                    f"confidence, wb_registered: bool, category_available: bool|null}}"
                 )
 
             if product_id:
@@ -204,8 +216,14 @@ class BrandResolverAgent(BaseAgent):
                         f"ОБЯЗАТЕЛЬНО передай category_id! Бренд может быть в WB, но недоступен в категории\n"
                         f"2. update_imported_product(product_id=ID, brand=<каноническое написание из validate_brand>)\n\n"
                         f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                        f"ЗАПРЕЩЕНО самостоятельно искать категории через search_wb_categories!\n"
+                        f"Если у товара wb_subject_id пуст — пропусти его с reason='no_category'.\n\n"
+                        f"validate_brand вернёт поле category_available:\n"
+                        f"- category_available=true → бренд подтверждён, wb_registered=true\n"
+                        f"- category_available=false → бренд НЕДОСТУПЕН в категории, wb_registered=false\n"
+                        f"- category_available=null → данных нет, бренд НЕ подтверждён в категории, wb_registered=false\n\n"
                         f"Верни JSON: {{total, updated, skipped, saved: число, "
-                        f"results: [{{product_id, original, normalized}}]}}"
+                        f"results: [{{product_id, original, normalized, category_available}}]}}"
                     )
 
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
