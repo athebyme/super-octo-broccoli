@@ -1128,9 +1128,13 @@ class AutoImportManager:
             if match:
                 product_id = match.group(1)
             else:
-                # Извлекаем числовую часть из кодов вида "0T-00003031"
-                num_match = re.search(r'(\d+)', external_id)
-                product_id = num_match.group(1) if num_match else external_id
+                # Формат sex-opt: "0T-00003031" → "00003031" (числовая часть после дефиса)
+                match_sexopt = re.search(r'[A-Za-z]+-(\d+)', external_id)
+                if match_sexopt:
+                    product_id = match_sexopt.group(1)
+                else:
+                    num_match = re.search(r'(\d+)', external_id)
+                    product_id = num_match.group(1) if num_match else external_id
 
             # Артикул поставщика из CSV (колонка vendor_code / article)
             external_vendor_code = product_data.get('external_vendor_code', '')

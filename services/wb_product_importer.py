@@ -196,14 +196,18 @@ class WBProductImporter:
 
             if pattern:
                 ext_id = str(imported_product.external_id or '')
-                # Извлекаем product_id так же как в auto_import_manager
+                # Извлекаем product_id так же как в pricing_engine.extract_supplier_product_id
                 _m = _re.search(r'id-(\d+)', ext_id)
                 if _m:
                     product_id_val = _m.group(1)
                 else:
-                    # Извлекаем числовую часть из кодов вида "0T-00003031"
-                    _num = _re.search(r'(\d+)', ext_id)
-                    product_id_val = _num.group(1) if _num else ext_id
+                    # Формат sex-opt: "0T-00003031" → "00003031" (числовая часть после дефиса)
+                    _m_sexopt = _re.search(r'[A-Za-z]+-(\d+)', ext_id)
+                    if _m_sexopt:
+                        product_id_val = _m_sexopt.group(1)
+                    else:
+                        _num = _re.search(r'(\d+)', ext_id)
+                        product_id_val = _num.group(1) if _num else ext_id
                 vendor_code = pattern.replace('{product_id}', product_id_val)
                 vendor_code = vendor_code.replace('{supplier_code}', sup_code or '')
                 vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
@@ -2280,8 +2284,13 @@ class WBProductImporter:
             if _m:
                 _pid = _m.group(1)
             else:
-                _num = _re.search(r'(\d+)', _ext_id)
-                _pid = _num.group(1) if _num else _ext_id
+                # Формат sex-opt: "0T-00003031" → "00003031"
+                _m_sexopt = _re.search(r'[A-Za-z]+-(\d+)', _ext_id)
+                if _m_sexopt:
+                    _pid = _m_sexopt.group(1)
+                else:
+                    _num = _re.search(r'(\d+)', _ext_id)
+                    _pid = _num.group(1) if _num else _ext_id
             vendor_code = _vc_pattern.replace('{product_id}', _pid)
             vendor_code = vendor_code.replace('{supplier_code}', _sup_code or '')
             vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
