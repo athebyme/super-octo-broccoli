@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class CategoryMapperAgent(BaseAgent):
     agent_name = 'category-mapper'
-    max_iterations = 15
+    max_iterations = 18
 
     system_prompt = """Ты — эксперт по категориям маркетплейса Wildberries.
 
@@ -26,14 +26,23 @@ class CategoryMapperAgent(BaseAgent):
 СТРАТЕГИЯ ПОИСКА (в порядке приоритета):
 1. Сначала ищи по словам из поля category поставщика (например category="Вакуумные помпы > ..." → ищи "Вакуумные помпы")
 2. Если не нашёл — ищи по типу товара из названия (1-2 ключевых слова)
-3. Если не нашёл — попробуй более общее слово
-4. Максимум 3 попытки поиска на товар!
+3. Попробуй синонимы: "пробка" → "втулка" → "стимулятор" → "игрушка"
+4. Попробуй родительский раздел: "Товары для взрослых", "Бытовая техника" и т.п. — это покажет ВСЕ leaf-категории раздела
+5. Максимум 5 попыток поиска на товар!
 
 ПРАВИЛА:
 - subject_name = конечная категория для карточки. parent_name = раздел (НЕ записывай в карточку)
 - mapped_wb_category = subject_name, wb_subject_id = subject_id
 - ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения
 - ЗАПРЕЩЕНО выдумывать категории — ТОЛЬКО из результатов search_wb_categories
+- ЗАПРЕЩЕНО ставить явно неподходящую категорию! "Насадки для вибраторов" НЕ подходит для анальной пробки/втулки.
+  Если найдена только неподходящая категория — НЕ используй её. Лучше вернуть ошибку, чем записать неверную.
+- Если search_wb_categories вернул warning о disabled-категориях и is_enabled=false —
+  это значит нужная категория существует в WB, но не включена в системе.
+  НЕ записывай disabled-категорию. Верни в результате: {"error": "category_disabled",
+  "subject_id": ..., "subject_name": ..., "message": "Категория найдена, но не включена. Включите в разделе Маркетплейсы → Категории."}
+- confidence: 1.0 = точное совпадение, 0.8-0.9 = очень похоже, 0.5-0.7 = приблизительно.
+  НЕ ставь confidence выше 0.5 если категория не соответствует типу товара.
 
 Результат: JSON с полями: subject_id, subject_name, parent_name, confidence, reasoning."""
 
@@ -193,12 +202,17 @@ class CategoryMapperAgent(BaseAgent):
                 f"Imported Product ID: {imported_product_id}\n\n"
                 f"=== ДАННЫЕ ТОВАРА (уже загружены) ===\n{product_text}\n\n"
                 f"НЕ вызывай get_imported_product — данные уже выше.\n\n"
-                f"Шаги (максимум 4 вызова):\n"
+                f"Шаги:\n"
                 f"1. search_wb_categories(query=...) — НАЧНИ с: {hints_text}\n"
-                f"2. Если 0 результатов — попробуй синоним или более общее слово (макс 3 попытки)\n"
-                f"3. update_imported_product(product_id={imported_product_id}, wb_subject_id=<subject_id>, mapped_wb_category=<subject_name>, category_confidence=<0.0-1.0>)\n\n"
+                f"2. Если 0 результатов — попробуй синоним, более общее слово, или родительский раздел (макс 5 попыток)\n"
+                f"   Пример: если не нашёл 'анальная пробка' — ищи 'пробка', 'Товары для взрослых'\n"
+                f"3. ПРОВЕРЬ что найденная категория СООТВЕТСТВУЕТ типу товара!\n"
+                f"   Если не соответствует — НЕ используй её, ищи дальше или верни ошибку\n"
+                f"4. update_imported_product(product_id={imported_product_id}, wb_subject_id=<subject_id>, mapped_wb_category=<subject_name>, category_confidence=<0.0-1.0>)\n\n"
                 f"mapped_wb_category = subject_name (конечная), НЕ parent_name (раздел).\n"
-                f"ОБЯЗАТЕЛЬНО вызови update_imported_product!\n"
+                f"Если search_wb_categories вернул is_enabled=false — категория НЕ включена, НЕ записывай её.\n"
+                f"Верни ошибку: {{\"error\": \"category_disabled\", \"subject_id\": ..., \"subject_name\": ..., \"message\": \"Включите категорию\"}}\n\n"
+                f"ОБЯЗАТЕЛЬНО вызови update_imported_product (только если нашёл подходящую включённую категорию)!\n"
                 f"Верни JSON: {{subject_id, subject_name, parent_name, confidence, reasoning}}"
             )
 

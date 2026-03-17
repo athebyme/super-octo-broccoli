@@ -501,21 +501,32 @@ def internal_search_categories():
     # только для ASCII). Используем db.func.lower() для Unicode-безопасного
     # сравнения.
     q_lower = q.lower()
-    categories = MarketplaceCategory.query.filter(
-        MarketplaceCategory.is_enabled == True,
-        MarketplaceCategory.is_leaf == True,
-        db.or_(
-            db.func.lower(MarketplaceCategory.subject_name).contains(q_lower),
-            db.func.lower(MarketplaceCategory.parent_name).contains(q_lower),
+
+    def _search_categories(enabled_only: bool):
+        query = MarketplaceCategory.query.filter(
+            MarketplaceCategory.is_leaf == True,
+            db.or_(
+                db.func.lower(MarketplaceCategory.subject_name).contains(q_lower),
+                db.func.lower(MarketplaceCategory.parent_name).contains(q_lower),
+            )
         )
-    ).order_by(
-        # Точное совпадение по subject_name выше
-        db.case(
-            (db.func.lower(MarketplaceCategory.subject_name).contains(q_lower), 0),
-            else_=1
-        ),
-        MarketplaceCategory.subject_name
-    ).limit(limit).all()
+        if enabled_only:
+            query = query.filter(MarketplaceCategory.is_enabled == True)
+        return query.order_by(
+            db.case(
+                (db.func.lower(MarketplaceCategory.subject_name).contains(q_lower), 0),
+                else_=1
+            ),
+            MarketplaceCategory.subject_name
+        ).limit(limit).all()
+
+    categories = _search_categories(enabled_only=True)
+
+    # Fallback: если среди включённых ничего не нашлось — ищем среди всех
+    # (включая disabled) и помечаем, чтобы агент видел существующие категории
+    include_disabled = not categories
+    if include_disabled:
+        categories = _search_categories(enabled_only=False)
 
     return jsonify({
         'categories': [
@@ -524,10 +535,19 @@ def internal_search_categories():
                 'subject_name': c.subject_name,
                 'parent_name': c.parent_name,
                 'is_leaf': c.is_leaf,
+                **(
+                    {'is_enabled': c.is_enabled}
+                    if include_disabled else {}
+                ),
             }
             for c in categories
         ],
         'count': len(categories),
+        **(
+            {'warning': 'Нет включённых категорий по запросу. Показаны все доступные (включая отключённые). '
+                        'Для использования категории её нужно включить в разделе Маркетплейсы → Категории.'}
+            if include_disabled and categories else {}
+        ),
     })
 
 
