@@ -1128,12 +1128,17 @@ def register_supplier_routes(app):
     def admin_supplier_connect_seller(supplier_id):
         seller_id = request.form.get('seller_id', type=int)
         supplier_code = request.form.get('supplier_code', '').strip()
+        vendor_code_pattern = request.form.get('vendor_code_pattern', '').strip()
 
         if not seller_id:
             flash('Выберите продавца', 'warning')
             return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
 
-        SupplierService.connect_seller(seller_id, supplier_id, supplier_code=supplier_code)
+        SupplierService.connect_seller(
+            seller_id, supplier_id,
+            supplier_code=supplier_code,
+            vendor_code_pattern=vendor_code_pattern or None
+        )
 
         log_admin_action(
             admin_user_id=current_user.id,
@@ -1145,6 +1150,27 @@ def register_supplier_routes(app):
         )
 
         flash('Продавец подключён', 'success')
+        return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/update', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_update_seller(supplier_id, seller_id):
+        """Обновить настройки подключения продавца к поставщику"""
+        conn = SellerSupplier.query.filter_by(
+            seller_id=seller_id, supplier_id=supplier_id
+        ).first_or_404()
+
+        new_code = request.form.get('supplier_code', '').strip()
+        new_pattern = request.form.get('vendor_code_pattern', '').strip()
+
+        if new_code:
+            conn.supplier_code = new_code
+        if new_pattern:
+            conn.vendor_code_pattern = new_pattern
+
+        db.session.commit()
+        flash('Настройки подключения обновлены', 'success')
         return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
 
     @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/disconnect', methods=['POST'])

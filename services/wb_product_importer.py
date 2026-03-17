@@ -163,12 +163,38 @@ class WBProductImporter:
                 has_real_sizes = False
 
             # Формируем артикул по шаблону из настроек
-            # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}
+            # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}, {external_id}
             # ВАЖНО: логика извлечения product_id должна совпадать с auto_import_manager._process_product()
+            #
+            # Приоритет настроек:
+            # 1) SellerSupplier (подключение продавца к поставщику) — если товар привязан к поставщику
+            # 2) AutoImportSettings (глобальные настройки автоимпорта) — fallback
             import re as _re
-            settings = self.seller.auto_import_settings
-            if settings and settings.vendor_code_pattern:
-                pattern = settings.vendor_code_pattern
+            from models import SellerSupplier
+
+            pattern = None
+            sup_code = None
+
+            # Сначала пробуем SellerSupplier — настройки конкретного подключения к поставщику
+            if imported_product.supplier_id:
+                seller_supplier = SellerSupplier.query.filter_by(
+                    seller_id=self.seller.id,
+                    supplier_id=imported_product.supplier_id,
+                    is_active=True
+                ).first()
+                if seller_supplier:
+                    pattern = seller_supplier.vendor_code_pattern
+                    sup_code = seller_supplier.supplier_code
+
+            # Fallback на AutoImportSettings
+            if not pattern:
+                settings = self.seller.auto_import_settings
+                if settings and settings.vendor_code_pattern:
+                    pattern = settings.vendor_code_pattern
+                    if not sup_code:
+                        sup_code = settings.supplier_code
+
+            if pattern:
                 ext_id = str(imported_product.external_id or '')
                 # Извлекаем product_id так же как в auto_import_manager
                 _m = _re.search(r'id-(\d+)', ext_id)
@@ -179,7 +205,7 @@ class WBProductImporter:
                     _num = _re.search(r'(\d+)', ext_id)
                     product_id_val = _num.group(1) if _num else ext_id
                 vendor_code = pattern.replace('{product_id}', product_id_val)
-                vendor_code = vendor_code.replace('{supplier_code}', settings.supplier_code or '')
+                vendor_code = vendor_code.replace('{supplier_code}', sup_code or '')
                 vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
                 vendor_code = vendor_code.replace('{external_id}', ext_id)
             else:
@@ -2223,7 +2249,45 @@ class WBProductImporter:
                 issues.append({'field': 'barcodes', 'level': 'warning', 'message': 'Нет баркодов'})
 
         # --- Vendor code ---
-        vendor_code = f"id-{imported_product.id}-{self.seller.id}"
+        # Используем ту же логику формирования артикула, что и при реальном импорте
+        import re as _re
+        from models import SellerSupplier as _SS
+
+        _vc_pattern = None
+        _sup_code = None
+
+        # Приоритет: SellerSupplier → AutoImportSettings → fallback
+        if imported_product.supplier_id:
+            _ss = _SS.query.filter_by(
+                seller_id=self.seller.id,
+                supplier_id=imported_product.supplier_id,
+                is_active=True
+            ).first()
+            if _ss:
+                _vc_pattern = _ss.vendor_code_pattern
+                _sup_code = _ss.supplier_code
+
+        if not _vc_pattern:
+            _aim_settings = self.seller.auto_import_settings
+            if _aim_settings and _aim_settings.vendor_code_pattern:
+                _vc_pattern = _aim_settings.vendor_code_pattern
+                if not _sup_code:
+                    _sup_code = _aim_settings.supplier_code
+
+        if _vc_pattern:
+            _ext_id = str(imported_product.external_id or '')
+            _m = _re.search(r'id-(\d+)', _ext_id)
+            if _m:
+                _pid = _m.group(1)
+            else:
+                _num = _re.search(r'(\d+)', _ext_id)
+                _pid = _num.group(1) if _num else _ext_id
+            vendor_code = _vc_pattern.replace('{product_id}', _pid)
+            vendor_code = vendor_code.replace('{supplier_code}', _sup_code or '')
+            vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
+            vendor_code = vendor_code.replace('{external_id}', _ext_id)
+        else:
+            vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 
         # --- Characteristics ---
         chars_dict = {}
