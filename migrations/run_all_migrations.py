@@ -239,6 +239,9 @@ def migrate(db_path):
                 ("last_description_sync_at", "DATETIME"),
                 ("last_description_sync_status", "VARCHAR(50)"),
                 ("ai_parsing_instruction", "TEXT"),
+                # Настройки формирования артикулов
+                ("external_id_pattern", "VARCHAR(300)"),
+                ("default_vendor_code_pattern", "VARCHAR(200)"),
             ]
             for col_name, col_type in sup_columns:
                 if add_column_if_missing(cursor, 'suppliers', col_name, col_type, existing_sup):

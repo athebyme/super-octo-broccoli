@@ -1300,17 +1300,11 @@ def register_supplier_routes(app):
         all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
         all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
         if all_sp_external_ids:
-            import re as _re
+            from services.pricing_engine import extract_product_id_for_vendor_code
             vc_to_sp = {}
             for sp_id, ext_id in all_sp_external_ids.items():
-                # Извлекаем product_id так же как в auto_import_manager._process_product()
                 ext_id_str = str(ext_id or '')
-                _m = _re.search(r'id-(\d+)', ext_id_str)
-                if _m:
-                    product_id_val = _m.group(1)
-                else:
-                    _num = _re.search(r'(\d+)', ext_id_str)
-                    product_id_val = _num.group(1) if _num else ext_id_str
+                product_id_val = extract_product_id_for_vendor_code(ext_id_str, supplier)
                 vc = vc_pattern.replace('{product_id}', product_id_val)
                 vc = vc.replace('{supplier_code}', vc_supplier_code)
                 vc = vc.replace('{external_vendor_code}', str(all_sp_vendor_codes.get(sp_id) or ''))
@@ -3086,6 +3080,7 @@ def _extract_supplier_form_data(form) -> dict:
         'ai_seo_title_instruction', 'ai_keywords_instruction',
         'ai_description_instruction', 'ai_analysis_instruction',
         'ai_parsing_instruction',
+        'external_id_pattern', 'default_vendor_code_pattern',
     ]
     for f in text_fields:
         val = form.get(f, '').strip()

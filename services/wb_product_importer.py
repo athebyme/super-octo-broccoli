@@ -164,16 +164,16 @@ class WBProductImporter:
 
             # Формируем артикул по шаблону из настроек
             # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}, {external_id}
-            # ВАЖНО: логика извлечения product_id должна совпадать с auto_import_manager._process_product()
             #
             # Приоритет настроек:
             # 1) SellerSupplier (подключение продавца к поставщику) — если товар привязан к поставщику
             # 2) AutoImportSettings (глобальные настройки автоимпорта) — fallback
-            import re as _re
-            from models import SellerSupplier
+            from models import SellerSupplier, Supplier
+            from services.pricing_engine import extract_product_id_for_vendor_code
 
             pattern = None
             sup_code = None
+            supplier_obj = None
 
             # Сначала пробуем SellerSupplier — настройки конкретного подключения к поставщику
             if imported_product.supplier_id:
@@ -185,6 +185,7 @@ class WBProductImporter:
                 if seller_supplier:
                     pattern = seller_supplier.vendor_code_pattern
                     sup_code = seller_supplier.supplier_code
+                supplier_obj = Supplier.query.get(imported_product.supplier_id)
 
             # Fallback на AutoImportSettings
             if not pattern:
@@ -196,18 +197,7 @@ class WBProductImporter:
 
             if pattern:
                 ext_id = str(imported_product.external_id or '')
-                # Извлекаем product_id так же как в pricing_engine.extract_supplier_product_id
-                _m = _re.search(r'id-(\d+)', ext_id)
-                if _m:
-                    product_id_val = _m.group(1)
-                else:
-                    # Формат sex-opt: "0T-00003031" → "00003031" (числовая часть после дефиса)
-                    _m_sexopt = _re.search(r'[A-Za-z]+-(\d+)', ext_id)
-                    if _m_sexopt:
-                        product_id_val = _m_sexopt.group(1)
-                    else:
-                        _num = _re.search(r'(\d+)', ext_id)
-                        product_id_val = _num.group(1) if _num else ext_id
+                product_id_val = extract_product_id_for_vendor_code(ext_id, supplier_obj)
                 vendor_code = pattern.replace('{product_id}', product_id_val)
                 vendor_code = vendor_code.replace('{supplier_code}', sup_code or '')
                 vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
@@ -2254,11 +2244,12 @@ class WBProductImporter:
 
         # --- Vendor code ---
         # Используем ту же логику формирования артикула, что и при реальном импорте
-        import re as _re
-        from models import SellerSupplier as _SS
+        from models import SellerSupplier as _SS, Supplier as _Sup
+        from services.pricing_engine import extract_product_id_for_vendor_code
 
         _vc_pattern = None
         _sup_code = None
+        _supplier_obj = None
 
         # Приоритет: SellerSupplier → AutoImportSettings → fallback
         if imported_product.supplier_id:
@@ -2270,6 +2261,7 @@ class WBProductImporter:
             if _ss:
                 _vc_pattern = _ss.vendor_code_pattern
                 _sup_code = _ss.supplier_code
+            _supplier_obj = _Sup.query.get(imported_product.supplier_id)
 
         if not _vc_pattern:
             _aim_settings = self.seller.auto_import_settings
@@ -2280,17 +2272,7 @@ class WBProductImporter:
 
         if _vc_pattern:
             _ext_id = str(imported_product.external_id or '')
-            _m = _re.search(r'id-(\d+)', _ext_id)
-            if _m:
-                _pid = _m.group(1)
-            else:
-                # Формат sex-opt: "0T-00003031" → "00003031"
-                _m_sexopt = _re.search(r'[A-Za-z]+-(\d+)', _ext_id)
-                if _m_sexopt:
-                    _pid = _m_sexopt.group(1)
-                else:
-                    _num = _re.search(r'(\d+)', _ext_id)
-                    _pid = _num.group(1) if _num else _ext_id
+            _pid = extract_product_id_for_vendor_code(_ext_id, _supplier_obj)
             vendor_code = _vc_pattern.replace('{product_id}', _pid)
             vendor_code = vendor_code.replace('{supplier_code}', _sup_code or '')
             vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')

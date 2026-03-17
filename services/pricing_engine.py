@@ -286,3 +286,45 @@ def extract_supplier_product_id(external_id_or_vendor_code: str) -> Optional[int
     if m:
         return int(m.group(1))
     return None
+
+
+def extract_product_id_for_vendor_code(external_id: str, supplier=None) -> str:
+    """Извлечь product_id из external_id для подстановки в шаблон артикула.
+
+    Использует supplier.external_id_pattern (regex с группой 'product_id')
+    если задан, иначе — стандартную цепочку регексов.
+
+    Возвращает строку (не int), чтобы сохранять ведущие нули.
+    """
+    if not external_id:
+        return ''
+
+    # Если у поставщика задан кастомный regex — используем его
+    if supplier and getattr(supplier, 'external_id_pattern', None):
+        try:
+            m = re.search(supplier.external_id_pattern, external_id)
+            if m:
+                # Пробуем именованную группу product_id, иначе первую группу
+                try:
+                    return m.group('product_id')
+                except IndexError:
+                    return m.group(1)
+        except re.error:
+            pass  # Невалидный regex — fallback на стандартную логику
+
+    # Стандартная логика: id-12345-...
+    m = re.search(r'id-(\d+)', external_id)
+    if m:
+        return m.group(1)
+
+    # Формат с буквенным префиксом: "0T-00003031" → "00003031"
+    m = re.search(r'[A-Za-z]+-(\d+)', external_id)
+    if m:
+        return m.group(1)
+
+    # Просто число
+    m = re.search(r'(\d+)', external_id)
+    if m:
+        return m.group(1)
+
+    return external_id

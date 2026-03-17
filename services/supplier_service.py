@@ -751,6 +751,7 @@ class SupplierService:
             'ai_description_instruction', 'ai_analysis_instruction',
             'ai_parsing_instruction',
             'description_file_url', 'description_file_delimiter', 'description_file_encoding',
+            'external_id_pattern', 'default_vendor_code_pattern',
         ]
         for f in simple_fields:
             if f in data:
@@ -1512,6 +1513,12 @@ class SupplierService:
                 existing.vendor_code_pattern = vendor_code_pattern
             db.session.commit()
             return existing
+
+        # Если шаблон не передан — берём default_vendor_code_pattern поставщика
+        if not vendor_code_pattern:
+            supplier = Supplier.query.get(supplier_id)
+            if supplier and supplier.default_vendor_code_pattern:
+                vendor_code_pattern = supplier.default_vendor_code_pattern
 
         conn = SellerSupplier(
             seller_id=seller_id,

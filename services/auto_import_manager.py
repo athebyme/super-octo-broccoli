@@ -1118,23 +1118,17 @@ class AutoImportManager:
             external_id = product_data['external_id']
 
             # Формируем артикул по шаблону из настроек
+            from services.pricing_engine import extract_product_id_for_vendor_code
+            from models import Supplier as _Supplier
+
             vendor_code_pattern = self.settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}'
 
-            # Извлекаем ID товара из external_id
-            # Для формата "id-12345-код" извлекаем числовой ID
-            # Для формата "0T-00003031" (sex-opt) извлекаем числовую часть "00003031"
-            import re
-            match = re.search(r'id-(\d+)', external_id)
-            if match:
-                product_id = match.group(1)
-            else:
-                # Формат sex-opt: "0T-00003031" → "00003031" (числовая часть после дефиса)
-                match_sexopt = re.search(r'[A-Za-z]+-(\d+)', external_id)
-                if match_sexopt:
-                    product_id = match_sexopt.group(1)
-                else:
-                    num_match = re.search(r'(\d+)', external_id)
-                    product_id = num_match.group(1) if num_match else external_id
+            # Находим поставщика для использования его external_id_pattern
+            _supplier_obj = None
+            if self.settings.csv_source_type:
+                _supplier_obj = _Supplier.query.filter_by(code=self.settings.csv_source_type).first()
+
+            product_id = extract_product_id_for_vendor_code(external_id, _supplier_obj)
 
             # Артикул поставщика из CSV (колонка vendor_code / article)
             external_vendor_code = product_data.get('external_vendor_code', '')
