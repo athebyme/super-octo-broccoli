@@ -854,13 +854,6 @@ def internal_validate_brand():
 
     category_id = request.args.get('category_id', type=int)
 
-    # category_id обязателен — без него нельзя проверить доступность бренда в категории
-    if not category_id:
-        return jsonify({
-            'error': 'category_id (wb_subject_id) is required',
-            'hint': 'Run category-mapper first to assign a category, then validate brand.',
-        }), 400
-
     # Точный поиск по алиасам
     normalized = brand_name.strip().lower()
     alias = BrandAlias.query.filter(
@@ -882,24 +875,30 @@ def internal_validate_brand():
             result['marketplace_brand_name'] = mp_brand.marketplace_brand_name
             result['marketplace_brand_id'] = mp_brand.marketplace_brand_id
 
-            # Проверяем доступность бренда в указанной категории
-            try:
-                link = BrandCategoryLink.query.filter_by(
-                    marketplace_brand_id=mp_brand.id,
-                    category_id=category_id,
-                ).first()
-                if link:
-                    result['category_available'] = link.is_available
-                else:
+            # Проверяем доступность бренда в указанной категории (только если category_id передан)
+            if category_id:
+                try:
+                    link = BrandCategoryLink.query.filter_by(
+                        marketplace_brand_id=mp_brand.id,
+                        category_id=category_id,
+                    ).first()
+                    if link:
+                        result['category_available'] = link.is_available
+                    else:
+                        result['category_available'] = None
+                        result['category_warning'] = (
+                            f'Нет данных о доступности бренда в категории {category_id}. '
+                            f'Бренд НЕ подтверждён в этой категории — wb_registered=false.'
+                        )
+                except Exception:
                     result['category_available'] = None
-                    result['category_warning'] = (
-                        f'Нет данных о доступности бренда в категории {category_id}. '
-                        f'Бренд НЕ подтверждён в этой категории — wb_registered=false.'
-                    )
-            except Exception:
-                # Таблица brand_category_links может не существовать (миграция не применена)
+                    result['category_warning'] = 'Невозможно проверить доступность бренда в категории.'
+            else:
                 result['category_available'] = None
-                result['category_warning'] = 'Невозможно проверить доступность бренда в категории.'
+                result['category_warning'] = (
+                    'category_id не передан — проверка доступности в категории не выполнена. '
+                    'Бренд найден в реестре, но category_available=null.'
+                )
 
         return jsonify({'result': result})
 
