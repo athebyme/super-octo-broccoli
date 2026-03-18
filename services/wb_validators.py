@@ -235,6 +235,24 @@ def prepare_card_for_update(
         if field not in prepared or prepared[field] is None:
             logger.error(f"Отсутствует обязательное поле: {field}")
 
+    # Предупреждение о nm_id=0 — такие карточки вызовут ошибку "Неуникальный баркод"
+    nm_id = prepared.get('nmID', 0)
+    if not nm_id or nm_id <= 0:
+        logger.warning(
+            f"⚠️ Карточка с nmID={nm_id} ({prepared.get('vendorCode', '?')}) — "
+            f"не привязана к WB, обновление приведет к ошибке баркодов!"
+        )
+
+    # Предупреждение о sizes без chrtID — могут вызвать конфликт баркодов
+    sizes = prepared.get('sizes', [])
+    if sizes:
+        sizes_without_chrt = [s for s in sizes if not s.get('chrtID')]
+        if sizes_without_chrt:
+            logger.warning(
+                f"⚠️ Карточка nmID={nm_id}: {len(sizes_without_chrt)}/{len(sizes)} "
+                f"размеров без chrtID — WB может создать дубли баркодов"
+            )
+
     # Исправляем некорректные габариты
     if 'dimensions' in prepared and prepared['dimensions']:
         dims = prepared['dimensions']
@@ -351,3 +369,100 @@ def validate_and_log_errors(
 
     logger.info(f"✅ Валидация карточки nmID={card_data.get('nmID')} прошла успешно")
     return True
+
+
+def prepare_batch_cards_safe(
+    products,
+    updates_fn,
+    client,
+    seller_id: int = None,
+    log_to_db: bool = True
+) -> tuple:
+    """
+    Безопасная подготовка карточек для batch-обновления.
+
+    Для каждого продукта получает СВЕЖИЕ sizes из WB API (с chrtID),
+    чтобы избежать ошибки "Неуникальный баркод" при обновлении.
+
+    Карточки с nm_id=0 или без nm_id пропускаются.
+
+    Args:
+        products: Список объектов Product
+        updates_fn: Функция (product, full_card) -> dict с обновлениями для карточки.
+                    Должна вернуть dict с изменяемыми полями, или None если пропустить.
+        client: WildberriesAPIClient
+        seller_id: ID продавца для логирования
+        log_to_db: Логировать запросы в БД
+
+    Returns:
+        (cards_to_update, product_map, skipped_errors)
+        - cards_to_update: список подготовленных карточек
+        - product_map: dict {nmID: product}
+        - skipped_errors: список ошибок для пропущенных товаров
+    """
+    cards_to_update = []
+    product_map = {}
+    skipped_errors = []
+
+    # Фильтруем продукты с валидным nm_id
+    valid_products = []
+    for product in products:
+        if not product.nm_id or product.nm_id <= 0:
+            skipped_errors.append(
+                f"Товар {product.vendor_code}: пропущен (nm_id={product.nm_id}, "
+                f"карточка не привязана к WB). Синхронизируйте товары."
+            )
+            logger.warning(f"⚠️ Skipping product {product.vendor_code}: nm_id={product.nm_id}")
+            continue
+        valid_products.append(product)
+
+    if not valid_products:
+        return cards_to_update, product_map, skipped_errors
+
+    # Получаем свежие sizes из WB API для всех карточек
+    nm_ids = [p.nm_id for p in valid_products]
+    fresh_sizes_map = client.get_fresh_sizes_map(
+        nm_ids,
+        log_to_db=log_to_db,
+        seller_id=seller_id
+    )
+
+    for product in valid_products:
+        try:
+            full_card = product.to_wb_card_format()
+            if not full_card:
+                skipped_errors.append(f"Товар {product.vendor_code}: нет данных в БД")
+                continue
+
+            # Подменяем sizes на свежие из WB API (с chrtID)
+            fresh_sizes = fresh_sizes_map.get(product.nm_id)
+            if fresh_sizes:
+                full_card['sizes'] = fresh_sizes
+            elif not full_card.get('sizes'):
+                skipped_errors.append(
+                    f"Товар {product.vendor_code}: нет sizes ни в БД, "
+                    f"ни в WB API (требуется синхронизация)"
+                )
+                continue
+
+            # Применяем обновления через пользовательскую функцию
+            updates = updates_fn(product, full_card)
+            if updates is None:
+                continue
+
+            for key, value in updates.items():
+                full_card[key] = value
+
+            card_ready = prepare_card_for_update(full_card, {})
+            cards_to_update.append(card_ready)
+            product_map[product.nm_id] = product
+
+        except Exception as e:
+            skipped_errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
+            logger.error(f"Error preparing card {product.vendor_code}: {e}")
+
+    logger.info(
+        f"✅ Prepared {len(cards_to_update)} cards for batch update "
+        f"({len(skipped_errors)} skipped)"
+    )
+    return cards_to_update, product_map, skipped_errors

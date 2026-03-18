@@ -377,6 +377,12 @@ class WBProductImporter:
                         nm_id = created_card.get('nmID')
                         if nm_id:
                             logger.info(f"Карточка создана с nmID: {nm_id} (попытка {attempt+1}/{len(retry_delays)})")
+                            # Обновляем wb_sizes свежими данными с WB (включая chrtID)
+                            # чтобы при последующем редактировании не возникало конфликтов баркодов
+                            wb_sizes_from_api = created_card.get('sizes', [])
+                            if wb_sizes_from_api:
+                                wb_sizes = wb_sizes_from_api
+                                logger.info(f"Обновлены sizes из WB API (с chrtID): {len(wb_sizes)} размеров")
                             break
                     except Exception as e:
                         logger.warning(f"Попытка {attempt+1}/{len(retry_delays)} получить nmID: {e}")

@@ -2982,29 +2982,23 @@ def products_bulk_edit():
                                              edit_operations=edit_operations)
 
                     from services.wb_api_client import chunk_list
-                    from services.wb_validators import prepare_card_for_update
+                    from services.wb_validators import prepare_batch_cards_safe
 
-                    cards_to_update = []
-                    product_map = {}  # nmID -> (product, new_desc)
+                    desc_map = {}  # nmID -> new_desc
 
-                    for product in products:
-                        try:
-                            full_card = product.to_wb_card_format()
-                            if not full_card or not full_card.get('sizes'):
-                                error_count += 1
-                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
-                                continue
+                    def _append_desc_updates(product, full_card):
+                        current_desc = product.description or ''
+                        new_desc = f"{current_desc}\n\n{append_text}".strip()
+                        desc_map[product.nm_id] = new_desc
+                        return {'description': new_desc}
 
-                            current_desc = product.description or ''
-                            new_desc = f"{current_desc}\n\n{append_text}".strip()
-                            full_card['description'] = new_desc
-
-                            card_ready = prepare_card_for_update(full_card, {})
-                            cards_to_update.append(card_ready)
-                            product_map[product.nm_id] = (product, new_desc)
-                        except Exception as e:
-                            error_count += 1
-                            errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
+                    cards_to_update, product_map, skipped = prepare_batch_cards_safe(
+                        products, _append_desc_updates, client,
+                        seller_id=current_user.seller.id
+                    )
+                    for err in skipped:
+                        error_count += 1
+                        errors.append(err)
 
                     BATCH_SIZE = 100
                     for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
@@ -3013,8 +3007,9 @@ def products_bulk_edit():
 
                             for card in batch:
                                 nm_id = card['nmID']
-                                product, new_desc = product_map.get(nm_id, (None, None))
-                                if product:
+                                product = product_map.get(nm_id)
+                                new_desc = desc_map.get(nm_id)
+                                if product and new_desc:
                                     snapshot_before = _create_product_snapshot(product)
                                     product.description = new_desc
                                     product.last_sync = datetime.utcnow()
@@ -3056,26 +3051,18 @@ def products_bulk_edit():
                                              edit_operations=edit_operations)
 
                     from services.wb_api_client import chunk_list
-                    from services.wb_validators import prepare_card_for_update
+                    from services.wb_validators import prepare_batch_cards_safe
 
-                    cards_to_update = []
-                    product_map = {}  # nmID -> product
+                    def _replace_desc_updates(product, full_card):
+                        return {'description': new_description}
 
-                    for product in products:
-                        try:
-                            full_card = product.to_wb_card_format()
-                            if not full_card or not full_card.get('sizes'):
-                                error_count += 1
-                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
-                                continue
-
-                            full_card['description'] = new_description
-                            card_ready = prepare_card_for_update(full_card, {})
-                            cards_to_update.append(card_ready)
-                            product_map[product.nm_id] = product
-                        except Exception as e:
-                            error_count += 1
-                            errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
+                    cards_to_update, product_map, skipped = prepare_batch_cards_safe(
+                        products, _replace_desc_updates, client,
+                        seller_id=current_user.seller.id
+                    )
+                    for err in skipped:
+                        error_count += 1
+                        errors.append(err)
 
                     BATCH_SIZE = 100
                     for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
@@ -3177,55 +3164,35 @@ def products_bulk_edit():
                     app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
 
                     from services.wb_api_client import chunk_list
-                    from services.wb_validators import prepare_card_for_update
+                    from services.wb_validators import prepare_batch_cards_safe
 
-                    cards_to_update = []
-                    product_map = {}  # nmID -> product
+                    def _char_updates(product, full_card):
+                        current_characteristics = full_card.get('characteristics', [])
+                        for change in char_changes:
+                            char_id = change['char_id']
+                            new_value = change['value']
+                            char_found = False
+                            for char in current_characteristics:
+                                if str(char.get('id')) == char_id:
+                                    char['value'] = new_value
+                                    char_found = True
+                                    break
+                            if not char_found:
+                                current_characteristics.append({
+                                    'id': int(char_id),
+                                    'value': new_value
+                                })
+                        return {'characteristics': current_characteristics}
 
-                    app.logger.info(f"⚡ Using DB data instead of {len(products_to_update)} GET requests to WB API")
+                    cards_to_update, product_map, skipped = prepare_batch_cards_safe(
+                        products_to_update, _char_updates, client,
+                        seller_id=current_user.seller.id
+                    )
+                    for err in skipped:
+                        error_count += 1
+                        errors.append(err)
 
-                    for product in products_to_update:
-                        try:
-                            full_card = product.to_wb_card_format()
-
-                            if not full_card or not full_card.get('sizes'):
-                                error_count += 1
-                                errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
-                                continue
-
-                            current_characteristics = full_card.get('characteristics', [])
-
-                            # Применяем все изменения из очереди к характеристикам карточки
-                            for change in char_changes:
-                                char_id = change['char_id']
-                                new_value = change['value']
-                                char_found = False
-                                for char in current_characteristics:
-                                    if str(char.get('id')) == char_id:
-                                        char['value'] = new_value
-                                        char_found = True
-                                        break
-                                if not char_found:
-                                    current_characteristics.append({
-                                        'id': int(char_id),
-                                        'value': new_value
-                                    })
-
-                            full_card['characteristics'] = current_characteristics
-                            card_ready = prepare_card_for_update(full_card, {})
-                            cards_to_update.append(card_ready)
-                            product_map[product.nm_id] = product
-
-                            if len(cards_to_update) % 100 == 0:
-                                app.logger.info(f"  📦 Prepared {len(cards_to_update)}/{len(products_to_update)} cards...")
-
-                        except Exception as e:
-                            error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}"
-                            errors.append(error_msg)
-                            app.logger.error(error_msg)
-
-                    app.logger.info(f"✅ Prepared {len(cards_to_update)} cards (0 API calls!)")
+                    app.logger.info(f"✅ Prepared {len(cards_to_update)} cards")
 
                     if not cards_to_update:
                         flash('Не удалось подготовить ни одной карточки для обновления', 'danger')
@@ -3438,7 +3405,23 @@ def products_bulk_edit():
                     cards_to_update = []
                     product_map = {}  # nmID -> (product, new_field, new_value)
 
-                    for product in products:
+                    # Фильтруем продукты с nm_id=0 заранее
+                    valid_products = [p for p in products if p.nm_id and p.nm_id > 0]
+                    skipped_nm0 = len(products) - len(valid_products)
+                    if skipped_nm0 > 0:
+                        error_count += skipped_nm0
+                        errors.append(
+                            f"{skipped_nm0} товар(ов) пропущено: nm_id=0 "
+                            f"(карточки не привязаны к WB, синхронизируйте товары)"
+                        )
+
+                    # Получаем свежие sizes из WB API (с chrtID)
+                    nm_ids = [p.nm_id for p in valid_products]
+                    fresh_sizes_map = client.get_fresh_sizes_map(
+                        nm_ids, log_to_db=True, seller_id=current_user.seller.id
+                    )
+
+                    for product in valid_products:
                         try:
                             if operation == 'ai_seo_title':
                                 success, result, error = ai_service.generate_seo_title(
@@ -3486,9 +3469,18 @@ def products_bulk_edit():
                                 changed_field = 'brand'
 
                             full_card = product.to_wb_card_format()
-                            if not full_card or not full_card.get('sizes'):
+                            if not full_card:
                                 error_count += 1
                                 errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                continue
+
+                            # Подменяем sizes на свежие из WB API (с chrtID)
+                            fresh_sizes = fresh_sizes_map.get(product.nm_id)
+                            if fresh_sizes:
+                                full_card['sizes'] = fresh_sizes
+                            elif not full_card.get('sizes'):
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет sizes (требуется синхронизация)")
                                 continue
 
                             full_card[changed_field] = new_value
@@ -3614,7 +3606,23 @@ def products_bulk_edit():
                     cards_to_update = []
                     product_map = {}  # nmID -> (product, changed_fields, new_values dict)
 
-                    for product in products:
+                    # Фильтруем продукты с nm_id=0 заранее
+                    valid_products = [p for p in products if p.nm_id and p.nm_id > 0]
+                    skipped_nm0 = len(products) - len(valid_products)
+                    if skipped_nm0 > 0:
+                        error_count += skipped_nm0
+                        errors.append(
+                            f"{skipped_nm0} товар(ов) пропущено: nm_id=0 "
+                            f"(карточки не привязаны к WB, синхронизируйте товары)"
+                        )
+
+                    # Получаем свежие sizes из WB API (с chrtID)
+                    nm_ids = [p.nm_id for p in valid_products]
+                    fresh_sizes_map = client.get_fresh_sizes_map(
+                        nm_ids, log_to_db=True, seller_id=current_user.seller.id
+                    )
+
+                    for product in valid_products:
                         try:
                             changed_fields = []
                             new_values = {}
@@ -3686,9 +3694,17 @@ def products_bulk_edit():
                             wb_fields = {k: v for k, v in new_values.items() if k in ('title', 'description', 'brand')}
                             if wb_fields:
                                 full_card = product.to_wb_card_format()
-                                if not full_card or not full_card.get('sizes'):
+                                if not full_card:
                                     error_count += 1
                                     errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                                    continue
+                                # Подменяем sizes на свежие из WB API (с chrtID)
+                                fresh_sizes = fresh_sizes_map.get(product.nm_id)
+                                if fresh_sizes:
+                                    full_card['sizes'] = fresh_sizes
+                                elif not full_card.get('sizes'):
+                                    error_count += 1
+                                    errors.append(f"Товар {product.vendor_code}: нет sizes (требуется синхронизация)")
                                     continue
                                 for field, val in wb_fields.items():
                                     full_card[field] = val
@@ -3781,7 +3797,20 @@ def products_bulk_edit():
                         if _ai_svc:
                             _cards_ai = []
                             _pmap_ai = {}
-                            for product in products:
+                            # Фильтруем продукты с nm_id=0
+                            _valid_prods = [p for p in products if p.nm_id and p.nm_id > 0]
+                            _skipped = len(products) - len(_valid_prods)
+                            if _skipped > 0:
+                                error_count += _skipped
+                                errors.append(f"{_skipped} товар(ов) пропущено: nm_id=0 (синхронизируйте товары)")
+
+                            # Получаем свежие sizes из WB API (с chrtID)
+                            _nm_ids = [p.nm_id for p in _valid_prods]
+                            _fresh_sizes = client.get_fresh_sizes_map(
+                                _nm_ids, log_to_db=True, seller_id=current_user.seller.id
+                            )
+
+                            for product in _valid_prods:
                                 try:
                                     _changed = []
                                     _nv = {}
@@ -3829,7 +3858,15 @@ def products_bulk_edit():
                                     _wb_fields = {k: v for k, v in _nv.items() if k in ('title', 'description', 'brand')}
                                     if _wb_fields:
                                         _fc = product.to_wb_card_format()
-                                        if _fc and _fc.get('sizes'):
+                                        if _fc:
+                                            # Подменяем sizes на свежие из WB API (с chrtID)
+                                            _fs = _fresh_sizes.get(product.nm_id)
+                                            if _fs:
+                                                _fc['sizes'] = _fs
+                                            elif not _fc.get('sizes'):
+                                                error_count += 1
+                                                errors.append(f"{product.vendor_code}: нет sizes (синхронизируйте)")
+                                                continue
                                             for f, v in _wb_fields.items():
                                                 _fc[f] = v
                                             _cards_ai.append(prepare_card_for_update(_fc, {}))
@@ -4207,58 +4244,80 @@ def revert_bulk_edit(bulk_id):
         from services.wb_api_client import chunk_list
         from services.wb_validators import prepare_card_for_update, clean_characteristics_for_update
 
-        # Готовим карточки для батч-обновления из локальной БД (без лишних GET-запросов к WB)
+        # Готовим карточки для батч-обновления
         cards_to_update = []
         change_map = {}  # nmID -> (change, product, reverted_fields, snapshot_to_restore)
 
+        # Собираем продукты для получения свежих sizes
+        revert_products = []
         for change in product_changes:
             if not change.can_revert():
                 continue
-
             product = Product.query.get(change.product_id)
-            if not product:
-                continue
-
-            snapshot_to_restore = change.snapshot_before
-            reverted_fields = []
-
-            try:
-                full_card = product.to_wb_card_format()
-                if not full_card or not full_card.get('sizes'):
-                    error_count += 1
-                    errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
-                    continue
-
-                # Применяем snapshot_before к полной карточке из БД
-                for field in change.changed_fields:
-                    if field not in snapshot_to_restore:
-                        continue
-                    if field == 'vendor_code':
-                        full_card['vendorCode'] = snapshot_to_restore[field]
-                    elif field == 'characteristics':
-                        chars = snapshot_to_restore[field]
-                        full_card['characteristics'] = clean_characteristics_for_update(chars) if chars else chars
-                    elif field in ['title', 'description', 'brand']:
-                        full_card[field] = snapshot_to_restore[field]
-                    reverted_fields.append(field)
-
-                if not reverted_fields:
-                    continue
-
-                card_ready = prepare_card_for_update(full_card, {})
-                cards_to_update.append(card_ready)
-                change_map[product.nm_id] = (change, product, reverted_fields, snapshot_to_restore)
-
-            except Exception as e:
+            if product and product.nm_id and product.nm_id > 0:
+                revert_products.append((change, product))
+            elif product:
                 error_count += 1
-                errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
-
-        app.logger.info(f"📦 Prepared {len(cards_to_update)} cards for batch revert")
+                errors.append(
+                    f"Товар {product.vendor_code}: пропущен (nm_id={product.nm_id}, "
+                    f"карточка не привязана к WB)"
+                )
 
         with WildberriesAPIClient(
             current_user.seller.wb_api_key,
             db_logger_callback=APILog.log_request
         ) as client:
+            # Получаем свежие sizes из WB API (с chrtID)
+            nm_ids = [p.nm_id for _, p in revert_products]
+            fresh_sizes_map = client.get_fresh_sizes_map(
+                nm_ids, log_to_db=True, seller_id=current_user.seller.id
+            )
+
+            for change, product in revert_products:
+                snapshot_to_restore = change.snapshot_before
+                reverted_fields = []
+
+                try:
+                    full_card = product.to_wb_card_format()
+                    if not full_card:
+                        error_count += 1
+                        errors.append(f"Товар {product.vendor_code}: нет данных в БД (требуется синхронизация)")
+                        continue
+
+                    # Подменяем sizes на свежие из WB API (с chrtID)
+                    fresh_sizes = fresh_sizes_map.get(product.nm_id)
+                    if fresh_sizes:
+                        full_card['sizes'] = fresh_sizes
+                    elif not full_card.get('sizes'):
+                        error_count += 1
+                        errors.append(f"Товар {product.vendor_code}: нет sizes (требуется синхронизация)")
+                        continue
+
+                    # Применяем snapshot_before к полной карточке из БД
+                    for field in change.changed_fields:
+                        if field not in snapshot_to_restore:
+                            continue
+                        if field == 'vendor_code':
+                            full_card['vendorCode'] = snapshot_to_restore[field]
+                        elif field == 'characteristics':
+                            chars = snapshot_to_restore[field]
+                            full_card['characteristics'] = clean_characteristics_for_update(chars) if chars else chars
+                        elif field in ['title', 'description', 'brand']:
+                            full_card[field] = snapshot_to_restore[field]
+                        reverted_fields.append(field)
+
+                    if not reverted_fields:
+                        continue
+
+                    card_ready = prepare_card_for_update(full_card, {})
+                    cards_to_update.append(card_ready)
+                    change_map[product.nm_id] = (change, product, reverted_fields, snapshot_to_restore)
+
+                except Exception as e:
+                    error_count += 1
+                    errors.append(f"Товар {product.vendor_code}: ошибка подготовки - {str(e)}")
+
+            app.logger.info(f"📦 Prepared {len(cards_to_update)} cards for batch revert")
             BATCH_SIZE = 100
             for batch_num, batch in enumerate(chunk_list(cards_to_update, BATCH_SIZE), 1):
                 try:
