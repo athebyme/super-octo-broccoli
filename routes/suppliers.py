@@ -17,7 +17,7 @@ from flask_login import login_required, current_user
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, AIHistory, log_admin_action, Product,
-    BackgroundJob, Notification,
+    BackgroundJob, Notification, AgentChangeSnapshot,
 )
 from services.supplier_service import SupplierService
 
@@ -1128,12 +1128,17 @@ def register_supplier_routes(app):
     def admin_supplier_connect_seller(supplier_id):
         seller_id = request.form.get('seller_id', type=int)
         supplier_code = request.form.get('supplier_code', '').strip()
+        vendor_code_pattern = request.form.get('vendor_code_pattern', '').strip()
 
         if not seller_id:
             flash('Выберите продавца', 'warning')
             return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
 
-        SupplierService.connect_seller(seller_id, supplier_id, supplier_code=supplier_code)
+        SupplierService.connect_seller(
+            seller_id, supplier_id,
+            supplier_code=supplier_code,
+            vendor_code_pattern=vendor_code_pattern or None
+        )
 
         log_admin_action(
             admin_user_id=current_user.id,
@@ -1145,6 +1150,27 @@ def register_supplier_routes(app):
         )
 
         flash('Продавец подключён', 'success')
+        return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/update', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_update_seller(supplier_id, seller_id):
+        """Обновить настройки подключения продавца к поставщику"""
+        conn = SellerSupplier.query.filter_by(
+            seller_id=seller_id, supplier_id=supplier_id
+        ).first_or_404()
+
+        new_code = request.form.get('supplier_code', '').strip()
+        new_pattern = request.form.get('vendor_code_pattern', '').strip()
+
+        if new_code:
+            conn.supplier_code = new_code
+        if new_pattern:
+            conn.vendor_code_pattern = new_pattern
+
+        db.session.commit()
+        flash('Настройки подключения обновлены', 'success')
         return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
 
     @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/disconnect', methods=['POST'])
@@ -1264,18 +1290,25 @@ def register_supplier_routes(app):
             vc_pattern = 'id-{product_id}-{supplier_code}'
             vc_supplier_code = conn.supplier_code or ''
 
-        # Получаем все external_id поставщика и вычисляем vendor_code'ы
-        all_sp_external_ids = dict(
-            db.session.query(SupplierProduct.id, SupplierProduct.external_id).filter(
-                SupplierProduct.supplier_id == supplier_id,
-                ~SupplierProduct.id.in_(wb_existing_sp_ids) if wb_existing_sp_ids else True
-            ).all()
-        )
+        # Получаем все external_id и vendor_code поставщика и вычисляем артикулы WB
+        all_sp_data = db.session.query(
+            SupplierProduct.id, SupplierProduct.external_id, SupplierProduct.vendor_code
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            ~SupplierProduct.id.in_(wb_existing_sp_ids) if wb_existing_sp_ids else True
+        ).all()
+        all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
+        all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
         if all_sp_external_ids:
+            from services.pricing_engine import extract_product_id_for_vendor_code
             vc_to_sp = {}
             for sp_id, ext_id in all_sp_external_ids.items():
-                vc = vc_pattern.replace('{product_id}', str(ext_id or ''))
+                ext_id_str = str(ext_id or '')
+                product_id_val = extract_product_id_for_vendor_code(ext_id_str, supplier)
+                vc = vc_pattern.replace('{product_id}', product_id_val)
                 vc = vc.replace('{supplier_code}', vc_supplier_code)
+                vc = vc.replace('{external_vendor_code}', str(all_sp_vendor_codes.get(sp_id) or ''))
+                vc = vc.replace('{external_id}', ext_id_str)
                 if vc:
                     vc_to_sp[vc] = sp_id
 
@@ -1422,6 +1455,42 @@ def register_supplier_routes(app):
             ImportedProduct.updated_at.isnot(None)
         ).order_by(ImportedProduct.updated_at.desc()).limit(10).all()
 
+        # Предзагрузка статуса бренда по категории для товаров на странице
+        brand_category_map = {}  # product_id -> True/False/None
+        products_with_brand = [
+            p for p in pagination.items
+            if p.resolved_brand_id and p.wb_subject_id
+        ]
+        if products_with_brand:
+            try:
+                from models import MarketplaceBrand, BrandCategoryLink
+                brand_ids = list({p.resolved_brand_id for p in products_with_brand})
+                mp_brands = MarketplaceBrand.query.filter(
+                    MarketplaceBrand.brand_id.in_(brand_ids)
+                ).all()
+                mp_brand_map = {mb.brand_id: mb.id for mb in mp_brands}
+
+                # Собираем все пары (mp_brand_id, category_id) для проверки
+                check_pairs = []
+                for p in products_with_brand:
+                    mp_id = mp_brand_map.get(p.resolved_brand_id)
+                    if mp_id:
+                        check_pairs.append((p.id, mp_id, p.wb_subject_id))
+
+                if check_pairs:
+                    mp_ids = list({pair[1] for pair in check_pairs})
+                    cat_ids = list({pair[2] for pair in check_pairs})
+                    links = BrandCategoryLink.query.filter(
+                        BrandCategoryLink.marketplace_brand_id.in_(mp_ids),
+                        BrandCategoryLink.category_id.in_(cat_ids),
+                    ).all()
+                    link_map = {(l.marketplace_brand_id, l.category_id): l.is_available for l in links}
+
+                    for pid, mp_id, cat_id in check_pairs:
+                        brand_category_map[pid] = link_map.get((mp_id, cat_id))
+            except Exception:
+                pass  # Таблица может не существовать
+
         return render_template(
             'seller_my_products.html',
             pagination=pagination,
@@ -1430,6 +1499,7 @@ def register_supplier_routes(app):
             search=search,
             has_wb_key=seller.has_valid_api_key(),
             recent_imports=recent_imports,
+            brand_category_map=brand_category_map,
         )
 
     # -------------------------------------------------------------------
@@ -1894,6 +1964,11 @@ def register_supplier_routes(app):
 
         if not product_ids:
             return jsonify({'error': 'Не выбраны товары'}), 400
+
+        # Удаляем связанные agent_change_snapshots перед удалением товаров
+        AgentChangeSnapshot.query.filter(
+            AgentChangeSnapshot.imported_product_id.in_(product_ids)
+        ).delete(synchronize_session=False)
 
         deleted = ImportedProduct.query.filter(
             ImportedProduct.id.in_(product_ids),
@@ -3047,6 +3122,7 @@ def _extract_supplier_form_data(form) -> dict:
         'ai_seo_title_instruction', 'ai_keywords_instruction',
         'ai_description_instruction', 'ai_analysis_instruction',
         'ai_parsing_instruction',
+        'external_id_pattern', 'default_vendor_code_pattern',
     ]
     for f in text_fields:
         val = form.get(f, '').strip()

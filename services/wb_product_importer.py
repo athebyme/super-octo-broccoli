@@ -162,13 +162,46 @@ class WBProductImporter:
                 sizes_list = []
                 has_real_sizes = False
 
-            # Формируем артикул: id-<айди товара в базе>-<айди продавца>
-            from services.auto_import_manager import AutoImportManager
-            settings = self.seller.auto_import_settings
-            if settings and settings.vendor_code_pattern:
-                pattern = settings.vendor_code_pattern
-                vendor_code = pattern.replace('{product_id}', str(imported_product.external_id))
-                vendor_code = vendor_code.replace('{supplier_code}', settings.supplier_code or '')
+            # Формируем артикул по шаблону из настроек
+            # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}, {external_id}
+            #
+            # Приоритет настроек:
+            # 1) SellerSupplier (подключение продавца к поставщику) — если товар привязан к поставщику
+            # 2) AutoImportSettings (глобальные настройки автоимпорта) — fallback
+            from models import SellerSupplier, Supplier
+            from services.pricing_engine import extract_product_id_for_vendor_code
+
+            pattern = None
+            sup_code = None
+            supplier_obj = None
+
+            # Сначала пробуем SellerSupplier — настройки конкретного подключения к поставщику
+            if imported_product.supplier_id:
+                seller_supplier = SellerSupplier.query.filter_by(
+                    seller_id=self.seller.id,
+                    supplier_id=imported_product.supplier_id,
+                    is_active=True
+                ).first()
+                if seller_supplier:
+                    pattern = seller_supplier.vendor_code_pattern
+                    sup_code = seller_supplier.supplier_code
+                supplier_obj = Supplier.query.get(imported_product.supplier_id)
+
+            # Fallback на AutoImportSettings
+            if not pattern:
+                settings = self.seller.auto_import_settings
+                if settings and settings.vendor_code_pattern:
+                    pattern = settings.vendor_code_pattern
+                    if not sup_code:
+                        sup_code = settings.supplier_code
+
+            if pattern:
+                ext_id = str(imported_product.external_id or '')
+                product_id_val = extract_product_id_for_vendor_code(ext_id, supplier_obj)
+                vendor_code = pattern.replace('{product_id}', product_id_val)
+                vendor_code = vendor_code.replace('{supplier_code}', sup_code or '')
+                vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
+                vendor_code = vendor_code.replace('{external_id}', ext_id)
             else:
                 vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 
@@ -1137,22 +1170,48 @@ class WBProductImporter:
                 if brand and brand.status != 'rejected':
                     # Ищем маркетплейс-специфичное имя для WB
                     wb_mp = Marketplace.query.filter_by(code='wb').first()
+                    resolved_name = None
                     if wb_mp:
                         mp_brand = MarketplaceBrand.query.filter_by(
                             brand_id=brand.id,
                             marketplace_id=wb_mp.id
                         ).first()
                         if mp_brand and mp_brand.status != 'rejected' and mp_brand.marketplace_brand_name:
-                            logger.info(
-                                f"Бренд '{raw_brand}' → MarketplaceBrand: '{mp_brand.marketplace_brand_name}' "
-                                f"(brand_id={brand.id}, mp_brand_id={mp_brand.marketplace_brand_id})"
+                            resolved_name = mp_brand.marketplace_brand_name
+
+                    if not resolved_name:
+                        resolved_name = brand.name
+
+                    # Валидируем бренд в конкретной категории через WB API
+                    # (бренд может быть зарегистрирован, но недоступен в данной категории)
+                    if imported_product.wb_subject_id and self.api_client:
+                        try:
+                            check = self.api_client.validate_brand(
+                                resolved_name, subject_id=imported_product.wb_subject_id
                             )
-                            return mp_brand.marketplace_brand_name
-                    # Нет MarketplaceBrand для WB — используем каноническое имя
-                    logger.info(
-                        f"Бренд '{raw_brand}' → каноническое имя: '{brand.name}' (brand_id={brand.id})"
-                    )
-                    return brand.name
+                            if check.get('valid') and check.get('exact_match'):
+                                wb_name = check['exact_match'].get('name', resolved_name)
+                                logger.info(
+                                    f"Бренд '{raw_brand}' → WB-валидирован: '{wb_name}' "
+                                    f"(brand_id={brand.id}, subject_id={imported_product.wb_subject_id})"
+                                )
+                                return wb_name
+                            else:
+                                logger.warning(
+                                    f"Бренд '{resolved_name}' (brand_id={brand.id}) не найден в WB "
+                                    f"для категории subject_id={imported_product.wb_subject_id}, "
+                                    f"пробуем BrandEngine.resolve()"
+                                )
+                                # Не возвращаем — пусть Step 2 попробует найти бренд
+                        except Exception as e:
+                            logger.warning(f"Ошибка WB-валидации бренда: {e}, используем resolved")
+                            return resolved_name
+                    else:
+                        logger.info(
+                            f"Бренд '{raw_brand}' → '{resolved_name}' (brand_id={brand.id})"
+                        )
+                        return resolved_name
+
                 elif brand and brand.status == 'rejected':
                     logger.warning(
                         f"Бренд '{raw_brand}' (brand_id={brand.id}) отклонён, используем сырое имя"
@@ -1573,6 +1632,9 @@ class WBProductImporter:
         """
         Форматирует одиночное значение характеристики.
         charc_type: int (1=массив строк, 4=число) или str для legacy
+
+        Для справочных характеристик (с dictionary): если значение не найдено
+        в справочнике — возвращает None (WB отклонит карточку с невалидным значением).
         """
         import re
 
@@ -1630,7 +1692,14 @@ class WBProductImporter:
                 if str_value_lower in dict_value.lower() or dict_value.lower() in str_value_lower:
                     return dict_value
 
-        # Возвращаем как есть
+            # Значение не найдено в справочнике — WB отклонит карточку
+            logger.warning(
+                f"Характеристика '{char_name}': значение '{str_value}' не найдено в справочнике "
+                f"({len(dictionary)} записей), пропускаем"
+            )
+            return None
+
+        # Возвращаем как есть (нет справочника — свободный ввод)
         return str_value
 
     def _load_wb_directories(self) -> Dict[str, list]:
@@ -2122,10 +2191,31 @@ class WBProductImporter:
         # --- Brand ---
         product_brand = imported_product.brand or ''
         brand_resolved = bool(imported_product.resolved_brand_id)
+        brand_category_ok = None  # None = не проверялось, True = доступен, False = недоступен
+
+        # Проверяем доступность бренда в категории товара
+        if brand_resolved and imported_product.wb_subject_id:
+            try:
+                from models import MarketplaceBrand, BrandCategoryLink
+                mp_brand = MarketplaceBrand.query.filter_by(
+                    brand_id=imported_product.resolved_brand_id
+                ).first()
+                if mp_brand:
+                    link = BrandCategoryLink.query.filter_by(
+                        marketplace_brand_id=mp_brand.id,
+                        category_id=imported_product.wb_subject_id,
+                    ).first()
+                    if link:
+                        brand_category_ok = link.is_available
+            except Exception:
+                pass  # Таблица может не существовать
+
         if not product_brand:
             issues.append({'field': 'brand', 'level': 'error', 'message': 'Бренд не указан'})
         elif not brand_resolved:
             issues.append({'field': 'brand', 'level': 'warning', 'message': f'Бренд "{product_brand}" не подтверждён в реестре'})
+        elif brand_category_ok is False:
+            issues.append({'field': 'brand', 'level': 'warning', 'message': f'Бренд "{product_brand}" недоступен в выбранной категории WB'})
 
         # --- Category ---
         if not imported_product.wb_subject_id:
@@ -2210,7 +2300,42 @@ class WBProductImporter:
                 issues.append({'field': 'barcodes', 'level': 'warning', 'message': 'Нет баркодов'})
 
         # --- Vendor code ---
-        vendor_code = f"id-{imported_product.id}-{self.seller.id}"
+        # Используем ту же логику формирования артикула, что и при реальном импорте
+        from models import SellerSupplier as _SS, Supplier as _Sup
+        from services.pricing_engine import extract_product_id_for_vendor_code
+
+        _vc_pattern = None
+        _sup_code = None
+        _supplier_obj = None
+
+        # Приоритет: SellerSupplier → AutoImportSettings → fallback
+        if imported_product.supplier_id:
+            _ss = _SS.query.filter_by(
+                seller_id=self.seller.id,
+                supplier_id=imported_product.supplier_id,
+                is_active=True
+            ).first()
+            if _ss:
+                _vc_pattern = _ss.vendor_code_pattern
+                _sup_code = _ss.supplier_code
+            _supplier_obj = _Sup.query.get(imported_product.supplier_id)
+
+        if not _vc_pattern:
+            _aim_settings = self.seller.auto_import_settings
+            if _aim_settings and _aim_settings.vendor_code_pattern:
+                _vc_pattern = _aim_settings.vendor_code_pattern
+                if not _sup_code:
+                    _sup_code = _aim_settings.supplier_code
+
+        if _vc_pattern:
+            _ext_id = str(imported_product.external_id or '')
+            _pid = extract_product_id_for_vendor_code(_ext_id, _supplier_obj)
+            vendor_code = _vc_pattern.replace('{product_id}', _pid)
+            vendor_code = vendor_code.replace('{supplier_code}', _sup_code or '')
+            vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
+            vendor_code = vendor_code.replace('{external_id}', _ext_id)
+        else:
+            vendor_code = f"id-{imported_product.id}-{self.seller.id}"
 
         # --- Characteristics ---
         chars_dict = {}
@@ -2298,6 +2423,7 @@ class WBProductImporter:
                 'description': description,
                 'brand': product_brand,
                 'brand_resolved': brand_resolved,
+                'brand_category_ok': brand_category_ok,
                 'subjectID': imported_product.wb_subject_id,
                 'subjectName': imported_product.mapped_wb_category or '',
                 'dimensions': {

@@ -198,7 +198,8 @@ class PlatformClient:
 
     def search_categories(self, query: str, limit: int = 20) -> dict:
         """Поиск категорий WB по локальному справочнику."""
-        return self._request('GET', f'/categories/search?q={query}&limit={limit}')
+        return self._request('GET', '/categories/search',
+                             params={'q': query, 'limit': limit})
 
     # ── Характеристики категории ─────────────────────────────────
 
@@ -215,23 +216,22 @@ class PlatformClient:
     def get_directory(self, directory_type: str, query: str = None,
                       limit: int = 50) -> dict:
         """Получает справочник WB (colors, countries, kinds, seasons)."""
-        params = f'?limit={limit}'
+        q = {'limit': limit}
         if query:
-            params += f'&q={query}'
-        return self._request('GET', f'/directories/{directory_type}{params}')
+            q['q'] = query
+        return self._request('GET', f'/directories/{directory_type}', params=q)
 
     # ── Запрещённые слова ──────────────────────────────────────────
 
     def get_prohibited_words(self, seller_id: int = None,
                               query: str = None) -> dict:
         """Получает список стоп-слов."""
-        params = []
+        q = {}
         if seller_id:
-            params.append(f'seller_id={seller_id}')
+            q['seller_id'] = seller_id
         if query:
-            params.append(f'q={query}')
-        qs = '?' + '&'.join(params) if params else ''
-        return self._request('GET', f'/prohibited-words{qs}')
+            q['q'] = query
+        return self._request('GET', '/prohibited-words', params=q)
 
     def check_prohibited_words(self, text: str,
                                 seller_id: int = None) -> dict:
@@ -246,10 +246,10 @@ class PlatformClient:
     def validate_brand(self, brand_name: str,
                        category_id: int = None) -> dict:
         """Проверяет бренд по реестру."""
-        params = f'?brand={brand_name}'
+        query = {'brand': brand_name}
         if category_id:
-            params += f'&category_id={category_id}'
-        return self._request('GET', f'/brands/validate{params}')
+            query['category_id'] = category_id
+        return self._request('GET', '/brands/validate', params=query)
 
     # ── Настройки ценообразования ──────────────────────────────────
 

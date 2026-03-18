@@ -231,18 +231,14 @@ class SupplierPriceLoader:
             if len(row) < 4:
                 continue
             raw_id = row[0].strip()
-            # Пропускаем заголовок
+            # Пропускаем заголовок — если не содержит числового ID
             if not header_skipped:
-                try:
-                    int(raw_id)
-                except ValueError:
+                if extract_supplier_product_id(raw_id) is None:
                     header_skipped = True
                     continue
                 header_skipped = True
 
-            try:
-                product_id = int(raw_id)
-            except ValueError:
+            if not raw_id:
                 continue
 
             try:
@@ -256,7 +252,8 @@ class SupplierPriceLoader:
                 quantity = 0
 
             if price > 0:
-                prices[product_id] = {
+                # Ключ — сырой ID из CSV (строка), совпадает с external_id товара
+                prices[raw_id] = {
                     'price': price,
                     'quantity': quantity,
                     'vendor_code': row[1].strip() if len(row) > 1 else '',
@@ -267,14 +264,67 @@ class SupplierPriceLoader:
 
 
 def extract_supplier_product_id(external_id_or_vendor_code: str) -> Optional[int]:
-    """Извлечь числовой ID поставщика из external_id/vendor_code вида 'id-1841-SELLER'."""
+    """Извлечь числовой ID поставщика из external_id/vendor_code.
+
+    Поддерживаемые форматы:
+        'id-1841-SELLER' → 1841
+        '0T-00000877'    → 877 (sex-opt формат)
+        '12345'          → 12345
+    """
     if not external_id_or_vendor_code:
         return None
+    # Формат: id-12345 или id_12345
     m = re.search(r'id[_-](\d+)', external_id_or_vendor_code)
     if m:
         return int(m.group(1))
-    # Попробуем просто число
+    # Формат sex-opt: 0T-00000877 (буквы-цифры)
+    m = re.search(r'[A-Za-z]+-(\d+)', external_id_or_vendor_code)
+    if m:
+        return int(m.group(1))
+    # Просто число
     m = re.match(r'^(\d+)$', external_id_or_vendor_code.strip())
     if m:
         return int(m.group(1))
     return None
+
+
+def extract_product_id_for_vendor_code(external_id: str, supplier=None) -> str:
+    """Извлечь product_id из external_id для подстановки в шаблон артикула.
+
+    Использует supplier.external_id_pattern (regex с группой 'product_id')
+    если задан, иначе — стандартную цепочку регексов.
+
+    Возвращает строку (не int), чтобы сохранять ведущие нули.
+    """
+    if not external_id:
+        return ''
+
+    # Если у поставщика задан кастомный regex — используем его
+    if supplier and getattr(supplier, 'external_id_pattern', None):
+        try:
+            m = re.search(supplier.external_id_pattern, external_id)
+            if m:
+                # Пробуем именованную группу product_id, иначе первую группу
+                try:
+                    return m.group('product_id')
+                except IndexError:
+                    return m.group(1)
+        except re.error:
+            pass  # Невалидный regex — fallback на стандартную логику
+
+    # Стандартная логика: id-12345-...
+    m = re.search(r'id-(\d+)', external_id)
+    if m:
+        return m.group(1)
+
+    # Формат с буквенным префиксом: "0T-00003031" → "00003031"
+    m = re.search(r'[A-Za-z]+-(\d+)', external_id)
+    if m:
+        return m.group(1)
+
+    # Просто число
+    m = re.search(r'(\d+)', external_id)
+    if m:
+        return m.group(1)
+
+    return external_id

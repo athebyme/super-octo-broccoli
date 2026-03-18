@@ -362,13 +362,21 @@ class CSVProductParser:
             # Разделяем по пробелам (один или несколько)
             photo_nums = [p.strip() for p in photo_codes.split() if p.strip()]
 
-        # Извлекаем числовой ID из external_id (формат: id-12345-код)
+        # Извлекаем числовой ID из external_id
+        # Поддерживаемые форматы:
+        #   "id-12345-код" → 12345
+        #   "0T-00000877"  → 00000877 (sex-opt формат)
+        #   "12345"        → 12345
         match = re.search(r'id-(\d+)', product_id)
-        if not match:
-            # Пытаемся использовать сам product_id как числовой
-            numeric_id = product_id
-        else:
+        if match:
             numeric_id = match.group(1)
+        else:
+            # Пытаемся извлечь числовую часть после дефиса (sex-opt: "0T-00000877" → "00000877")
+            match_sexopt = re.search(r'[A-Za-z]+-(\d+)', product_id)
+            if match_sexopt:
+                numeric_id = match_sexopt.group(1)
+            else:
+                numeric_id = product_id
 
         for num in photo_nums:
             # Формируем все варианты URL
@@ -1063,16 +1071,15 @@ class AutoImportManager:
             logger.warning(f"Не удалось загрузить цены поставщика: {e}")
             return {}
 
-    def _attach_supplier_price(self, product_data: Dict, supplier_prices: Dict[int, Dict]):
+    def _attach_supplier_price(self, product_data: Dict, supplier_prices: Dict[str, Dict]):
         """Подставить цену поставщика и рассчитать розничную цену."""
         if not supplier_prices:
             return
 
         ext_id = product_data.get('external_id', '')
-        supplier_id = extract_supplier_product_id(ext_id)
-        if supplier_id and supplier_id in supplier_prices:
-            product_data['supplier_price'] = supplier_prices[supplier_id]['price']
-            product_data['supplier_quantity'] = supplier_prices[supplier_id].get('quantity', 0)
+        if ext_id and ext_id in supplier_prices:
+            product_data['supplier_price'] = supplier_prices[ext_id]['price']
+            product_data['supplier_quantity'] = supplier_prices[ext_id].get('quantity', 0)
         else:
             product_data['supplier_price'] = None
             product_data['supplier_quantity'] = 0
@@ -1111,16 +1118,26 @@ class AutoImportManager:
             external_id = product_data['external_id']
 
             # Формируем артикул по шаблону из настроек
+            from services.pricing_engine import extract_product_id_for_vendor_code
+            from models import Supplier as _Supplier
+
             vendor_code_pattern = self.settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}'
 
-            # Извлекаем числовой ID из external_id (формат: id-12345-код)
-            import re
-            match = re.search(r'id-(\d+)', external_id)
-            numeric_product_id = match.group(1) if match else external_id
+            # Находим поставщика для использования его external_id_pattern
+            _supplier_obj = None
+            if self.settings.csv_source_type:
+                _supplier_obj = _Supplier.query.filter_by(code=self.settings.csv_source_type).first()
+
+            product_id = extract_product_id_for_vendor_code(external_id, _supplier_obj)
+
+            # Артикул поставщика из CSV (колонка vendor_code / article)
+            external_vendor_code = product_data.get('external_vendor_code', '')
 
             generated_vendor_code = vendor_code_pattern.format(
-                product_id=numeric_product_id,
-                supplier_code=self.settings.supplier_code or ''
+                product_id=product_id,
+                supplier_code=self.settings.supplier_code or '',
+                external_vendor_code=external_vendor_code,
+                external_id=external_id
             )
 
             # ПРОВЕРКА ДУБЛИКАТОВ: проверяем, есть ли уже товар с таким артикулом в WB

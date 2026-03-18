@@ -1970,7 +1970,8 @@ class AgentChangeSnapshot(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     imported_product = db.relationship('ImportedProduct', backref=db.backref(
-        'agent_changes', lazy='dynamic', order_by='AgentChangeSnapshot.created_at.desc()'))
+        'agent_changes', lazy='dynamic', order_by='AgentChangeSnapshot.created_at.desc()',
+        cascade='all, delete-orphan'))
 
     __table_args__ = (
         db.Index('idx_acs_task_product', 'task_id', 'imported_product_id'),
@@ -2194,6 +2195,14 @@ class Supplier(db.Model):
     auto_sync_prices = db.Column(db.Boolean, default=False, nullable=False)
     auto_sync_interval_minutes = db.Column(db.Integer, default=60)
 
+    # Артикулы: настройки формирования vendor_code
+    # Regex для извлечения product_id из external_id поставщика.
+    # Должен содержать группу (?P<product_id>...).
+    # Примеры: r'[A-Za-z]+-(?P<product_id>\d+)' для "0T-00003031" → "00003031"
+    external_id_pattern = db.Column(db.String(300))
+    # Шаблон артикула по умолчанию для новых подключений продавцов
+    default_vendor_code_pattern = db.Column(db.String(200))
+
     # Авторизация для доступа к ресурсам поставщика (фото и т.д.)
     auth_login = db.Column(db.String(200))
     _auth_password_encrypted = db.Column('auth_password', db.String(500))
@@ -2342,6 +2351,8 @@ class Supplier(db.Model):
             'ai_enabled': self.ai_enabled,
             'ai_provider': self.ai_provider,
             'ai_model': self.ai_model,
+            'external_id_pattern': self.external_id_pattern,
+            'default_vendor_code_pattern': self.default_vendor_code_pattern,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

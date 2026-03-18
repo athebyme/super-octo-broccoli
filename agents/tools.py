@@ -40,6 +40,11 @@ class ToolRegistry:
         self._tools.update(other._tools)
         self._handlers.update(other._handlers)
 
+    def remove(self, name: str):
+        """Удаляет инструмент из реестра."""
+        self._tools.pop(name, None)
+        self._handlers.pop(name, None)
+
     def get_tool_schemas(self) -> list[dict]:
         """Возвращает схемы всех инструментов для LLM."""
         return list(self._tools.values())
@@ -220,7 +225,10 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             'subject_id и subject_name — это конечная категория для карточки. '
             'parent_name — родительский раздел (для информации, НЕ для записи в карточку). '
             'Ищет и по subject_name, и по parent_name — запрос "Товары для взрослых" вернёт '
-            'все конечные категории этого раздела.'
+            'все конечные категории этого раздела. '
+            'СОВЕТ: если по точному запросу ничего нет — ищи по parent_name раздела (например "Товары для взрослых"), '
+            'чтобы увидеть ВСЕ доступные leaf-категории в разделе. '
+            'Если вернулся warning и is_enabled=false — категория не включена в системе.'
         ),
         parameters={
             'properties': {
@@ -336,21 +344,20 @@ def create_platform_tools(platform_client) -> ToolRegistry:
     registry.register(
         name='validate_brand',
         description=(
-            'Проверить бренд по реестру WB. Возвращает: найден ли бренд, каноническое написание, '
-            'уверенность, похожие варианты. Проверяет доступность бренда в категории (если указана). '
-            'ОБЯЗАТЕЛЬНО используй для нормализации брендов вместо угадывания.'
+            'Проверить бренд по реестру WB. '
+            'Если передан category_id — дополнительно проверяет доступность бренда в категории. '
+            'Без category_id — проверяет только наличие бренда в реестре (category_available=null). '
+            'Возвращает: найден ли бренд, каноническое написание, похожие варианты.'
         ),
         parameters={
             'properties': {
                 'brand_name': {'type': 'string', 'description': 'Название бренда для проверки'},
-                'category_id': {'type': 'integer', 'description': 'subject_id категории для проверки доступности (опционально)'},
+                'category_id': {'type': 'integer', 'description': 'wb_subject_id категории товара (опционально, для проверки доступности в категории)'},
             },
             'required': ['brand_name'],
         },
         handler=lambda brand_name, category_id=None:
-            platform_client.validate_brand(
-                brand_name, int(category_id) if category_id else None
-            ),
+            platform_client.validate_brand(brand_name, int(category_id) if category_id else None),
     )
 
     # ── Настройки ценообразования ───────────────────────────────

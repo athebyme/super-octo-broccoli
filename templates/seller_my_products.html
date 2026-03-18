@@ -59,7 +59,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" style="overflow-x:hidden"
      x-data="myProductsPage()"
      x-init="init()">
 
@@ -121,7 +121,7 @@
     </form>
 
     <!-- Bulk actions bar -->
-    <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex items-center justify-between">
+    <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex items-center justify-between gap-2" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <div class="flex items-center gap-3">
             <label class="flex items-center gap-2">
                 <input type="checkbox" x-model="selectedAll"
@@ -131,7 +131,7 @@
             </label>
             <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
         </div>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-shrink-0">
             {% if has_wb_key %}
             <button @click="pushBulkToWB()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
                     class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40">
@@ -155,39 +155,48 @@
                 Удалить выбранные
             </button>
             <!-- AI Агенты -->
-            <div x-data="bulkAiAgents()" class="relative">
+            <div x-data="bulkAiAgents()">
                 <button @click="toggle()" type="button"
                         class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50 disabled:opacity-40 flex items-center gap-1.5">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     AI-агенты
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
-                <div x-show="open" @click.away="open=false" x-transition
-                     class="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 z-50 overflow-hidden">
-                    <div class="px-3 py-2 border-b border-gray-100">
-                        <p class="text-xs font-medium text-gray-400 uppercase tracking-wider">AI-обработка</p>
-                    </div>
-                    <template x-if="loading">
-                        <div class="p-4 text-center">
-                            <svg class="w-5 h-5 mx-auto text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <!-- Modal overlay -->
+                <template x-teleport="body">
+                    <div x-show="open" x-transition.opacity class="fixed inset-0 z-[100] flex items-center justify-center"
+                         style="background:rgba(0,0,0,0.3)">
+                        <div @click.away="open=false" x-show="open" x-transition
+                             class="bg-white rounded-lg shadow-xl border border-gray-200 w-80 max-w-[90vw]">
+                            <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                                <p class="text-sm font-medium text-gray-900">AI-обработка</p>
+                                <button @click="open=false" class="text-gray-400 hover:text-gray-600">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                            <template x-if="loading">
+                                <div class="p-6 text-center">
+                                    <svg class="w-5 h-5 mx-auto text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                </div>
+                            </template>
+                            <template x-if="!loading && actions.length === 0">
+                                <div class="p-6 text-center">
+                                    <p class="text-sm text-gray-500">Нет доступных агентов</p>
+                                    <a href="/agents" class="text-sm text-gray-900 hover:underline mt-2 inline-block">Активировать</a>
+                                </div>
+                            </template>
+                            <div x-show="!loading && actions.length > 0" class="py-2">
+                                <template x-for="action in actions" :key="action.agent_id">
+                                    <button @click="submitBulk(action)" type="button"
+                                            class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+                                        <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                                        <span x-text="action.label_batch"></span>
+                                    </button>
+                                </template>
+                            </div>
                         </div>
-                    </template>
-                    <template x-if="!loading && actions.length === 0">
-                        <div class="p-4 text-center">
-                            <p class="text-xs text-gray-500">Нет доступных агентов</p>
-                            <a href="/agents" class="text-xs text-gray-900 hover:underline mt-1 inline-block">Активировать</a>
-                        </div>
-                    </template>
-                    <div x-show="!loading && actions.length > 0" class="py-1">
-                        <template x-for="action in actions" :key="action.agent_id">
-                            <button @click="submitBulk(action)" type="button"
-                                    class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                                <span class="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0"></span>
-                                <span x-text="action.label_batch"></span>
-                            </button>
-                        </template>
                     </div>
-                </div>
+                </template>
             </div>
         </div>
     </div>
@@ -330,9 +339,9 @@
     </template>
 
     <!-- Products list -->
-    <div class="bg-white border border-gray-200 rounded-b-lg overflow-hidden">
+    <div class="bg-white border border-gray-200 rounded-b-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         {% if pagination.items %}
-        <table class="w-full text-sm">
+        <table class="w-full text-sm" style="min-width:900px">
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-3 py-2 text-left w-8"></th>
@@ -378,7 +387,14 @@
                     <td class="px-3 py-2 text-sm text-gray-600">
                         {{ p.brand or '—' }}
                         {% if p.resolved_brand_id %}
-                        <span class="inline-block w-1.5 h-1.5 bg-gray-900 rounded-full ml-1" title="Бренд подтверждён"></span>
+                            {% set cat_ok = brand_category_map.get(p.id) %}
+                            {% if cat_ok is sameas true %}
+                            <span class="inline-block w-1.5 h-1.5 bg-green-600 rounded-full ml-1" title="Бренд подтверждён в категории"></span>
+                            {% elif cat_ok is sameas false %}
+                            <span class="inline-block w-1.5 h-1.5 bg-red-500 rounded-full ml-1" title="Бренд недоступен в категории"></span>
+                            {% else %}
+                            <span class="inline-block w-1.5 h-1.5 bg-gray-900 rounded-full ml-1" title="Бренд подтверждён"></span>
+                            {% endif %}
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-sm text-gray-600">
@@ -513,8 +529,8 @@
     {% if recent_imports %}
     <div class="mt-8">
         <h2 class="text-lg font-medium text-gray-900 mb-3">История загрузок</h2>
-        <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <table class="w-full text-sm">
+        <div class="bg-white border border-gray-200 rounded-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+            <table class="w-full text-sm" style="min-width:650px">
                 <thead class="bg-gray-50">
                     <tr>
                         <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Товар</th>

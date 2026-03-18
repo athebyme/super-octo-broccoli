@@ -242,6 +242,9 @@ class BaseAgent(ABC):
         extra = self.get_tools()
         if extra:
             self._tools.merge(extra)
+        # Удаляем инструменты, запрещённые для данного агента
+        for tool_name in getattr(self, 'excluded_tools', ()):
+            self._tools.remove(tool_name)
 
         self._running = False
         self._heartbeat_thread: Optional[threading.Thread] = None

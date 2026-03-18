@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 class BrandResolverAgent(BaseAgent):
     agent_name = 'brand-resolver'
     max_iterations = 12
+    # Brand resolver НЕ должен сам искать категории — это задача category-mapper
+    excluded_tools = ('search_wb_categories',)
 
     system_prompt = """Ты — эксперт по брендам на маркетплейсе Wildberries.
 
@@ -25,9 +27,16 @@ class BrandResolverAgent(BaseAgent):
 КРИТИЧЕСКИЕ ПРАВИЛА:
 - ЗАПРЕЩЕНО угадывать написание бренда! ОБЯЗАТЕЛЬНО используй validate_brand(brand_name=...)
   чтобы проверить бренд по реальному реестру WB
+- ОБЯЗАТЕЛЬНО передавай category_id=<wb_subject_id> в validate_brand!
+  Бренд может быть зарегистрирован в WB, но НЕДОСТУПЕН в конкретной категории товара.
+  Без category_id проверка бессмысленна — WB отклонит карточку.
 - validate_brand вернёт: точное совпадение, каноническое написание или похожие варианты
-- Если validate_brand вернул category_available=false — бренд недоступен в этой категории
+- Если validate_brand вернул category_available=true → бренд подтверждён в категории
+- Если validate_brand вернул category_available=false → бренд НЕДОСТУПЕН в этой категории
+- Если validate_brand вернул category_available=null → нет данных по категории (бренд найден в реестре, но не проверен по категории)
 - Если бренд не найден — используй "Нет бренда"
+- Если у товара есть wb_subject_id — ОБЯЗАТЕЛЬНО передавай category_id в validate_brand
+- Если wb_subject_id пуст — вызывай validate_brand БЕЗ category_id (бренд всё равно можно проверить по реестру)
 - Для импортированных товаров ВСЕГДА используй update_imported_product (НЕ update_product)
 - Не вызывай get_imported_products если ID товаров уже известны
 - Не повторяй вызовы — каждый инструмент вызывай ровно 1 раз на товар
@@ -43,17 +52,30 @@ class BrandResolverAgent(BaseAgent):
 Результат: JSON с нормализованными брендами."""
 
     def execute_task(self, task: dict) -> dict:
-        """Автоматически разбивает большие батчи на чанки."""
+        """Автоматически разбивает большие батчи на чанки.
+
+        Перед запуском проверяет наличие category (wb_subject_id) у товаров —
+        без категории валидация бренда бессмысленна на любом маркетплейсе.
+        """
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'resolve_single')
-        if task_type in ('resolve_batch',):
+
+        if task_type == 'resolve_single':
+            product_ids = []
+            pid = input_data.get('imported_product_id') or input_data.get('product_id')
+            if pid:
+                product_ids = [pid]
+        elif task_type in ('resolve_batch', ):
             product_ids = (
                 input_data.get('product_ids')
                 or input_data.get('imported_product_ids')
                 or []
             )
-            if len(product_ids) > self.max_batch_size:
-                return self._run_chunked_batch(task, product_ids)
+        else:
+            product_ids = []
+
+        if task_type in ('resolve_batch',) and len(product_ids) > self.max_batch_size:
+            return self._run_chunked_batch(task, product_ids)
         return self._execute_react(task)
 
     def build_task_prompt(self, task: dict) -> str:
@@ -72,13 +94,16 @@ class BrandResolverAgent(BaseAgent):
                     f"Шаги:\n"
                     f"1. get_imported_product(product_id={imported_product_id})\n"
                     f"2. Извлеки бренд из названия/описания товара\n"
-                    f"3. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО проверь по реестру WB\n"
+                    f"3. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id из данных товара>) — "
+                    f"ОБЯЗАТЕЛЬНО передай category_id! Без него WB отклонит карточку\n"
                     f"4. Используй каноническое написание из результата validate_brand\n"
                     f"5. update_imported_product(product_id={imported_product_id}, brand=<каноническое написание>)\n\n"
                     f"ЗАПРЕЩЕНО угадывать бренд — используй ТОЛЬКО результат validate_brand.\n"
-                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n"
+                    f"Если у товара есть wb_subject_id — передай category_id в validate_brand.\n"
+                    f"Если wb_subject_id пуст — вызови validate_brand БЕЗ category_id (проверка только по реестру).\n"
+                    f"ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения.\n\n"
                     f"Верни JSON: {{original_brand, normalized_brand, "
-                    f"confidence, wb_registered: bool}}"
+                    f"confidence, wb_registered: bool, category_available: bool|null}}"
                 )
 
             if product_id:
@@ -123,11 +148,14 @@ class BrandResolverAgent(BaseAgent):
                         f"Данные товаров уже загружены:\n{products_text}\n\n"
                         f"ОПТИМИЗАЦИЯ: данные уже загружены выше. ЗАПРЕЩЕНО вызывать get_imported_product.\n\n"
                         f"Для каждого товара:\n"
-                        f"1. validate_brand(brand_name=<бренд из данных>, category_id=<wb_subject_id>) — ОБЯЗАТЕЛЬНО\n"
+                        f"1. validate_brand(brand_name=<бренд из данных>, category_id=<wb_subject_id из данных товара>) — "
+                        f"ОБЯЗАТЕЛЬНО передай category_id! Бренд может быть в WB, но недоступен в категории\n"
                         f"2. update_imported_product(product_id=ID, brand=<каноническое написание из validate_brand>)\n\n"
                         f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+                        f"Если у товара есть wb_subject_id — передай category_id в validate_brand.\n"
+                        f"Если wb_subject_id пуст — вызови validate_brand БЕЗ category_id.\n\n"
                         f"Верни JSON: {{total, updated, skipped, saved: число, "
-                        f"results: [{{product_id, original, normalized}}]}}"
+                        f"results: [{{product_id, original, normalized, category_available}}]}}"
                     )
 
                 ids_str = ', '.join(str(i) for i in product_ids[:20])
@@ -137,7 +165,8 @@ class BrandResolverAgent(BaseAgent):
                     f"ЗАПРЕЩЕНО вызывать get_imported_products.\n\n"
                     f"Для каждого ID:\n"
                     f"1. get_imported_product(product_id=ID)\n"
-                    f"2. validate_brand(brand_name=<бренд>) — ОБЯЗАТЕЛЬНО\n"
+                    f"2. validate_brand(brand_name=<бренд>, category_id=<wb_subject_id из данных товара>) — "
+                    f"ОБЯЗАТЕЛЬНО с category_id!\n"
                     f"3. update_imported_product(product_id=ID, brand=...)\n\n"
                     f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
                     f"Верни JSON: {{total, updated, skipped, saved: число, "
