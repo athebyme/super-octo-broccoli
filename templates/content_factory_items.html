@@ -2,6 +2,9 @@
 {% block title %}{{ factory.name }} — Контент{% endblock %}
 
 {% block content %}
+{% set platform_limits = {'telegram': 4096, 'vk': 16000, 'instagram': 2200, 'tiktok': 300, 'youtube': 5000} %}
+{% set char_limit = platform_limits.get(factory.platform, 5000) %}
+
 <div class="max-w-7xl mx-auto" x-data="contentItems()">
     <!-- Breadcrumb -->
     <div class="flex items-center gap-2 text-sm text-gray-500 mb-4">
@@ -58,67 +61,294 @@
     {% if items.items %}
     <div class="space-y-4">
         {% for item in items.items %}
-        <div class="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-sm transition" x-data="{ expanded: false }">
-            <div class="flex items-start gap-4">
-                <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2 mb-2">
-                        <span class="px-2 py-0.5 rounded text-xs font-medium
-                            {% if item.status == 'draft' %}bg-amber-50 text-amber-700
-                            {% elif item.status == 'approved' %}bg-blue-50 text-blue-700
-                            {% elif item.status == 'scheduled' %}bg-indigo-50 text-indigo-700
-                            {% elif item.status == 'published' %}bg-green-50 text-green-700
-                            {% elif item.status == 'failed' %}bg-red-50 text-red-700
-                            {% else %}bg-gray-50 text-gray-600{% endif %}">
-                            {{ status_labels.get(item.status, item.status) }}
-                        </span>
-                        <span class="text-xs text-gray-400">{{ content_type_labels.get(item.content_type, item.content_type) }}</span>
-                        <span class="text-xs text-gray-300">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '' }}</span>
-                        {% if item.ai_provider %}
-                        <span class="text-xs text-gray-300">{{ item.ai_provider }}{% if item.generation_time_ms %} ({{ (item.generation_time_ms / 1000)|round(1) }}с){% endif %}</span>
+        {% set media_urls = item.get_media_urls() %}
+        {% set ps = item.get_platform_specific() %}
+        {% set hashtags = item.get_hashtags() %}
+        {% set quality_score = ps.get('quality_score', 0) %}
+        {% set wb_url = ps.get('wb_url') %}
+        {% set store_name = ps.get('store_name') %}
+        {% set product_names = ps.get('product_names', []) %}
+        {% set body_len = item.body_text|length if item.body_text else 0 %}
+
+        <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
+             x-data="{ expanded: false, showPreview: false, showGallery: false }">
+            <div class="p-5">
+                <div class="flex gap-4">
+                    <!-- Left column: Product image gallery -->
+                    <div class="shrink-0 flex flex-col gap-1.5">
+                        {% if media_urls %}
+                        <div class="relative cursor-pointer group" @click="showGallery = true">
+                            <img src="{{ media_urls[0] }}" alt="Product"
+                                 class="w-20 h-20 rounded-lg object-cover border border-gray-100 group-hover:border-brand/40 transition">
+                            {% if media_urls|length > 1 %}
+                            <span class="absolute -bottom-1 -right-1 bg-gray-800 text-white text-[10px] font-medium rounded-full w-5 h-5 flex items-center justify-center shadow">
+                                +{{ media_urls|length - 1 }}
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% if media_urls|length > 1 %}
+                        <div class="flex gap-1 flex-wrap max-w-[84px]">
+                            {% for url in media_urls[1:3] %}
+                            <img src="{{ url }}" alt="" class="w-[38px] h-[38px] rounded object-cover border border-gray-100 cursor-pointer hover:border-brand/40 transition" @click="showGallery = true">
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% else %}
+                        <div class="w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300">
+                            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        </div>
                         {% endif %}
                     </div>
 
-                    {% if item.title %}
-                    <h3 class="font-medium text-gray-900 mb-1">{{ item.title }}</h3>
-                    {% endif %}
+                    <!-- Center column: Content body -->
+                    <div class="flex-1 min-w-0">
+                        <!-- Top meta row -->
+                        <div class="flex flex-wrap items-center gap-2 mb-2">
+                            <span class="px-2 py-0.5 rounded text-xs font-medium
+                                {% if item.status == 'draft' %}bg-amber-50 text-amber-700
+                                {% elif item.status == 'approved' %}bg-blue-50 text-blue-700
+                                {% elif item.status == 'scheduled' %}bg-indigo-50 text-indigo-700
+                                {% elif item.status == 'published' %}bg-green-50 text-green-700
+                                {% elif item.status == 'failed' %}bg-red-50 text-red-700
+                                {% else %}bg-gray-50 text-gray-600{% endif %}">
+                                {{ status_labels.get(item.status, item.status) }}
+                            </span>
+                            <span class="text-xs text-gray-400">{{ content_type_labels.get(item.content_type, item.content_type) }}</span>
+                            <span class="text-xs text-gray-300">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '' }}</span>
+                            {% if item.ai_provider %}
+                            <span class="text-xs text-gray-300">{{ item.ai_provider }}{% if item.generation_time_ms %} ({{ (item.generation_time_ms / 1000)|round(1) }}с){% endif %}</span>
+                            {% endif %}
 
-                    <div class="text-sm text-gray-600 cursor-pointer" @click="expanded = !expanded">
-                        <template x-if="!expanded">
-                            <p class="line-clamp-3">{{ item.body_text[:300] }}{% if item.body_text|length > 300 %}...{% endif %}</p>
-                        </template>
-                        <template x-if="expanded">
-                            <pre class="whitespace-pre-wrap font-body text-sm">{{ item.body_text }}</pre>
-                        </template>
+                            <!-- Quality score badge -->
+                            {% if quality_score %}
+                            <span class="inline-flex items-center gap-1 text-xs font-medium
+                                {% if quality_score >= 80 %}text-green-600
+                                {% elif quality_score >= 50 %}text-yellow-600
+                                {% else %}text-red-500{% endif %}">
+                                <span class="w-2 h-2 rounded-full
+                                    {% if quality_score >= 80 %}bg-green-500
+                                    {% elif quality_score >= 50 %}bg-yellow-400
+                                    {% else %}bg-red-400{% endif %}"></span>
+                                {{ quality_score }}
+                            </span>
+                            {% endif %}
+
+                            <!-- Character count -->
+                            <span class="text-[11px] text-gray-300 ml-auto tabular-nums">
+                                {{ body_len }} / {{ char_limit }}
+                                {% if body_len > char_limit %}
+                                <span class="text-red-400 font-medium ml-0.5">!</span>
+                                {% endif %}
+                            </span>
+                        </div>
+
+                        <!-- Store name + product info -->
+                        {% if store_name or product_names %}
+                        <div class="flex flex-wrap items-center gap-1.5 mb-2">
+                            {% if store_name %}
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-500 text-[11px] rounded-full border border-gray-100">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z"/></svg>
+                                {{ store_name }}
+                            </span>
+                            {% endif %}
+                            {% for pname in product_names[:3] %}
+                            <span class="px-2 py-0.5 bg-gray-50 text-gray-400 text-[11px] rounded-full border border-gray-100 truncate max-w-[200px]">{{ pname }}</span>
+                            {% endfor %}
+                            {% if product_names|length > 3 %}
+                            <span class="text-[11px] text-gray-300">+{{ product_names|length - 3 }}</span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
+                        <!-- Title -->
+                        {% if item.title %}
+                        <h3 class="font-medium text-gray-900 mb-1 leading-snug">{{ item.title }}</h3>
+                        {% endif %}
+
+                        <!-- Body text -->
+                        <div class="text-sm text-gray-600 cursor-pointer select-text" @click="expanded = !expanded">
+                            <template x-if="!expanded">
+                                <div class="line-clamp-3 whitespace-pre-wrap break-words">{{ item.body_text[:500] if item.body_text else '' }}</div>
+                            </template>
+                            <template x-if="expanded">
+                                <div class="whitespace-pre-wrap break-words">{{ item.body_text }}</div>
+                            </template>
+                        </div>
+                        <button @click="expanded = !expanded" class="text-xs text-brand hover:text-brand-dark mt-1 transition">
+                            <span x-text="expanded ? 'Свернуть' : 'Показать полностью'"></span>
+                        </button>
+
+                        <!-- Bottom meta section -->
+                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                            <!-- WB product link -->
+                            {% if wb_url %}
+                            <a href="{{ wb_url }}" target="_blank" rel="noopener"
+                               class="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-50 text-purple-700 text-xs font-medium rounded-full border border-purple-100 hover:bg-purple-100 transition">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M3.5 5L6 17h1.5l2-8 2 8H13l2.5-12h-1.5l-2 8.5-2-8.5h-1l-2 8.5L5 5H3.5zm13 0L19 17h1.5L23 5h-1.5l-2 8.5L17.5 5H16z"/></svg>
+                                Товар на WB
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                            </a>
+                            {% endif %}
+
+                            <!-- External post URL -->
+                            {% if item.external_post_url %}
+                            <a href="{{ item.external_post_url }}" target="_blank"
+                               class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-50 text-green-700 text-xs font-medium rounded-full border border-green-100 hover:bg-green-100 transition">
+                                Открыть пост
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                            </a>
+                            {% endif %}
+
+                            <!-- Hashtags as blue chips -->
+                            {% if hashtags %}
+                            <div class="flex flex-wrap gap-1">
+                                {% for tag in hashtags %}
+                                <span class="px-2 py-0.5 bg-blue-50 text-blue-600 text-[11px] rounded-full">{{ tag if tag.startswith('#') else '#' ~ tag }}</span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {% if item.error_message %}
+                        <div class="mt-2 text-xs text-red-500 bg-red-50 rounded-lg px-3 py-2">{{ item.error_message }}</div>
+                        {% endif %}
                     </div>
 
-                    {% if item.get_hashtags() %}
-                    <div class="mt-2 text-xs text-blue-500">{{ item.get_hashtags()|join(' ') }}</div>
-                    {% endif %}
+                    <!-- Right column: Actions -->
+                    <div class="flex flex-col gap-1.5 shrink-0">
+                        {% if item.status == 'draft' %}
+                        <button @click="approveItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Одобрить</button>
+                        {% endif %}
+                        {% if item.status in ('draft', 'approved') %}
+                        <button @click="publishItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium">Опубликовать</button>
+                        {% endif %}
+                        <button @click="regenerateItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
 
-                    {% if item.external_post_url %}
-                    <a href="{{ item.external_post_url }}" target="_blank" class="inline-flex items-center gap-1 mt-2 text-xs text-brand hover:underline">
-                        Открыть пост
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                    </a>
-                    {% endif %}
+                        <!-- Preview button -->
+                        <button @click="showPreview = true" class="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition">
+                            <svg class="w-3.5 h-3.5 inline mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                            Превью
+                        </button>
 
-                    {% if item.error_message %}
-                    <div class="mt-2 text-xs text-red-500">{{ item.error_message }}</div>
-                    {% endif %}
-                </div>
+                        <!-- Copy button -->
+                        <button @click="copyToClipboard({{ item.id }})" class="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50 rounded-lg transition" :id="'copy-btn-' + {{ item.id }}">
+                            <svg class="w-3.5 h-3.5 inline mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                            Копировать
+                        </button>
 
-                <!-- Actions -->
-                <div class="flex flex-col gap-1 shrink-0">
-                    {% if item.status == 'draft' %}
-                    <button @click="approveItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition">Одобрить</button>
-                    {% endif %}
-                    {% if item.status in ('draft', 'approved') %}
-                    <button @click="publishItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition">Опубликовать</button>
-                    {% endif %}
-                    <button @click="regenerateItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
-                    <button @click="deleteItem({{ item.id }})" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+                        <button @click="deleteItem({{ item.id }})" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+                    </div>
                 </div>
             </div>
+
+            <!-- Image Gallery Modal -->
+            {% if media_urls %}
+            <div x-show="showGallery" x-cloak
+                 class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                 style="background:rgba(0,0,0,0.7)"
+                 @click.self="showGallery = false"
+                 @keydown.escape.window="showGallery = false"
+                 x-data="{ currentImg: 0 }">
+                <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden" @click.stop>
+                    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                        <span class="text-sm font-medium text-gray-700">Изображения ({{ media_urls|length }})</span>
+                        <button @click="showGallery = false" class="text-gray-400 hover:text-gray-600 transition">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <div class="relative bg-gray-50">
+                        {% for url in media_urls %}
+                        <img x-show="currentImg === {{ loop.index0 }}" src="{{ url }}" alt="Product image {{ loop.index }}"
+                             class="w-full max-h-[60vh] object-contain">
+                        {% endfor %}
+                        {% if media_urls|length > 1 %}
+                        <button @click="currentImg = (currentImg - 1 + {{ media_urls|length }}) % {{ media_urls|length }}"
+                                class="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-white/80 hover:bg-white rounded-full shadow flex items-center justify-center transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                        </button>
+                        <button @click="currentImg = (currentImg + 1) % {{ media_urls|length }}"
+                                class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-white/80 hover:bg-white rounded-full shadow flex items-center justify-center transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        {% endif %}
+                    </div>
+                    {% if media_urls|length > 1 %}
+                    <div class="flex gap-2 p-3 overflow-x-auto">
+                        {% for url in media_urls %}
+                        <img @click="currentImg = {{ loop.index0 }}" src="{{ url }}" alt=""
+                             class="w-16 h-16 rounded-lg object-cover cursor-pointer border-2 transition"
+                             :class="currentImg === {{ loop.index0 }} ? 'border-brand' : 'border-transparent hover:border-gray-200'">
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Preview Modal -->
+            <div x-show="showPreview" x-cloak
+                 class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                 style="background:rgba(0,0,0,0.5)"
+                 @click.self="showPreview = false"
+                 @keydown.escape.window="showPreview = false">
+                <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col" @click.stop>
+                    <!-- Preview header -->
+                    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-700">Превью поста</span>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-medium
+                                {% if factory.platform == 'telegram' %}bg-blue-100 text-blue-700
+                                {% elif factory.platform == 'vk' %}bg-sky-100 text-sky-700
+                                {% elif factory.platform == 'instagram' %}bg-pink-100 text-pink-700
+                                {% elif factory.platform == 'tiktok' %}bg-gray-900 text-white
+                                {% elif factory.platform == 'youtube' %}bg-red-100 text-red-700
+                                {% endif %}">{{ platform_labels.get(factory.platform, factory.platform) }}</span>
+                        </div>
+                        <button @click="showPreview = false" class="text-gray-400 hover:text-gray-600 transition">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <!-- Preview body simulating platform card -->
+                    <div class="overflow-y-auto flex-1 p-4">
+                        <div class="border border-gray-200 rounded-xl overflow-hidden">
+                            <!-- Author header -->
+                            <div class="flex items-center gap-3 px-4 py-3 bg-gray-50 border-b border-gray-100">
+                                <div class="w-9 h-9 rounded-full bg-brand/10 text-brand flex items-center justify-center text-sm font-bold">{{ factory.name[:1]|upper }}</div>
+                                <div>
+                                    <div class="text-sm font-medium text-gray-900">{{ factory.name }}</div>
+                                    <div class="text-[11px] text-gray-400">{{ item.created_at.strftime('%d %b %Y, %H:%M') if item.created_at else '' }}</div>
+                                </div>
+                            </div>
+                            <!-- Image -->
+                            {% if media_urls %}
+                            <img src="{{ media_urls[0] }}" alt="" class="w-full max-h-72 object-cover">
+                            {% endif %}
+                            <!-- Text content -->
+                            <div class="px-4 py-3">
+                                {% if item.title %}
+                                <div class="font-semibold text-gray-900 mb-1">{{ item.title }}</div>
+                                {% endif %}
+                                <div class="text-sm text-gray-700 whitespace-pre-wrap break-words">{{ item.body_text }}</div>
+                                {% if hashtags %}
+                                <div class="mt-2 text-sm text-blue-500">{{ hashtags|join(' ') }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <!-- Character info -->
+                        <div class="mt-3 text-center text-xs text-gray-400">
+                            {{ body_len }} / {{ char_limit }} символов
+                            {% if body_len > char_limit %}
+                            <span class="text-red-400 font-medium"> -- превышен лимит!</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hidden textarea for copy functionality -->
+            <textarea id="copy-text-{{ item.id }}" class="sr-only" aria-hidden="true">{{ item.body_text }}{% if hashtags %}
+
+{{ hashtags|join(' ') }}{% endif %}</textarea>
         </div>
         {% endfor %}
     </div>
@@ -138,6 +368,9 @@
 
     {% else %}
     <div class="bg-white rounded-xl border border-gray-100 p-12 text-center">
+        <div class="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+            <svg class="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>
+        </div>
         <p class="text-gray-500 mb-4">Нет контента. Нажмите "Генерировать" для создания.</p>
         <button @click="showGenerateModal = true" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
             Генерировать контент
@@ -279,6 +512,26 @@ function contentItems() {
             if (!confirm('Удалить этот контент?')) return;
             await fetch(`/api/content-factory/items/${id}`, { method: 'DELETE', headers: { 'X-CSRFToken': this.csrf() } });
             location.reload();
+        },
+
+        async copyToClipboard(id) {
+            const el = document.getElementById('copy-text-' + id);
+            if (!el) return;
+            try {
+                await navigator.clipboard.writeText(el.value);
+                const btn = document.getElementById('copy-btn-' + id);
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = '<svg class="w-3.5 h-3.5 inline mr-0.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Скопировано';
+                    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+                }
+            } catch (e) {
+                /* Fallback for older browsers */
+                el.classList.remove('sr-only');
+                el.select();
+                document.execCommand('copy');
+                el.classList.add('sr-only');
+            }
         },
     }
 }

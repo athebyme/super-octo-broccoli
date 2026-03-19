@@ -12,8 +12,10 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
 
+import re
+
 from models import (
-    db, Product, SupplierProduct, ImportedProduct,
+    db, Product, Seller, SupplierProduct, ImportedProduct,
     ProductAnalytics, ContentFactory, ContentItem,
     ContentTemplate, ContentPlan, SocialAccount,
     CONTENT_PLATFORMS, CONTENT_TYPES, CONTENT_STATUSES,
@@ -21,6 +23,15 @@ from models import (
 from services.ai_service import AIConfig, AIClient, AIProvider
 
 logger = logging.getLogger(__name__)
+
+# Лимиты символов по платформам
+PLATFORM_CHAR_LIMITS = {
+    'telegram': 4096,
+    'vk': 16000,
+    'instagram': 2200,
+    'tiktok': 300,
+    'youtube': 5000,
+}
 
 
 # Маппинг платформ на читаемые названия
@@ -43,68 +54,101 @@ CONTENT_TYPE_LABELS = {
 # Встроенные шаблоны (fallback если в БД нет системных шаблонов)
 # ================================================================
 
+_BASE_SYSTEM_RULES = """СТРОГИЕ ПРАВИЛА ФОРМАТИРОВАНИЯ:
+1. Пиши ТОЛЬКО простым текстом. ЗАПРЕЩЕНО использовать markdown: никаких **, *, ##, ###, ```, -, •
+2. Для выделения используй ТОЛЬКО эмодзи и заглавные буквы
+3. Для списков используй эмодзи в начале строки (например: ✅, 🔥, 💰, 👉), НЕ тире и НЕ точки
+4. Фотографии товара будут прикреплены автоматически — НЕ описывай их в тексте
+5. ОБЯЗАТЕЛЬНО вставь ссылку на товар: {wb_url}
+6. ОБЯЗАТЕЛЬНО упомяни магазин: {store_name}
+7. Хештеги пиши отдельным блоком в самом конце через пустую строку, каждый начинается с #
+8. Лимит символов: {char_limit}. Не превышай его."""
+
 _BUILTIN_SYSTEM_PROMPTS = {
     'telegram': {
-        'promo_post': 'Ты — опытный SMM-менеджер для маркетплейсов. Пишешь продающие посты для Telegram-каналов. Стиль: лаконичный, с эмодзи, призывом к действию. Максимум 1000 символов.',
-        'review': 'Ты — блогер-обзорщик товаров с Wildberries. Пишешь честные, информативные обзоры для Telegram. Стиль: дружелюбный, экспертный, с личным опытом.',
-        'story_script': 'Ты — SMM-менеджер, создаёшь сценарии для Stories. Формат: набор слайдов с текстом и указаниями по визуалу. Стиль: динамичный, вовлекающий.',
-        'carousel': 'Ты — SMM-менеджер, составляешь тематические подборки товаров для Telegram-канала. Стиль: структурированный, с нумерацией, краткий.',
+        'promo_post': 'Ты — опытный SMM-менеджер. Пишешь продающие посты для Telegram-канала магазина на Wildberries.\n\nСтруктура поста:\n1. Эмодзи + цепляющий заголовок (ЗАГЛАВНЫМИ)\n2. 2-3 коротких преимущества с эмодзи\n3. Цена (если есть скидка — покажи старую и новую)\n4. Ссылка на товар на WB\n5. Призыв к действию\n6. Хештеги отдельной строкой\n\n' + _BASE_SYSTEM_RULES,
+        'review': 'Ты — блогер-обзорщик товаров с Wildberries для Telegram-канала.\n\nСтруктура обзора:\n1. Заголовок с оценкой (эмодзи звёзды)\n2. Что это за товар (1-2 предложения)\n3. Плюсы (каждый с ✅)\n4. Минусы (каждый с ⚠️) — минимум 1 для достоверности\n5. Для кого подойдёт\n6. Цена + ссылка\n7. Итоговый вердикт\n8. Хештеги\n\n' + _BASE_SYSTEM_RULES,
+        'story_script': 'Ты — SMM-менеджер. Создаёшь сценарии для Stories/Reels.\n\nФормат:\nСлайд 1: (интрига)\nСлайд 2: ...\n...\nПоследний слайд: CTA + ссылка\n\nДля каждого слайда укажи текст на экране.\n\n' + _BASE_SYSTEM_RULES,
+        'carousel': 'Ты — SMM-менеджер. Составляешь тематические подборки товаров для Telegram-канала.\n\nСтруктура:\n1. Заголовок подборки с эмодзи\n2. Каждый товар: номер, название, краткое описание (1-2 предложения), цена, ссылка\n3. Призыв к действию\n4. Хештеги\n\n' + _BASE_SYSTEM_RULES,
     },
     'vk': {
-        'promo_post': 'Ты — SMM-менеджер для сообщества ВКонтакте. Пишешь посты для продвижения товаров с Wildberries. Стиль: дружелюбный, подробный, с эмодзи. Максимум 2000 символов.',
-        'review': 'Ты — блогер-обзорщик товаров. Пишешь развёрнутые обзоры для сообщества ВКонтакте. Стиль: экспертный, структурированный.',
-        'story_script': 'Ты — SMM-менеджер ВКонтакте. Создаёшь сценарии для клипов и историй. Стиль: динамичный, вовлекающий.',
-        'carousel': 'Ты — SMM-менеджер, составляешь тематические подборки товаров для ВКонтакте. Стиль: структурированный, подробный.',
+        'promo_post': 'Ты — SMM-менеджер сообщества ВКонтакте магазина на Wildberries.\n\nСтруктура:\n1. Привлекательный заголовок\n2. Подробное описание товара (3-4 предложения)\n3. Преимущества\n4. Цена\n5. Ссылка\n6. Призыв\n7. Хештеги\n\n' + _BASE_SYSTEM_RULES,
+        'review': 'Ты — блогер-обзорщик для сообщества ВКонтакте.\n\n' + _BASE_SYSTEM_RULES,
+        'story_script': 'Ты — SMM-менеджер ВКонтакте. Создаёшь сценарии для клипов.\n\n' + _BASE_SYSTEM_RULES,
+        'carousel': 'Ты — SMM-менеджер ВКонтакте. Составляешь подборки товаров.\n\n' + _BASE_SYSTEM_RULES,
     },
     'instagram': {
-        'promo_post': 'Ты — Instagram-маркетолог. Пишешь продающие описания к постам. Стиль: стильный, с эмодзи, визуально структурированный. Максимум 2200 символов.',
-        'review': 'Ты — Instagram-блогер. Пишешь обзоры товаров. Стиль: визуально ориентированный, с акцентом на фото и впечатления.',
-        'story_script': 'Ты — Instagram-маркетолог. Создаёшь сценарии для Stories. Формат: набор слайдов с текстом и указаниями по визуалу.',
-        'carousel': 'Ты — Instagram-маркетолог. Создаёшь подборки товаров для карусельных постов. Стиль: визуально привлекательный.',
+        'promo_post': 'Ты — Instagram-маркетолог магазина на Wildberries.\n\nСтруктура:\n1. Короткий цепляющий заголовок\n2. Описание с эмодзи\n3. Цена\n4. CTA: "ссылка в шапке профиля" или прямая ссылка\n5. Хештеги (до 30 штук)\n\n' + _BASE_SYSTEM_RULES,
+        'review': 'Ты — Instagram-блогер. Пишешь обзоры.\n\n' + _BASE_SYSTEM_RULES,
+        'story_script': 'Ты — Instagram-маркетолог. Сценарии для Stories.\n\n' + _BASE_SYSTEM_RULES,
+        'carousel': 'Ты — Instagram-маркетолог. Подборки для каруселей.\n\n' + _BASE_SYSTEM_RULES,
     },
     'tiktok': {
-        'promo_post': 'Ты — TikTok-маркетолог. Пишешь описания к видео. Стиль: молодёжный, с трендовыми хештегами, максимум 300 символов.',
-        'review': 'Ты — TikTok-блогер. Пишешь сценарии обзоров товаров. Стиль: динамичный, с хуком в первые 3 секунды.',
-        'story_script': 'Ты — TikTok-маркетолог. Пишешь сценарии коротких видео для продвижения товаров. Стиль: динамичный, трендовый, с хуком в первые 3 секунды.',
-        'carousel': 'Ты — TikTok-маркетолог. Создаёшь подборки товаров для слайд-шоу. Стиль: молодёжный, динамичный.',
+        'promo_post': 'Ты — TikTok-маркетолог. Описание к видео, максимально коротко.\n\n' + _BASE_SYSTEM_RULES,
+        'review': 'Ты — TikTok-блогер. Сценарий обзора с хуком в первые 3 секунды.\n\n' + _BASE_SYSTEM_RULES,
+        'story_script': 'Ты — TikTok-маркетолог. Сценарий короткого видео.\n\n' + _BASE_SYSTEM_RULES,
+        'carousel': 'Ты — TikTok-маркетолог. Подборка для слайд-шоу.\n\n' + _BASE_SYSTEM_RULES,
     },
     'youtube': {
-        'promo_post': 'Ты — YouTube-маркетолог. Пишешь описания и заголовки к видео. Стиль: SEO-оптимизированный, информативный.',
-        'review': 'Ты — YouTube-блогер, делаешь обзоры товаров с маркетплейсов. Пишешь сценарии видео и описания. Стиль: экспертный, структурированный.',
-        'story_script': 'Ты — YouTube-блогер. Создаёшь сценарии для YouTube Shorts (до 60 секунд). Стиль: динамичный, с хуком.',
-        'carousel': 'Ты — YouTube-блогер. Создаёшь подборки товаров для видео. Стиль: экспертный, структурированный.',
+        'promo_post': 'Ты — YouTube-маркетолог. Описание к видео, SEO-оптимизированное.\n\n' + _BASE_SYSTEM_RULES,
+        'review': 'Ты — YouTube-блогер. Сценарий обзора товара.\n\n' + _BASE_SYSTEM_RULES,
+        'story_script': 'Ты — YouTube-блогер. Сценарий для Shorts.\n\n' + _BASE_SYSTEM_RULES,
+        'carousel': 'Ты — YouTube-блогер. Подборка товаров для видео.\n\n' + _BASE_SYSTEM_RULES,
     },
 }
 
 _BUILTIN_USER_PROMPTS = {
     'promo_post': (
         'Напиши продающий пост о товаре:\n\n'
-        'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
-        'Категория: {category}\nОписание: {description}\n\n'
-        'Требования:\n- Цепляющий заголовок\n- 2-3 ключевых преимущества\n'
-        '- Цена\n- 3-5 хештегов\n- Призыв к действию'
+        'Название: {product_name}\n'
+        'Цена: {price} руб.{discount_info}\n'
+        'Бренд: {brand}\n'
+        'Категория: {category}\n'
+        'Описание: {description}\n'
+        'Рейтинг на WB: {rating}\n'
+        'Ссылка: {wb_url}\n'
+        'Магазин: {store_name}\n'
+        'К посту будет прикреплено {photo_count} фото товара.\n\n'
+        'Требования:\n'
+        '1. Цепляющий заголовок ЗАГЛАВНЫМИ с эмодзи\n'
+        '2. 2-3 ключевых преимущества\n'
+        '3. Цена (если есть скидка — покажи выгоду)\n'
+        '4. Ссылка на WB: {wb_url}\n'
+        '5. Упомяни магазин {store_name}\n'
+        '6. Призыв к действию\n'
+        '7. 3-5 хештегов в конце отдельным блоком'
     ),
     'review': (
         'Напиши обзор товара:\n\n'
-        'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
-        'Категория: {category}\nОписание: {description}\n'
-        'Характеристики: {characteristics}\n\n'
-        'Требования:\n- Заголовок с оценкой (из 10)\n- Плюсы и минусы\n'
-        '- Для кого подойдёт\n- Итоговая рекомендация\n- 3-5 хештегов'
+        'Название: {product_name}\n'
+        'Цена: {price} руб.\n'
+        'Бренд: {brand}\n'
+        'Категория: {category}\n'
+        'Описание: {description}\n'
+        'Характеристики: {characteristics}\n'
+        'Рейтинг: {rating}\n'
+        'Ссылка: {wb_url}\n'
+        'Магазин: {store_name}\n\n'
+        'Требования:\n'
+        '1. Заголовок с оценкой (звёзды эмодзи)\n'
+        '2. Плюсы и минусы\n'
+        '3. Для кого подойдёт\n'
+        '4. Ссылка {wb_url}\n'
+        '5. Хештеги в конце'
     ),
     'story_script': (
-        'Создай сценарий Stories/Reels/Shorts для товара:\n\n'
+        'Создай сценарий Stories/Reels для товара:\n\n'
         'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
-        'Описание: {description}\n\n'
-        'Требования:\n- 5-7 слайдов/сцен\n- Для каждого: текст + визуал\n'
-        '- Первый слайд — интрига\n- Последний — призыв к действию'
+        'Описание: {description}\nСсылка: {wb_url}\nМагазин: {store_name}\n\n'
+        'Требования:\n5-7 слайдов, для каждого текст на экране.\n'
+        'Первый — интрига. Последний — CTA + ссылка {wb_url}'
     ),
     'carousel': (
         'Составь подборку товаров:\n\n'
-        'Тема подборки: {collection_theme}\nТовары:\n{products_list}\n\n'
-        'Требования:\n- Цепляющий заголовок подборки\n'
-        '- Краткое описание каждого товара (2-3 предложения)\n'
-        '- Цена каждого товара\n- Призыв к действию\n- 5-7 хештегов'
+        'Тема: {collection_theme}\nМагазин: {store_name}\n\nТовары:\n{products_list}\n\n'
+        'Требования:\n1. Заголовок подборки\n'
+        '2. Каждый товар: название, описание (1-2 предложения), цена, ссылка\n'
+        '3. Призыв к действию\n4. Хештеги'
     ),
 }
 
@@ -126,6 +170,11 @@ class GenerationResult:
     title: Optional[str] = None
     body_text: Optional[str] = None
     hashtags: Optional[List[str]] = None
+    media_urls: Optional[List[str]] = None
+    wb_url: Optional[str] = None
+    store_name: Optional[str] = None
+    product_names: Optional[List[str]] = None
+    quality_score: int = 0
     ai_provider: Optional[str] = None
     ai_model: Optional[str] = None
     tokens_used: int = 0
@@ -208,8 +257,18 @@ class ContentFactoryService:
             if custom_prompt:
                 user_prompt += f"\n\nДополнительные указания: {custom_prompt}"
 
-            # Добавляем стиль-гайдлайны фабрики
+            # Собираем контекст для system prompt
+            store_name = self._get_store_name(factory)
+            char_limit = PLATFORM_CHAR_LIMITS.get(factory.platform, 4096)
+            first_product = products_data[0] if products_data else {}
+            wb_url = first_product.get('wb_url', '')
+
+            # Подставляем контекстные данные в system prompt
             system_prompt = template.system_prompt
+            system_prompt = system_prompt.replace('{wb_url}', wb_url)
+            system_prompt = system_prompt.replace('{store_name}', store_name)
+            system_prompt = system_prompt.replace('{char_limit}', str(char_limit))
+
             if factory.style_guidelines:
                 system_prompt += f"\n\nДополнительные требования к стилю:\n{factory.style_guidelines}"
             if factory.tone:
@@ -221,7 +280,7 @@ class ContentFactoryService:
                 }
                 system_prompt += f"\n\n{tone_map.get(factory.tone, '')}"
 
-            # Запрос к AI
+            # ========== ШАГ 1: Генерация контента ==========
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -241,8 +300,24 @@ class ContentFactoryService:
                     ai_model=model_name,
                 )
 
-            # Парсим ответ
+            # ========== ШАГ 2: AI-ревью (самокритика) ==========
+            reviewed = self._ai_review_step(client, response, factory.platform, char_limit, wb_url, store_name)
+            if reviewed:
+                response = reviewed
+
+            # ========== ШАГ 3: Программная очистка ==========
             title, body, hashtags = self._parse_ai_response(response, content_type)
+
+            # Собираем медиа и метаданные
+            all_photos = []
+            product_names = []
+            for pd in products_data:
+                all_photos.extend(pd.get('photos', [])[:5])
+                if pd.get('name'):
+                    product_names.append(pd['name'])
+            media_urls = all_photos[:10]
+
+            quality = self._score_content(body, content_type, factory.platform, wb_url, store_name)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -251,9 +326,14 @@ class ContentFactoryService:
                 title=title,
                 body_text=body,
                 hashtags=hashtags,
+                media_urls=media_urls,
+                wb_url=wb_url,
+                store_name=store_name,
+                product_names=product_names,
+                quality_score=quality,
                 ai_provider=provider_name,
                 ai_model=model_name,
-                tokens_used=0,  # TODO: extract from response metadata
+                tokens_used=0,
                 generation_time_ms=elapsed_ms,
             )
 
@@ -308,6 +388,20 @@ class ContentFactoryService:
         item.set_product_ids(product_ids)
         if result.hashtags:
             item.set_hashtags(result.hashtags)
+
+        # Сохраняем фото товаров
+        if result.media_urls:
+            item.media_urls_json = json.dumps(result.media_urls)
+
+        # Сохраняем метаданные (ссылка WB, магазин, качество)
+        platform_specific = {
+            'wb_url': result.wb_url or '',
+            'store_name': result.store_name or '',
+            'product_names': result.product_names or [],
+            'quality_score': result.quality_score,
+            'char_count': len(result.body_text or ''),
+        }
+        item.platform_specific_json = json.dumps(platform_specific, ensure_ascii=False)
 
         db.session.add(item)
         db.session.commit()
@@ -443,25 +537,55 @@ class ContentFactoryService:
         return [self._product_to_dict(p) for p in products]
 
     def _product_to_dict(self, product: Product) -> Dict:
-        """Конвертирует Product в dict для промптов."""
+        """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""
         photos = []
         if product.photos_json:
             try:
                 photos = json.loads(product.photos_json)
+                if isinstance(photos, list):
+                    photos = [p for p in photos if isinstance(p, str) and p.startswith('http')]
             except Exception:
                 pass
 
+        characteristics = ''
+        if product.characteristics_json:
+            try:
+                chars = json.loads(product.characteristics_json)
+                if isinstance(chars, list):
+                    characteristics = '; '.join(
+                        f"{c.get('name', '')}: {', '.join(str(v) for v in c.get('value', []))}"
+                        for c in chars if c.get('name')
+                    )
+                elif isinstance(chars, dict):
+                    characteristics = '; '.join(f"{k}: {v}" for k, v in chars.items())
+            except Exception:
+                pass
+
+        nm_id = product.nm_id
+        wb_url = f'https://www.wildberries.ru/catalog/{nm_id}/detail.aspx' if nm_id else ''
+
+        price = float(product.price or 0)
+        discount_price = float(product.discount_price or 0)
+        discount_info = ''
+        if discount_price and discount_price < price and price > 0:
+            pct = int((1 - discount_price / price) * 100)
+            discount_info = f' (скидка {pct}%, было {int(price)} руб.)'
+
         return {
             'id': product.id,
-            'nm_id': product.nm_id,
+            'nm_id': nm_id,
             'name': product.title or '',
             'brand': product.brand or '',
             'category': product.object_name or '',
-            'price': product.price or 0,
-            'discount_price': product.discount_price or 0,
+            'price': price,
+            'discount_price': discount_price,
             'description': getattr(product, 'description', '') or '',
             'vendor_code': product.vendor_code or '',
             'photos': photos,
+            'wb_url': wb_url,
+            'rating': product.nm_rating or 0,
+            'characteristics': characteristics,
+            'discount_info': discount_info,
         }
 
     # ================================================================
@@ -546,29 +670,47 @@ class ContentFactoryService:
     # Формирование промптов
     # ================================================================
 
+    def _get_store_name(self, factory: ContentFactory) -> str:
+        """Получает название магазина."""
+        try:
+            seller = Seller.query.get(factory.seller_id)
+            return seller.company_name if seller else 'Наш магазин'
+        except Exception:
+            return 'Наш магазин'
+
     def _build_product_prompt(
         self,
         template: ContentTemplate,
         product_data: Dict,
         factory: ContentFactory,
     ) -> str:
-        """Подставляет данные товара в шаблон промпта."""
+        """Подставляет данные товара в шаблон промпта (с фото, ссылкой, магазином)."""
         prompt = template.user_prompt_template
+        store_name = self._get_store_name(factory)
+
+        price = product_data.get('discount_price') or product_data.get('price', 0)
+        rating = product_data.get('rating', 0)
+        rating_str = f'{rating}/5' if rating else 'нет данных'
 
         replacements = {
             '{product_name}': product_data.get('name', ''),
-            '{price}': str(product_data.get('discount_price') or product_data.get('price', '')),
-            '{brand}': product_data.get('brand', ''),
+            '{price}': str(int(float(price))) if price else '0',
+            '{brand}': product_data.get('brand', '') or 'Без бренда',
             '{category}': product_data.get('category', ''),
-            '{description}': product_data.get('description', ''),
+            '{description}': (product_data.get('description', '') or '')[:500],
             '{vendor_code}': product_data.get('vendor_code', ''),
-            '{characteristics}': product_data.get('description', ''),
+            '{characteristics}': (product_data.get('characteristics', '') or product_data.get('description', ''))[:500],
+            '{wb_url}': product_data.get('wb_url', ''),
+            '{store_name}': store_name,
+            '{rating}': rating_str,
+            '{photo_count}': str(len(product_data.get('photos', []))),
+            '{discount_info}': product_data.get('discount_info', ''),
         }
 
         for placeholder, value in replacements.items():
             prompt = prompt.replace(placeholder, str(value))
 
-        if template.hashtag_strategy:
+        if hasattr(template, 'hashtag_strategy') and template.hashtag_strategy:
             prompt += f"\n\nСтратегия хештегов: {template.hashtag_strategy}"
 
         return prompt
@@ -580,16 +722,19 @@ class ContentFactoryService:
         factory: ContentFactory,
     ) -> str:
         """Формирует промпт для подборки товаров."""
+        store_name = self._get_store_name(factory)
         products_list = ""
         for i, p in enumerate(products_data, 1):
             price = p.get('discount_price') or p.get('price', 0)
-            products_list += f"{i}. {p.get('name', '')} — {price} руб. ({p.get('brand', '')})\n"
+            wb_url = p.get('wb_url', '')
+            products_list += f"{i}. {p.get('name', '')} — {int(float(price))} руб. ({p.get('brand', '')})\n   Ссылка: {wb_url}\n"
 
         prompt = template.user_prompt_template
         prompt = prompt.replace('{products_list}', products_list)
         prompt = prompt.replace('{collection_theme}', factory.description or 'Подборка товаров')
+        prompt = prompt.replace('{store_name}', store_name)
 
-        if template.hashtag_strategy:
+        if hasattr(template, 'hashtag_strategy') and template.hashtag_strategy:
             prompt += f"\n\nСтратегия хештегов: {template.hashtag_strategy}"
 
         return prompt
@@ -598,45 +743,158 @@ class ContentFactoryService:
     # Парсинг ответа AI
     # ================================================================
 
+    def _ai_review_step(
+        self,
+        client: AIClient,
+        draft: str,
+        platform: str,
+        char_limit: int,
+        wb_url: str,
+        store_name: str,
+    ) -> Optional[str]:
+        """Шаг 2: AI проверяет и улучшает черновик. Возвращает улучшенный текст или None."""
+        try:
+            review_prompt = (
+                f'Проверь и улучши этот пост для {PLATFORM_LABELS.get(platform, platform)}.\n\n'
+                f'ЧЕРНОВИК:\n{draft}\n\n'
+                f'ПРОВЕРЬ:\n'
+                f'1. Нет ли markdown-разметки (**, *, ##, ```)? Если есть — убери, замени на эмодзи/заглавные\n'
+                f'2. Есть ли ссылка на товар ({wb_url})? Если нет — добавь\n'
+                f'3. Упомянут ли магазин ({store_name})? Если нет — добавь\n'
+                f'4. Есть ли призыв к действию?\n'
+                f'5. Есть ли цена?\n'
+                f'6. Хештеги отделены пустой строкой в конце?\n'
+                f'7. Текст укладывается в {char_limit} символов?\n\n'
+                f'Верни ТОЛЬКО исправленный текст поста, без комментариев и пояснений.'
+            )
+
+            response = client.chat_completion(
+                messages=[{"role": "user", "content": review_prompt}],
+                temperature=0.3,
+                max_tokens=3000,
+            )
+            if response and len(response.strip()) > 50:
+                return response.strip()
+            return None
+        except Exception as e:
+            logger.warning(f"AI review step failed (using original): {e}")
+            return None
+
+    def _strip_markdown(self, text: str) -> str:
+        """Убирает markdown-артефакты из текста."""
+        # Убираем **bold** и *italic*
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        # Убираем ## заголовки
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        # Убираем ```code```
+        text = re.sub(r'```[\s\S]*?```', '', text)
+        # Убираем `inline code`
+        text = re.sub(r'`(.+?)`', r'\1', text)
+        # Убираем маркеры списка "- " и "• " в начале строк
+        text = re.sub(r'^[\-\•]\s+', '', text, flags=re.MULTILINE)
+        # Убираем лишние пустые строки (больше 2 подряд)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
     def _parse_ai_response(
         self,
         response: str,
         content_type: str,
     ) -> Tuple[Optional[str], str, List[str]]:
-        """Парсит ответ AI, извлекает заголовок, текст и хештеги.
+        """Парсит ответ AI: очищает markdown, извлекает заголовок, текст и хештеги (дедупликация)."""
+        # Очищаем markdown
+        text = self._strip_markdown(response)
 
-        Returns:
-            Tuple[title, body_text, hashtags]
-        """
-        import re
+        # Извлекаем и дедуплицируем хештеги
+        all_hashtags = re.findall(r'#[А-Яа-яA-Za-z0-9_]+', text)
+        seen = set()
+        hashtags = []
+        for tag in all_hashtags:
+            tag_lower = tag.lower()
+            if tag_lower not in seen:
+                seen.add(tag_lower)
+                hashtags.append(tag)
 
-        # Извлекаем хештеги
-        hashtag_pattern = r'#\w+'
-        hashtags = re.findall(hashtag_pattern, response)
+        # Удаляем строки с хештегами из тела (они пойдут в отдельное поле)
+        body_lines = []
+        for line in text.split('\n'):
+            stripped = line.strip()
+            # Строка целиком из хештегов — убираем
+            if stripped and all(w.startswith('#') for w in stripped.split()):
+                continue
+            body_lines.append(line)
+        body_text = '\n'.join(body_lines).strip()
+        # Убираем trailing пустые строки
+        body_text = re.sub(r'\n{2,}$', '', body_text)
 
-        # Извлекаем заголовок (первая строка, или строка после "Заголовок:")
-        lines = response.strip().split('\n')
+        # Извлекаем заголовок
         title = None
-
+        lines = body_text.split('\n')
         for line in lines:
             clean = line.strip()
             if not clean:
                 continue
-            # Ищем явный заголовок
-            for prefix in ('Заголовок:', 'Title:', '**Заголовок', '# '):
+            for prefix in ('Заголовок:', 'Title:', '# '):
                 if clean.lower().startswith(prefix.lower()):
-                    title = clean[len(prefix):].strip().strip('*').strip()
+                    title = clean[len(prefix):].strip()
                     break
             if title:
                 break
-            # Берём первую непустую строку как заголовок
-            title = clean.strip('*').strip('#').strip()
+            title = clean
             break
 
-        # Основной текст — весь ответ
-        body_text = response.strip()
-
         return title, body_text, hashtags
+
+    def _score_content(
+        self,
+        body: str,
+        content_type: str,
+        platform: str,
+        wb_url: str,
+        store_name: str,
+    ) -> int:
+        """Оценка качества контента 0-100."""
+        score = 0
+        text = body or ''
+
+        # Есть эмодзи? +10
+        if re.search(r'[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]', text):
+            score += 10
+
+        # Есть призыв к действию? +15
+        cta_words = ['заказ', 'купи', 'переходи', 'жми', 'ссылк', 'скорее', 'успей', 'закажи', 'бери']
+        if any(w in text.lower() for w in cta_words):
+            score += 15
+
+        # Есть ссылка на WB? +15
+        if wb_url and wb_url in text:
+            score += 15
+        elif 'wildberries.ru' in text.lower():
+            score += 10
+
+        # В лимите символов? +15
+        char_limit = PLATFORM_CHAR_LIMITS.get(platform, 4096)
+        if len(text) <= char_limit:
+            score += 15
+
+        # Упомянута цена? +10
+        if re.search(r'\d+\s*(руб|₽|р\.)', text):
+            score += 10
+
+        # Упомянут магазин? +10
+        if store_name and store_name.lower() in text.lower():
+            score += 10
+
+        # Нет markdown-артефактов? +15
+        if '**' not in text and '##' not in text and '```' not in text:
+            score += 15
+
+        # Есть хештеги? +10
+        if '#' in text or re.search(r'#\w+', text):
+            score += 10
+
+        return min(score, 100)
 
     # ================================================================
     # Управление контентом
