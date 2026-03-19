@@ -356,8 +356,18 @@ CLOUDRU_MODELS = {
 MIMO_MODELS = {
     "mimo-v2-pro": {
         "name": "MiMo V2 Pro",
-        "description": "Флагманская модель Xiaomi — 1T параметров (MoE), контекст 1M токенов, рассуждения и генерация",
+        "description": "Флагман — 1T параметров (42B active MoE), контекст 1M токенов, рассуждения и агенты",
         "recommended": True
+    },
+    "mimo-v2-flash": {
+        "name": "MiMo V2 Flash",
+        "description": "Быстрая и дешёвая — 309B параметров (15B active MoE), контекст 256K, open-source",
+        "recommended": False
+    },
+    "mimo-v2-omni": {
+        "name": "MiMo V2 Omni",
+        "description": "Мультимодальная — текст, изображения, видео, аудио (до 10ч)",
+        "recommended": False
     },
 }
 
