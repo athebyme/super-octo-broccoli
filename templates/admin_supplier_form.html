@@ -48,6 +48,17 @@
                             {id: 'mimo-v2-flash', name: 'MiMo V2 Flash'},
                             {id: 'mimo-v2-omni', name: 'MiMo V2 Omni'},
                         ],
+                        openrouter: [
+                            {id: 'google/gemini-2.5-flash-preview', name: 'Gemini 2.5 Flash', rec: true},
+                            {id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', rec: true},
+                            {id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3 0324', rec: true},
+                            {id: 'google/gemini-2.5-pro-preview', name: 'Gemini 2.5 Pro'},
+                            {id: 'anthropic/claude-opus-4', name: 'Claude Opus 4'},
+                            {id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini'},
+                            {id: 'openai/gpt-4o', name: 'GPT-4o'},
+                            {id: 'meta-llama/llama-4-maverick', name: 'Llama 4 Maverick'},
+                            {id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B'},
+                        ],
                         custom: []
                     },
                     get currentModels() {
@@ -322,6 +333,7 @@
                                 <option value="openai">OpenAI</option>
                                 <option value="cloudru">Cloud.ru</option>
                                 <option value="mimo">Xiaomi MiMo</option>
+                                <option value="openrouter">OpenRouter (300+ моделей)</option>
                                 <option value="custom">Кастомный API</option>
                             </select>
                         </div>

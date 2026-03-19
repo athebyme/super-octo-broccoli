@@ -300,6 +300,9 @@
                             <option value="mimo" {{ 'selected' if settings.ai_provider == 'mimo' else '' }}>
                                 Xiaomi MiMo
                             </option>
+                            <option value="openrouter" {{ 'selected' if settings.ai_provider == 'openrouter' else '' }}>
+                                OpenRouter (300+ моделей)
+                            </option>
                             <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
                                 Другой (OpenAI-совместимый)
                             </option>
@@ -858,9 +861,14 @@ function updateAIProviderSettings() {
         cloudruHint.classList.add('hidden');
         if (mimoHint) mimoHint.classList.remove('hidden');
         baseUrlBlock.classList.remove('hidden');
-        if (!baseUrlInput.value || baseUrlInput.value === 'https://foundation-models.api.cloud.ru/v1' || baseUrlInput.value === 'https://api.openai.com/v1') {
+        if (!baseUrlInput.value || baseUrlInput.value === 'https://foundation-models.api.cloud.ru/v1' || baseUrlInput.value === 'https://api.openai.com/v1' || baseUrlInput.value === 'https://openrouter.ai/api/v1') {
             baseUrlInput.value = 'https://api.xiaomimimo.com/v1';
         }
+    } else if (provider === 'openrouter') {
+        cloudruHint.classList.add('hidden');
+        if (mimoHint) mimoHint.classList.add('hidden');
+        baseUrlBlock.classList.add('hidden');
+        baseUrlInput.value = 'https://openrouter.ai/api/v1';
     } else {
         // Custom - скрываем подсказки, показываем base URL
         cloudruHint.classList.add('hidden');

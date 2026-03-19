@@ -320,6 +320,7 @@ class AIProvider(Enum):
     OPENAI = "openai"
     CLOUDRU = "cloudru"  # Cloud.ru Foundation Models
     MIMO = "mimo"  # Xiaomi MiMo (OpenAI-совместимый API)
+    OPENROUTER = "openrouter"  # OpenRouter — единый доступ к 300+ моделям
     CUSTOM = "custom"  # Любой OpenAI-совместимый API
 
 
@@ -367,6 +368,55 @@ MIMO_MODELS = {
     "mimo-v2-omni": {
         "name": "MiMo V2 Omni",
         "description": "Мультимодальная — текст, изображения, видео, аудио (до 10ч)",
+        "recommended": False
+    },
+}
+
+# Модели OpenRouter (популярные, доступны 300+)
+OPENROUTER_MODELS = {
+    "google/gemini-2.5-flash-preview": {
+        "name": "Gemini 2.5 Flash",
+        "description": "Быстрая и дешёвая, отличное качество",
+        "recommended": True
+    },
+    "anthropic/claude-sonnet-4": {
+        "name": "Claude Sonnet 4",
+        "description": "Мощная модель Anthropic",
+        "recommended": True
+    },
+    "deepseek/deepseek-chat-v3-0324": {
+        "name": "DeepSeek V3 0324",
+        "description": "Дешёвая, хорошее качество для парсинга",
+        "recommended": True
+    },
+    "google/gemini-2.5-pro-preview": {
+        "name": "Gemini 2.5 Pro",
+        "description": "Лучшее качество Google",
+        "recommended": False
+    },
+    "anthropic/claude-opus-4": {
+        "name": "Claude Opus 4",
+        "description": "Самая мощная модель Anthropic",
+        "recommended": False
+    },
+    "openai/gpt-4o-mini": {
+        "name": "GPT-4o Mini (через OpenRouter)",
+        "description": "OpenAI через OpenRouter",
+        "recommended": False
+    },
+    "openai/gpt-4o": {
+        "name": "GPT-4o (через OpenRouter)",
+        "description": "OpenAI через OpenRouter",
+        "recommended": False
+    },
+    "meta-llama/llama-4-maverick": {
+        "name": "Llama 4 Maverick",
+        "description": "Открытая модель Meta, бесплатная",
+        "recommended": False
+    },
+    "qwen/qwen3-235b-a22b": {
+        "name": "Qwen3 235B",
+        "description": "Мощная модель Alibaba",
         "recommended": False
     },
 }
@@ -1514,6 +1564,9 @@ class AIConfig:
         elif provider == AIProvider.MIMO:
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.xiaomimimo.com/v1'
             default_model = 'mimo-v2-pro'
+        elif provider == AIProvider.OPENROUTER:
+            api_base = 'https://openrouter.ai/api/v1'
+            default_model = 'google/gemini-2.5-flash-preview'
         else:  # CUSTOM
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
@@ -1554,6 +1607,9 @@ class AIConfig:
         elif provider == AIProvider.MIMO:
             api_base = settings.ai_api_base_url or "https://api.xiaomimimo.com/v1"
             default_model = "mimo-v2-pro"
+        elif provider == AIProvider.OPENROUTER:
+            api_base = "https://openrouter.ai/api/v1"
+            default_model = "google/gemini-2.5-flash-preview"
         elif provider == AIProvider.CUSTOM:
             api_base = settings.ai_api_base_url or "https://api.openai.com/v1"
             default_model = "gpt-4o-mini"
@@ -1611,8 +1667,13 @@ class AIClient:
         if config.provider == AIProvider.CLOUDRU:
             self._token_manager = get_cloudru_token_manager(config.api_key)
         else:
-            # Для OpenAI/Custom используем API key напрямую
+            # Для OpenAI/OpenRouter/Custom используем API key напрямую
             self._session.headers['Authorization'] = f'Bearer {config.api_key}'
+
+        # OpenRouter требует доп. заголовки
+        if config.provider == AIProvider.OPENROUTER:
+            self._session.headers['HTTP-Referer'] = 'https://seller-platform.tech'
+            self._session.headers['X-Title'] = 'Seller Platform'
 
     def _get_auth_header(self) -> Optional[str]:
         """Получает актуальный Authorization header"""
@@ -1665,7 +1726,8 @@ class AIClient:
         }
 
         # response_format не все модели поддерживают, добавляем опционально
-        if response_format and self.config.provider != AIProvider.CLOUDRU:
+        # Cloud.ru не поддерживает; OpenRouter и OpenAI — поддерживают
+        if response_format and self.config.provider not in (AIProvider.CLOUDRU,):
             payload["response_format"] = response_format
 
         self.last_error = None
@@ -4130,9 +4192,11 @@ def get_available_models(provider: str) -> Dict[str, Dict]:
         return OPENAI_MODELS
     elif provider == 'mimo':
         return MIMO_MODELS
+    elif provider == 'openrouter':
+        return OPENROUTER_MODELS
     else:
         # Для custom возвращаем объединенный список
-        return {**CLOUDRU_MODELS, **OPENAI_MODELS, **MIMO_MODELS}
+        return {**CLOUDRU_MODELS, **OPENAI_MODELS, **MIMO_MODELS, **OPENROUTER_MODELS}
 
 
 def get_default_instructions() -> Dict[str, Dict]:
