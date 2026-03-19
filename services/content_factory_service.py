@@ -672,6 +672,12 @@ class ContentFactoryService:
         products = self._base_product_query(seller_id).order_by(
             Product.created_at.desc()
         ).limit(limit).all()
+        if not products:
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(Product.created_at.desc()).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _select_by_rules(self, factory: ContentFactory, limit: int) -> List[Dict]:
@@ -696,6 +702,19 @@ class ContentFactoryService:
         products = self._base_product_query(seller_id).order_by(
             Product.updated_at.desc()
         ).limit(limit).all()
+        if not products:
+            # Fallback: без фильтра цены
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(Product.updated_at.desc()).limit(limit).all()
+        if not products:
+            # Fallback: любые активные
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+            ).order_by(Product.updated_at.desc()).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _collect_products_data(self, product_ids: List[int], seller_id: int) -> List[Dict]:

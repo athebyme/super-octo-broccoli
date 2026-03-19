@@ -392,17 +392,36 @@ def register_content_factory_routes(app):
         for eid in exclude_ids:
             used_product_ids.add(int(eid))
 
-        # Берём все товары продавца
+        # Берём товары продавца с фильтрами (наличие, цена, активность)
         from sqlalchemy import func as sa_func
-        query = Product.query.filter_by(seller_id=factory.seller_id)
+        query = Product.query.filter(
+            Product.seller_id == factory.seller_id,
+            Product.is_active == True,
+            Product.quantity > 0,
+            db.or_(
+                db.and_(
+                    Product.discount_price.isnot(None),
+                    Product.discount_price > 0,
+                    Product.discount_price <= 50000,
+                ),
+                db.and_(
+                    db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
+                    Product.price.isnot(None),
+                    Product.price > 0,
+                    Product.price <= 50000,
+                ),
+            ),
+        )
         if used_product_ids:
             query = query.filter(~Product.id.in_(used_product_ids))
         product = query.order_by(sa_func.random()).first()
 
         if not product:
-            # Все товары использованы — берём любой случайный
-            product = Product.query.filter_by(
-                seller_id=factory.seller_id,
+            # Fallback: без исключений (все уже использованы)
+            product = Product.query.filter(
+                Product.seller_id == factory.seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
             ).order_by(sa_func.random()).first()
             if not product:
                 return jsonify({'error': 'Нет доступных товаров'}), 404
