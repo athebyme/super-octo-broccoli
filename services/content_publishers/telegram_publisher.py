@@ -210,7 +210,22 @@ class TelegramPublisher(BasePublisher):
             )
 
     def _download_photo(self, photo_url: str) -> Optional[bytes]:
-        """Скачивает фото по URL и возвращает байты."""
+        """Скачивает фото по URL и возвращает байты.
+
+        Если URL указывает на наш /content-photos/ — читает с диска.
+        """
+        # Приоритет: локальные файлы с диска
+        import re
+        m = re.search(r'/content-photos/(\d+)/(\d+)\.jpg', photo_url)
+        if m:
+            try:
+                from services.content_photo_cache import get_cached_photo_path
+                path = get_cached_photo_path(int(m.group(1)), int(m.group(2)))
+                if path.exists() and path.stat().st_size > 512:
+                    return path.read_bytes()
+            except Exception:
+                pass
+
         headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '

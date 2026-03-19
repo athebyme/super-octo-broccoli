@@ -38,13 +38,92 @@ _BROWSER_UA = (
 )
 
 
+def _read_local_supplier_photo(photo_url: str) -> Optional[tuple[bytes, str]]:
+    """Если URL указывает на /photos/public/ или /photos/imported/ — пробуем из кэша поставщика."""
+    import re
+    # /photos/public/{sp_id}/{idx}.jpg?sig=...
+    m = re.search(r'/photos/public/(\d+)/(\d+)\.jpg', photo_url)
+    if not m:
+        return None
+    try:
+        from models import SupplierProduct
+        import json as _json
+        from services.photo_cache import get_photo_cache
+
+        sp_id = int(m.group(1))
+        idx = int(m.group(2))
+        product = SupplierProduct.query.get(sp_id)
+        if not product or not product.photo_urls_json:
+            return None
+
+        photos = _json.loads(product.photo_urls_json)
+        if idx < 0 or idx >= len(photos):
+            return None
+
+        ph = photos[idx]
+        url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur') if isinstance(ph, dict) else ph if isinstance(ph, str) else None
+        if not url:
+            return None
+
+        supplier_type = product.supplier.code if product.supplier else 'unknown'
+        external_id = product.external_id or ''
+        cache = get_photo_cache()
+
+        if cache.is_cached(supplier_type, external_id, url):
+            cache_path = cache.get_cache_path(supplier_type, external_id, url)
+            import os
+            if os.path.exists(cache_path) and os.path.getsize(cache_path) > 512:
+                with open(cache_path, 'rb') as f:
+                    data = f.read()
+                logger.info(f"Read local supplier photo: {cache_path} ({len(data)}B)")
+                return data, 'photo.jpg'
+    except Exception as e:
+        logger.debug(f"Failed to read local supplier photo: {e}")
+    return None
+
+
+def _read_local_content_photo(photo_url: str) -> Optional[tuple[bytes, str]]:
+    """Если URL указывает на наш /content-photos/ — читаем файл с диска напрямую."""
+    import re
+    # Матчим /content-photos/{nm_id}/{index}.jpg в URL
+    m = re.search(r'/content-photos/(\d+)/(\d+)\.jpg', photo_url)
+    if not m:
+        return None
+
+    try:
+        from services.content_photo_cache import get_cached_photo_path
+        nm_id = int(m.group(1))
+        index = int(m.group(2))
+        path = get_cached_photo_path(nm_id, index)
+        if path.exists() and path.stat().st_size > 512:
+            jpeg_bytes = path.read_bytes()
+            logger.info(f"Read local content photo: {path} ({len(jpeg_bytes)}B)")
+            return jpeg_bytes, 'photo.jpg'
+    except Exception as e:
+        logger.warning(f"Failed to read local content photo: {e}")
+    return None
+
+
 def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]:
     """Скачивает фото по URL и конвертирует в JPEG.
+
+    Если URL указывает на наш /content-photos/ — читает с диска (без HTTP).
 
     Returns:
         (jpeg_bytes, filename) или None при ошибке
     """
-    # Шаг 1: Скачиваем (с одним ретраем)
+    # Приоритет: локальные файлы — читаем с диска напрямую
+    local = _read_local_content_photo(photo_url)
+    if local:
+        return local
+
+    # Также пробуем /photos/public/ — локальный supplier кэш
+    if '/photos/public/' in photo_url or '/photos/imported/' in photo_url:
+        local_supplier = _read_local_supplier_photo(photo_url)
+        if local_supplier:
+            return local_supplier
+
+    # Скачиваем по HTTP (с одним ретраем)
     raw = None
     content_type = ''
     headers = {
