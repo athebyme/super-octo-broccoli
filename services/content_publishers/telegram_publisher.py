@@ -146,6 +146,19 @@ class TelegramPublisher(BasePublisher):
         except requests.exceptions.RequestException as e:
             return False, f"Ошибка подключения к Telegram API: {e}"
 
+    def _build_post_url(self, chat_id: str, message_id: int) -> Optional[str]:
+        """Формирует URL поста в Telegram."""
+        chat_str = str(chat_id)
+        if chat_str.startswith('@'):
+            # Публичный канал @username — t.me/username/message_id
+            username = chat_str.lstrip('@')
+            return f"https://t.me/{username}/{message_id}"
+        elif chat_str.startswith('-100'):
+            # Приватный канал — t.me/c/channel_id/message_id
+            channel = chat_str[4:]  # убираем -100
+            return f"https://t.me/c/{channel}/{message_id}"
+        return None
+
     def _send_text_message(
         self,
         bot_token: str,
@@ -171,13 +184,7 @@ class TelegramPublisher(BasePublisher):
 
         if data.get('ok'):
             message_id = data.get('result', {}).get('message_id')
-            # Формируем URL поста (для каналов)
-            post_url = None
-            if str(chat_id).startswith('@') or str(chat_id).startswith('-100'):
-                channel = str(chat_id).lstrip('@')
-                if channel.startswith('-100'):
-                    channel = channel[4:]  # убираем -100
-                post_url = f"https://t.me/c/{channel}/{message_id}"
+            post_url = self._build_post_url(chat_id, message_id)
 
             return PublishResult(
                 success=True,
@@ -189,6 +196,18 @@ class TelegramPublisher(BasePublisher):
                 success=False,
                 error=data.get('description', 'Ошибка отправки в Telegram'),
             )
+
+    def _download_photo(self, photo_url: str) -> Optional[bytes]:
+        """Скачивает фото по URL и возвращает байты."""
+        try:
+            resp = requests.get(photo_url, timeout=15)
+            if resp.status_code == 200 and len(resp.content) > 1024:
+                content_type = resp.headers.get('Content-Type', '')
+                if content_type.startswith('image/') or len(resp.content) > 5000:
+                    return resp.content
+        except Exception as e:
+            logger.warning(f"Failed to download photo {photo_url}: {e}")
+        return None
 
     def _send_photo_message(
         self,
@@ -203,21 +222,32 @@ class TelegramPublisher(BasePublisher):
         # Telegram caption лимит 1024 символа
         caption = text if len(text) <= 1024 else text[:1020] + '...'
 
-        payload = {
-            'chat_id': chat_id,
-            'photo': photo_url,
-            'caption': caption,
-            'parse_mode': 'HTML',
-        }
+        # Сначала пробуем скачать и отправить файлом (надежнее)
+        photo_data = self._download_photo(photo_url)
+        if photo_data:
+            resp = requests.post(url, data={
+                'chat_id': chat_id,
+                'caption': caption,
+                'parse_mode': 'HTML',
+            }, files={'photo': ('photo.jpg', photo_data, 'image/jpeg')}, timeout=30)
+        else:
+            # Фоллбэк — отправка URL напрямую
+            resp = requests.post(url, json={
+                'chat_id': chat_id,
+                'photo': photo_url,
+                'caption': caption,
+                'parse_mode': 'HTML',
+            }, timeout=30)
 
-        resp = requests.post(url, json=payload, timeout=30)
         data = resp.json()
 
         if data.get('ok'):
             message_id = data.get('result', {}).get('message_id')
+            post_url = self._build_post_url(chat_id, message_id)
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id),
+                external_post_url=post_url,
             )
         else:
             # Если фото не удалось — шлём как текст
@@ -237,28 +267,50 @@ class TelegramPublisher(BasePublisher):
 
         caption = text if len(text) <= 1024 else text[:1020] + '...'
 
+        # Скачиваем фото и загружаем как файлы для надежности
+        files = {}
         media = []
+        downloaded_any = False
+
         for i, photo_url in enumerate(photo_urls[:10]):
-            item = {'type': 'photo', 'media': photo_url}
+            photo_data = self._download_photo(photo_url)
+            if photo_data:
+                attach_name = f'photo_{i}'
+                files[attach_name] = (f'{attach_name}.jpg', photo_data, 'image/jpeg')
+                media_item = {'type': 'photo', 'media': f'attach://{attach_name}'}
+                downloaded_any = True
+            else:
+                # Фоллбэк на URL если скачать не удалось
+                media_item = {'type': 'photo', 'media': photo_url}
+
             if i == 0:
-                item['caption'] = caption
-                item['parse_mode'] = 'HTML'
-            media.append(item)
+                media_item['caption'] = caption
+                media_item['parse_mode'] = 'HTML'
+            media.append(media_item)
 
-        payload = {
-            'chat_id': chat_id,
-            'media': _json.dumps(media),
-        }
+        if downloaded_any:
+            # Отправка через multipart/form-data с файлами
+            resp = requests.post(url, data={
+                'chat_id': chat_id,
+                'media': _json.dumps(media),
+            }, files=files, timeout=60)
+        else:
+            # Нет скачанных фото — отправляем URL напрямую
+            resp = requests.post(url, json={
+                'chat_id': chat_id,
+                'media': media,
+            }, timeout=60)
 
-        resp = requests.post(url, json=payload, timeout=60)
         data = resp.json()
 
         if data.get('ok'):
             results = data.get('result', [])
             message_id = results[0].get('message_id') if results else None
+            post_url = self._build_post_url(chat_id, message_id) if message_id else None
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id) if message_id else None,
+                external_post_url=post_url,
             )
         else:
             # Фоллбэк на одно фото

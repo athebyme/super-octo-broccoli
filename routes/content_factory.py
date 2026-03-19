@@ -476,6 +476,11 @@ def register_content_factory_routes(app):
         # Определяем аккаунт для публикации
         account = None
         social_account_id = (request.get_json() or {}).get('social_account_id') or item.social_account_id
+        # Фоллбэк на дефолтный аккаунт фабрики
+        if not social_account_id:
+            factory = ContentFactory.query.get(item.factory_id)
+            if factory:
+                social_account_id = factory.default_social_account_id
         if social_account_id:
             account = SocialAccount.query.filter_by(
                 id=social_account_id, seller_id=current_user.seller.id
@@ -597,6 +602,21 @@ def register_content_factory_routes(app):
         item.status = 'draft'
         if result.hashtags:
             item.set_hashtags(result.hashtags)
+        if result.media_urls:
+            item.media_urls_json = json.dumps(result.media_urls)
+
+        # Обновляем метаданные
+        platform_specific = item.get_platform_specific()
+        if result.wb_url:
+            platform_specific['wb_url'] = result.wb_url
+        if result.store_name:
+            platform_specific['store_name'] = result.store_name
+        if result.product_names:
+            platform_specific['product_names'] = result.product_names
+        if result.quality_score:
+            platform_specific['quality_score'] = result.quality_score
+        platform_specific['char_count'] = len(result.body_text or '')
+        item.platform_specific_json = json.dumps(platform_specific, ensure_ascii=False)
 
         db.session.commit()
         return jsonify({'success': True, 'item': item.to_dict()})
