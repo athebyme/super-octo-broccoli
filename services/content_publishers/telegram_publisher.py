@@ -216,34 +216,38 @@ class TelegramPublisher(BasePublisher):
         text: str,
         photo_url: str,
     ) -> PublishResult:
-        """Отправляет сообщение с фото."""
+        """Отправляет сообщение с фото. Если текст > 1024 — фото + отдельный текст."""
         url = f"{TELEGRAM_API_BASE.format(token=bot_token)}/sendPhoto"
 
-        # Telegram caption лимит 1024 символа
-        caption = text if len(text) <= 1024 else text[:1020] + '...'
+        # Telegram caption лимит 1024 символа — если больше, отправляем текст отдельным сообщением
+        long_text = len(text) > 1024
+        caption = '' if long_text else text
 
         # Сначала пробуем скачать и отправить файлом (надежнее)
         photo_data = self._download_photo(photo_url)
         if photo_data:
-            resp = requests.post(url, data={
-                'chat_id': chat_id,
-                'caption': caption,
-                'parse_mode': 'HTML',
-            }, files={'photo': ('photo.jpg', photo_data, 'image/jpeg')}, timeout=30)
+            payload = {'chat_id': chat_id, 'parse_mode': 'HTML'}
+            if caption:
+                payload['caption'] = caption
+            resp = requests.post(url, data=payload,
+                                 files={'photo': ('photo.jpg', photo_data, 'image/jpeg')}, timeout=30)
         else:
             # Фоллбэк — отправка URL напрямую
-            resp = requests.post(url, json={
-                'chat_id': chat_id,
-                'photo': photo_url,
-                'caption': caption,
-                'parse_mode': 'HTML',
-            }, timeout=30)
+            payload = {'chat_id': chat_id, 'photo': photo_url, 'parse_mode': 'HTML'}
+            if caption:
+                payload['caption'] = caption
+            resp = requests.post(url, json=payload, timeout=30)
 
         data = resp.json()
 
         if data.get('ok'):
             message_id = data.get('result', {}).get('message_id')
             post_url = self._build_post_url(chat_id, message_id)
+
+            # Отправляем полный текст отдельным сообщением
+            if long_text:
+                self._send_text_message(bot_token, chat_id, text)
+
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id),
@@ -265,7 +269,9 @@ class TelegramPublisher(BasePublisher):
         import json as _json
         url = f"{TELEGRAM_API_BASE.format(token=bot_token)}/sendMediaGroup"
 
-        caption = text if len(text) <= 1024 else text[:1020] + '...'
+        # Если текст > 1024 — отправим его отдельным сообщением после фото
+        long_text = len(text) > 1024
+        caption = '' if long_text else text
 
         # Скачиваем фото и загружаем как файлы для надежности
         files = {}
@@ -283,7 +289,7 @@ class TelegramPublisher(BasePublisher):
                 # Фоллбэк на URL если скачать не удалось
                 media_item = {'type': 'photo', 'media': photo_url}
 
-            if i == 0:
+            if i == 0 and caption:
                 media_item['caption'] = caption
                 media_item['parse_mode'] = 'HTML'
             media.append(media_item)
@@ -307,6 +313,11 @@ class TelegramPublisher(BasePublisher):
             results = data.get('result', [])
             message_id = results[0].get('message_id') if results else None
             post_url = self._build_post_url(chat_id, message_id) if message_id else None
+
+            # Отправляем полный текст отдельным сообщением если не влез в caption
+            if long_text:
+                self._send_text_message(bot_token, chat_id, text)
+
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id) if message_id else None,
@@ -319,7 +330,11 @@ class TelegramPublisher(BasePublisher):
 
     def format_text(self, item: ContentItem) -> str:
         """Форматирует текст для Telegram (HTML)."""
+        import re
         text = item.body_text or ''
+
+        # Убираем служебные метки AI (ЧЕРНОВИК:, ИТОГОВЫЙ ТЕКСТ: и т.п.)
+        text = re.sub(r'^(?:ЧЕРНОВИК|DRAFT|ИТОГОВЫЙ ТЕКСТ|ИСПРАВЛЕННЫЙ ТЕКСТ|ИТОГОВЫЙ ВАРИАНТ)\s*:\s*\n?', '', text, flags=re.IGNORECASE)
 
         # Добавляем хештеги если они есть и не в тексте
         hashtags = item.get_hashtags()

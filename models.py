@@ -4022,6 +4022,9 @@ class ContentFactory(db.Model):
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
     schedule_cron = db.Column(db.String(100))  # cron-выражение для автогенерации
     auto_approve = db.Column(db.Boolean, default=False)
+    auto_publish = db.Column(db.Boolean, default=False)  # Автопубликация одобренных постов
+    publish_interval_minutes = db.Column(db.Integer, default=60)  # Интервал между публикациями (мин)
+    last_auto_publish_at = db.Column(db.DateTime, nullable=True)  # Время последней автопубликации
 
     default_social_account_id = db.Column(db.Integer, db.ForeignKey('social_accounts.id', use_alter=True), nullable=True)
 

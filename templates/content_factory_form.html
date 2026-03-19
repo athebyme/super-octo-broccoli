@@ -143,6 +143,28 @@
                 <span class="text-sm text-gray-700">Автоматически одобрять сгенерированный контент</span>
             </label>
 
+            <!-- Автопубликация -->
+            <div class="border border-gray-100 rounded-lg p-4 space-y-3" x-data="{ autoPublish: {{ 'true' if factory and factory.auto_publish else 'false' }} }">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="auto_publish" x-model="autoPublish"
+                        class="rounded border-gray-300 text-brand focus:ring-brand">
+                    <div>
+                        <span class="text-sm font-medium text-gray-700">Автопубликация</span>
+                        <p class="text-xs text-gray-400">Одобренные посты будут публиковаться автоматически</p>
+                    </div>
+                </label>
+                <div x-show="autoPublish" x-cloak class="ml-7">
+                    <label class="block text-sm text-gray-600 mb-1">Интервал между постами</label>
+                    <div class="flex items-center gap-2">
+                        <input type="number" name="publish_interval_minutes" min="5" max="1440"
+                            value="{{ factory.publish_interval_minutes if factory and factory.publish_interval_minutes else 60 }}"
+                            class="w-24 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                        <span class="text-sm text-gray-500">минут</span>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">Минимум 5 мин. Рекомендуемый: 30-120 мин.</p>
+                </div>
+            </div>
+
             {% if factory %}
             <label class="flex items-center gap-3 cursor-pointer">
                 <input type="checkbox" name="is_active" {% if factory.is_active %}checked{% endif %}

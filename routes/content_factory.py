@@ -110,6 +110,8 @@ def register_content_factory_routes(app):
                 ai_provider=request.form.get('ai_provider', 'openai'),
                 product_selection_mode=request.form.get('product_selection_mode', 'manual'),
                 auto_approve=bool(request.form.get('auto_approve')),
+                auto_publish=bool(request.form.get('auto_publish')),
+                publish_interval_minutes=max(5, int(request.form.get('publish_interval_minutes', 60) or 60)),
             )
             factory.set_content_types(content_types)
 
@@ -178,6 +180,8 @@ def register_content_factory_routes(app):
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
             factory.auto_approve = bool(request.form.get('auto_approve'))
+            factory.auto_publish = bool(request.form.get('auto_publish'))
+            factory.publish_interval_minutes = max(5, int(request.form.get('publish_interval_minutes', 60) or 60))
             factory.is_active = bool(request.form.get('is_active'))
 
             content_types = request.form.getlist('content_types')
@@ -470,7 +474,7 @@ def register_content_factory_routes(app):
         if not item:
             return jsonify({'error': 'Контент не найден'}), 404
 
-        if item.status not in ('draft', 'approved', 'scheduled'):
+        if item.status not in ('draft', 'approved', 'scheduled', 'failed'):
             return jsonify({'error': f'Нельзя опубликовать контент со статусом {item.status}'}), 400
 
         # Определяем аккаунт для публикации

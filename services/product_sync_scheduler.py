@@ -124,6 +124,16 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Автопубликация контента (каждые 2 минуты проверяет очередь)
+    from services.content_auto_publisher import auto_publish_content
+    scheduler.add_job(
+        func=lambda: auto_publish_content(flask_app),
+        trigger=IntervalTrigger(minutes=2),
+        id='content_auto_publish',
+        name='Auto-publish approved content items',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
 
