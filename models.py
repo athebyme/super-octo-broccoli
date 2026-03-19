@@ -4266,9 +4266,23 @@ class ContentItem(db.Model):
 
     def get_media_urls(self):
         try:
-            return json.loads(self.media_urls_json or '[]')
+            urls = json.loads(self.media_urls_json or '[]')
+            if urls:
+                return urls
         except Exception:
-            return []
+            pass
+
+        # Фоллбэк: генерируем URL фото из WB CDN по nm_id товаров
+        try:
+            product_ids = self.get_product_ids()
+            if product_ids:
+                from seller_platform import wb_photo_url
+                product = Product.query.get(product_ids[0])
+                if product and product.nm_id:
+                    return [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
+        except Exception:
+            pass
+        return []
 
     def get_platform_specific(self):
         try:

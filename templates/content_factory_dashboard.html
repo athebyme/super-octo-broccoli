@@ -117,13 +117,19 @@ function contentDashboard() {
     return {
         async deleteFactory(id, name) {
             if (!confirm(`Удалить фабрику "${name}" и весь её контент?`)) return;
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
-            const resp = await fetch(`/api/content-factory/${id}`, {
-                method: 'DELETE',
-                headers: { 'X-CSRFToken': csrf },
-            });
-            if (resp.ok) location.reload();
-            else alert('Ошибка удаления');
+            try {
+                const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                const resp = await fetch(`/api/content-factory/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                    body: JSON.stringify({})
+                });
+                const data = await resp.json();
+                if (data.success) location.reload();
+                else alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+            } catch (e) {
+                alert('Ошибка удаления: ' + e.message);
+            }
         }
     }
 }

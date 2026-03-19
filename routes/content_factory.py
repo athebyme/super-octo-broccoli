@@ -487,6 +487,14 @@ def register_content_factory_routes(app):
                 id=social_account_id, seller_id=current_user.seller.id
             ).first()
 
+        # Последний фоллбэк: любой активный аккаунт для этой платформы
+        if not account:
+            account = SocialAccount.query.filter_by(
+                seller_id=current_user.seller.id,
+                platform=item.platform,
+                is_active=True,
+            ).first()
+
         if not account:
             return jsonify({'error': 'Не указан аккаунт для публикации. Подключите аккаунт в настройках.'}), 400
 
@@ -744,7 +752,7 @@ def register_content_factory_routes(app):
     @app.route('/api/content-factory/<int:factory_id>', methods=['DELETE'])
     @login_required
     def api_content_factory_delete(factory_id):
-        """Удаление фабрики."""
+        """Удаление фабрики и всего её контента."""
         if not current_user.seller:
             return jsonify({'error': 'Продавец не найден'}), 403
 
@@ -754,9 +762,17 @@ def register_content_factory_routes(app):
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
 
-        db.session.delete(factory)
-        db.session.commit()
-        return jsonify({'success': True})
+        try:
+            # Явно удаляем связанные записи для надёжности
+            ContentItem.query.filter_by(factory_id=factory.id).delete()
+            ContentPlan.query.filter_by(factory_id=factory.id).delete()
+            db.session.delete(factory)
+            db.session.commit()
+            return jsonify({'success': True})
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Factory delete error: {e}", exc_info=True)
+            return jsonify({'error': f'Ошибка удаления: {e}'}), 500
 
     # ================================================================
     # API: Контент-календарь
