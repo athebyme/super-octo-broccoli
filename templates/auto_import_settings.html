@@ -311,13 +311,20 @@
 
                     <!-- Модель -->
                     <div>
-                        <label for="ai_model" class="block text-sm font-medium text-gray-700 mb-1">
+                        <label for="ai_model_select" class="block text-sm font-medium text-gray-700 mb-1">
                             Модель AI
                         </label>
-                        <select id="ai_model" name="ai_model"
+                        <select id="ai_model_select" onchange="onModelSelectChange()"
                                 class="shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md">
                             <option value="{{ settings.ai_model or 'openai/gpt-oss-120b' }}">{{ settings.ai_model or 'openai/gpt-oss-120b' }}</option>
                         </select>
+                        <input type="text" id="ai_model_custom"
+                               value="{{ settings.ai_model or 'openai/gpt-oss-120b' }}"
+                               placeholder="Например: google/gemini-2.5-flash-preview"
+                               class="mt-2 shadow-sm focus:ring-purple-500 focus:border-purple-500 block w-full sm:text-sm border-gray-300 rounded-md"
+                               style="display:none">
+                        <!-- hidden input для отправки формы — всегда содержит актуальное значение -->
+                        <input type="hidden" id="ai_model_hidden" name="ai_model" value="{{ settings.ai_model or 'openai/gpt-oss-120b' }}">
                         <p id="model_description" class="mt-1 text-xs text-gray-500">
                             Загрузка моделей...
                         </p>
@@ -911,10 +918,13 @@ async function loadModels() {
 }
 
 function populateModels(models, currentValue) {
-    const modelSelect = document.getElementById('ai_model');
+    const modelSelect = document.getElementById('ai_model_select');
     const modelDescription = document.getElementById('model_description');
+    const hiddenInput = document.getElementById('ai_model_hidden');
+    const customInput = document.getElementById('ai_model_custom');
 
     modelSelect.innerHTML = '';
+    let foundCurrent = false;
 
     for (const [modelId, modelInfo] of Object.entries(models)) {
         const option = document.createElement('option');
@@ -922,7 +932,11 @@ function populateModels(models, currentValue) {
         option.textContent = modelInfo.name + (modelInfo.recommended ? ' (рекомендуется)' : '');
         option.dataset.description = modelInfo.description || '';
 
-        if (modelId === currentValue || (!currentValue && modelInfo.recommended)) {
+        if (modelId === currentValue) {
+            option.selected = true;
+            foundCurrent = true;
+            modelDescription.textContent = modelInfo.description || '';
+        } else if (!currentValue && modelInfo.recommended && !foundCurrent) {
             option.selected = true;
             modelDescription.textContent = modelInfo.description || '';
         }
@@ -930,11 +944,51 @@ function populateModels(models, currentValue) {
         modelSelect.appendChild(option);
     }
 
+    // Добавляем "Другая (ввести вручную)"
+    const customOption = document.createElement('option');
+    customOption.value = '__custom__';
+    customOption.textContent = 'Другая (ввести вручную)...';
+    modelSelect.appendChild(customOption);
+
+    // Если текущая модель не в списке — это кастомная
+    if (currentValue && !foundCurrent) {
+        customOption.selected = true;
+        customInput.value = currentValue;
+        customInput.style.display = 'block';
+        hiddenInput.value = currentValue;
+        modelDescription.textContent = 'Кастомная модель';
+    } else {
+        customInput.style.display = 'none';
+        hiddenInput.value = modelSelect.value;
+    }
+
     // Обновляем описание при смене модели
     modelSelect.onchange = function() {
-        const selectedOption = this.options[this.selectedIndex];
-        modelDescription.textContent = selectedOption.dataset.description || '';
+        onModelSelectChange();
     };
+}
+
+function onModelSelectChange() {
+    const modelSelect = document.getElementById('ai_model_select');
+    const customInput = document.getElementById('ai_model_custom');
+    const hiddenInput = document.getElementById('ai_model_hidden');
+    const modelDescription = document.getElementById('model_description');
+
+    if (modelSelect.value === '__custom__') {
+        customInput.style.display = 'block';
+        customInput.focus();
+        hiddenInput.value = customInput.value;
+        modelDescription.textContent = 'Введите ID модели (например: google/gemini-2.5-flash-preview)';
+        // Обновлять hidden при вводе
+        customInput.oninput = function() {
+            hiddenInput.value = this.value;
+        };
+    } else {
+        customInput.style.display = 'none';
+        hiddenInput.value = modelSelect.value;
+        const selectedOption = modelSelect.options[modelSelect.selectedIndex];
+        modelDescription.textContent = selectedOption.dataset.description || '';
+    }
 }
 
 async function testAIConnection() {
