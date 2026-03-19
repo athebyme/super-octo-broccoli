@@ -795,6 +795,136 @@ def register_content_factory_routes(app):
         return jsonify({'success': True})
 
     # ================================================================
+    # API: Диагностика загрузки фото VK
+    # ================================================================
+
+    @app.route('/api/content-factory/items/<int:item_id>/debug-photos', methods=['POST'])
+    @login_required
+    def api_content_item_debug_photos(item_id):
+        """Диагностика: тестирует загрузку фото для контента в VK."""
+        import io
+        import requests as _requests
+
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+
+        item = ContentItem.query.filter_by(
+            id=item_id, seller_id=current_user.seller.id
+        ).first()
+        if not item:
+            return jsonify({'error': 'Контент не найден'}), 404
+
+        result = {
+            'item_id': item.id,
+            'platform': item.platform,
+            'media_urls_json_raw': item.media_urls_json,
+            'steps': [],
+        }
+
+        # Шаг 1: get_media_urls
+        media_urls = item.get_media_urls()
+        result['media_urls'] = media_urls
+        result['media_urls_count'] = len(media_urls)
+
+        if not media_urls:
+            # Проверяем product напрямую
+            product_ids = item.get_product_ids()
+            result['product_ids'] = product_ids
+            if product_ids:
+                product = Product.query.get(product_ids[0])
+                if product:
+                    result['product_nm_id'] = product.nm_id
+                    result['product_photos_json'] = product.photos_json[:500] if product.photos_json else None
+            result['steps'].append({'step': 'get_media_urls', 'status': 'EMPTY', 'detail': 'Нет URL фото'})
+            return jsonify(result)
+
+        result['steps'].append({'step': 'get_media_urls', 'status': 'OK', 'count': len(media_urls)})
+
+        # Шаг 2: Скачиваем первое фото
+        test_url = media_urls[0]
+        result['test_photo_url'] = test_url
+        try:
+            photo_resp = _requests.get(test_url, timeout=10)
+            result['steps'].append({
+                'step': 'download_photo',
+                'status': 'OK' if photo_resp.status_code == 200 else 'FAIL',
+                'http_status': photo_resp.status_code,
+                'content_type': photo_resp.headers.get('Content-Type', ''),
+                'content_length': len(photo_resp.content),
+            })
+
+            if photo_resp.status_code == 200 and len(photo_resp.content) > 512:
+                # Шаг 3: Конвертируем в JPEG
+                try:
+                    from PIL import Image
+                    img = Image.open(io.BytesIO(photo_resp.content))
+                    buf = io.BytesIO()
+                    if img.mode not in ('RGB',):
+                        img = img.convert('RGB')
+                    img.save(buf, format='JPEG', quality=93)
+                    jpeg_size = len(buf.getvalue())
+                    result['steps'].append({
+                        'step': 'convert_jpeg',
+                        'status': 'OK',
+                        'original_format': img.format,
+                        'original_size': f'{img.size[0]}x{img.size[1]}',
+                        'jpeg_bytes': jpeg_size,
+                    })
+                except Exception as e:
+                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': str(e)})
+        except Exception as e:
+            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': str(e)})
+
+        # Шаг 4: Проверяем VK аккаунт
+        data = request.get_json(silent=True) or {}
+        social_account_id = data.get('social_account_id') or item.social_account_id
+        if social_account_id:
+            account = SocialAccount.query.get(social_account_id)
+            if account:
+                creds = account.get_credentials_dict()
+                access_token = creds.get('access_token', '')
+                group_id = str(creds.get('group_id', '') or account.account_id).lstrip('-')
+                api_version = creds.get('api_version', '5.199')
+
+                result['vk_group_id'] = group_id
+                result['vk_token_prefix'] = access_token[:20] + '...' if access_token else 'EMPTY'
+
+                # Тестируем getWallUploadServer
+                try:
+                    srv_resp = _requests.get(
+                        'https://api.vk.com/method/photos.getWallUploadServer',
+                        params={
+                            'access_token': access_token,
+                            'group_id': group_id,
+                            'v': api_version,
+                        },
+                        timeout=10,
+                    )
+                    srv_data = srv_resp.json()
+                    if 'error' in srv_data:
+                        result['steps'].append({
+                            'step': 'vk_getWallUploadServer',
+                            'status': 'FAIL',
+                            'error_code': srv_data['error'].get('error_code'),
+                            'error_msg': srv_data['error'].get('error_msg'),
+                        })
+                    else:
+                        upload_url = srv_data.get('response', {}).get('upload_url', '')
+                        result['steps'].append({
+                            'step': 'vk_getWallUploadServer',
+                            'status': 'OK',
+                            'upload_url_prefix': upload_url[:80] + '...' if upload_url else 'EMPTY',
+                        })
+                except Exception as e:
+                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': str(e)})
+            else:
+                result['steps'].append({'step': 'vk_account', 'status': 'FAIL', 'error': f'Account {social_account_id} not found'})
+        else:
+            result['steps'].append({'step': 'vk_account', 'status': 'SKIP', 'detail': 'No social_account_id'})
+
+        return jsonify(result)
+
+    # ================================================================
     # API: Управление аккаунтами
     # ================================================================
 
