@@ -286,13 +286,24 @@ class TelegramPublisher(BasePublisher):
                 media_item = {'type': 'photo', 'media': f'attach://{attach_name}'}
                 downloaded_any = True
             else:
-                # Фоллбэк на URL если скачать не удалось
-                media_item = {'type': 'photo', 'media': photo_url}
+                # Пропускаем фото которые не удалось скачать (битые URL)
+                logger.warning(f"Skipping broken photo URL: {photo_url}")
+                continue
 
-            if i == 0 and caption:
+            if len(media) == 0 and caption:
                 media_item['caption'] = caption
                 media_item['parse_mode'] = 'HTML'
             media.append(media_item)
+
+        if not media:
+            # Ни одно фото не удалось скачать — отправляем только текст
+            logger.warning("No photos downloaded successfully, falling back to text-only")
+            return self._send_text_message(bot_token, chat_id, text)
+
+        if len(media) == 1:
+            # Только одно фото — используем sendPhoto (надёжнее)
+            attach_name = list(files.keys())[0]
+            return self._send_photo_message(bot_token, chat_id, text, photo_urls[0])
 
         if downloaded_any:
             # Отправка через multipart/form-data с файлами

@@ -13,6 +13,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
 
 import re
+import requests as _requests
 
 from models import (
     db, Product, Seller, SupplierProduct, ImportedProduct,
@@ -535,16 +536,37 @@ class ContentFactoryService:
             Product.seller_id == seller_id,
         ).all()
 
-        return [self._product_to_dict(p) for p in products]
+        return [self._product_to_dict(p, validate_photos=True) for p in products]
 
-    def _product_to_dict(self, product: Product) -> Dict:
+    def _validate_photo_urls(self, urls: list) -> list:
+        """Проверяет доступность фото по URL (HEAD-запрос). Останавливается на первой ошибке."""
+        validated = []
+        for url in urls:
+            try:
+                resp = _requests.head(url, timeout=4, allow_redirects=True)
+                if resp.status_code == 200:
+                    validated.append(url)
+                else:
+                    break  # WB фото последовательные: если одно не найдено, следующие тоже
+            except Exception:
+                break
+        return validated
+
+    def _product_to_dict(self, product: Product, validate_photos: bool = False) -> Dict:
         """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""
         photos = []
-        if product.photos_json:
+        if product.photos_json and product.nm_id:
             try:
+                from seller_platform import wb_photo_url
                 raw_photos = json.loads(product.photos_json)
                 if isinstance(raw_photos, list):
-                    photos = [p for p in raw_photos if isinstance(p, str) and p.startswith('http')]
+                    for p in raw_photos:
+                        if isinstance(p, str) and p.startswith('http'):
+                            # Формат wb_product_importer: полные URL
+                            photos.append(p)
+                        elif isinstance(p, int):
+                            # Формат seller_platform Cards sync: индексы фото [1, 2, 3, ...]
+                            photos.append(wb_photo_url(product.nm_id, p))
             except Exception:
                 pass
 
@@ -552,7 +574,12 @@ class ContentFactoryService:
         if not photos and product.nm_id:
             try:
                 from seller_platform import wb_photo_url
-                photos = [wb_photo_url(product.nm_id, i) for i in range(1, 6)]
+                if validate_photos:
+                    candidate_urls = [wb_photo_url(product.nm_id, i) for i in range(1, 11)]
+                    photos = self._validate_photo_urls(candidate_urls)
+                else:
+                    # Без валидации берём только 2 фото (безопасный минимум)
+                    photos = [wb_photo_url(product.nm_id, i) for i in range(1, 3)]
             except Exception:
                 pass
 

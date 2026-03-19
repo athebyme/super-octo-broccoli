@@ -57,6 +57,123 @@
         {% endif %}
     </div>
 
+    <!-- Generation progress banner -->
+    <div x-show="bulkProgress.active" x-cloak
+         class="mb-4 bg-gradient-to-r from-brand/5 to-brand/10 border border-brand/20 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-brand animate-spin" x-show="bulkProgress.running" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <svg class="w-5 h-5 text-green-500" x-show="!bulkProgress.running" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm font-medium text-gray-700" x-text="bulkProgress.running ? 'Генерация контента...' : 'Генерация завершена'"></span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-500">
+                    <span x-text="bulkProgress.done"></span> / <span x-text="bulkProgress.total"></span>
+                </span>
+                <button x-show="bulkProgress.running" @click="cancelBulk()" class="text-xs text-red-500 hover:text-red-700">Отмена</button>
+                <button x-show="!bulkProgress.running" @click="bulkProgress.active = false" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+            </div>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-1.5">
+            <div class="bg-brand h-1.5 rounded-full transition-all duration-300"
+                 :style="'width: ' + (bulkProgress.total ? (bulkProgress.done / bulkProgress.total * 100) : 0) + '%'"></div>
+        </div>
+        <div x-show="bulkProgress.errors.length > 0" class="mt-2 text-xs text-red-500" x-text="'Ошибки: ' + bulkProgress.errors.join('; ')"></div>
+    </div>
+
+    <!-- Dynamically generated items container -->
+    <div id="generated-items-container" class="space-y-4 mb-4" x-show="generatedItems.length > 0">
+        <template x-for="item in generatedItems" :key="item.id">
+            <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow animate-fadeIn"
+                 x-data="{ expanded: false }">
+                <div class="p-5">
+                    <div class="flex gap-4">
+                        <!-- Photo -->
+                        <div class="shrink-0">
+                            <template x-if="item.media_urls && item.media_urls.length > 0">
+                                <img :src="item.media_urls[0]" alt="Product"
+                                     class="w-20 h-20 rounded-lg object-cover border border-gray-100"
+                                     onerror="this.onerror=null;this.style.display='none';this.nextElementSibling?.classList.remove('hidden')">
+                            </template>
+                            <div class="w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300"
+                                 :class="item.media_urls && item.media_urls.length > 0 ? 'hidden' : ''">
+                                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </div>
+                        </div>
+                        <!-- Content -->
+                        <div class="flex-1 min-w-0">
+                            <div class="flex flex-wrap items-center gap-2 mb-2">
+                                <span class="px-2 py-0.5 rounded text-xs font-medium"
+                                      :class="item.status === 'draft' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'"
+                                      x-text="item.status === 'draft' ? 'Черновик' : 'Одобрен'"></span>
+                                <span class="text-xs text-gray-400" x-text="item._content_type_label || item.content_type"></span>
+                                <span class="text-xs text-gray-300" x-text="item._created_label || ''"></span>
+                                <template x-if="item.ai_provider">
+                                    <span class="text-xs text-gray-300" x-text="item.ai_provider + (item.generation_time_ms ? ' (' + (item.generation_time_ms / 1000).toFixed(1) + 'с)' : '')"></span>
+                                </template>
+                                <template x-if="item.platform_specific && item.platform_specific.quality_score">
+                                    <span class="inline-flex items-center gap-1 text-xs font-medium"
+                                          :class="item.platform_specific.quality_score >= 80 ? 'text-green-600' : item.platform_specific.quality_score >= 50 ? 'text-yellow-600' : 'text-red-500'">
+                                        <span class="w-2 h-2 rounded-full"
+                                              :class="item.platform_specific.quality_score >= 80 ? 'bg-green-500' : item.platform_specific.quality_score >= 50 ? 'bg-yellow-400' : 'bg-red-400'"></span>
+                                        <span x-text="item.platform_specific.quality_score"></span>
+                                    </span>
+                                </template>
+                            </div>
+                            <!-- Product names -->
+                            <template x-if="item.platform_specific && item.platform_specific.product_names && item.platform_specific.product_names.length">
+                                <div class="flex flex-wrap items-center gap-1.5 mb-2">
+                                    <template x-for="pname in item.platform_specific.product_names.slice(0, 3)">
+                                        <span class="px-2 py-0.5 bg-gray-50 text-gray-400 text-[11px] rounded-full border border-gray-100 truncate max-w-[200px]" x-text="pname"></span>
+                                    </template>
+                                </div>
+                            </template>
+                            <!-- Title -->
+                            <template x-if="item.title">
+                                <h3 class="font-medium text-gray-900 mb-1 leading-snug" x-text="item.title"></h3>
+                            </template>
+                            <!-- Body -->
+                            <div class="text-sm text-gray-600 cursor-pointer select-text" @click="expanded = !expanded">
+                                <template x-if="!expanded">
+                                    <div class="line-clamp-3 whitespace-pre-wrap break-words" x-text="(item.body_text || '').substring(0, 500)"></div>
+                                </template>
+                                <template x-if="expanded">
+                                    <div class="whitespace-pre-wrap break-words" x-text="item.body_text"></div>
+                                </template>
+                            </div>
+                            <button @click="expanded = !expanded" class="text-xs text-brand hover:text-brand-dark mt-1 transition">
+                                <span x-text="expanded ? 'Свернуть' : 'Показать полностью'"></span>
+                            </button>
+                            <!-- Hashtags -->
+                            <template x-if="item.hashtags && item.hashtags.length">
+                                <div class="mt-2 flex flex-wrap gap-1">
+                                    <template x-for="tag in item.hashtags">
+                                        <span class="px-2 py-0.5 bg-blue-50 text-blue-600 text-[11px] rounded-full" x-text="tag.startsWith('#') ? tag : '#' + tag"></span>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                        <!-- Actions -->
+                        <div class="flex flex-col gap-1.5 shrink-0">
+                            <template x-if="item.status === 'draft'">
+                                <button @click="approveItem(item.id)" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Одобрить</button>
+                            </template>
+                            <button @click="publishItem(item.id)" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium"
+                                    :id="'pub-btn-' + item.id">Опубликовать</button>
+                            <button @click="regenerateItem(item.id)" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
+                            <button @click="deleteItem(item.id)" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
     <!-- Content items -->
     {% if items.items %}
     <div class="space-y-4">
@@ -71,6 +188,7 @@
         {% set body_len = item.body_text|length if item.body_text else 0 %}
 
         <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
+             data-item-id="{{ item.id }}"
              x-data="{ expanded: false, showPreview: false, showGallery: false }">
             <div class="p-5">
                 <div class="flex gap-4">
@@ -110,7 +228,7 @@
                     <div class="flex-1 min-w-0">
                         <!-- Top meta row -->
                         <div class="flex flex-wrap items-center gap-2 mb-2">
-                            <span class="px-2 py-0.5 rounded text-xs font-medium
+                            <span class="status-badge px-2 py-0.5 rounded text-xs font-medium
                                 {% if item.status == 'draft' %}bg-amber-50 text-amber-700
                                 {% elif item.status == 'approved' %}bg-blue-50 text-blue-700
                                 {% elif item.status == 'scheduled' %}bg-indigo-50 text-indigo-700
@@ -226,7 +344,7 @@
                         <button @click="approveItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Одобрить</button>
                         {% endif %}
                         {% if item.status in ('draft', 'approved', 'failed') %}
-                        <button @click="publishItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium">Опубликовать</button>
+                        <button @click="publishItem({{ item.id }})" id="pub-btn-{{ item.id }}" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium">Опубликовать</button>
                         {% endif %}
                         <button @click="regenerateItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
 
@@ -451,7 +569,14 @@
     </div>
 </div>
 
+<style>
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+</style>
 <script>
+const CONTENT_TYPE_LABELS = {{ content_type_labels | tojson }};
+const STATUS_LABELS = {{ status_labels | tojson }};
+
 function contentItems() {
     return {
         showGenerateModal: false,
@@ -462,6 +587,9 @@ function contentItems() {
         genCustomPrompt: '',
         generating: false,
         genError: '',
+        generatedItems: [],
+        bulkProgress: { active: false, running: false, total: 0, done: 0, errors: [] },
+        _bulkCancelled: false,
 
         csrf() { return document.querySelector('meta[name="csrf-token"]')?.content; },
 
@@ -469,67 +597,191 @@ function contentItems() {
             this.generating = true;
             this.genError = '';
 
-            try {
-                let url, body;
-                if (this.genMode === 'single') {
-                    if (!this.genProductId) { this.genError = 'Выберите товар'; this.generating = false; return; }
-                    url = `/api/content-factory/{{ factory.id }}/generate`;
-                    body = { product_ids: [parseInt(this.genProductId)], content_type: this.genContentType, custom_prompt: this.genCustomPrompt || undefined };
-                } else {
-                    url = `/api/content-factory/{{ factory.id }}/generate-bulk`;
-                    body = { content_type: this.genContentType, count: parseInt(this.genCount), custom_prompt: this.genCustomPrompt || undefined };
-                }
+            if (this.genMode === 'single') {
+                if (!this.genProductId) { this.genError = 'Выберите товар'; this.generating = false; return; }
+                try {
+                    const resp = await fetch(`/api/content-factory/{{ factory.id }}/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                        body: JSON.stringify({
+                            product_ids: [parseInt(this.genProductId)],
+                            content_type: this.genContentType,
+                            custom_prompt: this.genCustomPrompt || undefined,
+                        }),
+                    });
+                    const data = await resp.json();
+                    if (data.error) {
+                        this.genError = data.error;
+                    } else {
+                        this.showGenerateModal = false;
+                        this._addGeneratedItem(data.item);
+                    }
+                } catch (e) { this.genError = 'Ошибка: ' + e.message; }
+                this.generating = false;
+            } else {
+                // Массовая генерация — в фон
+                await this._startBulkGeneration();
+            }
+        },
 
-                const resp = await fetch(url, {
+        async _startBulkGeneration() {
+            const count = parseInt(this.genCount);
+            this.showGenerateModal = false;
+            this.generating = false;
+            this._bulkCancelled = false;
+
+            // Показываем прогресс-бар
+            this.bulkProgress = { active: true, running: true, total: count, done: 0, errors: [] };
+
+            // Получаем список товаров
+            try {
+                const resp = await fetch(`/api/content-factory/{{ factory.id }}/select-products`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
-                    body: JSON.stringify(body),
+                    body: JSON.stringify({ count }),
                 });
                 const data = await resp.json();
-
-                if (data.error) {
-                    this.genError = data.error;
-                } else if (data.errors && data.errors.length > 0 && (!data.generated || data.generated === 0)) {
-                    this.genError = data.errors.join('; ');
-                } else {
-                    this.showGenerateModal = false;
-                    location.reload();
+                if (data.error || !data.products || data.products.length === 0) {
+                    this.bulkProgress.running = false;
+                    this.bulkProgress.errors.push(data.error || 'Не найдены товары для генерации');
+                    return;
                 }
-            } catch (e) { this.genError = 'Ошибка: ' + e.message; }
-            this.generating = false;
+
+                const products = data.products.slice(0, count);
+                this.bulkProgress.total = products.length;
+
+                // Генерируем по одному
+                for (const product of products) {
+                    if (this._bulkCancelled) break;
+
+                    try {
+                        const genResp = await fetch(`/api/content-factory/{{ factory.id }}/generate`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                            body: JSON.stringify({
+                                product_ids: [product.id],
+                                content_type: this.genContentType,
+                                custom_prompt: this.genCustomPrompt || undefined,
+                            }),
+                        });
+                        const genData = await genResp.json();
+                        if (genData.error) {
+                            this.bulkProgress.errors.push(product.name + ': ' + genData.error);
+                        } else if (genData.item) {
+                            this._addGeneratedItem(genData.item);
+                        }
+                    } catch (e) {
+                        this.bulkProgress.errors.push(product.name + ': ' + e.message);
+                    }
+                    this.bulkProgress.done++;
+                }
+            } catch (e) {
+                this.bulkProgress.errors.push('Ошибка: ' + e.message);
+            }
+            this.bulkProgress.running = false;
+        },
+
+        cancelBulk() {
+            this._bulkCancelled = true;
+        },
+
+        _addGeneratedItem(item) {
+            item._content_type_label = CONTENT_TYPE_LABELS[item.content_type] || item.content_type;
+            if (item.created_at) {
+                const d = new Date(item.created_at);
+                item._created_label = d.toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+            }
+            this.generatedItems.unshift(item);
         },
 
         async approveItem(id) {
-            await fetch(`/api/content-factory/items/${id}/approve`, { method: 'POST', headers: { 'X-CSRFToken': this.csrf() } });
-            location.reload();
+            const resp = await fetch(`/api/content-factory/items/${id}/approve`, { method: 'POST', headers: { 'X-CSRFToken': this.csrf() } });
+            const data = await resp.json();
+            if (data.success) {
+                // Обновляем в динамическом списке
+                const item = this.generatedItems.find(i => i.id === id);
+                if (item) item.status = 'approved';
+                // Обновляем в статическом DOM
+                this._updateStatusBadge(id, 'approved', 'Одобрен', 'bg-blue-50 text-blue-700');
+            }
         },
 
         async publishItem(id) {
             if (!confirm('Опубликовать контент сейчас?')) return;
+
+            // Показываем состояние загрузки
+            const btn = document.getElementById('pub-btn-' + id);
+            const origText = btn ? btn.textContent : '';
+            if (btn) { btn.textContent = 'Публикация...'; btn.disabled = true; btn.classList.add('opacity-50'); }
+
             try {
                 const resp = await fetch(`/api/content-factory/items/${id}/publish`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
-                    body: JSON.stringify({})
+                    body: JSON.stringify({}),
                 });
                 const data = await resp.json();
-                if (data.error) alert('Ошибка: ' + data.error);
-                else location.reload();
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    if (btn) { btn.textContent = origText; btn.disabled = false; btn.classList.remove('opacity-50'); }
+                } else {
+                    // Обновляем статус без перезагрузки
+                    const item = this.generatedItems.find(i => i.id === id);
+                    if (item) {
+                        item.status = 'published';
+                        item.external_post_url = data.external_post_url;
+                    }
+                    this._updateStatusBadge(id, 'published', 'Опубликован', 'bg-green-50 text-green-700');
+                    if (btn) { btn.textContent = 'Опубликован'; btn.classList.add('!bg-green-100', '!text-green-700'); }
+                }
             } catch (e) {
                 alert('Ошибка публикации: ' + e.message);
+                if (btn) { btn.textContent = origText; btn.disabled = false; btn.classList.remove('opacity-50'); }
             }
         },
 
         async regenerateItem(id) {
             if (!confirm('Перегенерировать контент?')) return;
-            await fetch(`/api/content-factory/items/${id}/regenerate`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() }, body: '{}' });
-            location.reload();
+            const resp = await fetch(`/api/content-factory/items/${id}/regenerate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.item) {
+                // Обновляем в динамическом списке
+                const idx = this.generatedItems.findIndex(i => i.id === id);
+                if (idx >= 0) {
+                    data.item._content_type_label = CONTENT_TYPE_LABELS[data.item.content_type] || data.item.content_type;
+                    this.generatedItems[idx] = data.item;
+                } else {
+                    location.reload();
+                }
+            } else {
+                location.reload();
+            }
         },
 
         async deleteItem(id) {
             if (!confirm('Удалить этот контент?')) return;
             await fetch(`/api/content-factory/items/${id}`, { method: 'DELETE', headers: { 'X-CSRFToken': this.csrf() } });
-            location.reload();
+            // Убираем из динамического списка
+            this.generatedItems = this.generatedItems.filter(i => i.id !== id);
+            // Убираем из статического DOM
+            const el = document.querySelector(`[data-item-id="${id}"]`);
+            if (el) el.remove();
+            else location.reload();
+        },
+
+        _updateStatusBadge(id, status, label, classes) {
+            // Для статических (серверных) элементов — обновляем DOM напрямую
+            const container = document.querySelector(`[data-item-id="${id}"]`);
+            if (!container) return;
+            const badge = container.querySelector('.status-badge');
+            if (badge) {
+                badge.className = 'status-badge px-2 py-0.5 rounded text-xs font-medium ' + classes;
+                badge.textContent = label;
+            }
         },
 
         async copyToClipboard(id) {
@@ -544,7 +796,6 @@ function contentItems() {
                     setTimeout(() => { btn.innerHTML = orig; }, 1500);
                 }
             } catch (e) {
-                /* Fallback for older browsers */
                 el.classList.remove('sr-only');
                 el.select();
                 document.execCommand('copy');

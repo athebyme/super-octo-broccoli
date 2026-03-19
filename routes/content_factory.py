@@ -318,6 +318,27 @@ def register_content_factory_routes(app):
     # API endpoints
     # ================================================================
 
+    @app.route('/api/content-factory/<int:factory_id>/select-products', methods=['POST'])
+    @login_required
+    def api_content_factory_select_products(factory_id):
+        """Подбирает товары для массовой генерации."""
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+
+        factory = ContentFactory.query.filter_by(
+            id=factory_id, seller_id=current_user.seller.id
+        ).first()
+        if not factory:
+            return jsonify({'error': 'Фабрика не найдена'}), 404
+
+        data = request.get_json() or {}
+        count = min(data.get('count', 5), 20)
+
+        products = service.select_products(factory, limit=count)
+        return jsonify({
+            'products': [{'id': p['id'], 'name': p.get('name', '')} for p in products[:count]],
+        })
+
     @app.route('/api/content-factory/<int:factory_id>/generate', methods=['POST'])
     @login_required
     def api_content_factory_generate(factory_id):
