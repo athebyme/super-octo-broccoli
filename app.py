@@ -506,9 +506,36 @@ app.secret_key = _app_secret
 app.jinja_env.filters["basename"] = lambda value: Path(value).name if value else ""
 
 
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+
+# Простая аутентификация через shared secret (если задан)
+_CALCULATOR_AUTH_TOKEN = os.environ.get("CALCULATOR_AUTH_TOKEN", "")
+
+
 @app.before_request
 def _ensure_setup() -> None:
     ensure_directories()
+
+
+@app.before_request
+def _check_auth() -> None:
+    """Базовая аутентификация калькулятора через токен (если задан)."""
+    if not _CALCULATOR_AUTH_TOKEN:
+        return  # Если токен не задан, доступ открыт (для dev/local)
+    # Пропускаем для статики
+    if request.path.startswith('/static/'):
+        return
+    # Проверяем сессию
+    if request.cookies.get('calc_auth') == _CALCULATOR_AUTH_TOKEN:
+        return
+    # Проверяем query param (для первого доступа)
+    if request.args.get('token') == _CALCULATOR_AUTH_TOKEN:
+        from flask import make_response
+        resp = make_response(redirect(request.path))
+        resp.set_cookie('calc_auth', _CALCULATOR_AUTH_TOKEN, httponly=True, samesite='Lax', max_age=86400)
+        return resp
+    from flask import abort
+    abort(401, "Требуется авторизация. Добавьте ?token=<CALCULATOR_AUTH_TOKEN> к URL.")
 
 
 @app.after_request

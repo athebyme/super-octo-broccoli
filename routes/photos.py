@@ -15,8 +15,8 @@ import logging
 from pathlib import Path
 from io import BytesIO
 
-from flask import send_file, abort, Response, url_for
-from flask_login import login_required
+from flask import send_file, abort, Response, url_for, request
+from flask_login import login_required, current_user
 
 logger = logging.getLogger(__name__)
 
@@ -160,10 +160,19 @@ def register_photo_routes(app):
         """
         import requests as _requests
         from PIL import Image as _Image
-        from models import SupplierProduct
+        from models import SupplierProduct, SellerSupplier
         from services.photo_cache import get_photo_cache
 
         product = SupplierProduct.query.get_or_404(supplier_product_id)
+
+        # Проверка доступа: только владелец поставщика или админ
+        if not current_user.is_admin and current_user.seller:
+            has_access = SellerSupplier.query.filter_by(
+                seller_id=current_user.seller.id,
+                supplier_id=product.supplier_id,
+            ).first()
+            if not has_access:
+                abort(403)
 
         if not product.photo_urls_json:
             abort(404)
@@ -270,6 +279,11 @@ def register_photo_routes(app):
 
         product = ImportedProduct.query.get_or_404(product_id)
 
+        # Проверка доступа: только владелец товара или админ
+        if not current_user.is_admin and current_user.seller:
+            if product.seller_id != current_user.seller.id:
+                abort(403)
+
         # Если есть связь с SupplierProduct — делегируем
         if product.supplier_product_id:
             return redirect(
@@ -318,6 +332,16 @@ def register_photo_routes(app):
         Запускает массовое фоновое скачивание всех фото поставщика.
         Фото, которые уже есть в кэше, пропускаются.
         """
+        # Проверка доступа: только владелец поставщика или админ
+        if not current_user.is_admin and current_user.seller:
+            from models import SellerSupplier
+            has_access = SellerSupplier.query.filter_by(
+                seller_id=current_user.seller.id,
+                supplier_id=supplier_id,
+            ).first()
+            if not has_access:
+                abort(403)
+
         from services.photo_cache import bulk_download_supplier_photos
         try:
             result = bulk_download_supplier_photos(supplier_id)
@@ -338,6 +362,16 @@ def register_photo_routes(app):
         """
         Возвращает прогресс скачивания фото для поставщика.
         """
+        # Проверка доступа
+        if not current_user.is_admin and current_user.seller:
+            from models import SellerSupplier
+            has_access = SellerSupplier.query.filter_by(
+                seller_id=current_user.seller.id,
+                supplier_id=supplier_id,
+            ).first()
+            if not has_access:
+                abort(403)
+
         from services.photo_cache import get_photo_cache
         try:
             cache = get_photo_cache()
@@ -642,11 +676,24 @@ def register_content_photo_routes(app):
         """
         Отдаёт закэшированное фото товара для контент-фабрики.
         Без авторизации — чтобы VK/Telegram publisher мог скачать.
+        Защита: HMAC-подпись в query param `sig` для предотвращения перебора.
         """
+        import hmac
+        import hashlib
+
         from services.content_photo_cache import get_cached_photo_path
 
         if index < 1 or index > 20:
             abort(404)
+
+        # Проверка HMAC-подписи (предотвращает перебор nm_id)
+        sig = request.args.get('sig', '')
+        secret = app.config.get('SECRET_KEY', '').encode()
+        expected_sig = hmac.new(secret, f'{nm_id}:{index}'.encode(), hashlib.sha256).hexdigest()[:16]
+        if not sig or not hmac.compare_digest(sig, expected_sig):
+            # Разрешаем доступ авторизованным пользователям без подписи
+            if not (hasattr(current_user, 'is_authenticated') and current_user.is_authenticated):
+                abort(403)
 
         photo_path = get_cached_photo_path(nm_id, index)
         if not photo_path.exists():

@@ -43,14 +43,24 @@ def is_photo_cached(nm_id: int, index: int) -> bool:
     return path.exists() and path.stat().st_size > 1024
 
 
-def get_content_photo_url(nm_id: int, index: int) -> str:
-    """Возвращает публичный URL для кэшированного фото."""
+def _content_photo_sig(nm_id: int, index: int) -> str:
+    """Генерирует HMAC-подпись для публичного URL фото."""
+    import hmac
+    import hashlib
     from flask import current_app
+    secret = current_app.config.get('SECRET_KEY', '').encode()
+    return hmac.new(secret, f'{nm_id}:{index}'.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def get_content_photo_url(nm_id: int, index: int) -> str:
+    """Возвращает публичный URL для кэшированного фото (с HMAC-подписью)."""
+    from flask import current_app
+    sig = _content_photo_sig(nm_id, index)
     public_base = current_app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
     if public_base:
-        return f'{public_base}/content-photos/{nm_id}/{index}.jpg'
+        return f'{public_base}/content-photos/{nm_id}/{index}.jpg?sig={sig}'
     from flask import url_for
-    return url_for('serve_content_photo', nm_id=nm_id, index=index, _external=True)
+    return url_for('serve_content_photo', nm_id=nm_id, index=index, sig=sig, _external=True)
 
 
 def download_and_cache_photo(nm_id: int, index: int, source_url: str) -> bool:
