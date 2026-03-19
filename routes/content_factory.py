@@ -504,6 +504,17 @@ def register_content_factory_routes(app):
         if item.status not in ('draft', 'approved', 'scheduled', 'failed'):
             return jsonify({'error': f'Нельзя опубликовать контент со статусом {item.status}'}), 400
 
+        # Атомарно ставим статус publishing чтобы предотвратить дубли
+        updated = ContentItem.query.filter(
+            ContentItem.id == item_id,
+            ContentItem.status.in_(['draft', 'approved', 'scheduled', 'failed']),
+        ).update({'status': 'publishing'}, synchronize_session='fetch')
+        db.session.commit()
+        if not updated:
+            return jsonify({'error': 'Контент уже публикуется или опубликован'}), 409
+        # Обновляем объект
+        db.session.refresh(item)
+
         # Определяем целевую платформу: берём из фабрики (источник правды), фоллбэк на item
         factory = ContentFactory.query.get(item.factory_id)
         target_platform = factory.platform if factory else item.platform
@@ -547,9 +558,6 @@ def register_content_factory_routes(app):
         try:
             from services.content_publishers import get_publisher
             publisher = get_publisher(target_platform)
-
-            item.status = 'publishing'
-            db.session.commit()
 
             result = publisher.publish(item, account)
 

@@ -85,13 +85,19 @@ def _auto_publish_for_factory(factory, now, db):
     if not item:
         return  # Нет постов для публикации
 
-    # Публикуем
+    # Публикуем — атомарно ставим статус чтобы избежать дублей
     try:
-        publisher = get_publisher(factory.platform)
-
-        item.status = 'publishing'
+        updated = ContentItem.query.filter(
+            ContentItem.id == item.id,
+            ContentItem.status == 'approved',
+        ).update({'status': 'publishing'}, synchronize_session='fetch')
         db.session.commit()
+        if not updated:
+            logger.info(f"Auto-publish: item {item.id} already picked up by another process")
+            return
+        db.session.refresh(item)
 
+        publisher = get_publisher(factory.platform)
         result = publisher.publish(item, account)
 
         if result.success:

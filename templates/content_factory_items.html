@@ -806,8 +806,13 @@ function contentItems() {
             }
         },
 
+        _publishingIds: new Set(),
+
         async publishItem(id) {
+            // Защита от двойного нажатия
+            if (this._publishingIds.has(id)) return;
             if (!confirm('Опубликовать контент сейчас?')) return;
+            this._publishingIds.add(id);
 
             // Показываем состояние загрузки
             const btn = document.getElementById('pub-btn-' + id);
@@ -824,6 +829,7 @@ function contentItems() {
                 if (data.error) {
                     alert('Ошибка: ' + data.error);
                     if (btn) { btn.textContent = origText; btn.disabled = false; btn.classList.remove('opacity-50'); }
+                    this._publishingIds.delete(id);
                 } else {
                     // Обновляем статус без перезагрузки
                     const item = this.generatedItems.find(i => i.id === id);
@@ -837,6 +843,7 @@ function contentItems() {
             } catch (e) {
                 alert('Ошибка публикации: ' + e.message);
                 if (btn) { btn.textContent = origText; btn.disabled = false; btn.classList.remove('opacity-50'); }
+                this._publishingIds.delete(id);
             }
         },
 
