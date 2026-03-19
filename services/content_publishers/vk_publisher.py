@@ -12,7 +12,10 @@ Credentials формат:
 {
     "access_token": "vk1.a.xxx...",
     "group_id": "123456789",    # ID сообщества (положительное число, без минуса)
-    "api_version": "5.199"      # (опционально)
+    "api_version": "5.199",     # (опционально)
+    "user_token": "vk1.a.yyy..."  # Пользовательский токен (для загрузки фото)
+                                   # Групповой токен НЕ поддерживает photos.getWallUploadServer
+                                   # Получить: https://vk.cc/1mYRMQ (scope: photos,wall,offline)
 }
 """
 import io
@@ -194,6 +197,8 @@ class VKPublisher(BasePublisher):
         """Публикует пост на стене сообщества ВКонтакте."""
         creds = account.get_credentials_dict()
         access_token = creds.get('access_token', '')
+        # user_token нужен для загрузки фото (photos.getWallUploadServer не работает с group token)
+        user_token = creds.get('user_token', '')
         group_id = creds.get('group_id', '') or account.account_id
         api_version = creds.get('api_version', VK_API_VERSION)
 
@@ -221,7 +226,13 @@ class VKPublisher(BasePublisher):
         except RuntimeError:
             pass  # Нет app context
 
-        logger.info(f"VK publish item={item.id}: group_id={group_id}, media_urls={len(media_urls)}")
+        if media_urls and not user_token:
+            logger.warning(f"VK publish: no user_token in credentials — photo upload may fail "
+                           f"(group tokens can't use photos.getWallUploadServer). "
+                           f"Add user_token to VK account credentials.")
+
+        logger.info(f"VK publish item={item.id}: group_id={group_id}, media_urls={len(media_urls)}, "
+                    f"has_user_token={bool(user_token)}")
         for i, url in enumerate(media_urls[:5]):
             logger.info(f"  photo[{i}]: {url[:120]}")
 
@@ -234,7 +245,9 @@ class VKPublisher(BasePublisher):
             for i, url in enumerate(media_urls[:10]):
                 if i > 0:
                     _time.sleep(0.5)  # VK rate limit: не более 3 req/sec
-                attachment, error_reason = self._upload_photo(access_token, group_id, url, api_version)
+                # Для фото используем user_token (group token не поддерживает photos.getWallUploadServer)
+                photo_token = user_token or access_token
+                attachment, error_reason = self._upload_photo(photo_token, group_id, url, api_version)
                 if attachment:
                     attachments.append(attachment)
                     logger.info(f"  photo[{i}] OK: {attachment}")
