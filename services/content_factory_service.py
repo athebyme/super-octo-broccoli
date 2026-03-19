@@ -641,13 +641,30 @@ class ContentFactoryService:
             .all()
         )
         if not products:
-            # Fallback: без аналитики, но с фильтром цены и наличия
+            # Fallback 1: без аналитики, но с фильтром цены и наличия
             products = (
                 self._base_product_query(seller_id)
                 .order_by(Product.created_at.desc())
                 .limit(limit)
                 .all()
             )
+        if not products:
+            # Fallback 2: только наличие и активность (без фильтра цены)
+            logger.warning(f"No products with price <= {self.MAX_SANE_PRICE} for seller {seller_id}, "
+                           f"falling back to all active products in stock")
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(Product.created_at.desc()).limit(limit).all()
+        if not products:
+            # Fallback 3: любые активные товары (quantity может быть устаревшим)
+            logger.warning(f"No products in stock for seller {seller_id}, "
+                           f"falling back to active products regardless of stock")
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+            ).order_by(Product.updated_at.desc()).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _select_new_arrivals(self, seller_id: int, limit: int) -> List[Dict]:
