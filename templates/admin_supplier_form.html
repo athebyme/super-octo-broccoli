@@ -27,8 +27,8 @@
                 action="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) if mode == 'edit' else url_for('admin_supplier_add') }}"
                 x-data="{
                     tab: 'basic',
-                    aiProvider: '{{ supplier.ai_provider if supplier and supplier.ai_provider else 'openai' }}',
-                    aiModel: '{{ supplier.ai_model if supplier and supplier.ai_model else '' }}',
+                    aiProvider: {{ (supplier.ai_provider if supplier and supplier.ai_provider else 'openai') | tojson }},
+                    aiModel: {{ (supplier.ai_model if supplier and supplier.ai_model else '') | tojson }},
                     customModel: '',
                     models: {
                         cloudru: [

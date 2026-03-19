@@ -302,8 +302,8 @@
                                 return {
                                     loading: false,
                                     fields: {{ product.marketplace_fields_json | default('{}', true) | tojson }},
-                                    validationStatus: '{{ product.marketplace_validation_status or "" }}',
-                                    fillPct: {{ product.marketplace_fill_pct or 0 }},
+                                    validationStatus: {{ (product.marketplace_validation_status or "") | tojson }},
+                                    fillPct: {{ (product.marketplace_fill_pct or 0) | tojson }},
                                     errors: {},
                                     globalError: "",
                                 newFieldKey: "",
@@ -626,7 +626,7 @@
         resultDiv.classList.add('hidden');
 
         const form = new FormData();
-        form.append('product_id', '{{ product.id }}');
+        form.append('product_id', {{ product.id | tojson }});
 
         fetch('{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}', {
             method: 'POST',

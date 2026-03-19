@@ -206,7 +206,7 @@
             <div class="divide-y divide-gray-100">
                 {% for card in group.cards %}
                 <div class="flex items-center gap-4 p-4 hover:bg-gray-50 transition {% if not card.nm_id or card.nm_id == 0 %}opacity-50{% endif %}"
-                     :class="{'bg-indigo-50 border-l-4 border-indigo-500': selectedTarget == '{{ card.nm_id }}', 'bg-purple-50': selectedCards['{{ card.nm_id }}'] && selectedTarget != '{{ card.nm_id }}'}"
+                     :class="{'bg-indigo-50 border-l-4 border-indigo-500': selectedTarget == {{ card.nm_id | tojson }}, 'bg-purple-50': selectedCards[{{ card.nm_id | tojson }}] && selectedTarget != {{ card.nm_id | tojson }}}"
                      data-nm-id="{{ card.nm_id }}"
                      data-subject-id="{{ card.subject_id }}">
 
@@ -222,8 +222,8 @@
                                data-title="{{ card.title }}"
                                data-vendor="{{ card.vendor_code }}"
                                {% if not card.nm_id or card.nm_id == 0 %}disabled{% endif %}
-                               @change="setTarget($el.dataset.nmId, $el.dataset.subject, $el.dataset.vendor, $el.dataset.title)"
-                               :checked="selectedTarget == '{{ card.nm_id }}'">
+                               @change="setTarget({{ card.nm_id | tojson }}, {{ card.subject_id | tojson }}, {{ card.vendor_code | tojson }}, {{ card.title | tojson }})"
+                               :checked="selectedTarget == {{ card.nm_id | tojson }}">
                         <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover/radio:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
                             {% if not card.nm_id or card.nm_id == 0 %}nmID не получен от WB{% else %}Сделать главной{% endif %}
                         </span>
@@ -241,8 +241,8 @@
                                data-title="{{ card.title }}"
                                data-vendor="{{ card.vendor_code }}"
                                {% if not card.nm_id or card.nm_id == 0 %}disabled{% endif %}
-                               @change="toggleCard($el.dataset.nmId, $el.dataset.subject, $el.dataset.vendor, $el.dataset.title)"
-                               :checked="selectedCards['{{ card.nm_id }}']">
+                               @change="toggleCard({{ card.nm_id | tojson }}, {{ card.subject_id | tojson }}, {{ card.vendor_code | tojson }}, {{ card.title | tojson }})"
+                               :checked="selectedCards[{{ card.nm_id | tojson }}]">
                         <span class="absolute -top-8 left-1/2 transform -translate-x-1/2 px-2 py-1 text-xs text-white bg-gray-900 rounded opacity-0 group-hover/check:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
                             {% if not card.nm_id or card.nm_id == 0 %}nmID не получен от WB{% else %}Выбрать для слияния{% endif %}
                         </span>

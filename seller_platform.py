@@ -3005,18 +3005,12 @@ def products_bulk_edit():
 
         app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
 
-        # Логируем все данные формы для отладки
-        app.logger.info(f"📋 Form data: operation={operation}")
-        app.logger.info(f"📋 Form value field: '{operation_value}'")
-        app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
-        app.logger.info(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
-        app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
-
-        # Показываем ВСЕ поля (кроме product_ids) для отладки
-        app.logger.info("📋 All form fields:")
-        for key, value in request.form.items():
-            if key != 'product_ids':
-                app.logger.info(f"   {key} = '{value}'")
+        # Логируем данные формы для отладки (только в debug)
+        app.logger.debug(f"📋 Form data: operation={operation}")
+        app.logger.debug(f"📋 Form value field: '{operation_value}'")
+        app.logger.debug(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
+        app.logger.debug(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
+        app.logger.debug(f"📋 All form keys: {list(request.form.keys())}")
 
         try:
             with WildberriesAPIClient(

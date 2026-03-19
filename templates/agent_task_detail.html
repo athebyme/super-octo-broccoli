@@ -469,7 +469,7 @@
                     <div class="flex-1 min-w-0 pt-0.5">
                         <div class="flex items-center justify-between gap-2 mb-0.5">
                             <h4 class="text-sm font-medium" style="color:var(--text)"
-                                x-text="showTechnical ? `{{ step.title | e }}` : friendlyTitle('{{ step.step_type }}', `{{ step.title | e }}`)">
+                                x-text="showTechnical ? {{ step.title | tojson }} : friendlyTitle({{ step.step_type | tojson }}, {{ step.title | tojson }})">
                                 {{ step.title }}
                             </h4>
                             <div class="flex items-center gap-2 flex-shrink-0">
@@ -548,10 +548,10 @@
 <script>
 function taskDetail() {
     return {
-        completedSteps: {{ task.completed_steps }},
-        totalSteps: {{ task.total_steps }},
-        currentLabel: '{{ task.current_step_label or "" }}',
-        taskStatus: '{{ task.status }}',
+        completedSteps: {{ task.completed_steps | tojson }},
+        totalSteps: {{ task.total_steps | tojson }},
+        currentLabel: {{ (task.current_step_label or "") | tojson }},
+        taskStatus: {{ task.status | tojson }},
         showTechnical: false,
         hiddenCount: 0,
 

@@ -322,7 +322,7 @@
                                     <button type="submit" class="text-green-600 hover:text-green-900">Разблокировать</button>
                                 </form>
                                 {% else %}
-                                <button onclick="showBlockModal({{ seller.id }}, '{{ seller.company_name }}')"
+                                <button onclick="showBlockModal({{ seller.id }}, {{ seller.company_name | tojson }})"
                                         class="text-yellow-600 hover:text-yellow-900 text-left">Блокировать</button>
                                 {% endif %}
 

@@ -769,7 +769,7 @@ function contentItems() {
         allProducts: ALL_PRODUCTS,
         selectedProduct: null,
         genMode: 'single',
-        genContentType: '{{ content_types[0] if content_types else "promo_post" }}',
+        genContentType: {{ (content_types[0] if content_types else "promo_post") | tojson }},
         genProductId: '',
         genCount: 5,
         genCustomPrompt: '',

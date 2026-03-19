@@ -1713,7 +1713,7 @@ class AIClient:
             token = self._token_manager.get_access_token()
             if token:
                 auth_header = f'Bearer {token}'
-                logger.info(f"🔐 Auth header: Bearer {token[:20]}... (длина токена: {len(token)})")
+                logger.debug(f"🔐 Auth header: Bearer ***{len(token)} chars***")
                 return auth_header
             return None
         else:
