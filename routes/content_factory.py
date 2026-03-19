@@ -620,6 +620,13 @@ def register_content_factory_routes(app):
             from services.content_publishers import get_publisher
             publisher = get_publisher(target_platform)
 
+            # Логируем медиа для диагностики
+            media_urls = item.get_media_urls()
+            logger.info(f"Publishing item {item.id} to {target_platform}: {len(media_urls)} media URLs")
+            if media_urls:
+                for i, url in enumerate(media_urls[:3]):
+                    logger.info(f"  media[{i}]: {url[:100]}")
+
             result = publisher.publish(item, account)
 
             if result.success:
@@ -638,11 +645,15 @@ def register_content_factory_routes(app):
             db.session.commit()
 
             if result.success:
-                return jsonify({
+                resp_data = {
                     'success': True,
                     'external_post_id': result.external_post_id,
                     'external_post_url': result.external_post_url,
-                })
+                }
+                # Добавляем debug-инфу о фото
+                if media_urls and target_platform == 'vk':
+                    resp_data['_debug_media_count'] = len(media_urls)
+                return jsonify(resp_data)
             else:
                 return jsonify({'error': result.error}), 500
 

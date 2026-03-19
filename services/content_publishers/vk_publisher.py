@@ -44,22 +44,38 @@ class VKPublisher(BasePublisher):
         text = self.format_text(item)
         media_urls = item.get_media_urls()
 
+        # Нормализуем group_id — убираем минус если есть
+        group_id = str(group_id).lstrip('-')
+
         try:
+            # owner_id для стены сообщества — отрицательный
+            owner_id = f'-{group_id}'
+
             params = {
                 'access_token': access_token,
                 'v': api_version,
-                'owner_id': f'-{group_id}',  # Минус = от имени сообщества
+                'owner_id': owner_id,
                 'from_group': 1,
                 'message': text,
             }
 
             # Если есть фото, загружаем через VK API
             attachments = []
+            photo_errors = []
             if media_urls:
-                for url in media_urls[:10]:  # VK максимум 10 вложений
+                logger.info(f"VK publish: {len(media_urls)} photos to upload for item {item.id}")
+                for i, url in enumerate(media_urls[:10]):  # VK максимум 10 вложений
                     attachment = self._upload_photo_by_url(access_token, group_id, url, api_version)
                     if attachment:
                         attachments.append(attachment)
+                        logger.info(f"VK photo {i+1} uploaded: {attachment}")
+                    else:
+                        photo_errors.append(f"photo {i+1}: {url[:80]}")
+            else:
+                logger.warning(f"VK publish: no media_urls for item {item.id}")
+
+            if photo_errors and not attachments:
+                logger.warning(f"VK publish: ALL photos failed: {photo_errors}")
 
             if attachments:
                 params['attachments'] = ','.join(attachments)
@@ -143,11 +159,13 @@ class VKPublisher(BasePublisher):
         """
         try:
             # 1. Получаем URL для загрузки
-            resp = requests.get(
+            # Нормализуем group_id — VK API ожидает положительное число
+            clean_group_id = str(group_id).lstrip('-')
+            resp = requests.post(
                 f'{VK_API_BASE}/photos.getWallUploadServer',
-                params={
+                data={
                     'access_token': access_token,
-                    'group_id': group_id,
+                    'group_id': clean_group_id,
                     'v': api_version,
                 },
                 timeout=10,
@@ -209,7 +227,7 @@ class VKPublisher(BasePublisher):
                 f'{VK_API_BASE}/photos.saveWallPhoto',
                 data={
                     'access_token': access_token,
-                    'group_id': group_id,
+                    'group_id': clean_group_id,
                     'photo': upload_data.get('photo', ''),
                     'server': upload_data.get('server', ''),
                     'hash': upload_data.get('hash', ''),

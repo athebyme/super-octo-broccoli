@@ -4270,8 +4270,12 @@ class ContentItem(db.Model):
     def get_media_urls(self):
         try:
             urls = json.loads(self.media_urls_json or '[]')
-            if urls:
-                return urls
+            # Фильтруем: оставляем только публично доступные URL (WB CDN)
+            # Серверные proxy URL (localhost, /photos/...) недоступны для Telegram/VK API
+            public_urls = [u for u in urls if isinstance(u, str) and
+                          ('wbbasket.ru' in u or 'wbimg.ru' in u)]
+            if public_urls:
+                return public_urls
         except Exception:
             pass
 
@@ -4282,7 +4286,8 @@ class ContentItem(db.Model):
                 from seller_platform import wb_photo_url
                 product = Product.query.get(product_ids[0])
                 if product and product.nm_id:
-                    return [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
+                    # Генерируем индексы 1-10, скачивающий сервис сам отфильтрует 404
+                    return [wb_photo_url(product.nm_id, i) for i in range(1, 11)]
         except Exception:
             pass
         return []
