@@ -130,6 +130,18 @@ class VKPublisher(BasePublisher):
         text = self.format_text(item)
         media_urls = item.get_media_urls()
 
+        # Относительные URL → абсолютные (для скачивания с нашего сервера)
+        try:
+            from flask import current_app
+            public_base = current_app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
+            if public_base:
+                media_urls = [
+                    f'{public_base}{u}' if u.startswith('/') else u
+                    for u in media_urls
+                ]
+        except RuntimeError:
+            pass  # Нет app context
+
         logger.info(f"VK publish item={item.id}: group_id={group_id}, media_urls={len(media_urls)}")
         for i, url in enumerate(media_urls[:5]):
             logger.info(f"  photo[{i}]: {url[:120]}")

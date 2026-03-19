@@ -715,12 +715,28 @@ class ContentFactoryService:
         return validated
 
     def _get_product_photos(self, product: Product, validate: bool = False) -> List[str]:
-        """Получает фото товара. Приоритет:
-        1. Локальные фото через ImportedProduct → серверные URL (/photos/public/...)
-        2. URL из photos_json (если содержит http-ссылки)
-        3. Фоллбэк: WB CDN по nm_id
+        """Получает фото товара и КЭШИРУЕТ их локально.
+
+        Приоритет источников:
+        1. Уже закэшированные фото в content_photos (мгновенно)
+        2. Локальные фото через ImportedProduct (/photos/public/...)
+        3. WB CDN → скачиваем, кэшируем, возвращаем локальный URL
+
+        Всегда возвращает URL на наш сервер, никогда — WB CDN напрямую.
         """
-        # === Приоритет 1: Локальные фото через ImportedProduct ===
+        from services.content_photo_cache import (
+            get_cached_photo_urls, cache_product_photos,
+        )
+
+        nm_id = product.nm_id
+
+        # === Приоритет 1: Уже закэшированные content-photos ===
+        if nm_id:
+            cached = get_cached_photo_urls(nm_id)
+            if cached:
+                return cached
+
+        # === Приоритет 2: Локальные фото через ImportedProduct ===
         try:
             from models import ImportedProduct
             from routes.photos import generate_public_photo_urls
@@ -728,44 +744,55 @@ class ContentFactoryService:
             if imported:
                 local_urls = generate_public_photo_urls(imported)
                 if local_urls:
-                    logger.debug(f"Product {product.id}: using {len(local_urls)} local cached photos")
+                    logger.info(f"Product {product.id}: using {len(local_urls)} local ImportedProduct photos")
                     return local_urls
         except Exception as e:
-            logger.debug(f"Product {product.id}: local photos lookup failed: {e}")
+            logger.debug(f"Product {product.id}: ImportedProduct lookup failed: {e}")
 
-        # === Приоритет 2: URL из photos_json ===
-        photos = []
+        # === Приоритет 3: Собираем URL-источники и кэшируем ===
+        source_urls = []
+
+        # Из photos_json
         if product.photos_json:
             try:
                 raw_photos = json.loads(product.photos_json)
                 if isinstance(raw_photos, list):
                     for p in raw_photos:
                         if isinstance(p, str) and p.startswith('http'):
-                            photos.append(p)
-                        elif isinstance(p, int) and product.nm_id:
+                            source_urls.append(p)
+                        elif isinstance(p, int) and nm_id:
                             from seller_platform import wb_photo_url
-                            photos.append(wb_photo_url(product.nm_id, p))
+                            source_urls.append(wb_photo_url(nm_id, p))
             except Exception:
                 pass
 
-        if photos:
-            return photos
-
-        # === Приоритет 3: WB CDN по nm_id ===
-        if product.nm_id:
+        # Дополняем из WB CDN если мало
+        if nm_id and len(source_urls) < 3:
             try:
                 from seller_platform import wb_photo_url
-                if validate:
-                    candidates = [wb_photo_url(product.nm_id, i) for i in range(1, 11)]
-                    validated = self._validate_photo_urls(candidates)
-                    if validated:
-                        return validated
-                # Без валидации или валидация дала 0 — берём 3 фото
-                return [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
+                existing = set(source_urls)
+                for i in range(1, 6):
+                    url = wb_photo_url(nm_id, i)
+                    if url not in existing:
+                        source_urls.append(url)
+                        existing.add(url)
             except Exception:
                 pass
 
-        return []
+        if not source_urls:
+            return []
+
+        # Скачиваем и кэшируем (конвертируем в JPEG на нашем сервере)
+        if nm_id:
+            cached_urls = cache_product_photos(nm_id, source_urls[:10])
+            if cached_urls:
+                logger.info(
+                    f"Product {product.id} (nm_id={nm_id}): cached {len(cached_urls)} photos locally"
+                )
+                return cached_urls
+
+        # Если кэширование не удалось — возвращаем source_urls как есть (крайний fallback)
+        return source_urls
 
     def _product_to_dict(self, product: Product, validate_photos: bool = False) -> Dict:
         """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""

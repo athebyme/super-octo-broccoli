@@ -4275,37 +4275,38 @@ class ContentItem(db.Model):
         self.hashtags_json = json.dumps(tags)
 
     def get_media_urls(self):
+        # Сохранённые URL (локальные /content-photos/... или /photos/public/...)
         try:
             urls = json.loads(self.media_urls_json or '[]')
-            # Принимаем все публичные URL (серверные /photos/public/..., WB CDN и др.)
-            public_urls = [u for u in urls if isinstance(u, str) and u.startswith('http')]
+            public_urls = [u for u in urls if isinstance(u, str) and u.startswith(('http', '/'))]
             if public_urls:
                 return public_urls
         except Exception:
             pass
 
-        # Фоллбэк 1: локальные фото через ImportedProduct
+        # Фоллбэк 1: кэшированные content-photos по nm_id
         try:
             product_ids = self.get_product_ids()
             if product_ids:
-                from models import ImportedProduct
-                from routes.photos import generate_public_photo_urls
-                imported = ImportedProduct.query.filter_by(product_id=product_ids[0]).first()
-                if imported:
-                    local_urls = generate_public_photo_urls(imported)
-                    if local_urls:
-                        return local_urls
+                product = Product.query.get(product_ids[0])
+                if product and product.nm_id:
+                    from services.content_photo_cache import get_cached_photo_urls
+                    cached = get_cached_photo_urls(product.nm_id)
+                    if cached:
+                        return cached
         except Exception:
             pass
 
-        # Фоллбэк 2: WB CDN по nm_id
+        # Фоллбэк 2: ImportedProduct фото
         try:
             product_ids = self.get_product_ids()
             if product_ids:
-                from seller_platform import wb_photo_url
-                product = Product.query.get(product_ids[0])
-                if product and product.nm_id:
-                    return [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
+                imported = ImportedProduct.query.filter_by(product_id=product_ids[0]).first()
+                if imported:
+                    from routes.photos import generate_public_photo_urls
+                    local_urls = generate_public_photo_urls(imported)
+                    if local_urls:
+                        return local_urls
         except Exception:
             pass
         return []

@@ -825,30 +825,56 @@ def register_content_factory_routes(app):
             'steps': [],
         }
 
+        # Проверяем связь Product → ImportedProduct
+        product_ids = item.get_product_ids()
+        result['product_ids'] = product_ids
+        if product_ids:
+            product = Product.query.get(product_ids[0])
+            if product:
+                result['product_id'] = product.id
+                result['product_nm_id'] = product.nm_id
+                result['product_photos_json'] = product.photos_json[:500] if product.photos_json else None
+
+                # Проверяем ImportedProduct
+                from models import ImportedProduct
+                imported = ImportedProduct.query.filter_by(product_id=product.id).first()
+                if imported:
+                    result['imported_product_id'] = imported.id
+                    result['imported_supplier_product_id'] = imported.supplier_product_id
+                    result['imported_photo_urls'] = imported.photo_urls[:500] if imported.photo_urls else None
+
+                    # Генерируем локальные фото URL
+                    try:
+                        from routes.photos import generate_public_photo_urls
+                        local_urls = generate_public_photo_urls(imported)
+                        result['local_photo_urls'] = local_urls
+                        result['local_photo_urls_count'] = len(local_urls)
+                    except Exception as e:
+                        result['local_photo_urls_error'] = str(e)
+                else:
+                    result['imported_product'] = 'NOT FOUND (no ImportedProduct linked to this Product)'
+
         # Шаг 1: get_media_urls
         media_urls = item.get_media_urls()
         result['media_urls'] = media_urls
         result['media_urls_count'] = len(media_urls)
 
         if not media_urls:
-            # Проверяем product напрямую
-            product_ids = item.get_product_ids()
-            result['product_ids'] = product_ids
-            if product_ids:
-                product = Product.query.get(product_ids[0])
-                if product:
-                    result['product_nm_id'] = product.nm_id
-                    result['product_photos_json'] = product.photos_json[:500] if product.photos_json else None
             result['steps'].append({'step': 'get_media_urls', 'status': 'EMPTY', 'detail': 'Нет URL фото'})
             return jsonify(result)
 
         result['steps'].append({'step': 'get_media_urls', 'status': 'OK', 'count': len(media_urls)})
 
-        # Шаг 2: Скачиваем первое фото
+        # Шаг 2: Скачиваем первое фото (с правильными заголовками)
         test_url = media_urls[0]
         result['test_photo_url'] = test_url
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': 'https://www.wildberries.ru/',
+        }
         try:
-            photo_resp = _requests.get(test_url, timeout=10)
+            photo_resp = _requests.get(test_url, timeout=10, headers=headers)
             result['steps'].append({
                 'step': 'download_photo',
                 'status': 'OK' if photo_resp.status_code == 200 else 'FAIL',

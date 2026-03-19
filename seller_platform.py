@@ -5896,8 +5896,9 @@ from routes.suppliers import register_supplier_routes
 register_supplier_routes(app)
 
 # ============= РОУТЫ ФОТОГРАФИЙ ПОСТАВЩИКОВ =============
-from routes.photos import register_photo_routes
+from routes.photos import register_photo_routes, register_content_photo_routes
 register_photo_routes(app)
+register_content_photo_routes(app)
 
 # ============= РОУТЫ ДОКУМЕНТАЦИИ =============
 from routes.docs import register_docs_routes

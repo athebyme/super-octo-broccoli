@@ -38,6 +38,18 @@ class TelegramPublisher(BasePublisher):
         text = self.format_text(item)
         media_urls = item.get_media_urls()
 
+        # Относительные URL → абсолютные
+        try:
+            from flask import current_app
+            public_base = current_app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
+            if public_base:
+                media_urls = [
+                    f'{public_base}{u}' if u.startswith('/') else u
+                    for u in media_urls
+                ]
+        except RuntimeError:
+            pass
+
         try:
             if len(media_urls) > 1:
                 # Отправка нескольких фото через media group
