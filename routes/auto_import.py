@@ -3952,6 +3952,85 @@ def register_auto_import_routes(app):
             logger.error(f"AI parse clothing sizes error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/auto-import/ai/detect-all', methods=['POST'])
+    @login_required
+    def auto_import_ai_detect_all():
+        """Определение бренда + материалов + цвета за 1 вызов AI (экономия токенов)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
+
+        if not settings or not settings.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не настроен'}), 400
+
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        try:
+            from services.ai_service import AIConfig, AIService
+
+            config = AIConfig.from_settings(settings)
+            ai_service = AIService(config)
+
+            characteristics = {}
+            if product.characteristics:
+                try:
+                    characteristics = json.loads(product.characteristics) if isinstance(product.characteristics, str) else product.characteristics
+                except:
+                    pass
+
+            success, result, error = ai_service.detect_brand_materials_color(
+                title=product.title or '',
+                description=product.description or '',
+                characteristics=characteristics,
+                category=product.mapped_wb_category or ''
+            )
+
+            if success:
+                # Сохраняем бренд
+                brand_data = result.get('brand', {})
+                if brand_data:
+                    product.ai_detected_brand = json.dumps(brand_data, ensure_ascii=False)
+                    if brand_data.get('confidence', 0) >= 0.7 and brand_data.get('brand_normalized'):
+                        product.brand = brand_data['brand_normalized']
+
+                # Сохраняем материалы
+                materials_data = result.get('materials', {})
+                if materials_data:
+                    product.ai_materials = json.dumps(materials_data, ensure_ascii=False)
+
+                # Сохраняем цвет
+                color_data = result.get('color', {})
+                if color_data:
+                    product.ai_colors = json.dumps(color_data, ensure_ascii=False)
+
+                db.session.commit()
+
+                save_ai_history(seller.id, product.id, 'unified_detect',
+                              {'title': product.title}, result,
+                              ai_provider=settings.ai_provider, ai_model=settings.ai_model)
+                return jsonify({'success': True, 'data': result})
+            else:
+                save_ai_history(seller.id, product.id, 'unified_detect', None, None, False, error,
+                              ai_provider=settings.ai_provider, ai_model=settings.ai_model)
+                return jsonify({'success': False, 'error': error}), 500
+
+        except Exception as e:
+            logger.error(f"AI detect all error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/auto-import/ai/detect-brand', methods=['POST'])
     @login_required
     def auto_import_ai_detect_brand():

@@ -639,6 +639,115 @@ Rich-контент на WB - это визуальные блоки (слайд
 ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
     },
 
+    "unified_optimize": {
+        "name": "Полная оптимизация карточки (1 запрос)",
+        "description": "SEO заголовок + ключевые слова + буллеты + описание + анализ — всё за один вызов AI",
+        "template": """Ты SEO-эксперт и копирайтер для маркетплейса Wildberries.
+Выполни ВСЕ 5 задач за один проход.
+
+═══ ЗАДАЧА 1: SEO-ЗАГОЛОВОК ═══
+- МАКСИМУМ 60 символов (жёсткое ограничение WB API!)
+- Начинай с типа товара
+- 1-2 ключевые характеристики
+- Без CAPS, спецсимволов (™®©), "лучший/топ/хит"
+
+═══ ЗАДАЧА 2: КЛЮЧЕВЫЕ СЛОВА ═══
+- 15-30 релевантных слов/фраз
+- Синонимы, транслитерация, вариации
+- Общие + специфичные запросы
+
+═══ ЗАДАЧА 3: ПРЕИМУЩЕСТВА (BULLET POINTS) ═══
+- 4-6 кратких пунктов (до 50 символов каждый)
+- Фокус на пользе для покупателя
+- БЕЗ эмодзи
+
+═══ ЗАДАЧА 4: ОПИСАНИЕ ═══
+- Максимум 2000 символов
+- Структура: УТП → подробности → особенности → призыв
+- Все факты из оригинала сохранены
+- Без ™®©
+
+═══ ЗАДАЧА 5: АНАЛИЗ КАРТОЧКИ ═══
+- Оценка 1-100
+- Проблемы с приоритетами
+- Рекомендации по улучшению
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "seo_title": {
+        "title": "<заголовок до 60 символов>",
+        "length": <число символов>,
+        "keywords_used": ["слово1", "слово2"]
+    },
+    "keywords": {
+        "keywords": ["слово1", "слово2", "...до 30"],
+        "search_queries": ["запрос1", "запрос2"]
+    },
+    "bullet_points": {
+        "bullet_points": ["Преимущество 1", "Преимущество 2"],
+        "target_audience": "<аудитория>"
+    },
+    "enhanced_description": {
+        "description": "<улучшенное описание до 2000 символов>"
+    },
+    "analysis": {
+        "score": <1-100>,
+        "issues": [{"priority": "high/medium/low", "issue": "проблема", "fix": "решение"}],
+        "recommendations": ["рекомендация"],
+        "strengths": ["сильная сторона"]
+    }
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON. SEO заголовок СТРОГО <= 60 символов!"""
+    },
+
+    "unified_detect": {
+        "name": "Определение бренда + материалов + цвета (1 запрос)",
+        "description": "Извлекает бренд, материалы и цвет товара за один вызов AI",
+        "template": """Ты эксперт по товарным карточкам Wildberries.
+Определи бренд, материалы и цвет товара за один проход.
+
+═══ БРЕНД ═══
+- Точное название бренда из текста
+- Если бренд не указан явно — попробуй определить по контексту
+- Нормализуй для WB (латиница → как есть, кириллица → как есть)
+
+═══ МАТЕРИАЛЫ ═══
+- Основной материал
+- Полный состав с процентами если есть
+- Свойства: гипоаллергенный, водонепроницаемый и т.д.
+
+═══ ЦВЕТ ═══
+- Основной цвет
+- Цвет для WB (стандартные: белый, чёрный, красный, синий, зелёный, розовый, фиолетовый, серый, бежевый, коричневый, оранжевый, жёлтый, голубой, бордовый, золотой, серебристый, телесный, прозрачный, мультиколор)
+- Дополнительные цвета
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "brand": {
+        "brand": "<название бренда или null>",
+        "brand_normalized": "<нормализованное для WB>",
+        "brand_type": "exact/inferred/unknown",
+        "confidence": <0.0-1.0>
+    },
+    "materials": {
+        "primary_material": "<основной>",
+        "composition": "<полный состав>",
+        "materials_list": ["материал1", "материал2"],
+        "properties": ["свойство1"],
+        "confidence": <0.0-1.0>
+    },
+    "color": {
+        "primary_color": "<основной цвет>",
+        "wb_color": "<цвет для WB>",
+        "secondary_colors": [],
+        "confidence": <0.0-1.0>
+    }
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
     "category_detection": {
         "name": "Определение категорий WB",
         "description": "Инструкция для определения категории товара на Wildberries",
@@ -2297,6 +2406,112 @@ class CardAnalysisTask(AITask):
 
 
 # ============================================================================
+# ОБЪЕДИНЁННЫЕ AI ЗАДАЧИ (ЭКОНОМИЯ ТОКЕНОВ)
+# ============================================================================
+
+class UnifiedOptimizeTask(AITask):
+    """SEO заголовок + ключевые слова + буллеты + описание + анализ = 1 вызов вместо 5"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["unified_optimize"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        category = kwargs.get('category', '')
+        brand = kwargs.get('brand', '')
+        characteristics = kwargs.get('characteristics', {})
+        photos_count = kwargs.get('photos_count', 0)
+        price = kwargs.get('price', 0)
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Оптимизируй карточку товара:
+
+НАЗВАНИЕ: {title}
+БРЕНД: {brand or 'Не указан'}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ОПИСАНИЕ: {description[:1500] if description else 'Отсутствует'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не заполнены'}
+ФОТО: {photos_count} шт.
+ЦЕНА: {price} руб."""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'seo_title': data.get('seo_title'),
+                'keywords': data.get('keywords'),
+                'bullet_points': data.get('bullet_points'),
+                'enhanced_description': data.get('enhanced_description'),
+                'analysis': data.get('analysis'),
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class UnifiedDetectTask(AITask):
+    """Бренд + материалы + цвет = 1 вызов вместо 3"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["unified_detect"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        category = kwargs.get('category', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Определи бренд, материалы и цвет товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+ОПИСАНИЕ: {description[:1000] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'brand': data.get('brand', {}),
+                'materials': data.get('materials', {}),
+                'color': data.get('color', {}),
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+# ============================================================================
 # НОВЫЕ AI ЗАДАЧИ ДЛЯ РАСШИРЕННОГО АНАЛИЗА ТОВАРОВ
 # ============================================================================
 
@@ -3627,6 +3842,30 @@ class AIService:
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
+    def detect_brand_materials_color(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        category: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Определяет бренд + материалы + цвет за 1 вызов AI (вместо 3 отдельных).
+
+        Returns:
+            Tuple[success, {brand, materials, color}, error]
+        """
+        task = UnifiedDetectTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            category=category
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
     def extract_all_attributes(
         self,
         title: str,
@@ -3693,7 +3932,8 @@ class AIService:
         price: float = 0
     ) -> Dict:
         """
-        Полная оптимизация карточки - все AI функции за один вызов
+        Полная оптимизация карточки — 1 вызов AI вместо 5.
+        При ошибке парсинга unified-ответа — fallback на отдельные вызовы.
 
         Returns:
             Dict с результатами всех оптимизаций
@@ -3707,29 +3947,62 @@ class AIService:
             'errors': []
         }
 
+        # --- Попытка unified (1 вызов вместо 5) ---
+        try:
+            task = UnifiedOptimizeTask(self.client)
+            success, data, error = task.execute(
+                title=title,
+                description=description,
+                category=category,
+                brand=brand,
+                characteristics=characteristics or {},
+                photos_count=photos_count,
+                price=price
+            )
+            if success and data:
+                results['seo_title'] = data.get('seo_title')
+                results['keywords'] = data.get('keywords')
+                results['bullet_points'] = data.get('bullet_points')
+                results['enhanced_description'] = data.get('enhanced_description')
+                results['analysis'] = data.get('analysis')
+
+                # Проверяем что хотя бы основные секции заполнились
+                filled = sum(1 for k in ['seo_title', 'keywords', 'bullet_points'] if results[k])
+                if filled >= 2:
+                    logger.info(f"[UnifiedOptimize] Успешно: {filled}/5 секций за 1 вызов")
+                    return results
+
+                logger.warning("[UnifiedOptimize] Мало секций заполнено, fallback на отдельные вызовы")
+        except Exception as e:
+            logger.warning(f"[UnifiedOptimize] Ошибка: {e}, fallback на отдельные вызовы")
+
+        # --- Fallback: старый подход (5 отдельных вызовов) ---
         # SEO заголовок
-        success, data, error = self.generate_seo_title(title, category, brand, description)
-        if success:
-            results['seo_title'] = data
-        else:
-            results['errors'].append(f"SEO заголовок: {error}")
+        if not results['seo_title']:
+            success, data, error = self.generate_seo_title(title, category, brand, description)
+            if success:
+                results['seo_title'] = data
+            else:
+                results['errors'].append(f"SEO заголовок: {error}")
 
         # Ключевые слова
-        success, data, error = self.generate_keywords(title, category, description)
-        if success:
-            results['keywords'] = data
-        else:
-            results['errors'].append(f"Ключевые слова: {error}")
+        if not results['keywords']:
+            success, data, error = self.generate_keywords(title, category, description)
+            if success:
+                results['keywords'] = data
+            else:
+                results['errors'].append(f"Ключевые слова: {error}")
 
         # Bullet points
-        success, data, error = self.generate_bullet_points(title, description, characteristics)
-        if success:
-            results['bullet_points'] = data
-        else:
-            results['errors'].append(f"Преимущества: {error}")
+        if not results['bullet_points']:
+            success, data, error = self.generate_bullet_points(title, description, characteristics)
+            if success:
+                results['bullet_points'] = data
+            else:
+                results['errors'].append(f"Преимущества: {error}")
 
         # Улучшенное описание
-        if description:
+        if not results['enhanced_description'] and description:
             success, data, error = self.enhance_description(title, description, category)
             if success:
                 results['enhanced_description'] = data
@@ -3737,13 +4010,14 @@ class AIService:
                 results['errors'].append(f"Описание: {error}")
 
         # Анализ карточки
-        success, data, error = self.analyze_card(
-            title, description, category, characteristics, photos_count, price
-        )
-        if success:
-            results['analysis'] = data
-        else:
-            results['errors'].append(f"Анализ: {error}")
+        if not results['analysis']:
+            success, data, error = self.analyze_card(
+                title, description, category, characteristics, photos_count, price
+            )
+            if success:
+                results['analysis'] = data
+            else:
+                results['errors'].append(f"Анализ: {error}")
 
         return results
 
