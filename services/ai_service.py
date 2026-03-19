@@ -348,6 +348,11 @@ CLOUDRU_MODELS = {
         "name": "Llama 3.3 70B Instruct",
         "description": "Модель от Meta",
         "recommended": False
+    },
+    "xiaomi/MiMo-7B-RL": {
+        "name": "MiMo V2 Pro 7B",
+        "description": "Модель от Xiaomi — рассуждения и генерация",
+        "recommended": False
     }
 }
 
