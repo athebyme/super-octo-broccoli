@@ -91,14 +91,23 @@
                 <!-- Telegram specific -->
                 <template x-if="newPlatform === 'telegram'">
                     <div class="space-y-3 p-4 bg-blue-50 rounded-lg">
-                        <p class="text-xs text-blue-700">Создайте бота через <a href="https://t.me/BotFather" target="_blank" class="underline">@BotFather</a> и добавьте его в канал как администратора.</p>
-                        <div>
-                            <label class="block text-xs text-blue-700 mb-1">Токен бота</label>
-                            <input type="text" x-model="newCredsBotToken" class="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm" placeholder="123456:ABC-DEF...">
+                        <div class="text-xs text-blue-800 space-y-1">
+                            <p class="font-semibold">Инструкция:</p>
+                            <ol class="list-decimal list-inside space-y-0.5">
+                                <li>Создайте бота через <a href="https://t.me/BotFather" target="_blank" class="underline font-medium">@BotFather</a> (команда /newbot)</li>
+                                <li>Скопируйте токен бота</li>
+                                <li>Откройте ваш <strong>канал</strong> и добавьте бота как <strong>администратора</strong></li>
+                                <li>Укажите @username канала ниже</li>
+                            </ol>
                         </div>
                         <div>
-                            <label class="block text-xs text-blue-700 mb-1">Chat ID / @username канала</label>
+                            <label class="block text-xs font-medium text-blue-700 mb-1">Токен бота</label>
+                            <input type="text" x-model="newCredsBotToken" class="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-blue-700 mb-1">@username или ID канала</label>
                             <input type="text" x-model="newAccountId" class="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm" placeholder="@mychannel или -1001234567890">
+                            <p class="text-xs text-blue-600 mt-1">Именно <strong>канал</strong>, не личный чат. Бот должен быть администратором канала.</p>
                         </div>
                     </div>
                 </template>
@@ -171,8 +180,10 @@ function socialAccounts() {
             let credentials = {};
             if (this.newPlatform === 'telegram') {
                 if (!this.newCredsBotToken) { this.addError = 'Укажите токен бота'; this.saving = false; return; }
+                if (!this.newAccountId) { this.addError = 'Укажите @username или ID канала (не личного чата!)'; this.saving = false; return; }
                 credentials = { bot_token: this.newCredsBotToken, chat_id: this.newAccountId };
             } else {
+                if (!this.newAccountId) { this.addError = 'Укажите ID аккаунта'; this.saving = false; return; }
                 if (this.newCredsAccessToken) credentials = { access_token: this.newCredsAccessToken, group_id: this.newAccountId };
             }
 
