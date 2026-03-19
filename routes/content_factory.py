@@ -340,7 +340,25 @@ def register_content_factory_routes(app):
         data = request.get_json() or {}
         count = min(data.get('count', 5), 20)
 
-        products = service.select_products(factory, limit=count)
+        # Собираем ID товаров, уже использованных в фабрике
+        used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
+        used_product_ids = set()
+        for ci in used_items:
+            used_product_ids.update(ci.get_product_ids())
+
+        products = service.select_products(factory, limit=count, exclude_product_ids=used_product_ids)
+
+        # Если после исключения не хватило — добираем из всех (повторы допустимы)
+        if len(products) < count:
+            all_products = service.select_products(factory, limit=count)
+            existing_ids = {p['id'] for p in products}
+            for p in all_products:
+                if p['id'] not in existing_ids:
+                    products.append(p)
+                    existing_ids.add(p['id'])
+                if len(products) >= count:
+                    break
+
         return jsonify({
             'products': [{'id': p['id'], 'name': p.get('name', '')} for p in products[:count]],
         })

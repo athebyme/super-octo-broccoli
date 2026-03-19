@@ -571,13 +571,15 @@ class ContentFactoryService:
         self,
         factory: ContentFactory,
         limit: int = 10,
+        exclude_product_ids: set = None,
     ) -> List[Dict[str, Any]]:
         """Подбирает товары для контента на основе режима фабрики."""
+        import random as _random
 
         mode = factory.product_selection_mode or 'manual'
 
-        # Запрашиваем больше товаров чтобы после дедупликации хватило
-        fetch_limit = limit * 3
+        # Запрашиваем больше товаров чтобы после дедупликации и фильтрации хватило
+        fetch_limit = limit * 5
 
         if mode == 'bestsellers':
             raw = self._select_bestsellers(factory.seller_id, fetch_limit)
@@ -589,7 +591,16 @@ class ContentFactoryService:
             # manual — возвращаем все товары для ручного выбора (без дедупликации)
             return self._select_all_products(factory.seller_id, limit)
 
-        return self._deduplicate_products(raw, limit)
+        deduped = self._deduplicate_products(raw, fetch_limit)
+
+        # Исключаем уже использованные товары
+        if exclude_product_ids:
+            deduped = [p for p in deduped if p['id'] not in exclude_product_ids]
+
+        # Рандомизируем порядок
+        _random.shuffle(deduped)
+
+        return deduped[:limit]
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:
         """Выбирает товары с лучшими продажами (по orders_count из аналитики)."""
