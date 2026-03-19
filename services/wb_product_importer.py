@@ -803,7 +803,7 @@ class WBProductImporter:
 
         # Привязываем
         imported_product.wb_nm_id = existing_nm_id
-        imported_product.import_status = 'completed'
+        imported_product.import_status = 'imported'
         imported_product.import_error = None
         imported_product.imported_at = datetime.utcnow()
         db.session.commit()

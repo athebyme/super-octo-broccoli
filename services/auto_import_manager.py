@@ -1231,9 +1231,10 @@ class AutoImportManager:
             ).first()
 
             # Запоминаем, был ли товар уже импортирован ранее
+            # ВАЖНО: 'completed' тоже считается импортированным (привязка к существующей карточке WB)
             was_already_imported = False
             if imported_product:
-                was_already_imported = (imported_product.import_status == 'imported')
+                was_already_imported = (imported_product.import_status in ('imported', 'completed'))
                 if was_already_imported:
                     logger.info(f"Товар {external_id} уже был импортирован на WB ранее, обновляем данные")
             else:
@@ -1296,6 +1297,26 @@ class AutoImportManager:
             # Используем уже сгенерированное описание
             imported_product.description = description
 
+            # === Проверка дублей по баркоду ===
+            # Если товар с таким же баркодом уже импортирован (под другим артикулом),
+            # считаем текущий товар дублем и не даём повторно загрузить на WB
+            if not was_already_imported and product_data.get('barcodes'):
+                duplicate_nm_id = self._find_duplicate_by_barcode(
+                    imported_product, product_data['barcodes']
+                )
+                if duplicate_nm_id:
+                    was_already_imported = True
+                    imported_product.wb_nm_id = duplicate_nm_id
+                    imported_product.import_status = 'imported'
+                    imported_product.imported_at = datetime.utcnow()
+                    imported_product.import_error = (
+                        f'Дубль: баркод совпадает с существующей карточкой nmID={duplicate_nm_id}'
+                    )
+                    logger.info(
+                        f"Товар {external_id} — дубль по баркоду, "
+                        f"привязан к nmID={duplicate_nm_id}"
+                    )
+
             # ВАЖНО: Если товар уже был импортирован на WB, НЕ меняем статус обратно на 'validated'
             # Это предотвратит повторный импорт того же товара
             if not was_already_imported:
@@ -1327,6 +1348,61 @@ class AutoImportManager:
         except Exception as e:
             logger.error(f"Ошибка обработки товара {product_data.get('external_id')}: {e}", exc_info=True)
             return 'failed'
+
+    def _find_duplicate_by_barcode(self, imported_product, barcodes: list) -> int:
+        """
+        Ищет дубли по баркоду среди уже импортированных товаров и существующих Product записей.
+        Предотвращает создание дубликатов на WB когда тот же товар загружается под другим артикулом.
+
+        Returns: nmID существующей карточки WB если найден дубль, иначе 0
+        """
+        barcode_set = set(str(b) for b in barcodes if b)
+        if not barcode_set:
+            return 0
+
+        product_id = getattr(imported_product, 'id', None)
+
+        # 1. Проверяем ImportedProduct с imported/completed статусом
+        try:
+            query = ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller.id,
+                ImportedProduct.import_status.in_(('imported', 'completed')),
+                ImportedProduct.wb_nm_id.isnot(None),
+                ImportedProduct.barcodes.isnot(None),
+            )
+            if product_id:
+                query = query.filter(ImportedProduct.id != product_id)
+
+            for cp in query.all():
+                try:
+                    cp_barcodes = set(str(b) for b in json.loads(cp.barcodes) if b)
+                    if barcode_set & cp_barcodes:
+                        return cp.wb_nm_id
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except Exception as e:
+            logger.warning(f"Ошибка поиска дубля по баркоду (ImportedProduct): {e}")
+
+        # 2. Проверяем Product записи (sizes_json содержит skus с баркодами)
+        try:
+            products = Product.query.filter(
+                Product.seller_id == self.seller.id,
+                Product.sizes_json.isnot(None),
+            ).all()
+
+            for p in products:
+                try:
+                    sizes = json.loads(p.sizes_json)
+                    for size_entry in (sizes if isinstance(sizes, list) else []):
+                        skus = set(str(s) for s in size_entry.get('skus', []) if s)
+                        if barcode_set & skus:
+                            return p.nm_id
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except Exception as e:
+            logger.warning(f"Ошибка поиска дубля по баркоду (Product): {e}")
+
+        return 0
 
     def _generate_description(self, product_data: Dict) -> str:
         """Генерирует описание товара"""
