@@ -230,14 +230,19 @@ class VKPublisher(BasePublisher):
             attachments = []
             photo_errors = []
 
+            import time as _time
             for i, url in enumerate(media_urls[:10]):
-                result = self._upload_photo(access_token, group_id, url, api_version)
-                if result:
-                    attachments.append(result)
-                    logger.info(f"  photo[{i}] OK: {result}")
+                if i > 0:
+                    _time.sleep(0.5)  # VK rate limit: не более 3 req/sec
+                attachment, error_reason = self._upload_photo(access_token, group_id, url, api_version)
+                if attachment:
+                    attachments.append(attachment)
+                    logger.info(f"  photo[{i}] OK: {attachment}")
                 else:
-                    photo_errors.append(url[:80])
-                    logger.warning(f"  photo[{i}] FAILED: {url[:80]}")
+                    short_url = url.split('/')[-1] if '/' in url else url[:40]
+                    error_info = f"{short_url}({error_reason})"
+                    photo_errors.append(error_info)
+                    logger.warning(f"  photo[{i}] FAILED: {error_reason} URL: {url[:80]}")
 
             if media_urls and not attachments:
                 logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload")
@@ -276,7 +281,7 @@ class VKPublisher(BasePublisher):
             # Сообщаем об ошибках фото даже при успешной публикации
             error_detail = None
             if photo_errors:
-                error_detail = f"Фото не загружены ({len(photo_errors)} из {len(media_urls)}): {'; '.join(photo_errors[:3])}"
+                error_detail = f"Фото не загружены ({len(photo_errors)} из {len(media_urls)}): {'; '.join(photo_errors[:5])}"
                 logger.warning(f"VK post published but with photo errors: {error_detail}")
 
             return PublishResult(
@@ -333,20 +338,19 @@ class VKPublisher(BasePublisher):
         group_id: str,
         photo_url: str,
         api_version: str,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], Optional[str]]:
         """Загружает фото по URL на стену сообщества VK.
 
-        Строго по документации VK API:
-        1. photos.getWallUploadServer → upload_url
-        2. POST photo на upload_url → server, photo, hash
-        3. photos.saveWallPhoto → photo object
-        4. Возвращает "photo{owner_id}_{photo_id}"
+        Returns:
+            (attachment_string, None) при успехе
+            (None, error_reason) при ошибке
         """
         # === ШАГ 0: Скачиваем и конвертируем в JPEG ===
         photo_data = _download_and_convert_to_jpeg(photo_url)
         if not photo_data:
-            return None
+            return None, "download_failed"
         jpeg_bytes, filename = photo_data
+        logger.info(f"VK upload: downloaded {len(jpeg_bytes)}B from {photo_url[:80]}")
 
         try:
             # === ШАГ 1: photos.getWallUploadServer ===
@@ -354,7 +358,7 @@ class VKPublisher(BasePublisher):
                 f'{VK_API_BASE}/photos.getWallUploadServer',
                 params={
                     'access_token': access_token,
-                    'group_id': group_id,  # положительное число
+                    'group_id': group_id,
                     'v': api_version,
                 },
                 timeout=10,
@@ -363,38 +367,39 @@ class VKPublisher(BasePublisher):
             logger.debug(f"getWallUploadServer response: {srv}")
 
             if 'error' in srv:
-                logger.error(f"VK getWallUploadServer error: {srv['error']}")
-                return None
+                err = srv['error']
+                reason = f"getUploadServer error {err.get('error_code')}: {err.get('error_msg', '')}"
+                logger.error(f"VK {reason}")
+                return None, reason
 
             upload_url = srv.get('response', {}).get('upload_url')
             if not upload_url:
                 logger.error(f"VK getWallUploadServer: no upload_url")
-                return None
+                return None, "no_upload_url"
 
             # === ШАГ 2: POST фото на upload_url ===
-            # Поле "photo", файл с расширением .jpg, content-type image/jpeg
             upload_resp = requests.post(
                 upload_url,
                 files={'photo': (filename, jpeg_bytes, 'image/jpeg')},
                 timeout=30,
             )
             upload_data = upload_resp.json()
-            logger.debug(f"VK upload response: server={upload_data.get('server')}, "
-                         f"photo_len={len(upload_data.get('photo', ''))}, "
-                         f"hash={upload_data.get('hash', '')[:16]}...")
+            logger.info(f"VK upload response: server={upload_data.get('server')}, "
+                        f"photo_len={len(upload_data.get('photo', ''))}, "
+                        f"hash={upload_data.get('hash', '')[:16]}...")
 
             # VK возвращает photo как JSON-строку. Пустое = ошибка
             photo_field = upload_data.get('photo', '')
             if not photo_field or photo_field in ('[]', ''):
                 logger.error(f"VK upload: empty photo field. Full response: {upload_data}")
-                return None
+                return None, f"vk_upload_empty_photo: {str(upload_data)[:200]}"
 
             # === ШАГ 3: photos.saveWallPhoto ===
             save_resp = requests.post(
                 f'{VK_API_BASE}/photos.saveWallPhoto',
                 data={
                     'access_token': access_token,
-                    'group_id': group_id,  # положительное число
+                    'group_id': group_id,
                     'server': upload_data.get('server', ''),
                     'photo': photo_field,
                     'hash': upload_data.get('hash', ''),
@@ -406,21 +411,29 @@ class VKPublisher(BasePublisher):
             logger.debug(f"saveWallPhoto response: {save_data}")
 
             if 'error' in save_data:
-                logger.error(f"VK saveWallPhoto error: {save_data['error']}")
-                return None
+                err = save_data['error']
+                reason = f"saveWallPhoto error {err.get('error_code')}: {err.get('error_msg', '')}"
+                logger.error(f"VK {reason}")
+                return None, reason
 
             photos = save_data.get('response', [])
             if not photos:
                 logger.error(f"VK saveWallPhoto: empty response array")
-                return None
+                return None, "saveWallPhoto_empty_response"
 
             # === ШАГ 4: Формируем attachment string ===
             photo_obj = photos[0]
-            owner_id = photo_obj['owner_id']  # отрицательный для группы
+            owner_id = photo_obj['owner_id']
             photo_id = photo_obj['id']
             attachment = f"photo{owner_id}_{photo_id}"
-            return attachment
+            return attachment, None
 
+        except requests.exceptions.Timeout as e:
+            logger.error(f"VK photo upload timeout: {e}")
+            return None, f"timeout: {e}"
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"VK photo upload connection error: {e}")
+            return None, f"connection_error: {str(e)[:100]}"
         except Exception as e:
             logger.error(f"VK photo upload exception: {e}", exc_info=True)
-            return None
+            return None, f"exception: {str(e)[:100]}"
