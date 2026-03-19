@@ -377,6 +377,12 @@ def register_content_factory_routes(app):
             template_id=template_id,
         )
 
+        if not items and errors:
+            return jsonify({
+                'error': errors[0] if len(errors) == 1 else f"Ошибки генерации: {'; '.join(errors[:3])}",
+                'errors': errors,
+            }), 500
+
         return jsonify({
             'success': True,
             'generated': len(items),
