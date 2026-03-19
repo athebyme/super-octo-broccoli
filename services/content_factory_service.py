@@ -442,6 +442,18 @@ class ContentFactoryService:
         ).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
+    def _collect_products_data(self, product_ids: List[int], seller_id: int) -> List[Dict]:
+        """Загружает товары по ID и возвращает данные для промптов."""
+        if not product_ids:
+            return []
+
+        products = Product.query.filter(
+            Product.id.in_(product_ids),
+            Product.seller_id == seller_id,
+        ).all()
+
+        return [self._product_to_dict(p) for p in products]
+
     def _product_to_dict(self, product: Product) -> Dict:
         """Конвертирует Product в dict для промптов."""
         photos = []
