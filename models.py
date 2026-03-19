@@ -4270,10 +4270,8 @@ class ContentItem(db.Model):
     def get_media_urls(self):
         try:
             urls = json.loads(self.media_urls_json or '[]')
-            # Фильтруем: оставляем только публично доступные URL (WB CDN)
-            # Серверные proxy URL (localhost, /photos/...) недоступны для Telegram/VK API
-            public_urls = [u for u in urls if isinstance(u, str) and
-                          ('wbbasket.ru' in u or 'wbimg.ru' in u)]
+            # Принимаем все публичные URL (WB CDN, серверные /photos/public/... и др.)
+            public_urls = [u for u in urls if isinstance(u, str) and u.startswith('http')]
             if public_urls:
                 return public_urls
         except Exception:

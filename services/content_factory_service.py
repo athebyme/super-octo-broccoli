@@ -686,15 +686,13 @@ class ContentFactoryService:
                 raw_photos = json.loads(product.photos_json)
                 if isinstance(raw_photos, list):
                     for p in raw_photos:
-                        if isinstance(p, str) and 'wbbasket.ru' in p:
-                            # WB CDN URL — доступен извне, подходит для публикации
+                        if isinstance(p, str) and p.startswith('http'):
+                            # Любой публичный URL: WB CDN, серверные /photos/public/... и т.д.
                             photos.append(p)
                         elif isinstance(p, int) and product.nm_id:
                             # Индексы фото [1, 2, 3, ...] — конвертируем в WB CDN URL
                             from seller_platform import wb_photo_url
                             photos.append(wb_photo_url(product.nm_id, p))
-                        # Серверные proxy URL (/photos/..., http://localhost/...) пропускаем —
-                        # они недоступны для VK/Telegram API при скачивании
             except Exception:
                 pass
 
