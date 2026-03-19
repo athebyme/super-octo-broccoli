@@ -219,9 +219,11 @@ class TelegramPublisher(BasePublisher):
         """Отправляет сообщение с фото. Если текст > 1024 — фото + отдельный текст."""
         url = f"{TELEGRAM_API_BASE.format(token=bot_token)}/sendPhoto"
 
-        # Telegram caption лимит 1024 символа — если больше, отправляем текст отдельным сообщением
-        long_text = len(text) > 1024
-        caption = '' if long_text else text
+        # Telegram caption лимит 1024 символа — обрезаем если длиннее
+        if len(text) > 1024:
+            caption = text[:1021] + '...'
+        else:
+            caption = text
 
         # Сначала пробуем скачать и отправить файлом (надежнее)
         photo_data = self._download_photo(photo_url)
@@ -244,10 +246,6 @@ class TelegramPublisher(BasePublisher):
             message_id = data.get('result', {}).get('message_id')
             post_url = self._build_post_url(chat_id, message_id)
 
-            # Отправляем полный текст отдельным сообщением
-            if long_text:
-                self._send_text_message(bot_token, chat_id, text)
-
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id),
@@ -269,9 +267,11 @@ class TelegramPublisher(BasePublisher):
         import json as _json
         url = f"{TELEGRAM_API_BASE.format(token=bot_token)}/sendMediaGroup"
 
-        # Если текст > 1024 — отправим его отдельным сообщением после фото
-        long_text = len(text) > 1024
-        caption = '' if long_text else text
+        # Telegram caption лимит 1024 символа — обрезаем если длиннее
+        if len(text) > 1024:
+            caption = text[:1021] + '...'
+        else:
+            caption = text
 
         # Скачиваем фото и загружаем как файлы для надежности
         files = {}
@@ -324,10 +324,6 @@ class TelegramPublisher(BasePublisher):
             results = data.get('result', [])
             message_id = results[0].get('message_id') if results else None
             post_url = self._build_post_url(chat_id, message_id) if message_id else None
-
-            # Отправляем полный текст отдельным сообщением если не влез в caption
-            if long_text:
-                self._send_text_message(bot_token, chat_id, text)
 
             return PublishResult(
                 success=True,
