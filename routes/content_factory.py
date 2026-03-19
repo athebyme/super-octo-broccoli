@@ -266,7 +266,7 @@ def register_content_factory_routes(app):
         templates = service.get_templates_for_factory(factory)
 
         # Товары для генерации
-        products = service.select_products(factory, limit=50)
+        products = service.select_products(factory, limit=100)
 
         return render_template(
             'content_factory_items.html',
@@ -344,6 +344,49 @@ def register_content_factory_routes(app):
         return jsonify({
             'products': [{'id': p['id'], 'name': p.get('name', '')} for p in products[:count]],
         })
+
+    @app.route('/api/content-factory/<int:factory_id>/random-product', methods=['POST'])
+    @login_required
+    def api_content_factory_random_product(factory_id):
+        """Выбирает случайный товар, исключая уже использованные в фабрике."""
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+
+        factory = ContentFactory.query.filter_by(
+            id=factory_id, seller_id=current_user.seller.id
+        ).first()
+        if not factory:
+            return jsonify({'error': 'Фабрика не найдена'}), 404
+
+        data = request.get_json() or {}
+        exclude_ids = data.get('exclude_ids', [])
+
+        # Собираем ID товаров, которые уже использовались в фабрике
+        used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
+        used_product_ids = set()
+        for ci in used_items:
+            used_product_ids.update(ci.get_product_ids())
+        # Также исключаем переданные ID
+        for eid in exclude_ids:
+            used_product_ids.add(int(eid))
+
+        # Берём все товары продавца
+        from sqlalchemy import func as sa_func
+        query = Product.query.filter_by(seller_id=factory.seller_id)
+        if used_product_ids:
+            query = query.filter(~Product.id.in_(used_product_ids))
+        product = query.order_by(sa_func.random()).first()
+
+        if not product:
+            # Все товары использованы — берём любой случайный
+            product = Product.query.filter_by(
+                seller_id=factory.seller_id,
+            ).order_by(sa_func.random()).first()
+            if not product:
+                return jsonify({'error': 'Нет доступных товаров'}), 404
+
+        pd = service._product_to_dict(product)
+        return jsonify({'product': pd})
 
     @app.route('/api/content-factory/<int:factory_id>/generate', methods=['POST'])
     @login_required

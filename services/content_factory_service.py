@@ -314,10 +314,12 @@ class ContentFactoryService:
             body = self._ensure_product_url(body, wb_url)
 
             # Собираем медиа и метаданные
+            # Для обзоров берём больше фото
+            max_photos_per_product = 10 if content_type in ('product_review', 'review') else 5
             all_photos = []
             product_names = []
             for pd in products_data:
-                all_photos.extend(pd.get('photos', [])[:5])
+                all_photos.extend(pd.get('photos', [])[:max_photos_per_product])
                 if pd.get('name'):
                     product_names.append(pd['name'])
             media_urls = all_photos[:10]
@@ -683,14 +685,20 @@ class ContentFactoryService:
             except Exception:
                 pass
 
-        # Фоллбэк: генерируем URL фото из WB CDN по nm_id
-        if not photos and product.nm_id:
+        # Если мало фото или нет вообще — дополняем из WB CDN
+        if product.nm_id and (not photos or (validate_photos and len(photos) < 5)):
             try:
                 from seller_platform import wb_photo_url
+                existing_urls = set(photos)
                 if validate_photos:
-                    candidate_urls = [wb_photo_url(product.nm_id, i) for i in range(1, 11)]
-                    photos = self._validate_photo_urls(candidate_urls)
-                else:
+                    candidate_urls = [wb_photo_url(product.nm_id, i) for i in range(1, 11)
+                                      if wb_photo_url(product.nm_id, i) not in existing_urls]
+                    extra = self._validate_photo_urls(candidate_urls)
+                    for url in extra:
+                        if url not in existing_urls:
+                            photos.append(url)
+                            existing_urls.add(url)
+                elif not photos:
                     # Без валидации берём только 2 фото (безопасный минимум)
                     photos = [wb_photo_url(product.nm_id, i) for i in range(1, 3)]
             except Exception:

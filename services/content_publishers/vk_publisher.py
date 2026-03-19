@@ -152,19 +152,57 @@ class VKPublisher(BasePublisher):
                 },
                 timeout=10,
             )
-            upload_url = resp.json().get('response', {}).get('upload_url')
+            server_data = resp.json()
+            if 'error' in server_data:
+                logger.warning(f"VK getWallUploadServer error: {server_data['error']}")
+                return None
+            upload_url = server_data.get('response', {}).get('upload_url')
             if not upload_url:
+                logger.warning(f"VK getWallUploadServer: no upload_url in response")
                 return None
 
             # 2. Скачиваем фото
             photo_resp = requests.get(photo_url, timeout=15)
             if photo_resp.status_code != 200:
+                logger.warning(f"Failed to download photo {photo_url}: HTTP {photo_resp.status_code}")
                 return None
 
+            if len(photo_resp.content) < 1024:
+                logger.warning(f"Photo too small ({len(photo_resp.content)} bytes), skipping: {photo_url}")
+                return None
+
+            # Конвертируем webp → jpeg если нужно (VK не принимает webp)
+            photo_content = photo_resp.content
+            content_type = photo_resp.headers.get('Content-Type', '')
+            filename = 'photo.jpg'
+
+            if 'webp' in content_type or photo_url.endswith('.webp'):
+                try:
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(photo_content))
+                    if img.mode in ('RGBA', 'P'):
+                        img = img.convert('RGB')
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=92)
+                    photo_content = buf.getvalue()
+                    filename = 'photo.jpg'
+                except ImportError:
+                    # Pillow не установлен — отправляем как есть, VK может принять
+                    logger.warning("Pillow not installed, sending webp as-is to VK")
+                    filename = 'photo.webp'
+                except Exception as conv_err:
+                    logger.warning(f"webp→jpeg conversion failed: {conv_err}, sending as-is")
+                    filename = 'photo.webp'
+
             # 3. Загружаем на VK
-            files = {'photo': ('photo.jpg', photo_resp.content, 'image/jpeg')}
+            files = {'photo': (filename, photo_content, 'image/jpeg')}
             upload_resp = requests.post(upload_url, files=files, timeout=30)
             upload_data = upload_resp.json()
+
+            if not upload_data.get('photo') or upload_data.get('photo') == '[]':
+                logger.warning(f"VK upload returned empty photo field: {upload_data}")
+                return None
 
             # 4. Сохраняем фото
             save_resp = requests.post(
@@ -181,10 +219,16 @@ class VKPublisher(BasePublisher):
             )
             save_data = save_resp.json()
 
+            if 'error' in save_data:
+                logger.warning(f"VK photos.saveWallPhoto error: {save_data['error']}")
+                return None
+
             photos = save_data.get('response', [])
             if photos:
                 photo = photos[0]
                 return f"photo{photo['owner_id']}_{photo['id']}"
+            else:
+                logger.warning(f"VK photos.saveWallPhoto returned empty response")
 
         except Exception as e:
             logger.warning(f"VK photo upload failed for {photo_url}: {e}")
