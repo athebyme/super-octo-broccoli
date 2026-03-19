@@ -1048,9 +1048,17 @@ def register_content_factory_routes(app):
             return jsonify({'error': 'Фабрика не найдена'}), 404
 
         try:
-            # Явно удаляем связанные записи для надёжности
-            ContentItem.query.filter_by(factory_id=factory.id).delete()
-            ContentPlan.query.filter_by(factory_id=factory.id).delete()
+            # Сначала обнуляем FK на social_account чтобы не было constraint
+            ContentItem.query.filter_by(factory_id=factory.id).update(
+                {'social_account_id': None, 'template_id': None},
+                synchronize_session=False,
+            )
+            # Удаляем связанные записи
+            ContentItem.query.filter_by(factory_id=factory.id).delete(synchronize_session=False)
+            ContentPlan.query.filter_by(factory_id=factory.id).delete(synchronize_session=False)
+            # Обнуляем FK default_social_account_id
+            factory.default_social_account_id = None
+            db.session.flush()
             db.session.delete(factory)
             db.session.commit()
             return jsonify({'success': True})
