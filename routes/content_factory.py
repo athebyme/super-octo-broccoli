@@ -178,7 +178,7 @@ def register_content_factory_routes(app):
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
             factory.auto_approve = bool(request.form.get('auto_approve'))
-            factory.is_active = bool(request.form.get('is_active', True))
+            factory.is_active = bool(request.form.get('is_active'))
 
             content_types = request.form.getlist('content_types')
             if content_types:
@@ -369,12 +369,14 @@ def register_content_factory_routes(app):
         content_type = data.get('content_type', 'promo_post')
         count = min(data.get('count', 5), 20)
         template_id = data.get('template_id')
+        custom_prompt = data.get('custom_prompt')
 
         items, errors = service.generate_bulk(
             factory=factory,
             content_type=content_type,
             count=count,
             template_id=template_id,
+            custom_prompt=custom_prompt,
         )
 
         if not items and errors:

@@ -346,6 +346,7 @@ class ContentFactoryService:
         content_type: str,
         count: int = 5,
         template_id: Optional[int] = None,
+        custom_prompt: Optional[str] = None,
     ) -> Tuple[List[ContentItem], List[str]]:
         """Массовая генерация контента.
 
@@ -372,6 +373,7 @@ class ContentFactoryService:
                 product_ids=[product_id],
                 content_type=content_type,
                 template_id=template_id,
+                custom_prompt=custom_prompt,
             )
 
             if item:
@@ -405,10 +407,22 @@ class ContentFactoryService:
             return self._select_all_products(factory.seller_id, limit)
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:
-        """Выбирает товары с лучшими продажами."""
-        products = Product.query.filter_by(seller_id=seller_id).order_by(
-            Product.quantity.desc()
-        ).limit(limit).all()
+        """Выбирает товары с лучшими продажами (по orders_count из аналитики)."""
+        # Пробуем подобрать по реальным продажам через ProductAnalytics
+        products = (
+            Product.query
+            .outerjoin(ProductAnalytics, db.and_(
+                ProductAnalytics.nm_id == Product.nm_id,
+                ProductAnalytics.seller_id == Product.seller_id,
+            ))
+            .filter(Product.seller_id == seller_id)
+            .order_by(db.func.coalesce(ProductAnalytics.orders_count, 0).desc())
+            .limit(limit)
+            .all()
+        )
+        if not products:
+            # Fallback на все товары
+            products = Product.query.filter_by(seller_id=seller_id).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _select_new_arrivals(self, seller_id: int, limit: int) -> List[Dict]:
@@ -539,15 +553,18 @@ class ContentFactoryService:
         """Все доступные шаблоны для фабрики."""
         content_types = factory.get_content_types()
 
-        templates = ContentTemplate.query.filter(
+        query = ContentTemplate.query.filter(
             ContentTemplate.platform == factory.platform,
-            ContentTemplate.content_type.in_(content_types) if content_types else True,
             ContentTemplate.is_active == True,
             db.or_(
                 ContentTemplate.seller_id == factory.seller_id,
                 ContentTemplate.is_system == True,
             ),
-        ).all()
+        )
+        if content_types:
+            query = query.filter(ContentTemplate.content_type.in_(content_types))
+
+        templates = query.all()
 
         return templates
 
