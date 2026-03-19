@@ -43,6 +43,9 @@
                             {id: 'gpt-4o', name: 'GPT-4o'},
                             {id: 'gpt-4-turbo', name: 'GPT-4 Turbo'},
                         ],
+                        mimo: [
+                            {id: 'mimo-v2-pro', name: 'MiMo V2 Pro', rec: true},
+                        ],
                         custom: []
                     },
                     get currentModels() {
@@ -316,6 +319,7 @@
                                 class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
                                 <option value="openai">OpenAI</option>
                                 <option value="cloudru">Cloud.ru</option>
+                                <option value="mimo">Xiaomi MiMo</option>
                                 <option value="custom">Кастомный API</option>
                             </select>
                         </div>

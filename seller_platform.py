@@ -6341,13 +6341,14 @@ def api_profile_ai_test():
             return jsonify({'success': False, 'error': 'API ключ не указан'})
 
         from services.ai_service import AIConfig, AIClient, AIProvider
+        default_urls = {
+            'cloudru': 'https://foundation-models.api.cloud.ru/v1',
+            'mimo': 'https://api.mimo.xiaomi.com/v1',
+        }
         config = AIConfig(
             provider=AIProvider(provider),
             api_key=api_key,
-            api_base_url=api_base_url or (
-                'https://foundation-models.api.cloud.ru/v1' if provider == 'cloudru'
-                else 'https://api.openai.com/v1'
-            ),
+            api_base_url=api_base_url or default_urls.get(provider, 'https://api.openai.com/v1'),
             model=model or 'openai/gpt-oss-120b',
         )
         config.timeout = 30

@@ -319,6 +319,7 @@ class AIProvider(Enum):
     """Поддерживаемые AI провайдеры"""
     OPENAI = "openai"
     CLOUDRU = "cloudru"  # Cloud.ru Foundation Models
+    MIMO = "mimo"  # Xiaomi MiMo (OpenAI-совместимый API)
     CUSTOM = "custom"  # Любой OpenAI-совместимый API
 
 
@@ -349,11 +350,15 @@ CLOUDRU_MODELS = {
         "description": "Модель от Meta",
         "recommended": False
     },
-    "xiaomi/MiMo-7B-RL": {
-        "name": "MiMo V2 Pro 7B",
-        "description": "Модель от Xiaomi — рассуждения и генерация",
-        "recommended": False
-    }
+}
+
+# Модели Xiaomi MiMo
+MIMO_MODELS = {
+    "mimo-v2-pro": {
+        "name": "MiMo V2 Pro",
+        "description": "Флагманская модель Xiaomi — 1T параметров (MoE), контекст 1M токенов, рассуждения и генерация",
+        "recommended": True
+    },
 }
 
 # Модели OpenAI
@@ -1384,6 +1389,9 @@ class AIConfig:
         elif provider == AIProvider.OPENAI:
             api_base = 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
+        elif provider == AIProvider.MIMO:
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.mimo.xiaomi.com/v1'
+            default_model = 'mimo-v2-pro'
         else:  # CUSTOM
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
@@ -1421,6 +1429,9 @@ class AIConfig:
         if provider == AIProvider.CLOUDRU:
             api_base = settings.ai_api_base_url or "https://foundation-models.api.cloud.ru/v1"
             default_model = "openai/gpt-oss-120b"
+        elif provider == AIProvider.MIMO:
+            api_base = settings.ai_api_base_url or "https://api.mimo.xiaomi.com/v1"
+            default_model = "mimo-v2-pro"
         elif provider == AIProvider.CUSTOM:
             api_base = settings.ai_api_base_url or "https://api.openai.com/v1"
             default_model = "gpt-4o-mini"
@@ -3791,9 +3802,11 @@ def get_available_models(provider: str) -> Dict[str, Dict]:
         return CLOUDRU_MODELS
     elif provider == 'openai':
         return OPENAI_MODELS
+    elif provider == 'mimo':
+        return MIMO_MODELS
     else:
         # Для custom возвращаем объединенный список
-        return {**CLOUDRU_MODELS, **OPENAI_MODELS}
+        return {**CLOUDRU_MODELS, **OPENAI_MODELS, **MIMO_MODELS}
 
 
 def get_default_instructions() -> Dict[str, Dict]:

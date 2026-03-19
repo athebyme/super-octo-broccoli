@@ -297,6 +297,9 @@
                             <option value="openai" {{ 'selected' if settings.ai_provider == 'openai' else '' }}>
                                 OpenAI
                             </option>
+                            <option value="mimo" {{ 'selected' if settings.ai_provider == 'mimo' else '' }}>
+                                Xiaomi MiMo
+                            </option>
                             <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
                                 Другой (OpenAI-совместимый)
                             </option>
@@ -330,6 +333,19 @@
                                 1. Создайте сервисный аккаунт в <a href="https://console.cloud.ru" target="_blank" class="underline">консоли Cloud.ru</a><br>
                                 2. Сгенерируйте API ключ с ролью <code>ml_inference_ai_marketplace</code><br>
                                 3. Скопируйте Key Secret сразу - он показывается только один раз
+                            </div>
+                        </div>
+                    </div>
+                    <div id="mimo_hint" class="p-4 bg-orange-50 border border-orange-200 rounded-lg mb-3 hidden">
+                        <div class="flex items-start">
+                            <svg class="w-5 h-5 text-orange-500 mt-0.5 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <div class="text-sm text-orange-700">
+                                <strong>Xiaomi MiMo API ключ</strong><br>
+                                1. Зарегистрируйтесь на <a href="https://platform.xiaomimimo.com" target="_blank" class="underline font-medium">platform.xiaomimimo.com</a><br>
+                                2. Создайте API ключ в личном кабинете<br>
+                                3. Модель MiMo V2 Pro — флагман Xiaomi (1T параметров MoE, контекст 1M токенов)
                             </div>
                         </div>
                     </div>
@@ -824,20 +840,31 @@ function updateAIProviderSettings() {
     const baseUrlInput = document.getElementById('ai_api_base_url');
     const cloudruHint = document.getElementById('cloudru_hint');
 
-    // Показываем/скрываем подсказку для Cloud.ru
+    // Показываем/скрываем подсказки и base URL
+    const mimoHint = document.getElementById('mimo_hint');
     if (provider === 'cloudru') {
         cloudruHint.classList.remove('hidden');
+        if (mimoHint) mimoHint.classList.add('hidden');
         baseUrlBlock.classList.remove('hidden');
-        if (!baseUrlInput.value || baseUrlInput.value === 'https://api.openai.com/v1') {
+        if (!baseUrlInput.value || baseUrlInput.value === 'https://api.openai.com/v1' || baseUrlInput.value === 'https://api.mimo.xiaomi.com/v1') {
             baseUrlInput.value = 'https://foundation-models.api.cloud.ru/v1';
         }
     } else if (provider === 'openai') {
         cloudruHint.classList.add('hidden');
+        if (mimoHint) mimoHint.classList.add('hidden');
         baseUrlBlock.classList.add('hidden');
         baseUrlInput.value = '';
-    } else {
-        // Custom - скрываем подсказку Cloud.ru, показываем base URL
+    } else if (provider === 'mimo') {
         cloudruHint.classList.add('hidden');
+        if (mimoHint) mimoHint.classList.remove('hidden');
+        baseUrlBlock.classList.remove('hidden');
+        if (!baseUrlInput.value || baseUrlInput.value === 'https://foundation-models.api.cloud.ru/v1' || baseUrlInput.value === 'https://api.openai.com/v1') {
+            baseUrlInput.value = 'https://api.mimo.xiaomi.com/v1';
+        }
+    } else {
+        // Custom - скрываем подсказки, показываем base URL
+        cloudruHint.classList.add('hidden');
+        if (mimoHint) mimoHint.classList.add('hidden');
         baseUrlBlock.classList.remove('hidden');
     }
 

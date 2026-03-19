@@ -73,6 +73,7 @@
                 <select name="ai_provider" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
                     <option value="openai" {% if factory and factory.ai_provider == 'openai' %}selected{% endif %}>OpenAI (GPT-4o)</option>
                     <option value="cloudru" {% if factory and factory.ai_provider == 'cloudru' %}selected{% endif %}>Cloud.ru</option>
+                    <option value="mimo" {% if factory and factory.ai_provider == 'mimo' %}selected{% endif %}>Xiaomi MiMo</option>
                     <option value="claude" {% if factory and factory.ai_provider == 'claude' %}selected{% endif %}>Claude</option>
                     <option value="gemini" {% if factory and factory.ai_provider == 'gemini' %}selected{% endif %}>Gemini</option>
                 </select>
