@@ -135,37 +135,49 @@ def wb_photo_url(nm_id: int, photo_index: int = 1, size: str = 'big') -> str:
     vol = nm_id // 100000
     part = nm_id // 1000
 
-    # Определяем номер корзины по vol
-    if vol >= 0 and vol <= 143:
+    # Определяем номер корзины по vol (актуально на 2025)
+    if vol <= 143:
         basket = '01'
-    elif vol >= 144 and vol <= 287:
+    elif vol <= 287:
         basket = '02'
-    elif vol >= 288 and vol <= 431:
+    elif vol <= 431:
         basket = '03'
-    elif vol >= 432 and vol <= 719:
+    elif vol <= 719:
         basket = '04'
-    elif vol >= 720 and vol <= 1007:
+    elif vol <= 1007:
         basket = '05'
-    elif vol >= 1008 and vol <= 1061:
+    elif vol <= 1061:
         basket = '06'
-    elif vol >= 1062 and vol <= 1115:
+    elif vol <= 1115:
         basket = '07'
-    elif vol >= 1116 and vol <= 1169:
+    elif vol <= 1169:
         basket = '08'
-    elif vol >= 1170 and vol <= 1313:
+    elif vol <= 1313:
         basket = '09'
-    elif vol >= 1314 and vol <= 1601:
+    elif vol <= 1601:
         basket = '10'
-    elif vol >= 1602 and vol <= 1655:
+    elif vol <= 1655:
         basket = '11'
-    elif vol >= 1656 and vol <= 1919:
+    elif vol <= 1919:
         basket = '12'
-    elif vol >= 1920 and vol <= 2045:
+    elif vol <= 2045:
         basket = '13'
-    elif vol >= 2046 and vol <= 2189:
+    elif vol <= 2189:
         basket = '14'
-    else:
+    elif vol <= 2405:
         basket = '15'
+    elif vol <= 2621:
+        basket = '16'
+    elif vol <= 2837:
+        basket = '17'
+    elif vol <= 3053:
+        basket = '18'
+    elif vol <= 3269:
+        basket = '19'
+    elif vol <= 3485:
+        basket = '20'
+    else:
+        basket = '21'
 
     return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/{size}/{photo_index}.webp"
 

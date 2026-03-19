@@ -2,17 +2,25 @@
 """
 VKPublisher — публикация контента ВКонтакте через VK API
 
+Процедура загрузки фото (по документации VK API):
+1. photos.getWallUploadServer(group_id) → upload_url
+2. POST файл на upload_url в поле "photo" (multipart/form-data) → server, photo, hash
+3. photos.saveWallPhoto(group_id, server, photo, hash) → photo object с owner_id и id
+4. wall.post(attachments="photo{owner_id}_{id}")
+
 Credentials формат:
 {
     "access_token": "vk1.a.xxx...",
-    "group_id": "123456789",    # ID сообщества (без минуса)
+    "group_id": "123456789",    # ID сообщества (положительное число, без минуса)
     "api_version": "5.199"      # (опционально)
 }
 """
+import io
 import logging
 from typing import Optional
 
 import requests
+from PIL import Image
 
 from models import ContentItem, SocialAccount
 from services.content_publishers.base_publisher import BasePublisher, PublishResult
@@ -21,6 +29,42 @@ logger = logging.getLogger(__name__)
 
 VK_API_BASE = 'https://api.vk.com/method'
 VK_API_VERSION = '5.199'
+
+
+def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]:
+    """Скачивает фото по URL и конвертирует в JPEG.
+
+    Returns:
+        (jpeg_bytes, filename) или None при ошибке
+    """
+    try:
+        resp = requests.get(photo_url, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(f"Photo download HTTP {resp.status_code}: {photo_url}")
+            return None
+
+        raw = resp.content
+        if len(raw) < 512:
+            logger.warning(f"Photo too small ({len(raw)}B): {photo_url}")
+            return None
+
+        # Всегда конвертируем через Pillow в JPEG — гарантирует правильный формат
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ('RGBA', 'LA', 'P', 'PA'):
+            img = img.convert('RGB')
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=93)
+        jpeg_bytes = buf.getvalue()
+
+        logger.info(f"Photo converted to JPEG: {len(raw)}B → {len(jpeg_bytes)}B from {photo_url[:80]}")
+        return jpeg_bytes, 'photo.jpg'
+
+    except Exception as e:
+        logger.error(f"Photo download/convert failed: {e} URL: {photo_url[:100]}")
+        return None
 
 
 class VKPublisher(BasePublisher):
@@ -41,41 +85,41 @@ class VKPublisher(BasePublisher):
                 error="Не указан access_token или group_id"
             )
 
+        # group_id ВСЕГДА положительное число (по доке VK API)
+        group_id = str(group_id).lstrip('-').strip()
+
         text = self.format_text(item)
         media_urls = item.get_media_urls()
 
-        # Нормализуем group_id — убираем минус если есть
-        group_id = str(group_id).lstrip('-')
+        logger.info(f"VK publish item={item.id}: group_id={group_id}, media_urls={len(media_urls)}")
+        for i, url in enumerate(media_urls[:5]):
+            logger.info(f"  photo[{i}]: {url[:120]}")
 
         try:
-            # owner_id для стены сообщества — отрицательный
-            owner_id = f'-{group_id}'
+            # Загружаем фото через VK Upload API
+            attachments = []
+            photo_errors = []
 
+            for i, url in enumerate(media_urls[:10]):
+                result = self._upload_photo(access_token, group_id, url, api_version)
+                if result:
+                    attachments.append(result)
+                    logger.info(f"  photo[{i}] OK: {result}")
+                else:
+                    photo_errors.append(url[:80])
+                    logger.warning(f"  photo[{i}] FAILED: {url[:80]}")
+
+            if media_urls and not attachments:
+                logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload")
+
+            # wall.post: owner_id отрицательный для сообщества
             params = {
                 'access_token': access_token,
                 'v': api_version,
-                'owner_id': owner_id,
+                'owner_id': f'-{group_id}',
                 'from_group': 1,
                 'message': text,
             }
-
-            # Если есть фото, загружаем через VK API
-            attachments = []
-            photo_errors = []
-            if media_urls:
-                logger.info(f"VK publish: {len(media_urls)} photos to upload for item {item.id}")
-                for i, url in enumerate(media_urls[:10]):  # VK максимум 10 вложений
-                    attachment = self._upload_photo_by_url(access_token, group_id, url, api_version)
-                    if attachment:
-                        attachments.append(attachment)
-                        logger.info(f"VK photo {i+1} uploaded: {attachment}")
-                    else:
-                        photo_errors.append(f"photo {i+1}: {url[:80]}")
-            else:
-                logger.warning(f"VK publish: no media_urls for item {item.id}")
-
-            if photo_errors and not attachments:
-                logger.warning(f"VK publish: ALL photos failed: {photo_errors}")
 
             if attachments:
                 params['attachments'] = ','.join(attachments)
@@ -86,6 +130,7 @@ class VKPublisher(BasePublisher):
                 timeout=30,
             )
             data = resp.json()
+            logger.info(f"VK wall.post response: {data}")
 
             if 'error' in data:
                 error_msg = data['error'].get('error_msg', 'Неизвестная ошибка VK API')
@@ -98,10 +143,17 @@ class VKPublisher(BasePublisher):
             post_id = data.get('response', {}).get('post_id')
             post_url = f"https://vk.com/wall-{group_id}_{post_id}" if post_id else None
 
+            # Сообщаем об ошибках фото даже при успешной публикации
+            error_detail = None
+            if photo_errors:
+                error_detail = f"Фото не загружены ({len(photo_errors)} из {len(media_urls)}): {'; '.join(photo_errors[:3])}"
+                logger.warning(f"VK post published but with photo errors: {error_detail}")
+
             return PublishResult(
                 success=True,
                 external_post_id=str(post_id) if post_id else None,
                 external_post_url=post_url,
+                error=error_detail,  # ошибки фото видны в UI
             )
 
         except requests.exceptions.Timeout:
@@ -129,7 +181,7 @@ class VKPublisher(BasePublisher):
                 f'{VK_API_BASE}/groups.getById',
                 params={
                     'access_token': access_token,
-                    'group_id': group_id,
+                    'group_id': str(group_id).lstrip('-'),
                     'v': VK_API_VERSION,
                 },
                 timeout=10,
@@ -145,110 +197,100 @@ class VKPublisher(BasePublisher):
         except requests.exceptions.RequestException as e:
             return False, f"Ошибка подключения к VK API: {e}"
 
-    def _upload_photo_by_url(
+    def _upload_photo(
         self,
         access_token: str,
         group_id: str,
         photo_url: str,
         api_version: str,
     ) -> Optional[str]:
-        """Загружает фото по URL для использования в посте.
+        """Загружает фото по URL на стену сообщества VK.
 
-        Returns:
-            VK attachment string (photo{owner_id}_{photo_id}) или None
+        Строго по документации VK API:
+        1. photos.getWallUploadServer → upload_url
+        2. POST photo на upload_url → server, photo, hash
+        3. photos.saveWallPhoto → photo object
+        4. Возвращает "photo{owner_id}_{photo_id}"
         """
+        # === ШАГ 0: Скачиваем и конвертируем в JPEG ===
+        photo_data = _download_and_convert_to_jpeg(photo_url)
+        if not photo_data:
+            return None
+        jpeg_bytes, filename = photo_data
+
         try:
-            # 1. Получаем URL для загрузки
-            # Нормализуем group_id — VK API ожидает положительное число
-            clean_group_id = str(group_id).lstrip('-')
-            resp = requests.post(
+            # === ШАГ 1: photos.getWallUploadServer ===
+            resp = requests.get(
                 f'{VK_API_BASE}/photos.getWallUploadServer',
-                data={
+                params={
                     'access_token': access_token,
-                    'group_id': clean_group_id,
+                    'group_id': group_id,  # положительное число
                     'v': api_version,
                 },
                 timeout=10,
             )
-            server_data = resp.json()
-            if 'error' in server_data:
-                logger.warning(f"VK getWallUploadServer error: {server_data['error']}")
+            srv = resp.json()
+            logger.debug(f"getWallUploadServer response: {srv}")
+
+            if 'error' in srv:
+                logger.error(f"VK getWallUploadServer error: {srv['error']}")
                 return None
-            upload_url = server_data.get('response', {}).get('upload_url')
+
+            upload_url = srv.get('response', {}).get('upload_url')
             if not upload_url:
-                logger.warning(f"VK getWallUploadServer: no upload_url in response")
+                logger.error(f"VK getWallUploadServer: no upload_url")
                 return None
 
-            # 2. Скачиваем фото
-            photo_resp = requests.get(photo_url, timeout=15)
-            if photo_resp.status_code != 200:
-                logger.warning(f"Failed to download photo {photo_url}: HTTP {photo_resp.status_code}")
-                return None
-
-            if len(photo_resp.content) < 1024:
-                logger.warning(f"Photo too small ({len(photo_resp.content)} bytes), skipping: {photo_url}")
-                return None
-
-            # Конвертируем webp → jpeg если нужно (VK не принимает webp)
-            photo_content = photo_resp.content
-            content_type = photo_resp.headers.get('Content-Type', '')
-            filename = 'photo.jpg'
-
-            if 'webp' in content_type or photo_url.endswith('.webp'):
-                try:
-                    from PIL import Image
-                    import io
-                    img = Image.open(io.BytesIO(photo_content))
-                    if img.mode in ('RGBA', 'P'):
-                        img = img.convert('RGB')
-                    buf = io.BytesIO()
-                    img.save(buf, format='JPEG', quality=92)
-                    photo_content = buf.getvalue()
-                    filename = 'photo.jpg'
-                except ImportError:
-                    # Pillow не установлен — отправляем как есть, VK может принять
-                    logger.warning("Pillow not installed, sending webp as-is to VK")
-                    filename = 'photo.webp'
-                except Exception as conv_err:
-                    logger.warning(f"webp→jpeg conversion failed: {conv_err}, sending as-is")
-                    filename = 'photo.webp'
-
-            # 3. Загружаем на VK
-            files = {'photo': (filename, photo_content, 'image/jpeg')}
-            upload_resp = requests.post(upload_url, files=files, timeout=30)
+            # === ШАГ 2: POST фото на upload_url ===
+            # Поле "photo", файл с расширением .jpg, content-type image/jpeg
+            upload_resp = requests.post(
+                upload_url,
+                files={'photo': (filename, jpeg_bytes, 'image/jpeg')},
+                timeout=30,
+            )
             upload_data = upload_resp.json()
+            logger.debug(f"VK upload response: server={upload_data.get('server')}, "
+                         f"photo_len={len(upload_data.get('photo', ''))}, "
+                         f"hash={upload_data.get('hash', '')[:16]}...")
 
-            if not upload_data.get('photo') or upload_data.get('photo') == '[]':
-                logger.warning(f"VK upload returned empty photo field: {upload_data}")
+            # VK возвращает photo как JSON-строку. Пустое = ошибка
+            photo_field = upload_data.get('photo', '')
+            if not photo_field or photo_field in ('[]', ''):
+                logger.error(f"VK upload: empty photo field. Full response: {upload_data}")
                 return None
 
-            # 4. Сохраняем фото
+            # === ШАГ 3: photos.saveWallPhoto ===
             save_resp = requests.post(
                 f'{VK_API_BASE}/photos.saveWallPhoto',
                 data={
                     'access_token': access_token,
-                    'group_id': clean_group_id,
-                    'photo': upload_data.get('photo', ''),
+                    'group_id': group_id,  # положительное число
                     'server': upload_data.get('server', ''),
+                    'photo': photo_field,
                     'hash': upload_data.get('hash', ''),
                     'v': api_version,
                 },
                 timeout=10,
             )
             save_data = save_resp.json()
+            logger.debug(f"saveWallPhoto response: {save_data}")
 
             if 'error' in save_data:
-                logger.warning(f"VK photos.saveWallPhoto error: {save_data['error']}")
+                logger.error(f"VK saveWallPhoto error: {save_data['error']}")
                 return None
 
             photos = save_data.get('response', [])
-            if photos:
-                photo = photos[0]
-                return f"photo{photo['owner_id']}_{photo['id']}"
-            else:
-                logger.warning(f"VK photos.saveWallPhoto returned empty response")
+            if not photos:
+                logger.error(f"VK saveWallPhoto: empty response array")
+                return None
+
+            # === ШАГ 4: Формируем attachment string ===
+            photo_obj = photos[0]
+            owner_id = photo_obj['owner_id']  # отрицательный для группы
+            photo_id = photo_obj['id']
+            attachment = f"photo{owner_id}_{photo_id}"
+            return attachment
 
         except Exception as e:
-            logger.warning(f"VK photo upload failed for {photo_url}: {e}")
-
-        return None
+            logger.error(f"VK photo upload exception: {e}", exc_info=True)
+            return None

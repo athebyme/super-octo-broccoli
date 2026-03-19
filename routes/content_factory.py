@@ -634,7 +634,8 @@ def register_content_factory_routes(app):
                 item.published_at = datetime.utcnow()
                 item.external_post_id = result.external_post_id
                 item.external_post_url = result.external_post_url
-                item.error_message = None
+                # Сохраняем предупреждения о фото (result.error может быть заполнен при success)
+                item.error_message = result.error if result.error else None
                 account.last_used_at = datetime.utcnow()
                 account.last_error = None
             else:
@@ -650,9 +651,8 @@ def register_content_factory_routes(app):
                     'external_post_id': result.external_post_id,
                     'external_post_url': result.external_post_url,
                 }
-                # Добавляем debug-инфу о фото
-                if media_urls and target_platform == 'vk':
-                    resp_data['_debug_media_count'] = len(media_urls)
+                if result.error:
+                    resp_data['warning'] = result.error
                 return jsonify(resp_data)
             else:
                 return jsonify({'error': result.error}), 500
