@@ -505,8 +505,12 @@ if not _app_secret:
 app.secret_key = _app_secret
 app.jinja_env.filters["basename"] = lambda value: Path(value).name if value else ""
 
-
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 час
+
+# CSRF-защита
+from flask_wtf.csrf import CSRFProtect
+csrf = CSRFProtect(app)
 
 # Простая аутентификация через shared secret (если задан)
 _CALCULATOR_AUTH_TOKEN = os.environ.get("CALCULATOR_AUTH_TOKEN", "")
@@ -708,8 +712,19 @@ def download_latest_price_catalog(url: str = SUPPLIER_URL) -> Path:
     return destination
 
 
+_last_refresh: Optional[datetime] = None
+_REFRESH_COOLDOWN_SECONDS = 60  # Минимальный интервал между обновлениями
+
+
 @app.route("/refresh-price", methods=["POST"])
 def refresh_price() -> str:
+    global _last_refresh
+    # Rate limiting: не чаще раза в минуту
+    if _last_refresh and (datetime.now() - _last_refresh).total_seconds() < _REFRESH_COOLDOWN_SECONDS:
+        flash("Слишком частые запросы. Подождите минуту.", "warning")
+        return redirect(url_for("index"))
+    _last_refresh = datetime.now()
+
     try:
         price_path = download_latest_price_catalog()
     except requests.HTTPError as exc:
