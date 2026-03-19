@@ -200,7 +200,7 @@ class CloudRuApiKeyManager:
             # API-ключ - используется напрямую
             self.auth_type = 'api_key'
             self.api_key = api_key
-            logger.info(f"✅ Cloud.ru API-ключ: {api_key[:12]}...")
+            logger.info("✅ Cloud.ru API-ключ: ***настроен***")
 
     @classmethod
     def from_key_secret(cls, key_secret: str) -> 'CloudRuApiKeyManager':

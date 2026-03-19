@@ -221,7 +221,7 @@ class WildberriesAPIClient:
         # Логирование запроса
         params_str = f" params={kwargs.get('params')}" if kwargs.get('params') else ""
         logger.info(f"WB API Request: {method} {url}{params_str}")
-        logger.debug(f"API Key (first 10 chars): {self.api_key[:10]}...")
+        logger.debug("API Key: ***настроен***")
         start_time = time.time()
 
         # Сохраняем request body для логирования

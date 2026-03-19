@@ -55,8 +55,15 @@ with app.app_context():
     if not password:
         import secrets as _s
         password = _s.token_urlsafe(16)
-        print(f"⚠️  ADMIN_PASSWORD не задан! Сгенерирован случайный пароль: {password}")
-        print(f"   ОБЯЗАТЕЛЬНО сохраните его и задайте ADMIN_PASSWORD в .env!")
+        # Записываем пароль в защищённый файл вместо stdout
+        _pwd_file = '/app/data/.generated_admin_password'
+        with open(_pwd_file, 'w') as _f:
+            _f.write(password)
+        import os as _os
+        _os.chmod(_pwd_file, 0o600)
+        print(f"⚠️  ADMIN_PASSWORD не задан! Сгенерирован случайный пароль.")
+        print(f"   Пароль записан в: {_pwd_file}")
+        print(f"   ОБЯЗАТЕЛЬНО задайте ADMIN_PASSWORD в .env!")
 
     # Ищем по username, по email или первого админа
     admin_user = (

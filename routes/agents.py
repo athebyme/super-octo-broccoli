@@ -11,7 +11,9 @@ UI маршруты для дашборда агентов.
 """
 import json
 import logging
+import secrets
 import uuid
+from datetime import datetime
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, abort, session
 from flask_login import login_required, current_user
@@ -117,6 +119,12 @@ def register_agents_routes(app):
         task = agent_service.get_task(task_id)
         if not task:
             return jsonify({'error': 'Not found'}), 404
+
+        # Проверка прав доступа: только владелец задачи или админ
+        seller_id = current_user.seller.id if current_user.seller else None
+        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+            return jsonify({'error': 'Forbidden'}), 403
+
         steps = agent_service.get_task_steps(task_id, limit=50)
 
         # Если это pipeline-задача — добавляем статус подзадач
@@ -311,7 +319,12 @@ def register_agents_routes(app):
     @login_required
     def agent_task_create():
         """Создать задачу для агента вручную."""
-        fallback_url = request.form.get('redirect_url') or url_for('agents_dashboard')
+        # Защита от open redirect: только относительные URL
+        redirect_url = request.form.get('redirect_url', '')
+        if redirect_url and redirect_url.startswith('/') and '://' not in redirect_url and not redirect_url.startswith('//'):
+            fallback_url = redirect_url
+        else:
+            fallback_url = url_for('agents_dashboard')
 
         if not current_user.seller:
             flash('Нет профиля продавца', 'danger')
@@ -463,7 +476,7 @@ def register_agents_routes(app):
         )
 
         # Генерируем API ключ
-        raw_key = str(uuid.uuid4())
+        raw_key = secrets.token_urlsafe(32)
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
@@ -491,7 +504,7 @@ def register_agents_routes(app):
             return redirect(url_for('agents_dashboard'))
 
         # Генерируем API ключ
-        raw_key = str(uuid.uuid4())
+        raw_key = secrets.token_urlsafe(32)
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 
@@ -520,7 +533,7 @@ def register_agents_routes(app):
             return redirect(url_for('agents_dashboard'))
 
         # Генерируем новый API ключ
-        raw_key = str(uuid.uuid4())
+        raw_key = secrets.token_urlsafe(32)
         agent.api_key_hash = generate_password_hash(raw_key)
         db.session.commit()
 

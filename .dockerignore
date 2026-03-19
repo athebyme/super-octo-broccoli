@@ -1,6 +1,8 @@
 __pycache__/
 .venv/
 .env
+.env.*
+!.env.example
 *.pyc
 *.pyo
 uploads/*
@@ -9,5 +11,12 @@ data/
 *.xlsx
 *.csv
 .idea/
+.vscode/
 *.log
+.git/
+.gitignore
+*.md
+tests/
+scripts/test_*
+docs/
 

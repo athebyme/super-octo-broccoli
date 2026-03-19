@@ -29,9 +29,11 @@ def init_test_platform():
             is_admin=True,
             is_active=True
         )
-        admin.set_password("admin123")
+        import secrets as _s
+        test_password = _s.token_urlsafe(12)
+        admin.set_password(test_password)
         db.session.add(admin)
-        print("✓ Создан администратор (admin / admin123)")
+        print(f"✓ Создан администратор (admin / {test_password})")
 
         # Создаем тестового продавца
         seller_user = User(
@@ -40,7 +42,8 @@ def init_test_platform():
             is_admin=False,
             is_active=True
         )
-        seller_user.set_password("seller123")
+        seller_pass = _s.token_urlsafe(12)
+        seller_user.set_password(seller_pass)
         db.session.add(seller_user)
         db.session.flush()
 

@@ -5,6 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Создаём непривилегированного пользователя
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -13,7 +16,10 @@ COPY agents/ ./agents/
 COPY docker-entrypoint-agent.sh .
 COPY agent-healthcheck.sh .
 
-RUN chmod +x /app/docker-entrypoint-agent.sh /app/agent-healthcheck.sh
+RUN chmod +x /app/docker-entrypoint-agent.sh /app/agent-healthcheck.sh && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD ["/app/agent-healthcheck.sh"]

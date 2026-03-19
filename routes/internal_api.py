@@ -51,6 +51,18 @@ def _authenticate_agent(f):
     return decorated
 
 
+def _verify_agent_seller_access(agent, seller_id: int) -> bool:
+    """Проверяет, что агент имеет задачи для данного продавца (защита от IDOR)."""
+    from models import AgentTask
+    has_tasks = AgentTask.query.filter_by(
+        agent_id=agent.id,
+        seller_id=seller_id,
+    ).filter(
+        AgentTask.status.in_(['queued', 'running', 'active'])
+    ).first()
+    return has_tasks is not None
+
+
 # ── Heartbeat ───────────────────────────────────────────────────
 
 @internal_api_bp.route('/heartbeat', methods=['POST'])
@@ -169,6 +181,8 @@ def internal_get_steps(task_id):
 @_authenticate_agent
 def internal_list_products(seller_id):
     """Получить товары продавца."""
+    if not _verify_agent_seller_access(request._agent, seller_id):
+        return jsonify({'error': 'Agent has no active tasks for this seller'}), 403
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
     status = request.args.get('status')
@@ -192,6 +206,8 @@ def internal_list_products(seller_id):
 @_authenticate_agent
 def internal_get_product(seller_id, product_id):
     """Получить конкретный товар."""
+    if not _verify_agent_seller_access(request._agent, seller_id):
+        return jsonify({'error': 'Agent has no active tasks for this seller'}), 403
     product = Product.query.filter_by(id=product_id, seller_id=seller_id).first()
     if not product:
         return jsonify({'error': 'Product not found'}), 404
@@ -202,6 +218,8 @@ def internal_get_product(seller_id, product_id):
 @_authenticate_agent
 def internal_update_product(seller_id, product_id):
     """Агент обновляет данные товара."""
+    if not _verify_agent_seller_access(request._agent, seller_id):
+        return jsonify({'error': 'Agent has no active tasks for this seller'}), 403
     product = Product.query.filter_by(id=product_id, seller_id=seller_id).first()
     if not product:
         return jsonify({'error': 'Product not found'}), 404
@@ -235,6 +253,8 @@ def internal_update_product(seller_id, product_id):
 @_authenticate_agent
 def internal_list_imported_products(seller_id):
     """Получить импортированные товары (от поставщика)."""
+    if not _verify_agent_seller_access(request._agent, seller_id):
+        return jsonify({'error': 'Agent has no active tasks for this seller'}), 403
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
 
@@ -499,6 +519,8 @@ def internal_get_task(task_id):
 @_authenticate_agent
 def internal_get_seller(seller_id):
     """Информация о продавце."""
+    if not _verify_agent_seller_access(request._agent, seller_id):
+        return jsonify({'error': 'Agent has no active tasks for this seller'}), 403
     seller = Seller.query.get(seller_id)
     if not seller:
         return jsonify({'error': 'Seller not found'}), 404
@@ -939,6 +961,8 @@ def internal_get_pricing_settings(seller_id):
     БЕЗОПАСНОСТЬ: НЕ возвращает URL файлов поставщика, хеши, user IDs.
     Только формулы и коэффициенты, нужные для расчёта цен.
     """
+    if not _verify_agent_seller_access(request._agent, seller_id):
+        return jsonify({'error': 'Agent has no active tasks for this seller'}), 403
     ps = PricingSettings.query.filter_by(seller_id=seller_id).first()
     if not ps:
         return jsonify({'error': 'Pricing settings not found for this seller'}), 404

@@ -256,6 +256,15 @@ def after_request(response):
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "img-src 'self' data: https://basket-*.wbbasket.ru https://*.wbbasket.ru; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'"
+    )
 
     # Запрещаем кэширование для аутентифицированных страниц
     if hasattr(response, 'cache_control'):
@@ -286,10 +295,11 @@ def load_user(user_id):
 
 
 def admin_required(f):
-    """Декоратор для проверки прав администратора"""
+    """Декоратор для проверки прав администратора (включает login_required)"""
     @wraps(f)
+    @login_required
     def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or not current_user.is_admin:
+        if not current_user.is_admin:
             flash('У вас нет прав для доступа к этой странице', 'danger')
             return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
@@ -298,7 +308,15 @@ def admin_required(f):
 
 # ============= ВАЛИДАЦИЯ ПАРОЛЕЙ =============
 
-_WEAK_PASSWORDS = {'admin123', 'password', '123456', 'qwerty', 'admin', 'letmein', '12345678', 'password1'}
+_WEAK_PASSWORDS = {
+    'admin123', 'password', '123456', 'qwerty', 'admin', 'letmein', '12345678', 'password1',
+    'password123', '123456789', '1234567890', 'welcome', 'welcome1', 'abc123', 'monkey',
+    'master', 'dragon', 'login', 'princess', 'football', 'shadow', 'sunshine', 'trustno1',
+    'iloveyou', 'batman', 'access', 'hello', 'charlie', 'donald', '123123', '654321',
+    'qwerty123', 'michael', 'hunter', 'test123', 'pass123', 'admin1', 'root', 'toor',
+    'pass', 'test', 'guest', 'master123', 'changeme', 'secret', '1q2w3e4r', '1qaz2wsx',
+    'zaq12wsx', 'qazwsx', 'passw0rd', 'p@ssw0rd', 'p@ssword', 'administrator',
+}
 
 
 def validate_password(password: str) -> Optional[str]:
@@ -319,24 +337,37 @@ def validate_password(password: str) -> Optional[str]:
 _login_attempts: Dict[str, List[float]] = {}
 _LOGIN_MAX_ATTEMPTS = 5  # макс. попыток
 _LOGIN_WINDOW_SECONDS = 300  # за 5 минут
+_LOGIN_CLEANUP_THRESHOLD = 1000  # Очистка словаря при превышении кол-ва записей
+_login_lock = threading.Lock()
 
 
 def _check_login_rate_limit(ip: str) -> bool:
     """Проверка rate limit для логина. Возвращает True если лимит превышен."""
     now = time.time()
-    attempts = _login_attempts.get(ip, [])
-    # Убираем старые попытки
-    attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
-    _login_attempts[ip] = attempts
-    return len(attempts) >= _LOGIN_MAX_ATTEMPTS
+    with _login_lock:
+        # Периодическая очистка от устаревших записей (защита от утечки памяти)
+        if len(_login_attempts) > _LOGIN_CLEANUP_THRESHOLD:
+            stale_ips = [
+                k for k, v in _login_attempts.items()
+                if not v or (now - v[-1]) > _LOGIN_WINDOW_SECONDS
+            ]
+            for k in stale_ips:
+                del _login_attempts[k]
+
+        attempts = _login_attempts.get(ip, [])
+        # Убираем старые попытки
+        attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
+        _login_attempts[ip] = attempts
+        return len(attempts) >= _LOGIN_MAX_ATTEMPTS
 
 
 def _record_login_attempt(ip: str) -> None:
     """Записать попытку входа."""
     now = time.time()
-    if ip not in _login_attempts:
-        _login_attempts[ip] = []
-    _login_attempts[ip].append(now)
+    with _login_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = []
+        _login_attempts[ip].append(now)
 
 
 @app.route('/login', methods=['GET', 'POST'])

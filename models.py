@@ -8,9 +8,28 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from typing import Optional
 import os
 import json
+import logging
 from cryptography.fernet import Fernet
 
+_models_logger = logging.getLogger(__name__)
+
 db = SQLAlchemy()
+
+
+def _get_fernet() -> Optional[Fernet]:
+    """Возвращает Fernet-объект для шифрования или None с предупреждением."""
+    encryption_key = os.environ.get('ENCRYPTION_KEY')
+    if not encryption_key:
+        _models_logger.warning(
+            "ENCRYPTION_KEY не установлен! Секреты хранятся в открытом виде. "
+            "Задайте ENCRYPTION_KEY для шифрования."
+        )
+        return None
+    try:
+        return Fernet(encryption_key.encode())
+    except Exception as e:
+        _models_logger.error(f"Невалидный ENCRYPTION_KEY: {e}")
+        return None
 
 
 class User(UserMixin, db.Model):
@@ -106,17 +125,15 @@ class Seller(db.Model):
         if not self._wb_api_key_encrypted:
             return None
 
-        # Получаем ключ шифрования из переменных окружения
-        encryption_key = os.environ.get('ENCRYPTION_KEY')
-        if not encryption_key:
-            # Если ключ не настроен, возвращаем как есть (для обратной совместимости)
+        f = _get_fernet()
+        if not f:
             return self._wb_api_key_encrypted
 
         try:
-            f = Fernet(encryption_key.encode())
             return f.decrypt(self._wb_api_key_encrypted.encode()).decode()
         except Exception:
-            # Если не удалось расшифровать, возможно ключ хранится незашифрованным
+            # Ключ возможно хранится незашифрованным (legacy)
+            _models_logger.warning("Не удалось расшифровать WB API ключ — возможно хранится в открытом виде (legacy)")
             return self._wb_api_key_encrypted
 
     @wb_api_key.setter
@@ -126,19 +143,17 @@ class Seller(db.Model):
             self._wb_api_key_encrypted = None
             return
 
-        # Получаем ключ шифрования
-        encryption_key = os.environ.get('ENCRYPTION_KEY')
-        if not encryption_key:
-            # Если ключ не настроен, сохраняем как есть
+        f = _get_fernet()
+        if not f:
+            _models_logger.warning("WB API ключ сохранён БЕЗ шифрования — установите ENCRYPTION_KEY!")
             self._wb_api_key_encrypted = value
             return
 
         try:
-            f = Fernet(encryption_key.encode())
             self._wb_api_key_encrypted = f.encrypt(value.encode()).decode()
-        except Exception:
-            # В случае ошибки сохраняем незашифрованным
-            self._wb_api_key_encrypted = value
+        except Exception as e:
+            _models_logger.error(f"Ошибка шифрования WB API ключа: {e}")
+            raise ValueError("Не удалось зашифровать API ключ. Проверьте ENCRYPTION_KEY.") from e
 
     def has_valid_api_key(self) -> bool:
         """Проверить наличие валидного API ключа"""
@@ -705,13 +720,13 @@ class AutoImportSettings(db.Model):
         """Расшифровать пароль sexoptovik."""
         if not self._sexoptovik_password_encrypted:
             return None
-        encryption_key = os.environ.get('ENCRYPTION_KEY')
-        if not encryption_key:
+        f = _get_fernet()
+        if not f:
             return self._sexoptovik_password_encrypted
         try:
-            f = Fernet(encryption_key.encode())
             return f.decrypt(self._sexoptovik_password_encrypted.encode()).decode()
         except Exception:
+            _models_logger.warning("Не удалось расшифровать пароль sexoptovik — возможно хранится в открытом виде (legacy)")
             return self._sexoptovik_password_encrypted
 
     @sexoptovik_password.setter
@@ -720,15 +735,16 @@ class AutoImportSettings(db.Model):
         if value is None or value == '':
             self._sexoptovik_password_encrypted = value
             return
-        encryption_key = os.environ.get('ENCRYPTION_KEY')
-        if not encryption_key:
+        f = _get_fernet()
+        if not f:
+            _models_logger.warning("Пароль sexoptovik сохранён БЕЗ шифрования — установите ENCRYPTION_KEY!")
             self._sexoptovik_password_encrypted = value
             return
         try:
-            f = Fernet(encryption_key.encode())
             self._sexoptovik_password_encrypted = f.encrypt(value.encode()).decode()
-        except Exception:
-            self._sexoptovik_password_encrypted = value
+        except Exception as e:
+            _models_logger.error(f"Ошибка шифрования пароля sexoptovik: {e}")
+            raise ValueError("Не удалось зашифровать пароль. Проверьте ENCRYPTION_KEY.") from e
 
     # Настройки импорта
     import_only_new = db.Column(db.Boolean, default=True, nullable=False)  # Импортировать только новые товары
@@ -742,7 +758,38 @@ class AutoImportSettings(db.Model):
     # AI настройки
     ai_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Использовать AI для определения категорий/размеров
     ai_provider = db.Column(db.String(50), default='openai')  # Провайдер AI (openai, cloudru, custom)
-    ai_api_key = db.Column(db.String(500))  # API ключ для AI
+    _ai_api_key_encrypted = db.Column('ai_api_key', db.String(500))  # API ключ для AI (зашифрованный)
+
+    @property
+    def ai_api_key(self) -> Optional[str]:
+        """Расшифровать AI API ключ."""
+        if not self._ai_api_key_encrypted:
+            return None
+        f = _get_fernet()
+        if not f:
+            return self._ai_api_key_encrypted
+        try:
+            return f.decrypt(self._ai_api_key_encrypted.encode()).decode()
+        except Exception:
+            return self._ai_api_key_encrypted
+
+    @ai_api_key.setter
+    def ai_api_key(self, value: Optional[str]) -> None:
+        """Зашифровать AI API ключ."""
+        if value is None or value == '':
+            self._ai_api_key_encrypted = value
+            return
+        f = _get_fernet()
+        if not f:
+            _models_logger.warning("AI API ключ сохранён БЕЗ шифрования — установите ENCRYPTION_KEY!")
+            self._ai_api_key_encrypted = value
+            return
+        try:
+            self._ai_api_key_encrypted = f.encrypt(value.encode()).decode()
+        except Exception as e:
+            _models_logger.error(f"Ошибка шифрования AI API ключа: {e}")
+            raise ValueError("Не удалось зашифровать AI API ключ.") from e
+
     ai_api_base_url = db.Column(db.String(500))  # Базовый URL API (для custom провайдеров)
     ai_model = db.Column(db.String(100), default='gpt-4o-mini')  # Модель AI
     ai_temperature = db.Column(db.Float, default=0.3)  # Температура для AI
