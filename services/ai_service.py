@@ -1332,6 +1332,74 @@ class AIConfig:
     seller_id: int = 0
 
     @classmethod
+    def for_seller(cls, seller_id: int, provider_override: str = None,
+                   temperature: float = None, max_tokens: int = None,
+                   timeout: int = None) -> 'AIConfig':
+        """Единая точка создания AI-конфига для любого seller_id.
+
+        Используется контент-фабрикой, отзывами, авто-импортом и любыми другими
+        модулями, которым нужен AI-клиент.
+
+        Args:
+            seller_id: ID продавца
+            provider_override: переопределить провайдера (иначе из настроек)
+            temperature: переопределить temperature
+            max_tokens: переопределить max_tokens
+            timeout: переопределить timeout
+
+        Returns:
+            AIConfig
+
+        Raises:
+            ValueError: если настройки не найдены или API ключ не указан
+        """
+        from models import AutoImportSettings
+        ai_settings = AutoImportSettings.query.filter_by(seller_id=seller_id).first()
+        if not ai_settings:
+            raise ValueError("AI не настроен. Перейдите в Профиль → AI-провайдер и укажите API ключ.")
+
+        # Определяем провайдер
+        provider_name = provider_override or getattr(ai_settings, 'ai_provider', 'cloudru') or 'cloudru'
+        if provider_name == 'gigachat':
+            provider_name = 'cloudru'
+        provider = AIProvider(provider_name)
+
+        # Определяем API ключ — единая логика для всех модулей
+        api_key = getattr(ai_settings, 'ai_api_key', '') or ''
+        if not api_key:
+            # Фоллбэк на ai_client_secret (legacy поле)
+            api_key = getattr(ai_settings, 'ai_client_secret', '') or ''
+        if not api_key:
+            raise ValueError("API ключ AI не указан. Перейдите в Профиль → AI-провайдер и укажите API ключ.")
+
+        # Определяем URL и модель по умолчанию
+        if provider == AIProvider.CLOUDRU:
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://foundation-models.api.cloud.ru/v1'
+            default_model = 'openai/gpt-oss-120b'
+        elif provider == AIProvider.OPENAI:
+            api_base = 'https://api.openai.com/v1'
+            default_model = 'gpt-4o-mini'
+        else:  # CUSTOM
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
+            default_model = 'gpt-4o-mini'
+
+        model = getattr(ai_settings, 'ai_model', '') or default_model
+
+        return cls(
+            provider=provider,
+            api_key=api_key,
+            api_base_url=api_base,
+            model=model,
+            temperature=temperature if temperature is not None else (getattr(ai_settings, 'ai_temperature', 0.3) or 0.3),
+            max_tokens=max_tokens if max_tokens is not None else (getattr(ai_settings, 'ai_max_tokens', 2000) or 2000),
+            timeout=timeout if timeout is not None else (getattr(ai_settings, 'ai_timeout', 120) or 120),
+            top_p=getattr(ai_settings, 'ai_top_p', 0.95) or 0.95,
+            presence_penalty=getattr(ai_settings, 'ai_presence_penalty', 0.0) or 0.0,
+            frequency_penalty=getattr(ai_settings, 'ai_frequency_penalty', 0.0) or 0.0,
+            seller_id=seller_id,
+        )
+
+    @classmethod
     def from_settings(cls, settings) -> Optional['AIConfig']:
         """Создает конфигурацию из настроек автоимпорта"""
         if not hasattr(settings, 'ai_enabled') or not settings.ai_enabled:

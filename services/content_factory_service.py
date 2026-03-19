@@ -146,48 +146,22 @@ class ContentFactoryService:
     def _get_ai_client(self, factory: ContentFactory) -> Tuple[AIClient, str, str]:
         """Создаёт AI клиент на основе настроек фабрики.
 
+        Использует единый AIConfig.for_seller() для получения конфигурации.
+
         Returns:
             Tuple[AIClient, provider_name, model_name]
         """
-        provider_name = factory.ai_provider or 'openai'
+        provider_name = factory.ai_provider or 'cloudru'
 
-        # Настройки AI берём из AutoImportSettings продавца (там хранятся ключи)
-        from models import AutoImportSettings
-        ai_settings = AutoImportSettings.query.filter_by(
-            seller_id=factory.seller_id
-        ).first()
-
-        if not ai_settings:
-            raise ValueError("AI не настроен. Настройте AI в разделе Авто-импорт.")
-
-        # Определяем провайдер и параметры
-        if provider_name in ('cloudru', 'gigachat'):
-            provider = AIProvider.CLOUDRU
-            api_key = ai_settings.ai_client_secret or ''
-            api_base_url = 'https://foundation-models.api.cloud.ru/v1'
-            model = ai_settings.ai_model if hasattr(ai_settings, 'ai_model') else 'openai/gpt-oss-120b'
-        elif provider_name == 'openai':
-            provider = AIProvider.OPENAI
-            api_key = ai_settings.openai_api_key or ''
-            api_base_url = 'https://api.openai.com/v1'
-            model = 'gpt-4o'
-        else:
-            provider = AIProvider.CUSTOM
-            api_key = ai_settings.openai_api_key or ai_settings.ai_client_secret or ''
-            api_base_url = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
-            model = getattr(ai_settings, 'ai_model', '') or 'gpt-4o'
-
-        config = AIConfig(
-            provider=provider,
-            api_key=api_key,
-            api_base_url=api_base_url,
-            model=model,
+        config = AIConfig.for_seller(
+            seller_id=factory.seller_id,
+            provider_override=provider_name,
             temperature=0.7,  # Более креативно для контента
             max_tokens=3000,
         )
 
         client = AIClient(config)
-        return client, provider_name, model
+        return client, config.provider.value, config.model
 
     # ================================================================
     # Генерация контента
