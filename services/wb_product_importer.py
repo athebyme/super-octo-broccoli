@@ -346,6 +346,25 @@ class WBProductImporter:
             except Exception:
                 pass  # Карточка не найдена — продолжаем создание
 
+            # === Pre-check: проверяем уникальность баркодов в локальной БД ===
+            if barcodes:
+                barcode_conflicts = self._check_barcode_uniqueness(imported_product, barcodes)
+                if barcode_conflicts:
+                    # Баркод уже используется — пытаемся привязать к существующей карточке
+                    conflict_bc, conflict_nm_id = barcode_conflicts[0]
+                    logger.info(
+                        f"Баркод {conflict_bc} уже используется в карточке nmID={conflict_nm_id}. "
+                        f"Привязываем вместо создания новой..."
+                    )
+                    try:
+                        linked = self._link_existing_card(
+                            imported_product, vendor_code, conflict_nm_id
+                        )
+                        if linked:
+                            return linked
+                    except Exception as link_err:
+                        logger.warning(f"Не удалось привязать по баркоду: {link_err}")
+
             # Вызов API WB для создания карточки
             try:
                 response = self.api_client.create_product_card(
@@ -377,6 +396,12 @@ class WBProductImporter:
                         nm_id = created_card.get('nmID')
                         if nm_id:
                             logger.info(f"Карточка создана с nmID: {nm_id} (попытка {attempt+1}/{len(retry_delays)})")
+                            # Обновляем wb_sizes свежими данными с WB (включая chrtID)
+                            # чтобы при последующем редактировании не возникало конфликтов баркодов
+                            wb_sizes_from_api = created_card.get('sizes', [])
+                            if wb_sizes_from_api:
+                                wb_sizes = wb_sizes_from_api
+                                logger.info(f"Обновлены sizes из WB API (с chrtID): {len(wb_sizes)} размеров")
                             break
                     except Exception as e:
                         logger.warning(f"Попытка {attempt+1}/{len(retry_delays)} получить nmID: {e}")
@@ -646,6 +671,71 @@ class WBProductImporter:
     # Helpers: привязка существующих карточек WB
     # ------------------------------------------------------------------
 
+    def _check_barcode_uniqueness(self, imported_product: ImportedProduct, barcodes: list) -> list:
+        """
+        Проверяет уникальность баркодов в локальной БД перед отправкой на WB.
+        Ищет конфликты с уже импортированными товарами (completed) и Product записями.
+
+        Returns: список кортежей (barcode, nm_id) для конфликтных баркодов, или пустой список
+        """
+        barcode_set = set(str(b) for b in barcodes if b)
+        if not barcode_set:
+            return []
+
+        conflicts = []
+
+        # 1. Проверяем ImportedProduct с completed статусом
+        try:
+            completed = ImportedProduct.query.filter(
+                ImportedProduct.seller_id == self.seller.id,
+                ImportedProduct.import_status == 'completed',
+                ImportedProduct.wb_nm_id.isnot(None),
+                ImportedProduct.barcodes.isnot(None),
+                ImportedProduct.id != imported_product.id,
+            ).all()
+
+            for cp in completed:
+                try:
+                    cp_barcodes = set(str(b) for b in json.loads(cp.barcodes) if b)
+                    overlap = barcode_set & cp_barcodes
+                    if overlap:
+                        for bc in overlap:
+                            conflicts.append((bc, cp.wb_nm_id))
+                        barcode_set -= overlap
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except Exception as e:
+            logger.warning(f"Ошибка проверки уникальности баркодов (ImportedProduct): {e}")
+
+        if not barcode_set:
+            return conflicts
+
+        # 2. Проверяем Product записи (sizes_json содержит skus)
+        try:
+            products = Product.query.filter(
+                Product.seller_id == self.seller.id,
+                Product.sizes_json.isnot(None),
+            ).all()
+
+            for p in products:
+                try:
+                    sizes = json.loads(p.sizes_json)
+                    for size_entry in (sizes if isinstance(sizes, list) else []):
+                        skus = set(str(s) for s in size_entry.get('skus', []) if s)
+                        overlap = barcode_set & skus
+                        if overlap:
+                            for bc in overlap:
+                                conflicts.append((bc, p.nm_id))
+                            barcode_set -= overlap
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not barcode_set:
+                    break
+        except Exception as e:
+            logger.warning(f"Ошибка проверки уникальности баркодов (Product): {e}")
+
+        return conflicts
+
     def _extract_nm_id_from_barcode_error(self, error_msg: str) -> int:
         """
         Извлекает nmID из ошибки WB о дублирующемся баркоде.
@@ -713,7 +803,7 @@ class WBProductImporter:
 
         # Привязываем
         imported_product.wb_nm_id = existing_nm_id
-        imported_product.import_status = 'completed'
+        imported_product.import_status = 'imported'
         imported_product.import_error = None
         imported_product.imported_at = datetime.utcnow()
         db.session.commit()

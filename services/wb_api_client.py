@@ -709,6 +709,49 @@ class WildberriesAPIClient:
         logger.info(f"Total stock records loaded: {len(all_stocks)}")
         return all_stocks
 
+    def get_fresh_sizes_map(
+        self,
+        nm_ids: List[int],
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Dict[int, list]:
+        """
+        Получить актуальные sizes (с chrtID) для списка nmID из WB API.
+
+        Используется для безопасного batch-обновления карточек:
+        sizes из локальной БД могут не содержать chrtID, что приводит
+        к ошибке "Неуникальный баркод" при обновлении.
+
+        Args:
+            nm_ids: Список nmID карточек
+            log_to_db: Логировать запросы в БД
+            seller_id: ID продавца для логирования
+
+        Returns:
+            Словарь {nmID: sizes_list} с актуальными размерами из WB
+        """
+        sizes_map = {}
+        if not nm_ids:
+            return sizes_map
+
+        # Фильтруем невалидные nm_ids
+        valid_nm_ids = [nm for nm in nm_ids if nm and nm > 0]
+        if not valid_nm_ids:
+            return sizes_map
+
+        logger.info(f"📥 Fetching fresh sizes for {len(valid_nm_ids)} cards from WB API...")
+
+        for nm_id in valid_nm_ids:
+            try:
+                card = self.get_card_by_nm_id(nm_id, log_to_db=log_to_db, seller_id=seller_id)
+                if card and card.get('sizes'):
+                    sizes_map[nm_id] = card['sizes']
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to fetch sizes for nmID={nm_id}: {e}")
+
+        logger.info(f"✅ Fetched fresh sizes for {len(sizes_map)}/{len(valid_nm_ids)} cards")
+        return sizes_map
+
     def update_card(
         self,
         nm_id: int,

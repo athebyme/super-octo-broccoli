@@ -782,7 +782,8 @@
                     </svg>
                 </button>
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
-                    <a href="{{ url_for('products_list') }}" class="sidebar-sublink {% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history'] %}active{% endif %}">Карточки</a>
+                    <a href="{{ url_for('products_list') }}" class="sidebar-sublink {% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_edit_history'] %}active{% endif %}">Карточки</a>
+                    <a href="{{ url_for('bulk_edit_history') }}" class="sidebar-sublink {% if request.endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] %}active{% endif %}">История операций</a>
                     <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_sync_status_page' %}active{% endif %}">Синхронизация</a>
                     <a href="{{ url_for('products_merge') }}" class="sidebar-sublink {% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %}active{% endif %}">Объединение</a>
                     <a href="{{ url_for('blocked_cards') }}" class="sidebar-sublink {% if request.endpoint in ['blocked_cards', 'blocked_cards_export'] %}active{% endif %}">Блокировки</a>
