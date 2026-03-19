@@ -457,6 +457,111 @@ class ContentFactoryService:
     # Подбор товаров
     # ================================================================
 
+    # Паттерн для извлечения размера из названия товара
+    _SIZE_PATTERN = re.compile(
+        r'\s+(?:'
+        r'(?:р(?:\.|азмер)?\s*)?'  # опциональный префикс "р.", "р ", "размер "
+        r'(?:'
+        r'(?:\d{1,3}(?:[/-]\d{1,3})?)'  # числовые: 42, 44-46, 48/50
+        r'|(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)'  # буквенные
+        r'|(?:one\s*size|единый)'  # one size
+        r')'
+        r')\s*$',
+        re.IGNORECASE,
+    )
+
+    def _base_product_name(self, title: str) -> str:
+        """Возвращает название товара без суффикса размера для группировки."""
+        if not title:
+            return ''
+        return self._SIZE_PATTERN.sub('', title).strip()
+
+    def _extract_size_label(self, product: Product) -> Optional[str]:
+        """Извлекает обозначение размера из названия товара."""
+        title = product.title or ''
+        m = self._SIZE_PATTERN.search(title)
+        if m:
+            return m.group(0).strip()
+        # Фоллбэк: берём из sizes_json
+        if product.sizes_json:
+            try:
+                sizes = json.loads(product.sizes_json)
+                if isinstance(sizes, list) and sizes:
+                    for s in sizes:
+                        tech = s.get('techSize') or s.get('origName') or ''
+                        if tech:
+                            return tech
+            except Exception:
+                pass
+        return None
+
+    def _get_available_sizes(self, product: Product) -> List[str]:
+        """Возвращает список доступных размеров из sizes_json."""
+        if not product.sizes_json:
+            return []
+        try:
+            sizes = json.loads(product.sizes_json)
+            if isinstance(sizes, list):
+                result = []
+                for s in sizes:
+                    label = s.get('origName') or s.get('techSize') or ''
+                    if label and label not in result:
+                        result.append(label)
+                return result
+        except Exception:
+            pass
+        return []
+
+    def _deduplicate_products(self, products: List[Dict], limit: int) -> List[Dict]:
+        """Дедуплицирует товары по базовому названию (без размера).
+
+        Группирует вариации одного товара (разные размеры) и обогащает
+        выбранного представителя информацией о доступных размерах.
+        """
+        groups = {}  # base_name -> list of product dicts
+        for p in products:
+            base = self._base_product_name(p.get('name', ''))
+            key = (p.get('brand', '').lower(), base.lower())
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(p)
+
+        result = []
+        for key, group in groups.items():
+            if len(result) >= limit:
+                break
+
+            # Берём первый товар как представителя
+            representative = group[0]
+
+            if len(group) > 1:
+                # Собираем все размеры из группы
+                all_sizes = []
+                seen_sizes = set()
+                for p in group:
+                    name = p.get('name', '')
+                    m = self._SIZE_PATTERN.search(name)
+                    if m:
+                        sz = m.group(0).strip()
+                        if sz.lower() not in seen_sizes:
+                            seen_sizes.add(sz.lower())
+                            all_sizes.append(sz)
+                    # Также берём размеры из sizes_json через _available_sizes
+                    for sz in p.get('available_sizes', []):
+                        if sz.lower() not in seen_sizes:
+                            seen_sizes.add(sz.lower())
+                            all_sizes.append(sz)
+
+                representative['available_sizes'] = all_sizes
+                # Базовое название (без размера) для промпта
+                representative['name'] = self._base_product_name(representative.get('name', ''))
+                # Примечание что есть несколько размеров
+                representative['sizes_info'] = f"Доступные размеры: {', '.join(all_sizes)}" if all_sizes else ''
+
+            result.append(representative)
+
+        return result[:limit]
+
     def select_products(
         self,
         factory: ContentFactory,
@@ -466,15 +571,20 @@ class ContentFactoryService:
 
         mode = factory.product_selection_mode or 'manual'
 
+        # Запрашиваем больше товаров чтобы после дедупликации хватило
+        fetch_limit = limit * 3
+
         if mode == 'bestsellers':
-            return self._select_bestsellers(factory.seller_id, limit)
+            raw = self._select_bestsellers(factory.seller_id, fetch_limit)
         elif mode == 'new_arrivals':
-            return self._select_new_arrivals(factory.seller_id, limit)
+            raw = self._select_new_arrivals(factory.seller_id, fetch_limit)
         elif mode == 'rules':
-            return self._select_by_rules(factory, limit)
+            raw = self._select_by_rules(factory, fetch_limit)
         else:
-            # manual — возвращаем все товары для ручного выбора
+            # manual — возвращаем все товары для ручного выбора (без дедупликации)
             return self._select_all_products(factory.seller_id, limit)
+
+        return self._deduplicate_products(raw, limit)
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:
         """Выбирает товары с лучшими продажами (по orders_count из аналитики)."""
@@ -607,6 +717,12 @@ class ContentFactoryService:
             pct = int((1 - discount_price / price) * 100)
             discount_info = f' (скидка {pct}%, было {int(price)} руб.)'
 
+        # Доступные размеры
+        available_sizes = self._get_available_sizes(product)
+        sizes_info = ''
+        if available_sizes:
+            sizes_info = f"Доступные размеры: {', '.join(available_sizes)}"
+
         return {
             'id': product.id,
             'nm_id': nm_id,
@@ -622,6 +738,8 @@ class ContentFactoryService:
             'rating': product.nm_rating or 0,
             'characteristics': characteristics,
             'discount_info': discount_info,
+            'available_sizes': available_sizes,
+            'sizes_info': sizes_info,
         }
 
     # ================================================================
@@ -734,6 +852,9 @@ class ContentFactoryService:
         rating = product_data.get('rating', 0)
         rating_str = f'{rating}/5' if rating else 'нет данных'
 
+        # Информация о размерах
+        sizes_info = product_data.get('sizes_info', '')
+
         replacements = {
             '{product_name}': product_data.get('name', ''),
             '{price}': str(int(float(price))) if price else '0',
@@ -747,10 +868,15 @@ class ContentFactoryService:
             '{rating}': rating_str,
             '{photo_count}': str(len(product_data.get('photos', []))),
             '{discount_info}': product_data.get('discount_info', ''),
+            '{sizes_info}': sizes_info,
         }
 
         for placeholder, value in replacements.items():
             prompt = prompt.replace(placeholder, str(value))
+
+        # Добавляем инфу о размерах если есть (даже если нет плейсхолдера в шаблоне)
+        if sizes_info and '{sizes_info}' not in template.user_prompt_template:
+            prompt += f"\n\n{sizes_info}"
 
         if hasattr(template, 'hashtag_strategy') and template.hashtag_strategy:
             prompt += f"\n\nСтратегия хештегов: {template.hashtag_strategy}"
