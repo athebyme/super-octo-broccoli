@@ -523,6 +523,13 @@ def register_content_factory_routes(app):
         if not account:
             return jsonify({'error': 'Не указан аккаунт для публикации. Подключите аккаунт в настройках.'}), 400
 
+        # Проверяем что платформа аккаунта совпадает с платформой контента
+        if account.platform != item.platform:
+            return jsonify({
+                'error': f'Аккаунт "{account.account_name}" ({account.platform}) не подходит для публикации на {item.platform}. '
+                         f'Подключите аккаунт для платформы {item.platform}.'
+            }), 400
+
         # Публикуем
         try:
             from services.content_publishers import get_publisher
