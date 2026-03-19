@@ -360,10 +360,103 @@ def _check_barcodes(product, issues: List[UploadIssue]) -> Dict:
         if not barcodes:
             issues.append(UploadIssue(UploadIssue.WARNING, 'barcodes', 'Массив баркодов пуст'))
             return {'status': 'warning', 'count': 0}
-        return {'status': 'ok', 'count': len(barcodes)}
     except Exception:
         issues.append(UploadIssue(UploadIssue.WARNING, 'barcodes', 'Невалидный JSON в barcodes'))
         return {'status': 'warning', 'count': 0}
+
+    # Проверка уникальности баркодов — ищем конфликты с уже импортированными товарами
+    conflicts = _find_barcode_conflicts(product, barcodes)
+    if conflicts:
+        conflict_details = '; '.join(
+            f"баркод {bc} → nmID {nm_id}" for bc, nm_id in conflicts
+        )
+        issues.append(UploadIssue(
+            UploadIssue.ERROR, 'barcodes',
+            f'Неуникальные баркоды: {conflict_details}. WB отклонит создание карточки.',
+            'Измените баркоды или синхронизируйте товары для привязки к существующей карточке'
+        ))
+        return {'status': 'error', 'count': len(barcodes), 'conflicts': conflicts}
+
+    return {'status': 'ok', 'count': len(barcodes)}
+
+
+def _find_barcode_conflicts(product, barcodes: list) -> list:
+    """
+    Ищет конфликты баркодов с уже существующими товарами.
+    Проверяет:
+    1. ImportedProduct с import_status='completed' и совпадающими баркодами
+    2. Product записи с совпадающими баркодами в sizes_json
+
+    Returns: список кортежей (barcode, nm_id) для конфликтных баркодов
+    """
+    from models import ImportedProduct, Product
+
+    if not barcodes:
+        return []
+
+    barcode_set = set(str(b) for b in barcodes if b)
+    if not barcode_set:
+        return []
+
+    conflicts = []
+    product_id = getattr(product, 'id', None)
+    seller_id = getattr(product, 'seller_id', None)
+
+    if not seller_id:
+        return []
+
+    # 1. Проверяем ImportedProduct с completed статусом
+    try:
+        completed_products = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller_id,
+            ImportedProduct.import_status == 'completed',
+            ImportedProduct.barcodes.isnot(None),
+        )
+        if product_id:
+            completed_products = completed_products.filter(ImportedProduct.id != product_id)
+
+        for cp in completed_products.all():
+            try:
+                cp_barcodes = set(str(b) for b in json.loads(cp.barcodes) if b)
+                overlap = barcode_set & cp_barcodes
+                if overlap and cp.wb_nm_id:
+                    for bc in overlap:
+                        conflicts.append((bc, cp.wb_nm_id))
+                    # Удаляем найденные из набора чтобы не дублировать
+                    barcode_set -= overlap
+            except (json.JSONDecodeError, TypeError):
+                continue
+    except Exception as e:
+        logger.warning(f"Ошибка проверки уникальности баркодов (ImportedProduct): {e}")
+
+    if not barcode_set:
+        return conflicts
+
+    # 2. Проверяем Product записи (sizes_json содержит skus с баркодами)
+    try:
+        products = Product.query.filter(
+            Product.seller_id == seller_id,
+            Product.sizes_json.isnot(None),
+        ).all()
+
+        for p in products:
+            try:
+                sizes = json.loads(p.sizes_json)
+                for size_entry in (sizes if isinstance(sizes, list) else []):
+                    skus = set(str(s) for s in size_entry.get('skus', []) if s)
+                    overlap = barcode_set & skus
+                    if overlap:
+                        for bc in overlap:
+                            conflicts.append((bc, p.nm_id))
+                        barcode_set -= overlap
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not barcode_set:
+                break
+    except Exception as e:
+        logger.warning(f"Ошибка проверки уникальности баркодов (Product): {e}")
+
+    return conflicts
 
 
 def _check_brand(product, issues: List[UploadIssue]) -> Dict:
