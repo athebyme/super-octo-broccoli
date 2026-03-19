@@ -714,8 +714,26 @@ class ContentFactoryService:
                 break
         return validated
 
-    def _product_to_dict(self, product: Product, validate_photos: bool = False) -> Dict:
-        """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""
+    def _get_product_photos(self, product: Product, validate: bool = False) -> List[str]:
+        """Получает фото товара. Приоритет:
+        1. Локальные фото через ImportedProduct → серверные URL (/photos/public/...)
+        2. URL из photos_json (если содержит http-ссылки)
+        3. Фоллбэк: WB CDN по nm_id
+        """
+        # === Приоритет 1: Локальные фото через ImportedProduct ===
+        try:
+            from models import ImportedProduct
+            from routes.photos import generate_public_photo_urls
+            imported = ImportedProduct.query.filter_by(product_id=product.id).first()
+            if imported:
+                local_urls = generate_public_photo_urls(imported)
+                if local_urls:
+                    logger.debug(f"Product {product.id}: using {len(local_urls)} local cached photos")
+                    return local_urls
+        except Exception as e:
+            logger.debug(f"Product {product.id}: local photos lookup failed: {e}")
+
+        # === Приоритет 2: URL из photos_json ===
         photos = []
         if product.photos_json:
             try:
@@ -723,38 +741,35 @@ class ContentFactoryService:
                 if isinstance(raw_photos, list):
                     for p in raw_photos:
                         if isinstance(p, str) and p.startswith('http'):
-                            # Любой публичный URL: WB CDN, серверные /photos/public/... и т.д.
                             photos.append(p)
                         elif isinstance(p, int) and product.nm_id:
-                            # Индексы фото [1, 2, 3, ...] — конвертируем в WB CDN URL
                             from seller_platform import wb_photo_url
                             photos.append(wb_photo_url(product.nm_id, p))
             except Exception:
                 pass
 
-        # Если мало фото или нет вообще — дополняем из WB CDN
-        if product.nm_id and (not photos or (validate_photos and len(photos) < 5)):
+        if photos:
+            return photos
+
+        # === Приоритет 3: WB CDN по nm_id ===
+        if product.nm_id:
             try:
                 from seller_platform import wb_photo_url
-                existing_urls = set(photos)
-                if validate_photos:
-                    candidate_urls = [wb_photo_url(product.nm_id, i) for i in range(1, 11)
-                                      if wb_photo_url(product.nm_id, i) not in existing_urls]
-                    extra = self._validate_photo_urls(candidate_urls)
-                    for url in extra:
-                        if url not in existing_urls:
-                            photos.append(url)
-                            existing_urls.add(url)
-                if not photos:
-                    # Валидация не прошла или нет фото — берём 3 CDN URL без валидации
-                    # (VK publisher сам обработает 404 при скачивании)
-                    logger.warning(
-                        f"No validated photos for product {product.id} (nm_id={product.nm_id}), "
-                        f"using unvalidated CDN URLs"
-                    )
-                    photos = [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
+                if validate:
+                    candidates = [wb_photo_url(product.nm_id, i) for i in range(1, 11)]
+                    validated = self._validate_photo_urls(candidates)
+                    if validated:
+                        return validated
+                # Без валидации или валидация дала 0 — берём 3 фото
+                return [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
             except Exception:
                 pass
+
+        return []
+
+    def _product_to_dict(self, product: Product, validate_photos: bool = False) -> Dict:
+        """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""
+        photos = self._get_product_photos(product, validate_photos)
 
         characteristics = ''
         if product.characteristics_json:

@@ -4277,22 +4277,35 @@ class ContentItem(db.Model):
     def get_media_urls(self):
         try:
             urls = json.loads(self.media_urls_json or '[]')
-            # Принимаем все публичные URL (WB CDN, серверные /photos/public/... и др.)
+            # Принимаем все публичные URL (серверные /photos/public/..., WB CDN и др.)
             public_urls = [u for u in urls if isinstance(u, str) and u.startswith('http')]
             if public_urls:
                 return public_urls
         except Exception:
             pass
 
-        # Фоллбэк: генерируем URL фото из WB CDN по nm_id товаров
+        # Фоллбэк 1: локальные фото через ImportedProduct
+        try:
+            product_ids = self.get_product_ids()
+            if product_ids:
+                from models import ImportedProduct
+                from routes.photos import generate_public_photo_urls
+                imported = ImportedProduct.query.filter_by(product_id=product_ids[0]).first()
+                if imported:
+                    local_urls = generate_public_photo_urls(imported)
+                    if local_urls:
+                        return local_urls
+        except Exception:
+            pass
+
+        # Фоллбэк 2: WB CDN по nm_id
         try:
             product_ids = self.get_product_ids()
             if product_ids:
                 from seller_platform import wb_photo_url
                 product = Product.query.get(product_ids[0])
                 if product and product.nm_id:
-                    # Генерируем индексы 1-10, скачивающий сервис сам отфильтрует 404
-                    return [wb_photo_url(product.nm_id, i) for i in range(1, 11)]
+                    return [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
         except Exception:
             pass
         return []
