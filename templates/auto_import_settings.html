@@ -846,7 +846,7 @@ function updateAIProviderSettings() {
         cloudruHint.classList.remove('hidden');
         if (mimoHint) mimoHint.classList.add('hidden');
         baseUrlBlock.classList.remove('hidden');
-        if (!baseUrlInput.value || baseUrlInput.value === 'https://api.openai.com/v1' || baseUrlInput.value === 'https://api.mimo.xiaomi.com/v1') {
+        if (!baseUrlInput.value || baseUrlInput.value === 'https://api.openai.com/v1' || baseUrlInput.value === 'https://api.xiaomimimo.com/v1') {
             baseUrlInput.value = 'https://foundation-models.api.cloud.ru/v1';
         }
     } else if (provider === 'openai') {
@@ -859,7 +859,7 @@ function updateAIProviderSettings() {
         if (mimoHint) mimoHint.classList.remove('hidden');
         baseUrlBlock.classList.remove('hidden');
         if (!baseUrlInput.value || baseUrlInput.value === 'https://foundation-models.api.cloud.ru/v1' || baseUrlInput.value === 'https://api.openai.com/v1') {
-            baseUrlInput.value = 'https://api.mimo.xiaomi.com/v1';
+            baseUrlInput.value = 'https://api.xiaomimimo.com/v1';
         }
     } else {
         // Custom - скрываем подсказки, показываем base URL

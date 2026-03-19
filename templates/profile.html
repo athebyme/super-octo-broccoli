@@ -196,7 +196,7 @@
                                 <input type="url" x-model="ai.apiBaseUrl"
                                     class="w-full px-4 py-2.5 rounded-xl text-sm transition-colors focus:outline-none focus:ring-2"
                                     style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)"
-                                    :placeholder="ai.provider === 'cloudru' ? 'https://foundation-models.api.cloud.ru/v1' : ai.provider === 'mimo' ? 'https://api.mimo.xiaomi.com/v1' : 'https://api.openai.com/v1'">
+                                    :placeholder="ai.provider === 'cloudru' ? 'https://foundation-models.api.cloud.ru/v1' : ai.provider === 'mimo' ? 'https://api.xiaomimimo.com/v1' : 'https://api.openai.com/v1'">
                             </div>
                         </div>
                     </div>
@@ -398,7 +398,7 @@ function profilePage() {
             const defaults = {
                 cloudru: { url: 'https://foundation-models.api.cloud.ru/v1', model: 'openai/gpt-oss-120b' },
                 openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-                mimo: { url: 'https://api.mimo.xiaomi.com/v1', model: 'mimo-v2-pro' },
+                mimo: { url: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2-pro' },
                 custom: { url: '', model: '' },
             };
             const d = defaults[this.ai.provider] || defaults.custom;

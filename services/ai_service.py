@@ -1390,7 +1390,7 @@ class AIConfig:
             api_base = 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
         elif provider == AIProvider.MIMO:
-            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.mimo.xiaomi.com/v1'
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.xiaomimimo.com/v1'
             default_model = 'mimo-v2-pro'
         else:  # CUSTOM
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
@@ -1430,7 +1430,7 @@ class AIConfig:
             api_base = settings.ai_api_base_url or "https://foundation-models.api.cloud.ru/v1"
             default_model = "openai/gpt-oss-120b"
         elif provider == AIProvider.MIMO:
-            api_base = settings.ai_api_base_url or "https://api.mimo.xiaomi.com/v1"
+            api_base = settings.ai_api_base_url or "https://api.xiaomimimo.com/v1"
             default_model = "mimo-v2-pro"
         elif provider == AIProvider.CUSTOM:
             api_base = settings.ai_api_base_url or "https://api.openai.com/v1"
