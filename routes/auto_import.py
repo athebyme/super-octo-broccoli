@@ -2965,6 +2965,23 @@ def register_auto_import_routes(app):
                 extracted = result.get('extracted_values', {})
                 suggestions = result.get('suggestions', {})
 
+                # Мержим inferred_attributes в extracted
+                inferred = result.get('inferred_attributes', {})
+                char_names_set = {c['name'] for c in size_characteristics}
+                char_names_lower = {c['name'].lower(): c['name'] for c in size_characteristics}
+                extra_attributes = {}
+                for attr_name, attr_val in inferred.items():
+                    if attr_name in char_names_set:
+                        if attr_name not in extracted:
+                            extracted[attr_name] = attr_val
+                    elif attr_name.lower() in char_names_lower:
+                        real_name = char_names_lower[attr_name.lower()]
+                        if real_name not in extracted:
+                            extracted[real_name] = attr_val
+                    else:
+                        extra_attributes[attr_name] = attr_val
+                result['extra_attributes'] = extra_attributes
+
                 # Строим расширенный маппинг ВСЕХ размерных WB характеристик
                 # wb_dim_chars - список ВСЕХ характеристик связанных с размерами/весом
                 wb_dim_chars = {}  # name -> {char_info, type, is_pack}
@@ -3466,7 +3483,29 @@ def register_auto_import_routes(app):
                 import re
                 import math
                 extracted = result.get('extracted_values', {})
+
+                # Мержим inferred_attributes: AI нашёл характеристики вне списка категории.
+                # Те, что совпадают по имени с WB характеристиками — в extracted,
+                # остальные сохраняем как доп. данные.
+                inferred = result.get('inferred_attributes', {})
                 all_chars = required_characteristics + optional_characteristics
+                all_char_names = {c['name'] for c in all_chars}
+                all_char_names_lower = {c['name'].lower(): c['name'] for c in all_chars}
+                extra_attributes = {}
+                for attr_name, attr_val in inferred.items():
+                    if attr_name in all_char_names:
+                        # Точное совпадение с WB характеристикой — в extracted
+                        if attr_name not in extracted:
+                            extracted[attr_name] = attr_val
+                    elif attr_name.lower() in all_char_names_lower:
+                        # Совпадение без учёта регистра
+                        real_name = all_char_names_lower[attr_name.lower()]
+                        if real_name not in extracted:
+                            extracted[real_name] = attr_val
+                    else:
+                        # Нет в WB — сохраняем как доп. атрибуты
+                        extra_attributes[attr_name] = attr_val
+                result['extra_attributes'] = extra_attributes
 
                 # Строим расширенный маппинг ВСЕХ размерных WB характеристик
                 wb_dim_chars = {}  # name -> {char_info, type, is_pack}
