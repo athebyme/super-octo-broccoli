@@ -110,6 +110,8 @@ def register_content_factory_routes(app):
                 ai_provider=request.form.get('ai_provider', 'openai'),
                 product_selection_mode=request.form.get('product_selection_mode', 'manual'),
                 auto_approve=bool(request.form.get('auto_approve')),
+                auto_generate=bool(request.form.get('auto_generate')),
+                generate_interval_minutes=max(30, int(request.form.get('generate_interval_minutes', 120) or 120)),
                 auto_publish=bool(request.form.get('auto_publish')),
                 publish_interval_minutes=max(5, int(request.form.get('publish_interval_minutes', 60) or 60)),
             )
@@ -180,6 +182,8 @@ def register_content_factory_routes(app):
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
             factory.auto_approve = bool(request.form.get('auto_approve'))
+            factory.auto_generate = bool(request.form.get('auto_generate'))
+            factory.generate_interval_minutes = max(30, int(request.form.get('generate_interval_minutes', 120) or 120))
             factory.auto_publish = bool(request.form.get('auto_publish'))
             factory.publish_interval_minutes = max(5, int(request.form.get('publish_interval_minutes', 60) or 60))
             factory.is_active = bool(request.form.get('is_active'))

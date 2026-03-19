@@ -124,8 +124,17 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Автогенерация контента (каждые 3 минуты проверяет фабрики с auto_generate)
+    from services.content_auto_publisher import auto_generate_content, auto_publish_content
+    scheduler.add_job(
+        func=lambda: auto_generate_content(flask_app),
+        trigger=IntervalTrigger(minutes=3),
+        id='content_auto_generate',
+        name='Auto-generate content for factories',
+        replace_existing=True
+    )
+
     # Автопубликация контента (каждые 2 минуты проверяет очередь)
-    from services.content_auto_publisher import auto_publish_content
     scheduler.add_job(
         func=lambda: auto_publish_content(flask_app),
         trigger=IntervalTrigger(minutes=2),

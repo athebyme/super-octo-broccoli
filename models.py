@@ -4022,6 +4022,9 @@ class ContentFactory(db.Model):
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
     schedule_cron = db.Column(db.String(100))  # cron-выражение для автогенерации
     auto_approve = db.Column(db.Boolean, default=False)
+    auto_generate = db.Column(db.Boolean, default=False)  # Автогенерация: рандомный товар → AI → пост
+    generate_interval_minutes = db.Column(db.Integer, default=120)  # Интервал автогенерации (мин)
+    last_auto_generate_at = db.Column(db.DateTime, nullable=True)  # Время последней автогенерации
     auto_publish = db.Column(db.Boolean, default=False)  # Автопубликация одобренных постов
     publish_interval_minutes = db.Column(db.Integer, default=60)  # Интервал между публикациями (мин)
     last_auto_publish_at = db.Column(db.DateTime, nullable=True)  # Время последней автопубликации
@@ -4070,6 +4073,10 @@ class ContentFactory(db.Model):
             'ai_provider': self.ai_provider,
             'schedule_cron': self.schedule_cron,
             'auto_approve': self.auto_approve,
+            'auto_generate': self.auto_generate,
+            'generate_interval_minutes': self.generate_interval_minutes,
+            'auto_publish': self.auto_publish,
+            'publish_interval_minutes': self.publish_interval_minutes,
             'is_active': self.is_active,
             'items_count': self.items.count() if self.items else 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,

@@ -919,6 +919,9 @@ def migrate(db_path):
             add_column_if_missing(cursor, 'content_factories', 'auto_publish', 'BOOLEAN DEFAULT 0', cf_cols)
             add_column_if_missing(cursor, 'content_factories', 'publish_interval_minutes', 'INTEGER DEFAULT 60', cf_cols)
             add_column_if_missing(cursor, 'content_factories', 'last_auto_publish_at', 'DATETIME', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'auto_generate', 'BOOLEAN DEFAULT 0', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'generate_interval_minutes', 'INTEGER DEFAULT 120', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'last_auto_generate_at', 'DATETIME', cf_cols)
 
         # Индексы
         for idx_sql in [
