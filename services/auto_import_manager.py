@@ -529,7 +529,7 @@ class SexoptovikAuth:
             logger.info(f"📄 Загрузка главной страницы для инициализации сессии...")
             main_response = session.get('https://sexoptovik.ru/', headers=base_headers, timeout=30)
             main_response.raise_for_status()
-            logger.info(f"🍪 Cookies после главной страницы: {session.cookies.get_dict()}")
+            logger.debug(f"🍪 Cookies после главной страницы: {len(session.cookies)} шт.")
 
             # Загружаем страницу логина
             login_page_url = 'https://sexoptovik.ru/login_page.php'
@@ -540,7 +540,7 @@ class SexoptovikAuth:
             get_response = session.get(login_page_url, headers=base_headers, timeout=30)
             get_response.raise_for_status()
             logger.info(f"✅ Страница логина загружена, статус: {get_response.status_code}")
-            logger.info(f"🍪 Cookies после GET: {session.cookies.get_dict()}")
+            logger.debug(f"🍪 Cookies после GET: {len(session.cookies)} шт.")
 
             # Извлекаем скрытые поля формы (CSRF токен и т.д.)
             hidden_fields = {}
@@ -588,7 +588,7 @@ class SexoptovikAuth:
             response = session.post(login_page_url, data=auth_data, headers=post_headers, timeout=30, allow_redirects=True)
             logger.info(f"📥 Ответ получен, статус: {response.status_code}")
             logger.info(f"🔗 Final URL: {response.url}")
-            logger.info(f"🍪 Cookies после POST: {session.cookies.get_dict()}")
+            logger.debug(f"🍪 Cookies после POST: {len(session.cookies)} шт.")
 
             response.raise_for_status()
 

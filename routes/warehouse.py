@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 from models import db, Product, ProductStock
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ def register_warehouse_routes(app):
 
         except Exception as e:
             logger.error(f"Error in warehouse analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/warehouse/refresh', methods=['POST'])
     @login_required
@@ -278,11 +279,11 @@ def register_warehouse_routes(app):
 
         except requests.exceptions.RequestException as e:
             logger.error(f"WB API error in warehouse refresh: {e}")
-            return jsonify({'error': f'Ошибка WB API: {str(e)}'}), 502
+            return jsonify({'error': safe_error_message(e)}), 502
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error in warehouse refresh: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/analytics/sync', methods=['POST'])
     @login_required
@@ -358,7 +359,7 @@ def register_warehouse_routes(app):
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error saving stock refresh interval: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/settings/stock-refresh', methods=['GET'])
     @login_required

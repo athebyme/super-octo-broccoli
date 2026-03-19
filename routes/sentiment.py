@@ -4,6 +4,7 @@ import logging
 from collections import defaultdict
 
 from models import db, WBFeedback
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def register_sentiment_routes(app):
             return jsonify(data)
         except Exception as e:
             logger.error(f"Error in sentiment analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/sentiment/status')
     @login_required

@@ -6444,7 +6444,7 @@ def api_profile_ai_settings_save():
         return jsonify({'success': True})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
 
 
 @app.route('/api/profile/ai-test', methods=['POST'])
@@ -6497,7 +6497,7 @@ def api_profile_ai_test():
                 'error': client.last_error or 'Пустой ответ от AI',
             })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
 
 
 @app.route('/api/ai/models')
@@ -6604,7 +6604,7 @@ def api_notifications_list():
     except Exception as e:
         logger.error(f"[Notifications] Error loading notifications for seller {seller_id}: {e}")
         db.session.rollback()
-        return jsonify({'items': [], 'total': 0, 'unread_count': 0, 'error': str(e)}), 200
+        return jsonify({'items': [], 'total': 0, 'unread_count': 0, 'error': 'Ошибка загрузки уведомлений'}), 200
 
 
 @app.route('/api/notifications/unread-count')

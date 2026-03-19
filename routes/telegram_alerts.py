@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 
 from models import db
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ def register_telegram_alerts_routes(app):
             return jsonify({'error': 'Таймаут при отправке сообщения'}), 504
         except Exception as e:
             logger.error(f"Telegram test message error: {e}")
-            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/telegram-alerts/history', methods=['GET'])
     @login_required

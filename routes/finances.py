@@ -8,6 +8,7 @@ from flask import render_template, request, jsonify, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from services.finance_service import FinanceService
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger('finance_routes')
 
@@ -51,7 +52,7 @@ def register_finance_routes(app):
             return jsonify({'success': True, 'data': data})
         except Exception as e:
             logger.exception(f"Error fetching finance summary: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/finances/refresh', methods=['POST'])
     @login_required
@@ -74,4 +75,4 @@ def register_finance_routes(app):
             return jsonify({'success': True, 'data': data})
         except Exception as e:
             logger.exception(f"Error refreshing finances: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500

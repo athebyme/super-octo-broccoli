@@ -17,6 +17,7 @@ from io import BytesIO
 
 from flask import send_file, abort, Response, url_for, request
 from flask_login import login_required, current_user
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +355,7 @@ def register_photo_routes(app):
             }
         except Exception as e:
             logger.error(f"Ошибка запуска массового скачивания фото: {e}")
-            return {'success': False, 'error': str(e)}, 500
+            return {'success': False, 'error': safe_error_message(e)}, 500
 
     @app.route('/api/photos/download-status/<int:supplier_id>')
     @login_required
@@ -382,7 +383,7 @@ def register_photo_routes(app):
             }
         except Exception as e:
             logger.error(f"Ошибка получения прогресса: {e}")
-            return {'success': False, 'error': str(e)}, 500
+            return {'success': False, 'error': safe_error_message(e)}, 500
 
     @app.route('/api/photos/cache-stats')
     @login_required
@@ -400,7 +401,7 @@ def register_photo_routes(app):
             }
         except Exception as e:
             logger.error(f"Ошибка получения статистики: {e}")
-            return {'success': False, 'error': str(e)}, 500
+            return {'success': False, 'error': safe_error_message(e)}, 500
 
     # ==========================================================================
     # Публичный маршрут для раздачи фото (для WB и превью без авторизации)

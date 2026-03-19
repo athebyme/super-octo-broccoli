@@ -21,6 +21,7 @@ from services.content_factory_service import (
     ContentFactoryService,
     PLATFORM_LABELS, CONTENT_TYPE_LABELS, STATUS_LABELS,
 )
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -727,13 +728,13 @@ def register_content_factory_routes(app):
             item.status = 'failed'
             item.error_message = str(e)
             db.session.commit()
-            return jsonify({'error': str(e)}), 400
+            return jsonify({'error': safe_error_message(e)}), 400
         except Exception as e:
             logger.error(f"Publish error: {e}", exc_info=True)
             item.status = 'failed'
             item.error_message = str(e)
             db.session.commit()
-            return jsonify({'error': f'Ошибка публикации: {e}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/content-factory/items/<int:item_id>/edit', methods=['POST'])
     @login_required
@@ -963,9 +964,9 @@ def register_content_factory_routes(app):
                         'jpeg_bytes': jpeg_size,
                     })
                 except Exception as e:
-                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': str(e)})
+                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': safe_error_message(e)})
         except Exception as e:
-            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': str(e)})
+            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': safe_error_message(e)})
 
         # Шаг 4: Проверяем VK аккаунт
         data = request.get_json(silent=True) or {}
@@ -1008,7 +1009,7 @@ def register_content_factory_routes(app):
                             'upload_url_prefix': upload_url[:80] + '...' if upload_url else 'EMPTY',
                         })
                 except Exception as e:
-                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': str(e)})
+                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': safe_error_message(e)})
             else:
                 result['steps'].append({'step': 'vk_account', 'status': 'FAIL', 'error': f'Account {social_account_id} not found'})
         else:
@@ -1127,7 +1128,7 @@ def register_content_factory_routes(app):
         except Exception as e:
             db.session.rollback()
             logger.error(f"Factory delete error: {e}", exc_info=True)
-            return jsonify({'error': f'Ошибка удаления: {e}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # ================================================================
     # API: Контент-календарь

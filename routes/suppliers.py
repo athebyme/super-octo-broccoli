@@ -20,6 +20,7 @@ from models import (
     BackgroundJob, Notification, AgentChangeSnapshot,
 )
 from services.supplier_service import SupplierService
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -1894,7 +1895,7 @@ def register_supplier_routes(app):
             preview = importer.build_wb_card_preview(product)
             return jsonify(preview)
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # Push to WB — единичный импорт товара на WB (AJAX)
@@ -3183,7 +3184,7 @@ def register_supplier_routes(app):
             return jsonify(result.to_dict())
         except Exception as e:
             logger.exception(f"Smart parse error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка парсинга: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/admin/suppliers/<int:supplier_id>/smart-parse/<int:product_id>', methods=['POST'])
     @login_required
@@ -3203,7 +3204,7 @@ def register_supplier_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.exception(f"Smart parse single error: product {product_id}")
-            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # API: Smart Parse — статус и отмена фоновой задачи
@@ -3276,7 +3277,7 @@ def register_supplier_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.exception(f"Characteristics validation error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка валидации: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/admin/suppliers/<int:supplier_id>/validate-characteristics/<int:product_id>')
     @login_required
@@ -3366,7 +3367,7 @@ def register_supplier_routes(app):
             })
         except Exception as e:
             logger.exception(f"Brand validation error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка валидации брендов: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # API: Применить результаты валидации брендов
@@ -3410,7 +3411,7 @@ def register_supplier_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.exception(f"Apply brand validation error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # API: Smart Import к продавцу (обогащение + импорт)
