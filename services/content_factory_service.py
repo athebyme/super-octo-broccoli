@@ -39,6 +39,75 @@ CONTENT_TYPE_LABELS = {
     'carousel': 'Подборка/карусель',
 }
 
+# ================================================================
+# Встроенные шаблоны (fallback если в БД нет системных шаблонов)
+# ================================================================
+
+_BUILTIN_SYSTEM_PROMPTS = {
+    'telegram': {
+        'promo_post': 'Ты — опытный SMM-менеджер для маркетплейсов. Пишешь продающие посты для Telegram-каналов. Стиль: лаконичный, с эмодзи, призывом к действию. Максимум 1000 символов.',
+        'review': 'Ты — блогер-обзорщик товаров с Wildberries. Пишешь честные, информативные обзоры для Telegram. Стиль: дружелюбный, экспертный, с личным опытом.',
+        'story_script': 'Ты — SMM-менеджер, создаёшь сценарии для Stories. Формат: набор слайдов с текстом и указаниями по визуалу. Стиль: динамичный, вовлекающий.',
+        'carousel': 'Ты — SMM-менеджер, составляешь тематические подборки товаров для Telegram-канала. Стиль: структурированный, с нумерацией, краткий.',
+    },
+    'vk': {
+        'promo_post': 'Ты — SMM-менеджер для сообщества ВКонтакте. Пишешь посты для продвижения товаров с Wildberries. Стиль: дружелюбный, подробный, с эмодзи. Максимум 2000 символов.',
+        'review': 'Ты — блогер-обзорщик товаров. Пишешь развёрнутые обзоры для сообщества ВКонтакте. Стиль: экспертный, структурированный.',
+        'story_script': 'Ты — SMM-менеджер ВКонтакте. Создаёшь сценарии для клипов и историй. Стиль: динамичный, вовлекающий.',
+        'carousel': 'Ты — SMM-менеджер, составляешь тематические подборки товаров для ВКонтакте. Стиль: структурированный, подробный.',
+    },
+    'instagram': {
+        'promo_post': 'Ты — Instagram-маркетолог. Пишешь продающие описания к постам. Стиль: стильный, с эмодзи, визуально структурированный. Максимум 2200 символов.',
+        'review': 'Ты — Instagram-блогер. Пишешь обзоры товаров. Стиль: визуально ориентированный, с акцентом на фото и впечатления.',
+        'story_script': 'Ты — Instagram-маркетолог. Создаёшь сценарии для Stories. Формат: набор слайдов с текстом и указаниями по визуалу.',
+        'carousel': 'Ты — Instagram-маркетолог. Создаёшь подборки товаров для карусельных постов. Стиль: визуально привлекательный.',
+    },
+    'tiktok': {
+        'promo_post': 'Ты — TikTok-маркетолог. Пишешь описания к видео. Стиль: молодёжный, с трендовыми хештегами, максимум 300 символов.',
+        'review': 'Ты — TikTok-блогер. Пишешь сценарии обзоров товаров. Стиль: динамичный, с хуком в первые 3 секунды.',
+        'story_script': 'Ты — TikTok-маркетолог. Пишешь сценарии коротких видео для продвижения товаров. Стиль: динамичный, трендовый, с хуком в первые 3 секунды.',
+        'carousel': 'Ты — TikTok-маркетолог. Создаёшь подборки товаров для слайд-шоу. Стиль: молодёжный, динамичный.',
+    },
+    'youtube': {
+        'promo_post': 'Ты — YouTube-маркетолог. Пишешь описания и заголовки к видео. Стиль: SEO-оптимизированный, информативный.',
+        'review': 'Ты — YouTube-блогер, делаешь обзоры товаров с маркетплейсов. Пишешь сценарии видео и описания. Стиль: экспертный, структурированный.',
+        'story_script': 'Ты — YouTube-блогер. Создаёшь сценарии для YouTube Shorts (до 60 секунд). Стиль: динамичный, с хуком.',
+        'carousel': 'Ты — YouTube-блогер. Создаёшь подборки товаров для видео. Стиль: экспертный, структурированный.',
+    },
+}
+
+_BUILTIN_USER_PROMPTS = {
+    'promo_post': (
+        'Напиши продающий пост о товаре:\n\n'
+        'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
+        'Категория: {category}\nОписание: {description}\n\n'
+        'Требования:\n- Цепляющий заголовок\n- 2-3 ключевых преимущества\n'
+        '- Цена\n- 3-5 хештегов\n- Призыв к действию'
+    ),
+    'review': (
+        'Напиши обзор товара:\n\n'
+        'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
+        'Категория: {category}\nОписание: {description}\n'
+        'Характеристики: {characteristics}\n\n'
+        'Требования:\n- Заголовок с оценкой (из 10)\n- Плюсы и минусы\n'
+        '- Для кого подойдёт\n- Итоговая рекомендация\n- 3-5 хештегов'
+    ),
+    'story_script': (
+        'Создай сценарий Stories/Reels/Shorts для товара:\n\n'
+        'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
+        'Описание: {description}\n\n'
+        'Требования:\n- 5-7 слайдов/сцен\n- Для каждого: текст + визуал\n'
+        '- Первый слайд — интрига\n- Последний — призыв к действию'
+    ),
+    'carousel': (
+        'Составь подборку товаров:\n\n'
+        'Тема подборки: {collection_theme}\nТовары:\n{products_list}\n\n'
+        'Требования:\n- Цепляющий заголовок подборки\n'
+        '- Краткое описание каждого товара (2-3 предложения)\n'
+        '- Цена каждого товара\n- Призыв к действию\n- 5-7 хештегов'
+    ),
+}
+
 STATUS_LABELS = {
     'draft': 'Черновик',
     'approved': 'Одобрен',
@@ -405,7 +474,7 @@ class ContentFactoryService:
         content_type: str,
         template_id: Optional[int] = None,
     ) -> Optional[ContentTemplate]:
-        """Находит подходящий шаблон."""
+        """Находит подходящий шаблон. Если в БД нет — использует встроенный."""
         if template_id:
             return ContentTemplate.query.get(template_id)
 
@@ -418,7 +487,7 @@ class ContentFactoryService:
         ).first()
 
         if not template:
-            # Используем системный
+            # Используем системный из БД
             template = ContentTemplate.query.filter_by(
                 is_system=True,
                 platform=factory.platform,
@@ -426,6 +495,32 @@ class ContentFactoryService:
                 is_active=True,
             ).first()
 
+        if not template:
+            # Fallback: встроенный шаблон (не сохраняется в БД)
+            template = self._get_builtin_template(factory.platform, content_type)
+
+        return template
+
+    def _get_builtin_template(self, platform: str, content_type: str) -> Optional[ContentTemplate]:
+        """Возвращает встроенный шаблон как объект ContentTemplate (без сохранения в БД)."""
+        platform_prompts = _BUILTIN_SYSTEM_PROMPTS.get(platform, {})
+        system_prompt = platform_prompts.get(content_type)
+        user_prompt = _BUILTIN_USER_PROMPTS.get(content_type)
+
+        if not system_prompt or not user_prompt:
+            logger.warning(f"Встроенный шаблон не найден: platform={platform}, type={content_type}")
+            return None
+
+        template = ContentTemplate()
+        template.id = None
+        template.seller_id = None
+        template.platform = platform
+        template.content_type = content_type
+        template.name = f"Встроенный: {CONTENT_TYPE_LABELS.get(content_type, content_type)} ({PLATFORM_LABELS.get(platform, platform)})"
+        template.system_prompt = system_prompt
+        template.user_prompt_template = user_prompt
+        template.is_system = True
+        template.is_active = True
         return template
 
     def get_templates_for_factory(self, factory: ContentFactory) -> List[ContentTemplate]:
