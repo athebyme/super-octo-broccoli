@@ -16,3 +16,5 @@ Flask-WTF==1.2.1
 anthropic>=0.40.0
 google-genai>=1.0.0
 openai>=1.30.0
+# Social media publishers (Content Factory)
+vk_api>=11.9.9

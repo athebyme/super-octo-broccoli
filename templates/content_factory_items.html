@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block title %}{{ factory.name }} — Контент{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto" x-data="contentItems()">
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-sm text-gray-500 mb-4">
+        <a href="{{ url_for('content_factory_dashboard') }}" class="hover:text-brand transition">Контент-фабрика</a>
+        <span>/</span>
+        <span class="text-gray-900">{{ factory.name }}</span>
+    </div>
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div class="flex items-center gap-3">
+            <h1 class="text-xl font-display text-gray-900">{{ factory.name }}</h1>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium
+                {% if factory.platform == 'telegram' %}bg-blue-100 text-blue-700
+                {% elif factory.platform == 'vk' %}bg-sky-100 text-sky-700
+                {% elif factory.platform == 'instagram' %}bg-pink-100 text-pink-700
+                {% elif factory.platform == 'tiktok' %}bg-gray-900 text-white
+                {% elif factory.platform == 'youtube' %}bg-red-100 text-red-700
+                {% endif %}">{{ platform_labels.get(factory.platform, factory.platform) }}</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="{{ url_for('content_factory_calendar', factory_id=factory.id) }}" class="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                Календарь
+            </a>
+            <a href="{{ url_for('content_factory_edit', factory_id=factory.id) }}" class="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition">Настройки</a>
+            <button @click="showGenerateModal = true" class="px-4 py-2 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
+                Генерировать
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="flex flex-wrap gap-3 mb-6">
+        <span class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-700">Всего: {{ stats.total }}</span>
+        {% for status, count in stats.by_status.items() %}
+        <a href="?status={{ status }}" class="px-3 py-1.5 rounded-lg text-xs font-medium
+            {% if status == 'draft' %}bg-amber-50 text-amber-700
+            {% elif status == 'approved' %}bg-blue-50 text-blue-700
+            {% elif status == 'scheduled' %}bg-indigo-50 text-indigo-700
+            {% elif status == 'published' %}bg-green-50 text-green-700
+            {% elif status == 'failed' %}bg-red-50 text-red-700
+            {% else %}bg-gray-50 text-gray-600{% endif %}
+            hover:opacity-80 transition {% if status_filter == status %}ring-2 ring-brand/30{% endif %}">
+            {{ status_labels.get(status, status) }}: {{ count }}
+        </a>
+        {% endfor %}
+        {% if status_filter %}
+        <a href="{{ url_for('content_factory_items', factory_id=factory.id) }}" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-brand transition">Сбросить фильтр</a>
+        {% endif %}
+    </div>
+
+    <!-- Content items -->
+    {% if items.items %}
+    <div class="space-y-4">
+        {% for item in items.items %}
+        <div class="bg-white rounded-xl border border-gray-100 p-5 hover:shadow-sm transition" x-data="{ expanded: false }">
+            <div class="flex items-start gap-4">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="px-2 py-0.5 rounded text-xs font-medium
+                            {% if item.status == 'draft' %}bg-amber-50 text-amber-700
+                            {% elif item.status == 'approved' %}bg-blue-50 text-blue-700
+                            {% elif item.status == 'scheduled' %}bg-indigo-50 text-indigo-700
+                            {% elif item.status == 'published' %}bg-green-50 text-green-700
+                            {% elif item.status == 'failed' %}bg-red-50 text-red-700
+                            {% else %}bg-gray-50 text-gray-600{% endif %}">
+                            {{ status_labels.get(item.status, item.status) }}
+                        </span>
+                        <span class="text-xs text-gray-400">{{ content_type_labels.get(item.content_type, item.content_type) }}</span>
+                        <span class="text-xs text-gray-300">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '' }}</span>
+                        {% if item.ai_provider %}
+                        <span class="text-xs text-gray-300">{{ item.ai_provider }}{% if item.generation_time_ms %} ({{ (item.generation_time_ms / 1000)|round(1) }}с){% endif %}</span>
+                        {% endif %}
+                    </div>
+
+                    {% if item.title %}
+                    <h3 class="font-medium text-gray-900 mb-1">{{ item.title }}</h3>
+                    {% endif %}
+
+                    <div class="text-sm text-gray-600 cursor-pointer" @click="expanded = !expanded">
+                        <template x-if="!expanded">
+                            <p class="line-clamp-3">{{ item.body_text[:300] }}{% if item.body_text|length > 300 %}...{% endif %}</p>
+                        </template>
+                        <template x-if="expanded">
+                            <pre class="whitespace-pre-wrap font-body text-sm">{{ item.body_text }}</pre>
+                        </template>
+                    </div>
+
+                    {% if item.get_hashtags() %}
+                    <div class="mt-2 text-xs text-blue-500">{{ item.get_hashtags()|join(' ') }}</div>
+                    {% endif %}
+
+                    {% if item.external_post_url %}
+                    <a href="{{ item.external_post_url }}" target="_blank" class="inline-flex items-center gap-1 mt-2 text-xs text-brand hover:underline">
+                        Открыть пост
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                    </a>
+                    {% endif %}
+
+                    {% if item.error_message %}
+                    <div class="mt-2 text-xs text-red-500">{{ item.error_message }}</div>
+                    {% endif %}
+                </div>
+
+                <!-- Actions -->
+                <div class="flex flex-col gap-1 shrink-0">
+                    {% if item.status == 'draft' %}
+                    <button @click="approveItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition">Одобрить</button>
+                    {% endif %}
+                    {% if item.status in ('draft', 'approved') %}
+                    <button @click="publishItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition">Опубликовать</button>
+                    {% endif %}
+                    <button @click="regenerateItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
+                    <button @click="deleteItem({{ item.id }})" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if items.pages > 1 %}
+    <div class="flex justify-center gap-2 mt-8">
+        {% for p in items.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+            {% if p %}
+                <a href="?page={{ p }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="px-3 py-1.5 rounded-lg text-sm {% if p == items.page %}bg-brand text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %} transition">{{ p }}</a>
+            {% else %}
+                <span class="px-2 py-1.5 text-gray-400">...</span>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="bg-white rounded-xl border border-gray-100 p-12 text-center">
+        <p class="text-gray-500 mb-4">Нет контента. Нажмите "Генерировать" для создания.</p>
+        <button @click="showGenerateModal = true" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
+            Генерировать контент
+        </button>
+    </div>
+    {% endif %}
+
+    <!-- Generate Modal -->
+    <div x-show="showGenerateModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.4)" @click.self="showGenerateModal = false">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6" @click.stop>
+            <h2 class="text-lg font-display text-gray-900 mb-4">Генерация контента</h2>
+
+            <div class="space-y-4">
+                <!-- Content type -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Тип контента</label>
+                    <select x-model="genContentType" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                        {% for ct in content_types %}
+                        <option value="{{ ct }}">{{ content_type_labels.get(ct, ct) }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Mode -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Режим</label>
+                    <div class="flex gap-2">
+                        <button @click="genMode = 'single'" :class="genMode === 'single' ? 'bg-brand text-white' : 'bg-gray-100 text-gray-700'" class="px-3 py-1.5 rounded-lg text-sm transition">Один пост</button>
+                        <button @click="genMode = 'bulk'" :class="genMode === 'bulk' ? 'bg-brand text-white' : 'bg-gray-100 text-gray-700'" class="px-3 py-1.5 rounded-lg text-sm transition">Массово</button>
+                    </div>
+                </div>
+
+                <!-- Product selection (single mode) -->
+                <div x-show="genMode === 'single'">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Товар</label>
+                    <select x-model="genProductId" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                        <option value="">Выберите товар</option>
+                        {% for p in products %}
+                        <option value="{{ p.id }}">{{ p.name[:60] }} — {{ p.price }} руб.</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Count (bulk mode) -->
+                <div x-show="genMode === 'bulk'">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Количество постов</label>
+                    <input type="number" x-model="genCount" min="1" max="20" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                    <p class="text-xs text-gray-400 mt-1">Товары будут подобраны автоматически ({{ factory.product_selection_mode }})</p>
+                </div>
+
+                <!-- Custom prompt -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Дополнительные указания (опционально)</label>
+                    <textarea x-model="genCustomPrompt" rows="2" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Например: сделай акцент на скидке 30%"></textarea>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
+                <button @click="generate()" :disabled="generating" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand-dark transition disabled:opacity-50">
+                    <span x-show="!generating">Генерировать</span>
+                    <span x-show="generating">Генерация...</span>
+                </button>
+                <button @click="showGenerateModal = false" class="px-4 py-2.5 text-gray-500 text-sm">Отмена</button>
+            </div>
+
+            <div x-show="genError" class="mt-3 text-sm text-red-500" x-text="genError"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+function contentItems() {
+    return {
+        showGenerateModal: false,
+        genMode: 'single',
+        genContentType: '{{ content_types[0] if content_types else "promo_post" }}',
+        genProductId: '',
+        genCount: 5,
+        genCustomPrompt: '',
+        generating: false,
+        genError: '',
+
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content; },
+
+        async generate() {
+            this.generating = true;
+            this.genError = '';
+
+            try {
+                let url, body;
+                if (this.genMode === 'single') {
+                    if (!this.genProductId) { this.genError = 'Выберите товар'; this.generating = false; return; }
+                    url = `/api/content-factory/{{ factory.id }}/generate`;
+                    body = { product_ids: [parseInt(this.genProductId)], content_type: this.genContentType, custom_prompt: this.genCustomPrompt || undefined };
+                } else {
+                    url = `/api/content-factory/{{ factory.id }}/generate-bulk`;
+                    body = { content_type: this.genContentType, count: parseInt(this.genCount), custom_prompt: this.genCustomPrompt || undefined };
+                }
+
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+
+                if (data.error) { this.genError = data.error; }
+                else { this.showGenerateModal = false; location.reload(); }
+            } catch (e) { this.genError = 'Ошибка: ' + e.message; }
+            this.generating = false;
+        },
+
+        async approveItem(id) {
+            await fetch(`/api/content-factory/items/${id}/approve`, { method: 'POST', headers: { 'X-CSRFToken': this.csrf() } });
+            location.reload();
+        },
+
+        async publishItem(id) {
+            if (!confirm('Опубликовать контент сейчас?')) return;
+            const resp = await fetch(`/api/content-factory/items/${id}/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() } });
+            const data = await resp.json();
+            if (data.error) alert(data.error);
+            else location.reload();
+        },
+
+        async regenerateItem(id) {
+            if (!confirm('Перегенерировать контент?')) return;
+            await fetch(`/api/content-factory/items/${id}/regenerate`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() }, body: '{}' });
+            location.reload();
+        },
+
+        async deleteItem(id) {
+            if (!confirm('Удалить этот контент?')) return;
+            await fetch(`/api/content-factory/items/${id}`, { method: 'DELETE', headers: { 'X-CSRFToken': this.csrf() } });
+            location.reload();
+        },
+    }
+}
+</script>
+{% endblock %}

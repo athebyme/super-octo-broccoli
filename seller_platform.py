@@ -35,6 +35,7 @@ from models import (
     CardMergeHistory, SellerReport,
     BackgroundJob, Notification,
     ServiceAgent, AgentTask, AgentTaskStep,
+    ContentFactory, SocialAccount, ContentTemplate, ContentItem, ContentPlan,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -5949,6 +5950,10 @@ register_returns_routes(app)
 # ============= РОУТЫ СЕРВИСНЫХ АГЕНТОВ =============
 from routes.agents import register_agents_routes
 register_agents_routes(app)
+
+# ============= КОНТЕНТ-ФАБРИКА =============
+from routes.content_factory import register_content_factory_routes
+register_content_factory_routes(app)
 
 # ============= INTERNAL API ДЛЯ АГЕНТОВ =============
 from routes.internal_api import internal_api_bp

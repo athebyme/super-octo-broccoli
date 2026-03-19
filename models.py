@@ -3987,3 +3987,370 @@ class AgentTaskStep(db.Model):
 
     def __repr__(self):
         return f'<AgentTaskStep #{self.step_number} [{self.step_type}] {self.title[:30]}>'
+
+
+# ============================================================================
+# CONTENT FACTORY — Контент-фабрика для продвижения в соцсетях
+# ============================================================================
+
+CONTENT_PLATFORMS = ['telegram', 'vk', 'instagram', 'tiktok', 'youtube']
+CONTENT_TYPES = ['promo_post', 'review', 'story_script', 'carousel']
+CONTENT_TONES = ['formal', 'casual', 'creative', 'expert']
+CONTENT_STATUSES = ['draft', 'approved', 'scheduled', 'publishing', 'published', 'failed', 'archived']
+PRODUCT_SELECTION_MODES = ['manual', 'bestsellers', 'new_arrivals', 'rules']
+
+
+class ContentFactory(db.Model):
+    """Контент-фабрика продавца — конвейер генерации контента для соцсетей"""
+    __tablename__ = 'content_factories'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+
+    platform = db.Column(db.String(20), nullable=False)  # telegram, vk, instagram, tiktok, youtube
+    content_types_json = db.Column(db.Text, default='[]')  # ["promo_post", "review", ...]
+
+    tone = db.Column(db.String(20), default='casual')  # formal, casual, creative, expert
+    style_guidelines = db.Column(db.Text)  # Текстовые инструкции для AI
+    language = db.Column(db.String(10), default='ru')
+
+    product_selection_mode = db.Column(db.String(20), default='manual')
+    product_selection_rules_json = db.Column(db.Text, default='{}')  # {category, brand, price_range}
+
+    ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
+    schedule_cron = db.Column(db.String(100))  # cron-выражение для автогенерации
+    auto_approve = db.Column(db.Boolean, default=False)
+
+    default_social_account_id = db.Column(db.Integer, db.ForeignKey('social_accounts.id', use_alter=True), nullable=True)
+
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    seller = db.relationship('Seller', backref=db.backref('content_factories', lazy='dynamic'))
+    items = db.relationship('ContentItem', backref='factory', lazy='dynamic', cascade='all, delete-orphan')
+    plans = db.relationship('ContentPlan', backref='factory', lazy='dynamic', cascade='all, delete-orphan')
+
+    def get_content_types(self):
+        try:
+            return json.loads(self.content_types_json or '[]')
+        except Exception:
+            return []
+
+    def set_content_types(self, types):
+        self.content_types_json = json.dumps(types)
+
+    def get_selection_rules(self):
+        try:
+            return json.loads(self.product_selection_rules_json or '{}')
+        except Exception:
+            return {}
+
+    def set_selection_rules(self, rules):
+        self.product_selection_rules_json = json.dumps(rules)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'name': self.name,
+            'description': self.description,
+            'platform': self.platform,
+            'content_types': self.get_content_types(),
+            'tone': self.tone,
+            'style_guidelines': self.style_guidelines,
+            'product_selection_mode': self.product_selection_mode,
+            'product_selection_rules': self.get_selection_rules(),
+            'ai_provider': self.ai_provider,
+            'schedule_cron': self.schedule_cron,
+            'auto_approve': self.auto_approve,
+            'is_active': self.is_active,
+            'items_count': self.items.count() if self.items else 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ContentFactory #{self.id} "{self.name}" [{self.platform}]>'
+
+
+class SocialAccount(db.Model):
+    """Подключённый аккаунт в социальной сети"""
+    __tablename__ = 'social_accounts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    platform = db.Column(db.String(20), nullable=False)  # telegram, vk, instagram, tiktok, youtube
+    account_name = db.Column(db.String(200))  # Название канала/группы/аккаунта
+    account_id = db.Column(db.String(200))  # ID в соцсети (chat_id, group_id, etc.)
+
+    _credentials_encrypted = db.Column('credentials', db.Text)  # Зашифрованные токены
+
+    is_active = db.Column(db.Boolean, default=True)
+    connected_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_used_at = db.Column(db.DateTime)
+    last_error = db.Column(db.Text)
+
+    seller = db.relationship('Seller', backref=db.backref('social_accounts', lazy='dynamic'))
+
+    @property
+    def credentials(self):
+        if not self._credentials_encrypted:
+            return None
+        encryption_key = os.environ.get('ENCRYPTION_KEY', '')
+        if not encryption_key:
+            return self._credentials_encrypted
+        try:
+            f = Fernet(encryption_key.encode())
+            return f.decrypt(self._credentials_encrypted.encode()).decode()
+        except Exception:
+            return self._credentials_encrypted
+
+    @credentials.setter
+    def credentials(self, value):
+        if not value:
+            self._credentials_encrypted = None
+            return
+        encryption_key = os.environ.get('ENCRYPTION_KEY', '')
+        if not encryption_key:
+            self._credentials_encrypted = value
+            return
+        try:
+            f = Fernet(encryption_key.encode())
+            self._credentials_encrypted = f.encrypt(value.encode()).decode()
+        except Exception:
+            self._credentials_encrypted = value
+
+    def get_credentials_dict(self):
+        creds = self.credentials
+        if not creds:
+            return {}
+        try:
+            return json.loads(creds)
+        except Exception:
+            return {}
+
+    def set_credentials_dict(self, creds_dict):
+        self.credentials = json.dumps(creds_dict)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'platform': self.platform,
+            'account_name': self.account_name,
+            'account_id': self.account_id,
+            'is_active': self.is_active,
+            'connected_at': self.connected_at.isoformat() if self.connected_at else None,
+            'last_used_at': self.last_used_at.isoformat() if self.last_used_at else None,
+            'last_error': self.last_error,
+        }
+
+    def __repr__(self):
+        return f'<SocialAccount #{self.id} {self.platform}:{self.account_name}>'
+
+
+class ContentTemplate(db.Model):
+    """Шаблон для генерации контента"""
+    __tablename__ = 'content_templates'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=True, index=True)  # NULL = системный
+
+    platform = db.Column(db.String(20), nullable=False)
+    content_type = db.Column(db.String(30), nullable=False)  # promo_post, review, story_script, carousel
+    name = db.Column(db.String(200), nullable=False)
+
+    system_prompt = db.Column(db.Text, nullable=False)
+    user_prompt_template = db.Column(db.Text, nullable=False)  # С плейсхолдерами {product_name}, {price}, etc.
+    example_output = db.Column(db.Text)
+    hashtag_strategy = db.Column(db.Text)  # Инструкции по хештегам
+
+    is_system = db.Column(db.Boolean, default=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('content_templates', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_ct_platform_type', 'platform', 'content_type'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'platform': self.platform,
+            'content_type': self.content_type,
+            'name': self.name,
+            'system_prompt': self.system_prompt,
+            'user_prompt_template': self.user_prompt_template,
+            'example_output': self.example_output,
+            'hashtag_strategy': self.hashtag_strategy,
+            'is_system': self.is_system,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ContentTemplate #{self.id} "{self.name}" [{self.platform}/{self.content_type}]>'
+
+
+class ContentItem(db.Model):
+    """Единица сгенерированного контента"""
+    __tablename__ = 'content_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    factory_id = db.Column(db.Integer, db.ForeignKey('content_factories.id'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    template_id = db.Column(db.Integer, db.ForeignKey('content_templates.id'), nullable=True)
+
+    platform = db.Column(db.String(20), nullable=False)
+    content_type = db.Column(db.String(30), nullable=False)
+
+    product_ids_json = db.Column(db.Text, default='[]')  # IDs товаров
+    title = db.Column(db.String(500))
+    body_text = db.Column(db.Text, nullable=False)
+    hashtags_json = db.Column(db.Text, default='[]')
+    media_urls_json = db.Column(db.Text, default='[]')
+    platform_specific_json = db.Column(db.Text, default='{}')  # Доп. данные под платформу
+
+    status = db.Column(db.String(20), default='draft', index=True)
+    scheduled_at = db.Column(db.DateTime)
+    published_at = db.Column(db.DateTime)
+
+    social_account_id = db.Column(db.Integer, db.ForeignKey('social_accounts.id'), nullable=True)
+    external_post_id = db.Column(db.String(200))  # ID поста после публикации
+    external_post_url = db.Column(db.String(500))  # URL поста
+
+    ai_provider = db.Column(db.String(20))
+    ai_model = db.Column(db.String(50))
+    tokens_used = db.Column(db.Integer)
+    generation_time_ms = db.Column(db.Integer)
+    error_message = db.Column(db.Text)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('content_items', lazy='dynamic'))
+    template = db.relationship('ContentTemplate', backref=db.backref('items', lazy='dynamic'))
+    social_account = db.relationship('SocialAccount', backref=db.backref('published_items', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_ci_factory_status', 'factory_id', 'status'),
+        db.Index('idx_ci_scheduled', 'status', 'scheduled_at'),
+    )
+
+    def get_product_ids(self):
+        try:
+            return json.loads(self.product_ids_json or '[]')
+        except Exception:
+            return []
+
+    def set_product_ids(self, ids):
+        self.product_ids_json = json.dumps(ids)
+
+    def get_hashtags(self):
+        try:
+            return json.loads(self.hashtags_json or '[]')
+        except Exception:
+            return []
+
+    def set_hashtags(self, tags):
+        self.hashtags_json = json.dumps(tags)
+
+    def get_media_urls(self):
+        try:
+            return json.loads(self.media_urls_json or '[]')
+        except Exception:
+            return []
+
+    def get_platform_specific(self):
+        try:
+            return json.loads(self.platform_specific_json or '{}')
+        except Exception:
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'factory_id': self.factory_id,
+            'seller_id': self.seller_id,
+            'template_id': self.template_id,
+            'platform': self.platform,
+            'content_type': self.content_type,
+            'product_ids': self.get_product_ids(),
+            'title': self.title,
+            'body_text': self.body_text,
+            'hashtags': self.get_hashtags(),
+            'media_urls': self.get_media_urls(),
+            'platform_specific': self.get_platform_specific(),
+            'status': self.status,
+            'scheduled_at': self.scheduled_at.isoformat() if self.scheduled_at else None,
+            'published_at': self.published_at.isoformat() if self.published_at else None,
+            'social_account_id': self.social_account_id,
+            'external_post_id': self.external_post_id,
+            'external_post_url': self.external_post_url,
+            'ai_provider': self.ai_provider,
+            'ai_model': self.ai_model,
+            'tokens_used': self.tokens_used,
+            'generation_time_ms': self.generation_time_ms,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ContentItem #{self.id} [{self.platform}/{self.content_type}] {self.status}>'
+
+
+class ContentPlan(db.Model):
+    """Контент-план (календарь публикаций)"""
+    __tablename__ = 'content_plans'
+
+    id = db.Column(db.Integer, primary_key=True)
+    factory_id = db.Column(db.Integer, db.ForeignKey('content_factories.id'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    name = db.Column(db.String(200), nullable=False)
+    date_from = db.Column(db.Date, nullable=False)
+    date_to = db.Column(db.Date, nullable=False)
+
+    # [{day_of_week: 0-6, time: "10:00", content_type: "promo_post"}, ...]
+    slots_json = db.Column(db.Text, default='[]')
+
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('content_plans', lazy='dynamic'))
+
+    def get_slots(self):
+        try:
+            return json.loads(self.slots_json or '[]')
+        except Exception:
+            return []
+
+    def set_slots(self, slots):
+        self.slots_json = json.dumps(slots)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'factory_id': self.factory_id,
+            'seller_id': self.seller_id,
+            'name': self.name,
+            'date_from': self.date_from.isoformat() if self.date_from else None,
+            'date_to': self.date_to.isoformat() if self.date_to else None,
+            'slots': self.get_slots(),
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ContentPlan #{self.id} "{self.name}">'
