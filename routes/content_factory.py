@@ -211,6 +211,12 @@ def register_content_factory_routes(app):
             else:
                 factory.default_social_account_id = None
 
+            # Синхронизируем платформу всех неопубликованных айтемов с фабрикой
+            ContentItem.query.filter(
+                ContentItem.factory_id == factory.id,
+                ContentItem.status.in_(['draft', 'approved', 'scheduled', 'failed']),
+            ).update({'platform': factory.platform}, synchronize_session='fetch')
+
             db.session.commit()
             flash('Настройки сохранены', 'success')
             return redirect(url_for('content_factory_items', factory_id=factory.id))
@@ -498,15 +504,22 @@ def register_content_factory_routes(app):
         if item.status not in ('draft', 'approved', 'scheduled', 'failed'):
             return jsonify({'error': f'Нельзя опубликовать контент со статусом {item.status}'}), 400
 
+        # Определяем целевую платформу: берём из фабрики (источник правды), фоллбэк на item
+        factory = ContentFactory.query.get(item.factory_id)
+        target_platform = factory.platform if factory else item.platform
+
+        # Синхронизируем platform айтема с фабрикой если рассинхрон
+        if item.platform != target_platform:
+            item.platform = target_platform
+            db.session.flush()
+
         # Определяем аккаунт для публикации
         account = None
         data = request.get_json(silent=True) or {}
         social_account_id = data.get('social_account_id') or item.social_account_id
         # Фоллбэк на дефолтный аккаунт фабрики
-        if not social_account_id:
-            factory = ContentFactory.query.get(item.factory_id)
-            if factory:
-                social_account_id = factory.default_social_account_id
+        if not social_account_id and factory:
+            social_account_id = factory.default_social_account_id
         if social_account_id:
             account = SocialAccount.query.filter_by(
                 id=social_account_id, seller_id=current_user.seller.id
@@ -516,24 +529,24 @@ def register_content_factory_routes(app):
         if not account:
             account = SocialAccount.query.filter_by(
                 seller_id=current_user.seller.id,
-                platform=item.platform,
+                platform=target_platform,
                 is_active=True,
             ).first()
 
         if not account:
             return jsonify({'error': 'Не указан аккаунт для публикации. Подключите аккаунт в настройках.'}), 400
 
-        # Проверяем что платформа аккаунта совпадает с платформой контента
-        if account.platform != item.platform:
+        # Проверяем что платформа аккаунта совпадает с целевой платформой
+        if account.platform != target_platform:
             return jsonify({
-                'error': f'Аккаунт "{account.account_name}" ({account.platform}) не подходит для публикации на {item.platform}. '
-                         f'Подключите аккаунт для платформы {item.platform}.'
+                'error': f'Аккаунт "{account.account_name}" ({account.platform}) не подходит для публикации на {target_platform}. '
+                         f'Подключите аккаунт для платформы {target_platform}.'
             }), 400
 
         # Публикуем
         try:
             from services.content_publishers import get_publisher
-            publisher = get_publisher(item.platform)
+            publisher = get_publisher(target_platform)
 
             item.status = 'publishing'
             db.session.commit()
