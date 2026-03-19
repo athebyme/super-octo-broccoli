@@ -665,12 +665,21 @@ class ContentFactoryService:
         return [self._product_to_dict(p, validate_photos=True) for p in products]
 
     def _validate_photo_urls(self, urls: list) -> list:
-        """Проверяет доступность фото по URL (HEAD-запрос). Останавливается на первой ошибке."""
+        """Проверяет доступность фото по URL. Останавливается на первой ошибке.
+
+        Использует GET с Range header (первые 1KB) вместо HEAD,
+        т.к. WB CDN может блокировать HEAD-запросы.
+        """
         validated = []
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Range': 'bytes=0-1023',
+        }
         for url in urls:
             try:
-                resp = _requests.head(url, timeout=4, allow_redirects=True)
-                if resp.status_code == 200:
+                resp = _requests.get(url, timeout=5, allow_redirects=True, headers=headers)
+                # 200 = полный ответ, 206 = partial content (range)
+                if resp.status_code in (200, 206) and len(resp.content) >= 100:
                     validated.append(url)
                 else:
                     break  # WB фото последовательные: если одно не найдено, следующие тоже
@@ -709,9 +718,14 @@ class ContentFactoryService:
                         if url not in existing_urls:
                             photos.append(url)
                             existing_urls.add(url)
-                elif not photos:
-                    # Без валидации берём только 2 фото (безопасный минимум)
-                    photos = [wb_photo_url(product.nm_id, i) for i in range(1, 3)]
+                if not photos:
+                    # Валидация не прошла или нет фото — берём 3 CDN URL без валидации
+                    # (VK publisher сам обработает 404 при скачивании)
+                    logger.warning(
+                        f"No validated photos for product {product.id} (nm_id={product.nm_id}), "
+                        f"using unvalidated CDN URLs"
+                    )
+                    photos = [wb_photo_url(product.nm_id, i) for i in range(1, 4)]
             except Exception:
                 pass
 

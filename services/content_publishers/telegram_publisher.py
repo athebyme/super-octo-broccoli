@@ -199,8 +199,17 @@ class TelegramPublisher(BasePublisher):
 
     def _download_photo(self, photo_url: str) -> Optional[bytes]:
         """Скачивает фото по URL и возвращает байты."""
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': 'https://www.wildberries.ru/',
+        }
         try:
-            resp = requests.get(photo_url, timeout=15)
+            resp = requests.get(photo_url, timeout=15, headers=headers)
             if resp.status_code == 200 and len(resp.content) > 1024:
                 content_type = resp.headers.get('Content-Type', '')
                 if content_type.startswith('image/') or len(resp.content) > 5000:

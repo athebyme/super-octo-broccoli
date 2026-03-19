@@ -31,33 +31,53 @@ VK_API_BASE = 'https://api.vk.com/method'
 VK_API_VERSION = '5.199'
 
 
+_BROWSER_UA = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/120.0.0.0 Safari/537.36'
+)
+
+
 def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]:
     """Скачивает фото по URL и конвертирует в JPEG.
 
     Returns:
         (jpeg_bytes, filename) или None при ошибке
     """
-    # Шаг 1: Скачиваем
-    try:
-        resp = requests.get(
-            photo_url,
-            timeout=15,
-            headers={'User-Agent': 'Mozilla/5.0 (compatible; ContentBot/1.0)'},
-        )
-        if resp.status_code != 200:
-            logger.warning(f"Photo download HTTP {resp.status_code}: {photo_url}")
+    # Шаг 1: Скачиваем (с одним ретраем)
+    raw = None
+    content_type = ''
+    headers = {
+        'User-Agent': _BROWSER_UA,
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+        'Referer': 'https://www.wildberries.ru/',
+    }
+    for attempt in range(2):
+        try:
+            resp = requests.get(photo_url, timeout=15, headers=headers)
+            if resp.status_code != 200:
+                logger.warning(f"Photo download HTTP {resp.status_code} (attempt {attempt + 1}): {photo_url}")
+                if attempt == 0:
+                    continue
+                return None
+
+            raw = resp.content
+            content_type = resp.headers.get('Content-Type', '')
+            break
+        except Exception as e:
+            logger.error(f"Photo download failed (attempt {attempt + 1}): {e} URL: {photo_url[:100]}")
+            if attempt == 0:
+                continue
             return None
 
-        raw = resp.content
-        if len(raw) < 512:
-            logger.warning(f"Photo too small ({len(raw)}B): {photo_url}")
-            return None
-
-        content_type = resp.headers.get('Content-Type', '')
-        logger.info(f"Photo downloaded: {len(raw)}B, content-type={content_type} from {photo_url[:80]}")
-    except Exception as e:
-        logger.error(f"Photo download failed: {e} URL: {photo_url[:100]}")
+    if not raw:
         return None
+
+    if len(raw) < 512:
+        logger.warning(f"Photo too small ({len(raw)}B): {photo_url}")
+        return None
+
+    logger.info(f"Photo downloaded: {len(raw)}B, content-type={content_type} from {photo_url[:80]}")
 
     # Шаг 2: Если уже JPEG — используем напрямую (серверные фото /photos/public/ уже JPEG)
     if content_type.startswith('image/jpeg') or raw[:3] == b'\xff\xd8\xff':
