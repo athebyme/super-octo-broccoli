@@ -641,11 +641,13 @@ class ContentFactoryService:
             .all()
         )
         if not products:
-            # Fallback: без фильтра цены (на случай если у всех товаров цена > MAX)
-            products = Product.query.filter(
-                Product.seller_id == seller_id,
-                Product.quantity > 0,
-            ).limit(limit).all()
+            # Fallback: без аналитики, но с фильтром цены и наличия
+            products = (
+                self._base_product_query(seller_id)
+                .order_by(Product.created_at.desc())
+                .limit(limit)
+                .all()
+            )
         return [self._product_to_dict(p) for p in products]
 
     def _select_new_arrivals(self, seller_id: int, limit: int) -> List[Dict]:
