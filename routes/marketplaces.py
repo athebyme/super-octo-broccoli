@@ -3,7 +3,10 @@
 Marketplaces and integration routes
 """
 import json
+import logging
 from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, current_app
+
+logger = logging.getLogger(__name__)
 from flask_login import login_required, current_user
 
 from models import db, Marketplace, MarketplaceCategory, MarketplaceCategoryCharacteristic, SupplierProduct
@@ -339,7 +342,8 @@ def test_prompt():
         return jsonify(result)
     except Exception as e:
         import traceback
-        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+        logger.error(f"Marketplace test error: {traceback.format_exc()}")
+        return jsonify({"success": False, "error": "Внутренняя ошибка сервера"})
 
 def register_marketplaces_routes(app):
     app.register_blueprint(marketplaces_bp)

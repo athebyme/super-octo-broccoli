@@ -301,7 +301,7 @@
                             function marketplaceValidator() {
                                 return {
                                     loading: false,
-                                    fields: {{ product.marketplace_fields_json | default('{}', true) | safe }},
+                                    fields: {{ product.marketplace_fields_json | default('{}', true) | tojson }},
                                     validationStatus: '{{ product.marketplace_validation_status or "" }}',
                                     fillPct: {{ product.marketplace_fill_pct or 0 }},
                                     errors: {},

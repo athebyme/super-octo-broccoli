@@ -84,6 +84,7 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 # Отключите только если HTTPS не используется (небезопасно для продакшена)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB макс. размер запроса (защита от DoS)
 
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
