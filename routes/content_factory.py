@@ -475,7 +475,8 @@ def register_content_factory_routes(app):
 
         # Определяем аккаунт для публикации
         account = None
-        social_account_id = (request.get_json() or {}).get('social_account_id') or item.social_account_id
+        data = request.get_json(silent=True) or {}
+        social_account_id = data.get('social_account_id') or item.social_account_id
         # Фоллбэк на дефолтный аккаунт фабрики
         if not social_account_id:
             factory = ContentFactory.query.get(item.factory_id)

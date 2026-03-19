@@ -504,10 +504,18 @@ function contentItems() {
 
         async publishItem(id) {
             if (!confirm('Опубликовать контент сейчас?')) return;
-            const resp = await fetch(`/api/content-factory/items/${id}/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() } });
-            const data = await resp.json();
-            if (data.error) alert(data.error);
-            else location.reload();
+            try {
+                const resp = await fetch(`/api/content-factory/items/${id}/publish`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({})
+                });
+                const data = await resp.json();
+                if (data.error) alert('Ошибка: ' + data.error);
+                else location.reload();
+            } catch (e) {
+                alert('Ошибка публикации: ' + e.message);
+            }
         },
 
         async regenerateItem(id) {

@@ -541,9 +541,17 @@ class ContentFactoryService:
         photos = []
         if product.photos_json:
             try:
-                photos = json.loads(product.photos_json)
-                if isinstance(photos, list):
-                    photos = [p for p in photos if isinstance(p, str) and p.startswith('http')]
+                raw_photos = json.loads(product.photos_json)
+                if isinstance(raw_photos, list):
+                    photos = [p for p in raw_photos if isinstance(p, str) and p.startswith('http')]
+            except Exception:
+                pass
+
+        # Фоллбэк: генерируем URL фото из WB CDN по nm_id
+        if not photos and product.nm_id:
+            try:
+                from seller_platform import wb_photo_url
+                photos = [wb_photo_url(product.nm_id, i) for i in range(1, 6)]
             except Exception:
                 pass
 
