@@ -6,6 +6,7 @@
   - Google Gemini (через google-genai SDK)
   - Anthropic Claude (через anthropic SDK)
   - Cloud.ru Foundation Models (OpenAI-compatible API)
+  - OpenRouter (прокси ко множеству моделей через OpenAI-compatible API)
   - Любой OpenAI-совместимый API (vLLM, Ollama, LM Studio, etc.)
 
 Унифицированный интерфейс: chat(), chat_with_tools(), structured_output()
@@ -502,6 +503,22 @@ class CloudRuLLM(OpenAICompatLLM):
         logger.info(f"Cloud.ru LLM initialized: {self.model}")
 
 
+class OpenRouterLLM(OpenAICompatLLM):
+    """OpenRouter — прокси ко множеству моделей (DeepSeek, Llama, Mistral, etc.)."""
+
+    OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+
+    def __init__(self, config: AgentConfig = None):
+        cfg = config or AgentConfig
+        super().__init__(
+            config=cfg,
+            api_key=cfg.OPENROUTER_API_KEY,
+            base_url=self.OPENROUTER_BASE_URL,
+            model=cfg.OPENROUTER_MODEL,
+        )
+        logger.info(f"OpenRouter LLM initialized: {self.model}")
+
+
 # ── Фабрика ───────────────────────────────────────────────────────
 
 def _create_by_provider(provider: str, config: AgentConfig,
@@ -524,6 +541,11 @@ def _create_by_provider(provider: str, config: AgentConfig,
         if model_override:
             llm.model = model_override
         return llm
+    elif provider == 'openrouter':
+        llm = OpenRouterLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     elif provider == 'openai_compat':
         llm = OpenAICompatLLM(config)
         if model_override:
@@ -532,7 +554,7 @@ def _create_by_provider(provider: str, config: AgentConfig,
     else:
         raise ValueError(
             f"Unknown LLM provider: {provider}. "
-            f"Use 'claude', 'gemini', 'cloudru', or 'openai_compat'."
+            f"Use 'claude', 'gemini', 'cloudru', 'openrouter', or 'openai_compat'."
         )
 
 

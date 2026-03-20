@@ -155,6 +155,7 @@
                                     style="background:var(--bg);border:1px solid var(--border);color:var(--text);--tw-ring-color:var(--accent)">
                                     <option value="cloudru">Cloud.ru Foundation Models</option>
                                     <option value="openai">OpenAI</option>
+                                    <option value="openrouter">OpenRouter (прокси)</option>
                                     <option value="custom">Другой (OpenAI-совместимый)</option>
                                 </select>
                             </div>
@@ -396,6 +397,7 @@ function profilePage() {
             const defaults = {
                 cloudru: { url: 'https://foundation-models.api.cloud.ru/v1', model: 'openai/gpt-oss-120b' },
                 openai: { url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+                openrouter: { url: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-r1' },
                 custom: { url: '', model: '' },
             };
             const d = defaults[this.ai.provider] || defaults.custom;

@@ -71,6 +71,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -93,6 +95,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -115,6 +119,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       # Fallback LLM для сложных задач импорта
       - FALLBACK_LLM_PROVIDER=${FALLBACK_LLM_PROVIDER:-}
       - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-claude-haiku-4-5-20251001}
@@ -141,6 +147,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - FALLBACK_LLM_PROVIDER=${FALLBACK_LLM_PROVIDER:-}
       - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-claude-haiku-4-5-20251001}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -166,6 +174,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - FALLBACK_LLM_PROVIDER=${FALLBACK_LLM_PROVIDER:-}
       - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-claude-haiku-4-5-20251001}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -191,6 +201,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -213,6 +225,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -235,6 +249,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -257,6 +273,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -279,6 +297,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - LOG_LEVEL=${AGENT_LOG_LEVEL:-INFO}
     depends_on:
       seller-platform:
@@ -301,6 +321,8 @@ services:
       - CLOUDRU_API_KEY=${CLOUDRU_API_KEY:-}
       - CLOUDRU_BASE_URL=${CLOUDRU_BASE_URL:-https://foundation-models.api.cloud.ru/v1/}
       - CLOUDRU_MODEL=${CLOUDRU_MODEL:-openai/gpt-oss-120b}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-deepseek/deepseek-r1}
       - FALLBACK_LLM_PROVIDER=${FALLBACK_LLM_PROVIDER:-}
       - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-claude-haiku-4-5-20251001}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

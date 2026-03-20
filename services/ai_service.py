@@ -319,6 +319,7 @@ class AIProvider(Enum):
     """Поддерживаемые AI провайдеры"""
     OPENAI = "openai"
     CLOUDRU = "cloudru"  # Cloud.ru Foundation Models
+    OPENROUTER = "openrouter"  # OpenRouter — прокси ко множеству моделей
     CUSTOM = "custom"  # Любой OpenAI-совместимый API
 
 
@@ -349,6 +350,45 @@ CLOUDRU_MODELS = {
         "description": "Модель от Meta",
         "recommended": False
     }
+}
+
+# Модели OpenRouter (популярные, доступные через openrouter.ai)
+OPENROUTER_MODELS = {
+    "deepseek/deepseek-r1": {
+        "name": "DeepSeek R1",
+        "description": "Мощная модель с рассуждениями, state-of-the-art",
+        "recommended": True
+    },
+    "deepseek/deepseek-chat-v3-0324": {
+        "name": "DeepSeek V3 (0324)",
+        "description": "Быстрая и дешёвая модель для большинства задач",
+        "recommended": True
+    },
+    "anthropic/claude-sonnet-4": {
+        "name": "Claude Sonnet 4",
+        "description": "Высокое качество, баланс скорости и точности",
+        "recommended": False
+    },
+    "google/gemini-2.5-flash-preview": {
+        "name": "Gemini 2.5 Flash Preview",
+        "description": "Быстрая модель от Google",
+        "recommended": False
+    },
+    "meta-llama/llama-4-maverick": {
+        "name": "Llama 4 Maverick",
+        "description": "Модель от Meta (Llama 4)",
+        "recommended": False
+    },
+    "qwen/qwen3-235b-a22b": {
+        "name": "Qwen3 235B",
+        "description": "Большая модель от Alibaba",
+        "recommended": False
+    },
+    "mistralai/mistral-large-2411": {
+        "name": "Mistral Large",
+        "description": "Топовая модель Mistral",
+        "recommended": False
+    },
 }
 
 # Модели OpenAI
@@ -3718,6 +3758,8 @@ def get_available_models(provider: str) -> Dict[str, Dict]:
         return CLOUDRU_MODELS
     elif provider == 'openai':
         return OPENAI_MODELS
+    elif provider == 'openrouter':
+        return OPENROUTER_MODELS
     else:
         # Для custom возвращаем объединенный список
         return {**CLOUDRU_MODELS, **OPENAI_MODELS}

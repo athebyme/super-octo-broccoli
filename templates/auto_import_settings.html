@@ -297,6 +297,9 @@
                             <option value="openai" {{ 'selected' if settings.ai_provider == 'openai' else '' }}>
                                 OpenAI
                             </option>
+                            <option value="openrouter" {{ 'selected' if settings.ai_provider == 'openrouter' else '' }}>
+                                OpenRouter (прокси)
+                            </option>
                             <option value="custom" {{ 'selected' if settings.ai_provider == 'custom' else '' }}>
                                 Другой (OpenAI-совместимый)
                             </option>
@@ -835,6 +838,10 @@ function updateAIProviderSettings() {
         cloudruHint.classList.add('hidden');
         baseUrlBlock.classList.add('hidden');
         baseUrlInput.value = '';
+    } else if (provider === 'openrouter') {
+        cloudruHint.classList.add('hidden');
+        baseUrlBlock.classList.add('hidden');
+        baseUrlInput.value = 'https://openrouter.ai/api/v1';
     } else {
         // Custom - скрываем подсказку Cloud.ru, показываем base URL
         cloudruHint.classList.add('hidden');

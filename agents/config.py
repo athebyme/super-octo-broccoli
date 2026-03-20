@@ -11,7 +11,7 @@
   AGENT_ID            — ID агента в БД платформы
   AGENT_API_KEY       — API-ключ агента
 
-  LLM_PROVIDER        — "cloudru" | "claude" | "gemini" | "openai_compat" (default: cloudru)
+  LLM_PROVIDER        — "cloudru" | "claude" | "gemini" | "openrouter" | "openai_compat" (default: cloudru)
   CLOUDRU_API_KEY      — ключ Cloud.ru Foundation Models
   CLOUDRU_MODEL        — модель Cloud.ru (default: openai/gpt-oss-120b)
   CLOUDRU_BASE_URL     — base URL Cloud.ru API
@@ -19,6 +19,9 @@
   CLAUDE_MODEL         — модель Claude (default: claude-sonnet-4-20250514)
   GEMINI_API_KEY       — ключ Google AI
   GEMINI_MODEL         — модель Gemini (default: gemini-2.0-flash)
+  OPENROUTER_API_KEY   — ключ OpenRouter
+  OPENROUTER_MODEL     — модель OpenRouter (default: deepseek/deepseek-r1)
+
   OPENAI_COMPAT_API_KEY — ключ для OpenAI-совместимого API
   OPENAI_COMPAT_BASE_URL — base URL (для любого OAI-compatible провайдера)
   OPENAI_COMPAT_MODEL  — модель
@@ -55,6 +58,10 @@ _FIELD_DEFS = {
     # Google Gemini
     'GEMINI_API_KEY':     ('GEMINI_API_KEY', '', str),
     'GEMINI_MODEL':       ('GEMINI_MODEL', 'gemini-2.0-flash', str),
+
+    # OpenRouter (прокси ко множеству моделей)
+    'OPENROUTER_API_KEY':  ('OPENROUTER_API_KEY', '', str),
+    'OPENROUTER_MODEL':    ('OPENROUTER_MODEL', 'deepseek/deepseek-r1', str),
 
     # Универсальный OpenAI-совместимый провайдер (vLLM, Ollama, LM Studio, etc.)
     'OPENAI_COMPAT_API_KEY':  ('OPENAI_COMPAT_API_KEY', '', str),
@@ -121,6 +128,8 @@ class AgentConfig(metaclass=_AgentConfigMeta):
             errors.append('ANTHROPIC_API_KEY not set (provider=claude)')
         if provider == 'cloudru' and not _resolve('CLOUDRU_API_KEY'):
             errors.append('CLOUDRU_API_KEY not set (provider=cloudru)')
+        if provider == 'openrouter' and not _resolve('OPENROUTER_API_KEY'):
+            errors.append('OPENROUTER_API_KEY not set (provider=openrouter)')
         if provider == 'openai_compat' and not _resolve('OPENAI_COMPAT_BASE_URL'):
             errors.append('OPENAI_COMPAT_BASE_URL not set (provider=openai_compat)')
 
