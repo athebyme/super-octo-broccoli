@@ -3755,8 +3755,9 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
         
     characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=cat.id, is_enabled=True).all()
     if not characteristics:
+        logger.info(f"No characteristics found for category {cat.id} ({cat.subject_name}), skipping MarketplaceAwareParsingTask")
         return
-        
+
     # Запускаем таску с двухпроходным парсингом и кэшированием
     task = MarketplaceAwareParsingTask(
         client=ai_svc.client,
@@ -3820,6 +3821,11 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
         # Убираем метаданные из результата перед сохранением
         clean_fields = {k: v for k, v in result.items() if k != '_meta'}
 
+        # Post-fill: досыпаем значения из physical/functionality для полей,
+        # которые AI не заполнил во втором проходе, но данные уже есть.
+        # Маппинг generic → category-specific через fuzzy-match по имени характеристики.
+        _post_fill_marketplace_fields(clean_fields, parsed_data, characteristics)
+
         # Сохраняем плоские поля для формы (массивы → строки через ";")
         flat_fields = {}
         for k, v in clean_fields.items():
@@ -3839,7 +3845,135 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
 
         logger.info(f"Marketplace aware parse success for {product.id}, status: {validation_result.get('validation_status')}")
     else:
+        # Даже если AI второй проход не сработал — пробуем заполнить из physical данных
+        _post_fill_marketplace_fields_fallback(product, parsed_data, characteristics)
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
+
+
+# ============================================================================
+# POST-FILL: физические данные → WB-характеристики
+# ============================================================================
+
+# Маппинг ключевых слов в именах WB характеристик на physical/functionality поля.
+# Ключ — подстрока (lowercase) в имени WB характеристики.
+# Значение — (секция parsed_data, поле, [альтернативные поля]).
+_PHYSICAL_TO_WB_KEYWORDS = [
+    # Диаметр
+    (['диаметр'], 'physical', ['max_diameter_cm', 'diameter_cm']),
+    # Длина
+    (['общая длина', 'длина'], 'physical', ['working_length_cm', 'length_cm']),
+    # Рабочая длина (более специфичная)
+    (['рабочая длина'], 'physical', ['working_length_cm']),
+    # Ширина
+    (['ширина'], 'physical', ['width_cm']),
+    # Вес
+    (['вес'], 'physical', ['weight_g']),
+    # Объём
+    (['объем', 'объём'], 'physical', ['volume_ml']),
+    # Глубина
+    (['глубина'], 'physical', ['depth_cm']),
+    # Толщина
+    (['толщина'], 'physical', ['thickness_cm']),
+    # Особенности
+    (['особенности', 'особенность'], 'functionality', ['special_features']),
+]
+
+
+def _post_fill_marketplace_fields(
+    fields: dict,
+    parsed_data: dict,
+    characteristics: list,
+) -> None:
+    """
+    Досыпает значения в marketplace fields из уже распарсенных физических данных.
+
+    Если AI во втором проходе не заполнил поле (например "Диаметр секс игрушки (см)"),
+    но в parsed_data.physical.diameter_cm есть значение — подставляем его.
+
+    Работает по fuzzy-match ключевых слов в именах WB характеристик.
+    """
+    for charc in characteristics:
+        if not charc.is_enabled:
+            continue
+        name = charc.name
+        # Уже заполнено AI
+        if name in fields and fields[name] not in (None, '', [], '[]'):
+            continue
+
+        name_lower = name.lower()
+
+        for keywords, section_key, field_names in _PHYSICAL_TO_WB_KEYWORDS:
+            if not any(kw in name_lower for kw in keywords):
+                continue
+
+            section = parsed_data.get(section_key, {})
+            value = None
+            for fn in field_names:
+                value = section.get(fn)
+                if value is not None:
+                    break
+
+            if value is None:
+                continue
+
+            # Тип 4 (NUMBER) — нужно число
+            if charc.charc_type == 4:
+                if isinstance(value, (int, float)):
+                    fields[name] = value
+                    logger.debug(f"[PostFill] {name} = {value} (from {section_key}.{field_names})")
+                elif isinstance(value, str):
+                    match = re.search(r'([\d]+[.,]?[\d]*)', value.replace(',', '.'))
+                    if match:
+                        num = float(match.group(1))
+                        fields[name] = int(num) if num == int(num) else num
+            # Тип 1 (STRING ARRAY) — массив строк
+            elif charc.charc_type == 1:
+                if isinstance(value, list):
+                    str_values = [str(v) for v in value if v]
+                    if str_values:
+                        fields[name] = str_values
+                elif isinstance(value, str) and value:
+                    fields[name] = [value]
+            else:
+                # Другие типы — строка
+                if isinstance(value, list):
+                    fields[name] = '; '.join(str(v) for v in value if v)
+                elif value:
+                    fields[name] = value
+
+            break  # Одно совпадение на характеристику
+
+
+def _post_fill_marketplace_fields_fallback(
+    product: SupplierProduct,
+    parsed_data: dict,
+    characteristics: list,
+) -> None:
+    """
+    Fallback: если _run_marketplace_aware_parse полностью провалился,
+    заполняем marketplace_fields_json напрямую из physical данных.
+    """
+    try:
+        existing = {}
+        if product.marketplace_fields_json:
+            try:
+                existing = json.loads(product.marketplace_fields_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        _post_fill_marketplace_fields(existing, parsed_data, characteristics)
+
+        if existing:
+            # Flatten lists to strings for form
+            flat = {}
+            for k, v in existing.items():
+                if isinstance(v, list):
+                    flat[k] = '; '.join(str(x) for x in v) if v else ''
+                elif v is not None:
+                    flat[k] = v
+            product.marketplace_fields_json = json.dumps(flat, ensure_ascii=False)
+    except Exception as e:
+        logger.debug(f"[PostFill fallback] Error: {e}")
 
 
 # ============================================================================
