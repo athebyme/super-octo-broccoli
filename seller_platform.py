@@ -1636,11 +1636,18 @@ def db_commit_with_retry(session, max_retries=3, initial_delay=0.5):
             if 'database is locked' in str(e).lower():
                 if attempt < max_retries - 1:
                     delay = initial_delay * (2 ** attempt)  # Экспоненциальная задержка
-                    app.logger.warning(f"⚠️ Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
+                    app.logger.warning(f"Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
                     time.sleep(delay)
-                    session.rollback()
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                 else:
-                    app.logger.error(f"❌ Database locked after {max_retries} retries")
+                    app.logger.error(f"Database locked after {max_retries} retries")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                     raise
             else:
                 # Другая ошибка - пробрасываем сразу
@@ -1724,8 +1731,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         db_commit_with_retry(db.session)
                         app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
                 except Exception as dedup_err:
-                    app.logger.warning(f"⚠️ Deduplication failed (non-critical): {dedup_err}")
-                    db.session.rollback()
+                    app.logger.warning(f"Deduplication failed (non-critical): {dedup_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
                 # Статистика
                 created_count = 0
@@ -1858,18 +1868,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                             app.logger.info(f"💾 Batch saved: {processed_in_batch} products ({created_count} new, {updated_count} updated so far)")
                             processed_in_batch = 0
                         except Exception as commit_error:
-                            app.logger.warning(f"⚠️ Batch commit failed, rolling back: {commit_error}")
-                            db.session.rollback()
+                            app.logger.warning(f"Batch commit failed, rolling back: {commit_error}")
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                db.session.remove()
                             # Продолжаем со следующей batch
 
                 # Сохраняем оставшиеся изменения
                 try:
                     db_commit_with_retry(db.session)
                     if processed_in_batch > 0:
-                        app.logger.info(f"💾 Final batch saved: {processed_in_batch} products")
+                        app.logger.info(f"Final batch saved: {processed_in_batch} products")
                 except Exception as commit_error:
-                    app.logger.warning(f"⚠️ Final commit failed: {commit_error}")
-                    db.session.rollback()
+                    app.logger.warning(f"Final commit failed: {commit_error}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 

@@ -57,9 +57,17 @@ def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
                 if attempt < max_retries:
                     delay = base_delay * (2 ** (attempt - 1))
                     logger.warning(f"SQLite locked, retry {attempt}/{max_retries} in {delay:.1f}s")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                     time.sleep(delay)
                     continue
-            session.rollback()
+            try:
+                session.rollback()
+            except Exception:
+                # Сессия в невосстановимом состоянии (prepared/invalid) — сбрасываем полностью
+                session.remove()
             raise
 
 
@@ -2724,7 +2732,10 @@ class SupplierService:
                     job_ref.results = json.dumps(results[-100:], ensure_ascii=False)
                     _commit_with_retry(db.session)
                 except Exception:
-                    db.session.rollback()
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
             def _check_cancelled():
                 """Проверяет не отменена ли задача."""
@@ -2735,7 +2746,10 @@ class SupplierService:
                         cancelled.set()
                         return True
                 except Exception:
-                    pass
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
                 return False
 
             def _parse_one(pid: int) -> dict:
@@ -2826,12 +2840,22 @@ class SupplierService:
                                 'status': 'error', 'error': error or 'Ошибка AI',
                             }
                     except Exception as e:
-                        db.session.rollback()
+                        try:
+                            db.session.rollback()
+                        except Exception:
+                            # Сессия в невосстановимом состоянии (prepared/invalid)
+                            db.session.remove()
                         logger.error(f"[AI Parse] Worker error pid={pid}: {e}")
                         return {
                             'product_id': pid, 'title': title,
                             'status': 'error', 'error': str(e)[:200],
                         }
+                    finally:
+                        # Гарантируем чистую сессию для следующего использования потока
+                        try:
+                            db.session.remove()
+                        except Exception:
+                            pass
 
             # Запускаем пул
             with ThreadPoolExecutor(max_workers=effective_workers,
@@ -2884,7 +2908,7 @@ class SupplierService:
                             try:
                                 db.session.rollback()
                             except Exception:
-                                pass
+                                db.session.remove()
 
             # Завершение задачи
             try:
@@ -2901,7 +2925,10 @@ class SupplierService:
                     job_final.updated_at = datetime.utcnow()
                     _commit_with_retry(db.session)
             except Exception:
-                db.session.rollback()
+                try:
+                    db.session.rollback()
+                except Exception:
+                    db.session.remove()
 
             logger.info(
                 f"[AI Parse] Job {job_id} done: "
