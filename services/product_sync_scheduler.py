@@ -134,10 +134,10 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
-    # Автопубликация контента (каждые 2 минуты проверяет очередь)
+    # Автопубликация контента (каждую минуту проверяет очередь)
     scheduler.add_job(
         func=lambda: auto_publish_content(flask_app),
-        trigger=IntervalTrigger(minutes=2),
+        trigger=IntervalTrigger(minutes=1),
         id='content_auto_publish',
         name='Auto-publish approved content items',
         replace_existing=True

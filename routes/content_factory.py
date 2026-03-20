@@ -113,7 +113,7 @@ def register_content_factory_routes(app):
                 auto_generate=bool(request.form.get('auto_generate')),
                 generate_interval_minutes=max(30, int(request.form.get('generate_interval_minutes', 120) or 120)),
                 auto_publish=bool(request.form.get('auto_publish')),
-                publish_interval_minutes=max(5, int(request.form.get('publish_interval_minutes', 60) or 60)),
+                publish_interval_minutes=max(1, int(request.form.get('publish_interval_minutes', 60) or 60)),
             )
             factory.set_content_types(content_types)
 
