@@ -238,21 +238,41 @@ def _build_slide_html(
 </html>'''
 
 
-def _fetch_photo_as_b64(photo_url: str) -> Optional[str]:
-    """Скачивает фото и конвертит в base64"""
+def _resolve_photo_url(photo_entry) -> Optional[str]:
+    """Извлекает URL из записи о фото (строка или dict с ключами original/blur/sexoptovik)"""
+    if isinstance(photo_entry, str):
+        return photo_entry
+    if isinstance(photo_entry, dict):
+        # Приоритет: original → blur → sexoptovik → первое значение
+        for key in ('original', 'blur', 'sexoptovik'):
+            if photo_entry.get(key):
+                return photo_entry[key]
+        # Берём первый непустой URL
+        for v in photo_entry.values():
+            if isinstance(v, str) and v.startswith('http'):
+                return v
+    return None
+
+
+def _fetch_photo_as_b64(photo_entry) -> Optional[str]:
+    """Скачивает фото и конвертит в base64. Принимает строку URL или dict."""
+    url = _resolve_photo_url(photo_entry)
+    if not url:
+        return None
     try:
         import requests as req
-        resp = req.get(photo_url, timeout=15)
-        if resp.status_code == 200:
+        resp = req.get(url, timeout=15)
+        if resp.status_code == 200 and len(resp.content) > 1000:
             img = Image.open(io.BytesIO(resp.content))
             img = img.convert('RGB')
-            # Ресайз до разумного размера
             img.thumbnail((900, 1200), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=85)
             return base64.b64encode(buf.getvalue()).decode('utf-8')
+        else:
+            logger.warning(f"Photo fetch failed: {url} status={resp.status_code} size={len(resp.content)}")
     except Exception as e:
-        logger.warning(f"Failed to fetch photo {photo_url}: {e}")
+        logger.warning(f"Failed to fetch photo {url}: {e}")
     return None
 
 
