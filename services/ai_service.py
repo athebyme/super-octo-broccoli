@@ -380,6 +380,16 @@ OPENROUTER_MODELS = {
         "description": "Быстрая и дешёвая, отличное качество",
         "recommended": True
     },
+    "google/gemini-3.1-flash-lite-preview": {
+        "name": "Gemini 3.1 Flash Lite",
+        "description": "Самая дешёвая Gemini, быстрая, для парсинга",
+        "recommended": True
+    },
+    "x-ai/grok-4.1-fast": {
+        "name": "Grok 4.1 Fast",
+        "description": "xAI Grok — быстрый, большой контекст 131K",
+        "recommended": False
+    },
     "anthropic/claude-sonnet-4": {
         "name": "Claude Sonnet 4",
         "description": "Мощная модель Anthropic",
