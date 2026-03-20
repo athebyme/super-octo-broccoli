@@ -2204,6 +2204,7 @@ class SupplierService:
             db.session.commit()
 
             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+            card_pct = _calc_card_completeness_pct(product)
 
             # Валидация и автокоррекция AI-характеристик
             validation_result = {}
@@ -2221,6 +2222,7 @@ class SupplierService:
                 'parsed_data': result,
                 'marketplace_data': marketplace_data,
                 'fill_percentage': fill_pct,
+                'card_completeness': card_pct,
                 'validation': validation_result,
             }
 
@@ -2523,9 +2525,11 @@ class SupplierService:
                                 logger.debug(f"Characteristics validation skipped: {ve}")
 
                             fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+                            card_pct = _calc_card_completeness_pct(product)
                             return {
                                 'product_id': pid, 'title': title,
                                 'status': 'success', 'fill_pct': fill_pct,
+                                'card_pct': card_pct,
                                 **validation_info,
                             }
                         else:
@@ -2661,6 +2665,7 @@ class SupplierService:
                     product.updated_at = datetime.utcnow()
 
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+                card_pct = _calc_card_completeness_pct(product)
 
                 job.status = 'done'
                 job.processed = 1
@@ -2670,6 +2675,7 @@ class SupplierService:
                     'title': (product.title or '')[:80],
                     'status': 'success',
                     'fill_pct': fill_pct,
+                    'card_pct': card_pct,
                 }], ensure_ascii=False)
             else:
                 job.status = 'done'
@@ -2897,6 +2903,68 @@ class SupplierService:
             data['characteristics'] = []
 
         return data
+
+
+# ============================================================================
+# CARD COMPLETENESS CALCULATOR
+# ============================================================================
+
+def _calc_card_completeness_pct(product: SupplierProduct) -> int:
+    """
+    Быстрый расчёт заполненности карточки (0-100%).
+    Считает основные группы полей: основные, цены, характеристики, AI, маркетплейс, медиа.
+    """
+    import json as _json
+
+    def _has(val):
+        if val is None:
+            return False
+        if isinstance(val, str):
+            val = val.strip()
+            if not val or val in ('[]', '{}', '""'):
+                return False
+            if val.startswith('[') or val.startswith('{'):
+                try:
+                    return bool(_json.loads(val))
+                except Exception:
+                    pass
+            return True
+        if isinstance(val, (int, float)):
+            return True
+        return bool(val)
+
+    fields = [
+        # Основные (6)
+        product.title, product.description, product.brand,
+        product.category, product.vendor_code, product.barcode,
+        # Цены и остатки (4)
+        product.supplier_price, product.supplier_quantity,
+        product.recommended_retail_price, product.supplier_status,
+        # Характеристики (9)
+        product.gender, product.country, product.season, product.age_group,
+        product.colors_json, product.materials_json, product.sizes_json,
+        product.dimensions_json, product.characteristics_json,
+        # AI данные (5)
+        product.ai_seo_title, product.ai_description,
+        product.ai_keywords_json, product.ai_bullets_json, product.ai_parsed_data_json,
+        # Маркетплейс (3) + валидация
+        product.wb_category_name, product.wb_subject_id, product.marketplace_fields_json,
+    ]
+
+    filled = sum(1 for f in fields if _has(f))
+    # +1 для валидации маркетплейса
+    total = len(fields) + 1
+    if getattr(product, 'marketplace_validation_status', None) == 'valid':
+        filled += 1
+
+    # Медиа (2): фотографии + видео
+    total += 2
+    if hasattr(product, 'get_photos') and product.get_photos():
+        filled += 1
+    if _has(getattr(product, 'video_url', None)):
+        filled += 1
+
+    return round(filled / total * 100) if total else 0
 
 
 # ============================================================================

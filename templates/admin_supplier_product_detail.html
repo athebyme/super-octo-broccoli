@@ -634,8 +634,10 @@
                         setTimeout(() => pollParseJob(jobId), 2000);
                     } else if (j.status === 'done') {
                         const r0 = (j.results && j.results[0]) || {};
-                        const fillPct = r0.fill_pct ? r0.fill_pct.toFixed(0) : '?';
-                        statusText.textContent = `Готово! Заполнено ${fillPct}%. Обновление...`;
+                        const aiPct = r0.fill_pct ? r0.fill_pct.toFixed(0) : '?';
+                        const cardPct = r0.card_pct ? r0.card_pct.toFixed(0) : null;
+                        const pctText = cardPct ? `AI ${aiPct}% / Карточка ${cardPct}%` : `Заполнено ${aiPct}%`;
+                        statusText.textContent = `Готово! ${pctText}. Обновление...`;
                         bar.style.width = '100%';
                         // Автоматически перезагружаем страницу через 1с
                         setTimeout(() => location.reload(), 1000);
