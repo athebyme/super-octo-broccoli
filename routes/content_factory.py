@@ -110,6 +110,10 @@ def register_content_factory_routes(app):
                 ai_provider=request.form.get('ai_provider', 'openai'),
                 product_selection_mode=request.form.get('product_selection_mode', 'manual'),
                 auto_approve=bool(request.form.get('auto_approve')),
+                auto_generate=bool(request.form.get('auto_generate')),
+                generate_interval_minutes=max(30, int(request.form.get('generate_interval_minutes', 120) or 120)),
+                auto_publish=bool(request.form.get('auto_publish')),
+                publish_interval_minutes=max(1, int(request.form.get('publish_interval_minutes', 60) or 60)),
             )
             factory.set_content_types(content_types)
 
@@ -178,6 +182,10 @@ def register_content_factory_routes(app):
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
             factory.auto_approve = bool(request.form.get('auto_approve'))
+            factory.auto_generate = bool(request.form.get('auto_generate'))
+            factory.generate_interval_minutes = max(30, int(request.form.get('generate_interval_minutes', 120) or 120))
+            factory.auto_publish = bool(request.form.get('auto_publish'))
+            factory.publish_interval_minutes = max(5, int(request.form.get('publish_interval_minutes', 60) or 60))
             factory.is_active = bool(request.form.get('is_active'))
 
             content_types = request.form.getlist('content_types')
@@ -206,6 +214,12 @@ def register_content_factory_routes(app):
                 factory.default_social_account_id = int(default_account_id)
             else:
                 factory.default_social_account_id = None
+
+            # Синхронизируем платформу всех неопубликованных айтемов с фабрикой
+            ContentItem.query.filter(
+                ContentItem.factory_id == factory.id,
+                ContentItem.status.in_(['draft', 'approved', 'scheduled', 'failed']),
+            ).update({'platform': factory.platform}, synchronize_session='fetch')
 
             db.session.commit()
             flash('Настройки сохранены', 'success')
@@ -256,7 +270,7 @@ def register_content_factory_routes(app):
         templates = service.get_templates_for_factory(factory)
 
         # Товары для генерации
-        products = service.select_products(factory, limit=50)
+        products = service.select_products(factory, limit=100)
 
         return render_template(
             'content_factory_items.html',
@@ -313,6 +327,107 @@ def register_content_factory_routes(app):
     # ================================================================
     # API endpoints
     # ================================================================
+
+    @app.route('/api/content-factory/<int:factory_id>/select-products', methods=['POST'])
+    @login_required
+    def api_content_factory_select_products(factory_id):
+        """Подбирает товары для массовой генерации."""
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+
+        factory = ContentFactory.query.filter_by(
+            id=factory_id, seller_id=current_user.seller.id
+        ).first()
+        if not factory:
+            return jsonify({'error': 'Фабрика не найдена'}), 404
+
+        data = request.get_json() or {}
+        count = min(data.get('count', 5), 20)
+
+        # Собираем ID товаров, уже использованных в фабрике
+        used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
+        used_product_ids = set()
+        for ci in used_items:
+            used_product_ids.update(ci.get_product_ids())
+
+        products = service.select_products(factory, limit=count, exclude_product_ids=used_product_ids)
+
+        # Если после исключения не хватило — добираем из всех (повторы допустимы)
+        if len(products) < count:
+            all_products = service.select_products(factory, limit=count)
+            existing_ids = {p['id'] for p in products}
+            for p in all_products:
+                if p['id'] not in existing_ids:
+                    products.append(p)
+                    existing_ids.add(p['id'])
+                if len(products) >= count:
+                    break
+
+        return jsonify({
+            'products': [{'id': p['id'], 'name': p.get('name', '')} for p in products[:count]],
+        })
+
+    @app.route('/api/content-factory/<int:factory_id>/random-product', methods=['POST'])
+    @login_required
+    def api_content_factory_random_product(factory_id):
+        """Выбирает случайный товар, исключая уже использованные в фабрике."""
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+
+        factory = ContentFactory.query.filter_by(
+            id=factory_id, seller_id=current_user.seller.id
+        ).first()
+        if not factory:
+            return jsonify({'error': 'Фабрика не найдена'}), 404
+
+        data = request.get_json() or {}
+        exclude_ids = data.get('exclude_ids', [])
+
+        # Собираем ID товаров, которые уже использовались в фабрике
+        used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
+        used_product_ids = set()
+        for ci in used_items:
+            used_product_ids.update(ci.get_product_ids())
+        # Также исключаем переданные ID
+        for eid in exclude_ids:
+            used_product_ids.add(int(eid))
+
+        # Берём товары продавца с фильтрами (наличие, цена, активность)
+        from sqlalchemy import func as sa_func
+        query = Product.query.filter(
+            Product.seller_id == factory.seller_id,
+            Product.is_active == True,
+            Product.quantity > 0,
+            db.or_(
+                db.and_(
+                    Product.discount_price.isnot(None),
+                    Product.discount_price > 0,
+                    Product.discount_price <= 50000,
+                ),
+                db.and_(
+                    db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
+                    Product.price.isnot(None),
+                    Product.price > 0,
+                    Product.price <= 50000,
+                ),
+            ),
+        )
+        if used_product_ids:
+            query = query.filter(~Product.id.in_(used_product_ids))
+        product = query.order_by(sa_func.random()).first()
+
+        if not product:
+            # Fallback: без исключений (все уже использованы)
+            product = Product.query.filter(
+                Product.seller_id == factory.seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(sa_func.random()).first()
+            if not product:
+                return jsonify({'error': 'Нет доступных товаров'}), 404
+
+        pd = service._product_to_dict(product)
+        return jsonify({'product': pd})
 
     @app.route('/api/content-factory/<int:factory_id>/generate', methods=['POST'])
     @login_required
@@ -470,27 +585,70 @@ def register_content_factory_routes(app):
         if not item:
             return jsonify({'error': 'Контент не найден'}), 404
 
-        if item.status not in ('draft', 'approved', 'scheduled'):
+        if item.status not in ('draft', 'approved', 'scheduled', 'failed'):
             return jsonify({'error': f'Нельзя опубликовать контент со статусом {item.status}'}), 400
+
+        # Атомарно ставим статус publishing чтобы предотвратить дубли
+        updated = ContentItem.query.filter(
+            ContentItem.id == item_id,
+            ContentItem.status.in_(['draft', 'approved', 'scheduled', 'failed']),
+        ).update({'status': 'publishing'}, synchronize_session='fetch')
+        db.session.commit()
+        if not updated:
+            return jsonify({'error': 'Контент уже публикуется или опубликован'}), 409
+        # Обновляем объект
+        db.session.refresh(item)
+
+        # Определяем целевую платформу: берём из фабрики (источник правды), фоллбэк на item
+        factory = ContentFactory.query.get(item.factory_id)
+        target_platform = factory.platform if factory else item.platform
+
+        # Синхронизируем platform айтема с фабрикой если рассинхрон
+        if item.platform != target_platform:
+            item.platform = target_platform
+            db.session.flush()
 
         # Определяем аккаунт для публикации
         account = None
-        social_account_id = (request.get_json() or {}).get('social_account_id') or item.social_account_id
+        data = request.get_json(silent=True) or {}
+        social_account_id = data.get('social_account_id') or item.social_account_id
+        # Фоллбэк на дефолтный аккаунт фабрики
+        if not social_account_id and factory:
+            social_account_id = factory.default_social_account_id
         if social_account_id:
             account = SocialAccount.query.filter_by(
                 id=social_account_id, seller_id=current_user.seller.id
             ).first()
 
+        # Последний фоллбэк: любой активный аккаунт для этой платформы
+        if not account:
+            account = SocialAccount.query.filter_by(
+                seller_id=current_user.seller.id,
+                platform=target_platform,
+                is_active=True,
+            ).first()
+
         if not account:
             return jsonify({'error': 'Не указан аккаунт для публикации. Подключите аккаунт в настройках.'}), 400
+
+        # Проверяем что платформа аккаунта совпадает с целевой платформой
+        if account.platform != target_platform:
+            return jsonify({
+                'error': f'Аккаунт "{account.account_name}" ({account.platform}) не подходит для публикации на {target_platform}. '
+                         f'Подключите аккаунт для платформы {target_platform}.'
+            }), 400
 
         # Публикуем
         try:
             from services.content_publishers import get_publisher
-            publisher = get_publisher(item.platform)
+            publisher = get_publisher(target_platform)
 
-            item.status = 'publishing'
-            db.session.commit()
+            # Логируем медиа для диагностики
+            media_urls = item.get_media_urls()
+            logger.info(f"Publishing item {item.id} to {target_platform}: {len(media_urls)} media URLs")
+            if media_urls:
+                for i, url in enumerate(media_urls[:3]):
+                    logger.info(f"  media[{i}]: {url[:100]}")
 
             result = publisher.publish(item, account)
 
@@ -499,7 +657,8 @@ def register_content_factory_routes(app):
                 item.published_at = datetime.utcnow()
                 item.external_post_id = result.external_post_id
                 item.external_post_url = result.external_post_url
-                item.error_message = None
+                # Сохраняем предупреждения о фото (result.error может быть заполнен при success)
+                item.error_message = result.error if result.error else None
                 account.last_used_at = datetime.utcnow()
                 account.last_error = None
             else:
@@ -510,11 +669,14 @@ def register_content_factory_routes(app):
             db.session.commit()
 
             if result.success:
-                return jsonify({
+                resp_data = {
                     'success': True,
                     'external_post_id': result.external_post_id,
                     'external_post_url': result.external_post_url,
-                })
+                }
+                if result.error:
+                    resp_data['warning'] = result.error
+                return jsonify(resp_data)
             else:
                 return jsonify({'error': result.error}), 500
 
@@ -597,6 +759,21 @@ def register_content_factory_routes(app):
         item.status = 'draft'
         if result.hashtags:
             item.set_hashtags(result.hashtags)
+        if result.media_urls:
+            item.media_urls_json = json.dumps(result.media_urls)
+
+        # Обновляем метаданные
+        platform_specific = item.get_platform_specific()
+        if result.wb_url:
+            platform_specific['wb_url'] = result.wb_url
+        if result.store_name:
+            platform_specific['store_name'] = result.store_name
+        if result.product_names:
+            platform_specific['product_names'] = result.product_names
+        if result.quality_score:
+            platform_specific['quality_score'] = result.quality_score
+        platform_specific['char_count'] = len(result.body_text or '')
+        item.platform_specific_json = json.dumps(platform_specific, ensure_ascii=False)
 
         db.session.commit()
         return jsonify({'success': True, 'item': item.to_dict()})
@@ -639,6 +816,162 @@ def register_content_factory_routes(app):
             return jsonify({'error': error}), 400
 
         return jsonify({'success': True})
+
+    # ================================================================
+    # API: Диагностика загрузки фото VK
+    # ================================================================
+
+    @app.route('/api/content-factory/items/<int:item_id>/debug-photos', methods=['POST'])
+    @login_required
+    def api_content_item_debug_photos(item_id):
+        """Диагностика: тестирует загрузку фото для контента в VK."""
+        import io
+        import requests as _requests
+
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+
+        item = ContentItem.query.filter_by(
+            id=item_id, seller_id=current_user.seller.id
+        ).first()
+        if not item:
+            return jsonify({'error': 'Контент не найден'}), 404
+
+        result = {
+            'item_id': item.id,
+            'platform': item.platform,
+            'media_urls_json_raw': item.media_urls_json,
+            'steps': [],
+        }
+
+        # Проверяем связь Product → ImportedProduct
+        product_ids = item.get_product_ids()
+        result['product_ids'] = product_ids
+        if product_ids:
+            product = Product.query.get(product_ids[0])
+            if product:
+                result['product_id'] = product.id
+                result['product_nm_id'] = product.nm_id
+                result['product_photos_json'] = product.photos_json[:500] if product.photos_json else None
+
+                # Проверяем ImportedProduct
+                from models import ImportedProduct
+                imported = ImportedProduct.query.filter_by(product_id=product.id).first()
+                if imported:
+                    result['imported_product_id'] = imported.id
+                    result['imported_supplier_product_id'] = imported.supplier_product_id
+                    result['imported_photo_urls'] = imported.photo_urls[:500] if imported.photo_urls else None
+
+                    # Генерируем локальные фото URL
+                    try:
+                        from routes.photos import generate_public_photo_urls
+                        local_urls = generate_public_photo_urls(imported)
+                        result['local_photo_urls'] = local_urls
+                        result['local_photo_urls_count'] = len(local_urls)
+                    except Exception as e:
+                        result['local_photo_urls_error'] = str(e)
+                else:
+                    result['imported_product'] = 'NOT FOUND (no ImportedProduct linked to this Product)'
+
+        # Шаг 1: get_media_urls
+        media_urls = item.get_media_urls()
+        result['media_urls'] = media_urls
+        result['media_urls_count'] = len(media_urls)
+
+        if not media_urls:
+            result['steps'].append({'step': 'get_media_urls', 'status': 'EMPTY', 'detail': 'Нет URL фото'})
+            return jsonify(result)
+
+        result['steps'].append({'step': 'get_media_urls', 'status': 'OK', 'count': len(media_urls)})
+
+        # Шаг 2: Скачиваем первое фото (с правильными заголовками)
+        test_url = media_urls[0]
+        result['test_photo_url'] = test_url
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': 'https://www.wildberries.ru/',
+        }
+        try:
+            photo_resp = _requests.get(test_url, timeout=10, headers=headers)
+            result['steps'].append({
+                'step': 'download_photo',
+                'status': 'OK' if photo_resp.status_code == 200 else 'FAIL',
+                'http_status': photo_resp.status_code,
+                'content_type': photo_resp.headers.get('Content-Type', ''),
+                'content_length': len(photo_resp.content),
+            })
+
+            if photo_resp.status_code == 200 and len(photo_resp.content) > 512:
+                # Шаг 3: Конвертируем в JPEG
+                try:
+                    from PIL import Image
+                    img = Image.open(io.BytesIO(photo_resp.content))
+                    buf = io.BytesIO()
+                    if img.mode not in ('RGB',):
+                        img = img.convert('RGB')
+                    img.save(buf, format='JPEG', quality=93)
+                    jpeg_size = len(buf.getvalue())
+                    result['steps'].append({
+                        'step': 'convert_jpeg',
+                        'status': 'OK',
+                        'original_format': img.format,
+                        'original_size': f'{img.size[0]}x{img.size[1]}',
+                        'jpeg_bytes': jpeg_size,
+                    })
+                except Exception as e:
+                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': str(e)})
+        except Exception as e:
+            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': str(e)})
+
+        # Шаг 4: Проверяем VK аккаунт
+        data = request.get_json(silent=True) or {}
+        social_account_id = data.get('social_account_id') or item.social_account_id
+        if social_account_id:
+            account = SocialAccount.query.get(social_account_id)
+            if account:
+                creds = account.get_credentials_dict()
+                access_token = creds.get('access_token', '')
+                group_id = str(creds.get('group_id', '') or account.account_id).lstrip('-')
+                api_version = creds.get('api_version', '5.199')
+
+                result['vk_group_id'] = group_id
+                result['vk_token_prefix'] = access_token[:20] + '...' if access_token else 'EMPTY'
+
+                # Тестируем getWallUploadServer
+                try:
+                    srv_resp = _requests.get(
+                        'https://api.vk.com/method/photos.getWallUploadServer',
+                        params={
+                            'access_token': access_token,
+                            'group_id': group_id,
+                            'v': api_version,
+                        },
+                        timeout=10,
+                    )
+                    srv_data = srv_resp.json()
+                    if 'error' in srv_data:
+                        result['steps'].append({
+                            'step': 'vk_getWallUploadServer',
+                            'status': 'FAIL',
+                            'error_code': srv_data['error'].get('error_code'),
+                            'error_msg': srv_data['error'].get('error_msg'),
+                        })
+                    else:
+                        upload_url = srv_data.get('response', {}).get('upload_url', '')
+                        result['steps'].append({
+                            'step': 'vk_getWallUploadServer',
+                            'status': 'OK',
+                            'upload_url_prefix': upload_url[:80] + '...' if upload_url else 'EMPTY',
+                        })
+                except Exception as e:
+                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': str(e)})
+            else:
+                result['steps'].append({'step': 'vk_account', 'status': 'FAIL', 'error': f'Account {social_account_id} not found'})
+        else:
+            result['steps'].append({'step': 'vk_account', 'status': 'SKIP', 'detail': 'No social_account_id'})
+
+        return jsonify(result)
 
     # ================================================================
     # API: Управление аккаунтами
@@ -723,7 +1056,7 @@ def register_content_factory_routes(app):
     @app.route('/api/content-factory/<int:factory_id>', methods=['DELETE'])
     @login_required
     def api_content_factory_delete(factory_id):
-        """Удаление фабрики."""
+        """Удаление фабрики и всего её контента."""
         if not current_user.seller:
             return jsonify({'error': 'Продавец не найден'}), 403
 
@@ -733,9 +1066,25 @@ def register_content_factory_routes(app):
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
 
-        db.session.delete(factory)
-        db.session.commit()
-        return jsonify({'success': True})
+        try:
+            # Сначала обнуляем FK на social_account чтобы не было constraint
+            ContentItem.query.filter_by(factory_id=factory.id).update(
+                {'social_account_id': None, 'template_id': None},
+                synchronize_session=False,
+            )
+            # Удаляем связанные записи
+            ContentItem.query.filter_by(factory_id=factory.id).delete(synchronize_session=False)
+            ContentPlan.query.filter_by(factory_id=factory.id).delete(synchronize_session=False)
+            # Обнуляем FK default_social_account_id
+            factory.default_social_account_id = None
+            db.session.flush()
+            db.session.delete(factory)
+            db.session.commit()
+            return jsonify({'success': True})
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Factory delete error: {e}", exc_info=True)
+            return jsonify({'error': f'Ошибка удаления: {e}'}), 500
 
     # ================================================================
     # API: Контент-календарь

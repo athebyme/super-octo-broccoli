@@ -128,7 +128,7 @@
                                 </td>
                                 <td class="py-1.5 pr-3">
                                     {% if r.status == 'success' %}
-                                    <span class="text-green-600 font-medium">OK {{ '%.0f'|format(r.fill_pct|default(0)) }}%</span>
+                                    <span class="text-green-600 font-medium">OK {{ '%.0f'|format(r.card_pct|default(r.fill_pct|default(0))) }}%</span>
                                     {% elif r.status == 'error' %}
                                     <span class="text-red-600 font-medium">FAIL</span>
                                     {% else %}
@@ -137,7 +137,9 @@
                                 </td>
                                 <td class="py-1.5 text-gray-500 max-w-md">
                                     {% if r.status == 'success' %}
-                                    <span class="text-green-600">Заполнено {{ '%.0f'|format(r.fill_pct|default(0)) }}% характеристик</span>
+                                    <span class="text-green-600">AI парсинг {{ '%.0f'|format(r.fill_pct|default(0)) }}%</span>
+                                    <span class="text-gray-400 mx-1">/</span>
+                                    <span class="text-blue-600">Карточка {{ '%.0f'|format(r.card_pct|default(0)) }}%</span>
                                     {% elif r.error %}
                                     <span class="text-red-600">{{ r.error[:150] }}</span>
                                     {% endif %}
@@ -471,7 +473,9 @@
             const last5 = j.results.slice(-5);
             details = '<div class="mt-2 space-y-1">' + last5.map(r => {
                 const icon = r.status === 'success' ? '<span class="text-green-600">&#10003;</span>' : '<span class="text-red-500">&#10007;</span>';
-                const extra = r.fill_pct ? ` (${r.fill_pct.toFixed(0)}%)` : '';
+                const aiPct = r.fill_pct ? `AI ${r.fill_pct.toFixed(0)}%` : '';
+                const cardPct = r.card_pct ? `Карточка ${r.card_pct.toFixed(0)}%` : '';
+                const extra = (aiPct || cardPct) ? ` (${[aiPct, cardPct].filter(Boolean).join(' / ')})` : '';
                 const err = r.error ? ` — ${r.error}` : '';
                 return `<p class="text-xs text-gray-500">${icon} ${r.title || r.product_id}${extra}${err}</p>`;
             }).join('') + '</div>';

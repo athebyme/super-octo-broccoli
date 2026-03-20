@@ -182,9 +182,13 @@ function socialAccounts() {
                 if (!this.newCredsBotToken) { this.addError = 'Укажите токен бота'; this.saving = false; return; }
                 if (!this.newAccountId) { this.addError = 'Укажите @username или ID канала (не личного чата!)'; this.saving = false; return; }
                 credentials = { bot_token: this.newCredsBotToken, chat_id: this.newAccountId };
+            } else if (this.newPlatform === 'vk') {
+                if (!this.newCredsAccessToken) { this.addError = 'Укажите Access Token сообщества'; this.saving = false; return; }
+                if (!this.newAccountId) { this.addError = 'Укажите ID сообщества'; this.saving = false; return; }
+                credentials = { access_token: this.newCredsAccessToken, group_id: this.newAccountId };
             } else {
                 if (!this.newAccountId) { this.addError = 'Укажите ID аккаунта'; this.saving = false; return; }
-                if (this.newCredsAccessToken) credentials = { access_token: this.newCredsAccessToken, group_id: this.newAccountId };
+                if (this.newCredsAccessToken) credentials = { access_token: this.newCredsAccessToken };
             }
 
             try {

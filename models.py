@@ -2235,6 +2235,13 @@ class Supplier(db.Model):
     last_description_sync_at = db.Column(db.DateTime)
     last_description_sync_status = db.Column(db.String(50))
 
+    # Прокси для AI запросов (OpenRouter, OpenAI и др. зарубежные провайдеры)
+    ai_proxy_enabled = db.Column(db.Boolean, default=False, nullable=False)
+
+    # Настройки генерации изображений для инфографики
+    image_gen_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    image_gen_provider = db.Column(db.String(50), default='openrouter')  # openrouter, fluxapi, openai_dalle, etc.
+
     # Настройки обработки фото
     resize_images = db.Column(db.Boolean, default=True, nullable=False)
     image_target_size = db.Column(db.Integer, default=1200)
@@ -4022,6 +4029,12 @@ class ContentFactory(db.Model):
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
     schedule_cron = db.Column(db.String(100))  # cron-выражение для автогенерации
     auto_approve = db.Column(db.Boolean, default=False)
+    auto_generate = db.Column(db.Boolean, default=False)  # Автогенерация: рандомный товар → AI → пост
+    generate_interval_minutes = db.Column(db.Integer, default=120)  # Интервал автогенерации (мин)
+    last_auto_generate_at = db.Column(db.DateTime, nullable=True)  # Время последней автогенерации
+    auto_publish = db.Column(db.Boolean, default=False)  # Автопубликация одобренных постов
+    publish_interval_minutes = db.Column(db.Integer, default=60)  # Интервал между публикациями (мин)
+    last_auto_publish_at = db.Column(db.DateTime, nullable=True)  # Время последней автопубликации
 
     default_social_account_id = db.Column(db.Integer, db.ForeignKey('social_accounts.id', use_alter=True), nullable=True)
 
@@ -4067,6 +4080,10 @@ class ContentFactory(db.Model):
             'ai_provider': self.ai_provider,
             'schedule_cron': self.schedule_cron,
             'auto_approve': self.auto_approve,
+            'auto_generate': self.auto_generate,
+            'generate_interval_minutes': self.generate_interval_minutes,
+            'auto_publish': self.auto_publish,
+            'publish_interval_minutes': self.publish_interval_minutes,
             'is_active': self.is_active,
             'items_count': self.items.count() if self.items else 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -4265,10 +4282,41 @@ class ContentItem(db.Model):
         self.hashtags_json = json.dumps(tags)
 
     def get_media_urls(self):
+        # Сохранённые URL (локальные /content-photos/... или /photos/public/...)
         try:
-            return json.loads(self.media_urls_json or '[]')
+            urls = json.loads(self.media_urls_json or '[]')
+            public_urls = [u for u in urls if isinstance(u, str) and u.startswith(('http', '/'))]
+            if public_urls:
+                return public_urls
         except Exception:
-            return []
+            pass
+
+        # Фоллбэк 1: кэшированные content-photos по nm_id
+        try:
+            product_ids = self.get_product_ids()
+            if product_ids:
+                product = Product.query.get(product_ids[0])
+                if product and product.nm_id:
+                    from services.content_photo_cache import get_cached_photo_urls
+                    cached = get_cached_photo_urls(product.nm_id)
+                    if cached:
+                        return cached
+        except Exception:
+            pass
+
+        # Фоллбэк 2: ImportedProduct фото
+        try:
+            product_ids = self.get_product_ids()
+            if product_ids:
+                imported = ImportedProduct.query.filter_by(product_id=product_ids[0]).first()
+                if imported:
+                    from routes.photos import generate_public_photo_urls
+                    local_urls = generate_public_photo_urls(imported)
+                    if local_urls:
+                        return local_urls
+        except Exception:
+            pass
+        return []
 
     def get_platform_specific(self):
         try:

@@ -135,37 +135,49 @@ def wb_photo_url(nm_id: int, photo_index: int = 1, size: str = 'big') -> str:
     vol = nm_id // 100000
     part = nm_id // 1000
 
-    # Определяем номер корзины по vol
-    if vol >= 0 and vol <= 143:
+    # Определяем номер корзины по vol (актуально на 2025)
+    if vol <= 143:
         basket = '01'
-    elif vol >= 144 and vol <= 287:
+    elif vol <= 287:
         basket = '02'
-    elif vol >= 288 and vol <= 431:
+    elif vol <= 431:
         basket = '03'
-    elif vol >= 432 and vol <= 719:
+    elif vol <= 719:
         basket = '04'
-    elif vol >= 720 and vol <= 1007:
+    elif vol <= 1007:
         basket = '05'
-    elif vol >= 1008 and vol <= 1061:
+    elif vol <= 1061:
         basket = '06'
-    elif vol >= 1062 and vol <= 1115:
+    elif vol <= 1115:
         basket = '07'
-    elif vol >= 1116 and vol <= 1169:
+    elif vol <= 1169:
         basket = '08'
-    elif vol >= 1170 and vol <= 1313:
+    elif vol <= 1313:
         basket = '09'
-    elif vol >= 1314 and vol <= 1601:
+    elif vol <= 1601:
         basket = '10'
-    elif vol >= 1602 and vol <= 1655:
+    elif vol <= 1655:
         basket = '11'
-    elif vol >= 1656 and vol <= 1919:
+    elif vol <= 1919:
         basket = '12'
-    elif vol >= 1920 and vol <= 2045:
+    elif vol <= 2045:
         basket = '13'
-    elif vol >= 2046 and vol <= 2189:
+    elif vol <= 2189:
         basket = '14'
-    else:
+    elif vol <= 2405:
         basket = '15'
+    elif vol <= 2621:
+        basket = '16'
+    elif vol <= 2837:
+        basket = '17'
+    elif vol <= 3053:
+        basket = '18'
+    elif vol <= 3269:
+        basket = '19'
+    elif vol <= 3485:
+        basket = '20'
+    else:
+        basket = '21'
 
     return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/{size}/{photo_index}.webp"
 
@@ -5843,6 +5855,18 @@ def apply_migrations():
         else:
             print("  ✓ Таблица pricing_settings уже существует")
 
+        # Миграция: image_gen поля для suppliers
+        cursor.execute("PRAGMA table_info(suppliers)")
+        sup_columns = {row[1] for row in cursor.fetchall()}
+        if sup_columns and 'image_gen_enabled' not in sup_columns:
+            print("  ➕ Добавление image_gen полей в suppliers...")
+            cursor.execute("ALTER TABLE suppliers ADD COLUMN image_gen_enabled BOOLEAN DEFAULT 0 NOT NULL")
+            cursor.execute("ALTER TABLE suppliers ADD COLUMN image_gen_provider VARCHAR(50) DEFAULT 'openrouter'")
+            conn.commit()
+            print("  ✅ image_gen поля добавлены в suppliers")
+        elif sup_columns:
+            print("  ✓ image_gen поля уже существуют в suppliers")
+
         print("\n✅ Миграции успешно применены!")
 
     except Exception as e:
@@ -5852,10 +5876,8 @@ def apply_migrations():
         conn.close()
 
 
-# ============= РОУТЫ АВТОИМПОРТА =============
-# Регистрация роутов автоимпорта товаров
-from routes.auto_import import register_auto_import_routes
-register_auto_import_routes(app)
+# ============= АВТОИМПОРТ УДАЛЁН =============
+# Функционал заменён разделом «Поставщики» (routes/suppliers.py)
 
 
 # ============= РОУТЫ ДЕФОЛТОВ ТОВАРОВ =============
@@ -5884,8 +5906,9 @@ from routes.suppliers import register_supplier_routes
 register_supplier_routes(app)
 
 # ============= РОУТЫ ФОТОГРАФИЙ ПОСТАВЩИКОВ =============
-from routes.photos import register_photo_routes
+from routes.photos import register_photo_routes, register_content_photo_routes
 register_photo_routes(app)
+register_content_photo_routes(app)
 
 # ============= РОУТЫ ДОКУМЕНТАЦИИ =============
 from routes.docs import register_docs_routes
@@ -5986,6 +6009,10 @@ def _run_startup_migrations():
         ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
         ('service_agents', 'icon', "TEXT DEFAULT 'cpu'"),
         ('service_agents', 'color', "TEXT DEFAULT 'blue'"),
+        # Supplier proxy & image generation
+        ('suppliers', 'ai_proxy_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
+        ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
+        ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
     ]
 
     for table, column, col_type in migrations:
@@ -6328,13 +6355,14 @@ def api_profile_ai_test():
             return jsonify({'success': False, 'error': 'API ключ не указан'})
 
         from services.ai_service import AIConfig, AIClient, AIProvider
+        default_urls = {
+            'cloudru': 'https://foundation-models.api.cloud.ru/v1',
+            'mimo': 'https://api.xiaomimimo.com/v1',
+        }
         config = AIConfig(
             provider=AIProvider(provider),
             api_key=api_key,
-            api_base_url=api_base_url or (
-                'https://foundation-models.api.cloud.ru/v1' if provider == 'cloudru'
-                else 'https://api.openai.com/v1'
-            ),
+            api_base_url=api_base_url or default_urls.get(provider, 'https://api.openai.com/v1'),
             model=model or 'openai/gpt-oss-120b',
         )
         config.timeout = 30
@@ -6360,6 +6388,69 @@ def api_profile_ai_test():
             })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai/models')
+@login_required
+def api_ai_models():
+    """Список доступных AI моделей по провайдеру."""
+    provider = request.args.get('provider', 'cloudru')
+    try:
+        from services.ai_service import get_available_models
+        models = get_available_models(provider)
+        return jsonify({'success': True, 'models': models})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'models': {}})
+
+
+@app.route('/api/proxy/status')
+@login_required
+def api_proxy_status():
+    """Проверка статуса AI прокси (SOCKS5/HTTP)."""
+    import os as _os
+    proxy_url = _os.environ.get('AI_PROXY') or _os.environ.get('IMAGE_GEN_PROXY') or _os.environ.get('HTTPS_PROXY')
+
+    if not proxy_url:
+        return jsonify({
+            'configured': False,
+            'message': 'Прокси не настроен (AI_PROXY не задан)',
+        })
+
+    # Проверяем через прокси
+    try:
+        import requests as _req
+        resp = _req.get(
+            'https://ifconfig.me',
+            proxies={'http': proxy_url, 'https': proxy_url},
+            timeout=10,
+            headers={'User-Agent': 'curl/8.0'}
+        )
+        external_ip = resp.text.strip()
+
+        # Получаем IP без прокси для сравнения
+        try:
+            direct_resp = _req.get('https://ifconfig.me', timeout=5, headers={'User-Agent': 'curl/8.0'})
+            direct_ip = direct_resp.text.strip()
+        except Exception:
+            direct_ip = 'unknown'
+
+        return jsonify({
+            'configured': True,
+            'working': True,
+            'proxy_url': proxy_url,
+            'proxy_ip': external_ip,
+            'direct_ip': direct_ip,
+            'ip_changed': external_ip != direct_ip,
+            'message': f'Прокси работает. IP: {external_ip}' + (f' (прямой: {direct_ip})' if direct_ip != external_ip else ''),
+        })
+    except Exception as e:
+        return jsonify({
+            'configured': True,
+            'working': False,
+            'proxy_url': proxy_url,
+            'error': str(e),
+            'message': f'Прокси не работает: {e}',
+        })
 
 
 @app.route('/notifications')

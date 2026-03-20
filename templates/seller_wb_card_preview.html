@@ -147,6 +147,71 @@
                 {% endif %}
             </div>
 
+            <!-- Rich-контент (инфографика) -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-4 overflow-hidden"
+                 x-data="richContentPanel()">
+                <div class="p-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase">Rich-контент</h3>
+                    <span x-show="hasRichContent" class="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Готов</span>
+                </div>
+                <div class="p-3 space-y-2">
+                    <!-- Генерация Rich-контента -->
+                    <button @click="generateRichContent()" :disabled="loading"
+                            class="w-full px-3 py-2 bg-[#0a0a0a] text-white text-xs font-medium rounded-lg hover:bg-[#1a1a1a] disabled:opacity-50 flex items-center justify-center gap-2">
+                        <template x-if="loading && action === 'generate'">
+                            <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </template>
+                        <svg x-show="!loading || action !== 'generate'" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        <span x-text="loading && action === 'generate' ? 'Генерация...' : 'Сгенерировать Rich-контент'"></span>
+                    </button>
+
+                    <!-- Рендер инфографики (шаблоны) -->
+                    <button @click="renderInfographic()" :disabled="loading || !hasRichContent"
+                            class="w-full px-3 py-2 bg-white border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 flex items-center justify-center gap-2">
+                        <template x-if="loading && action === 'render'">
+                            <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </template>
+                        <span x-text="loading && action === 'render' ? 'Рендеринг...' : 'Рендер инфографики (бесплатно)'"></span>
+                    </button>
+
+                    <!-- AI инфографика (гибрид) -->
+                    <button @click="renderHybrid()" :disabled="loading || !hasRichContent"
+                            class="w-full px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-medium rounded-lg hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                        <template x-if="loading && action === 'hybrid'">
+                            <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        </template>
+                        <span x-text="loading && action === 'hybrid' ? 'AI генерация...' : 'AI инфографика (качественная)'"></span>
+                    </button>
+
+                    <!-- Просмотр слайдов -->
+                    <button @click="viewSlides()" :disabled="!hasRichContent"
+                            class="w-full px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 underline disabled:opacity-50">
+                        Просмотр слайдов
+                    </button>
+
+                    <!-- Результат / ошибка -->
+                    <div x-show="message" x-transition class="text-xs rounded-lg px-3 py-2"
+                         :class="messageType === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'"
+                         x-text="message"></div>
+
+                    <!-- Превью слайдов -->
+                    <div x-show="slides.length > 0" class="space-y-2 mt-2">
+                        <template x-for="(slide, idx) in slides" :key="idx">
+                            <div class="border border-gray-200 rounded-lg overflow-hidden">
+                                <template x-if="slide.image_base64">
+                                    <img :src="'data:image/png;base64,' + slide.image_base64" class="w-full" :alt="'Слайд ' + (idx+1)">
+                                </template>
+                                <div class="px-2 py-1 bg-gray-50 flex justify-between items-center">
+                                    <span class="text-xs text-gray-500" x-text="'Слайд ' + (idx+1) + ' — ' + (slide.slide_type || '')"></span>
+                                    <span x-show="slide.success" class="text-xs text-green-600">OK</span>
+                                    <span x-show="!slide.success" class="text-xs text-red-600" x-text="slide.error || 'Ошибка'"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
             <!-- Pricing -->
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm mt-4 p-4">
                 <h3 class="text-xs font-medium text-gray-500 uppercase mb-3">Ценообразование</h3>
@@ -443,6 +508,123 @@
 </div>
 
 <script>
+function richContentPanel() {
+    return {
+        loading: false,
+        action: null,
+        message: '',
+        messageType: 'success',
+        hasRichContent: {{ 'true' if product.ai_rich_content else 'false' }},
+        slides: [],
+
+        showMessage(text, type) {
+            this.message = text;
+            this.messageType = type;
+            if (type === 'success') setTimeout(() => this.message = '', 5000);
+        },
+
+        async generateRichContent() {
+            this.loading = true;
+            this.action = 'generate';
+            this.message = '';
+            try {
+                const resp = await fetch('{{ url_for("seller_rich_content", product_id=product.id) }}', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.hasRichContent = true;
+                    this.showMessage('Rich-контент сгенерирован! Теперь можно рендерить инфографику.', 'success');
+                } else {
+                    this.showMessage(data.error || 'Ошибка генерации', 'error');
+                }
+            } catch(e) {
+                this.showMessage('Ошибка: ' + e.message, 'error');
+            }
+            this.loading = false;
+        },
+
+        async renderInfographic() {
+            this.loading = true;
+            this.action = 'render';
+            this.message = '';
+            this.slides = [];
+            try {
+                const resp = await fetch('{{ url_for("seller_render_infographic", product_id=product.id) }}', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.slides = data.results || [];
+                    this.showMessage(`Готово: ${data.successful}/${data.total_slides} слайдов`, 'success');
+                } else {
+                    this.showMessage(data.error || 'Ошибка рендера', 'error');
+                }
+            } catch(e) {
+                this.showMessage('Ошибка: ' + e.message, 'error');
+            }
+            this.loading = false;
+        },
+
+        async renderHybrid() {
+            this.loading = true;
+            this.action = 'hybrid';
+            this.message = '';
+            this.slides = [];
+            try {
+                const resp = await fetch('{{ url_for("seller_render_hybrid", product_id=product.id) }}', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    this.slides = data.results || [];
+                    this.showMessage(`AI инфографика готова: ${data.successful}/${data.total_slides} слайдов`, 'success');
+                } else {
+                    this.showMessage(data.error || 'Ошибка AI рендера', 'error');
+                }
+            } catch(e) {
+                this.showMessage('Ошибка: ' + e.message, 'error');
+            }
+            this.loading = false;
+        },
+
+        async viewSlides() {
+            this.message = '';
+            try {
+                const resp = await fetch('{{ url_for("seller_rich_content_slides", product_id=product.id) }}');
+                const data = await resp.json();
+                if (data.success) {
+                    const slides = data.slides;
+                    let html = '<div style="max-height:70vh;overflow-y:auto;font-family:system-ui">';
+                    slides.forEach((s, i) => {
+                        html += `<div style="margin-bottom:12px;padding:8px;border:1px solid #e5e7eb;border-radius:8px">`;
+                        html += `<div style="font-weight:600;font-size:13px;margin-bottom:4px">Слайд ${i+1}: ${s.type || ''}</div>`;
+                        html += `<div style="font-size:12px;font-weight:600">${s.headline || ''}</div>`;
+                        if (s.subheadline) html += `<div style="font-size:11px;color:#6b7280">${s.subheadline}</div>`;
+                        if (s.bullets) {
+                            html += '<ul style="font-size:11px;margin:4px 0;padding-left:16px">';
+                            s.bullets.forEach(b => html += `<li>${b}</li>`);
+                            html += '</ul>';
+                        }
+                        html += '</div>';
+                    });
+                    html += '</div>';
+
+                    const w = window.open('', '_blank', 'width=500,height=600');
+                    w.document.write(`<html><head><title>Rich-контент слайды</title></head><body style="margin:16px">${html}</body></html>`);
+                } else {
+                    this.showMessage(data.error || 'Не удалось загрузить', 'error');
+                }
+            } catch(e) {
+                this.showMessage('Ошибка: ' + e.message, 'error');
+            }
+        }
+    };
+}
+
 function aiAgentActions() {
     return {
         open: false,

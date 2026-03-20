@@ -38,6 +38,18 @@ class TelegramPublisher(BasePublisher):
         text = self.format_text(item)
         media_urls = item.get_media_urls()
 
+        # Относительные URL → абсолютные
+        try:
+            from flask import current_app
+            public_base = current_app.config.get('PUBLIC_BASE_URL', '').rstrip('/')
+            if public_base:
+                media_urls = [
+                    f'{public_base}{u}' if u.startswith('/') else u
+                    for u in media_urls
+                ]
+        except RuntimeError:
+            pass
+
         try:
             if len(media_urls) > 1:
                 # Отправка нескольких фото через media group
@@ -146,6 +158,19 @@ class TelegramPublisher(BasePublisher):
         except requests.exceptions.RequestException as e:
             return False, f"Ошибка подключения к Telegram API: {e}"
 
+    def _build_post_url(self, chat_id: str, message_id: int) -> Optional[str]:
+        """Формирует URL поста в Telegram."""
+        chat_str = str(chat_id)
+        if chat_str.startswith('@'):
+            # Публичный канал @username — t.me/username/message_id
+            username = chat_str.lstrip('@')
+            return f"https://t.me/{username}/{message_id}"
+        elif chat_str.startswith('-100'):
+            # Приватный канал — t.me/c/channel_id/message_id
+            channel = chat_str[4:]  # убираем -100
+            return f"https://t.me/c/{channel}/{message_id}"
+        return None
+
     def _send_text_message(
         self,
         bot_token: str,
@@ -171,13 +196,7 @@ class TelegramPublisher(BasePublisher):
 
         if data.get('ok'):
             message_id = data.get('result', {}).get('message_id')
-            # Формируем URL поста (для каналов)
-            post_url = None
-            if str(chat_id).startswith('@') or str(chat_id).startswith('-100'):
-                channel = str(chat_id).lstrip('@')
-                if channel.startswith('-100'):
-                    channel = channel[4:]  # убираем -100
-                post_url = f"https://t.me/c/{channel}/{message_id}"
+            post_url = self._build_post_url(chat_id, message_id)
 
             return PublishResult(
                 success=True,
@@ -190,6 +209,42 @@ class TelegramPublisher(BasePublisher):
                 error=data.get('description', 'Ошибка отправки в Telegram'),
             )
 
+    def _download_photo(self, photo_url: str) -> Optional[bytes]:
+        """Скачивает фото по URL и возвращает байты.
+
+        Если URL указывает на наш /content-photos/ — читает с диска.
+        """
+        # Приоритет: локальные файлы с диска
+        import re
+        m = re.search(r'/content-photos/(\d+)/(\d+)\.jpg', photo_url)
+        if m:
+            try:
+                from services.content_photo_cache import get_cached_photo_path
+                path = get_cached_photo_path(int(m.group(1)), int(m.group(2)))
+                if path.exists() and path.stat().st_size > 512:
+                    return path.read_bytes()
+            except Exception:
+                pass
+
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': 'https://www.wildberries.ru/',
+        }
+        try:
+            resp = requests.get(photo_url, timeout=15, headers=headers)
+            if resp.status_code == 200 and len(resp.content) > 1024:
+                content_type = resp.headers.get('Content-Type', '')
+                if content_type.startswith('image/') or len(resp.content) > 5000:
+                    return resp.content
+        except Exception as e:
+            logger.warning(f"Failed to download photo {photo_url}: {e}")
+        return None
+
     def _send_photo_message(
         self,
         bot_token: str,
@@ -197,27 +252,40 @@ class TelegramPublisher(BasePublisher):
         text: str,
         photo_url: str,
     ) -> PublishResult:
-        """Отправляет сообщение с фото."""
+        """Отправляет сообщение с фото. Если текст > 1024 — фото + отдельный текст."""
         url = f"{TELEGRAM_API_BASE.format(token=bot_token)}/sendPhoto"
 
-        # Telegram caption лимит 1024 символа
-        caption = text if len(text) <= 1024 else text[:1020] + '...'
+        # Telegram caption лимит 1024 символа — обрезаем если длиннее
+        if len(text) > 1024:
+            caption = text[:1021] + '...'
+        else:
+            caption = text
 
-        payload = {
-            'chat_id': chat_id,
-            'photo': photo_url,
-            'caption': caption,
-            'parse_mode': 'HTML',
-        }
+        # Сначала пробуем скачать и отправить файлом (надежнее)
+        photo_data = self._download_photo(photo_url)
+        if photo_data:
+            payload = {'chat_id': chat_id, 'parse_mode': 'HTML'}
+            if caption:
+                payload['caption'] = caption
+            resp = requests.post(url, data=payload,
+                                 files={'photo': ('photo.jpg', photo_data, 'image/jpeg')}, timeout=30)
+        else:
+            # Фоллбэк — отправка URL напрямую
+            payload = {'chat_id': chat_id, 'photo': photo_url, 'parse_mode': 'HTML'}
+            if caption:
+                payload['caption'] = caption
+            resp = requests.post(url, json=payload, timeout=30)
 
-        resp = requests.post(url, json=payload, timeout=30)
         data = resp.json()
 
         if data.get('ok'):
             message_id = data.get('result', {}).get('message_id')
+            post_url = self._build_post_url(chat_id, message_id)
+
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id),
+                external_post_url=post_url,
             )
         else:
             # Если фото не удалось — шлём как текст
@@ -235,30 +303,68 @@ class TelegramPublisher(BasePublisher):
         import json as _json
         url = f"{TELEGRAM_API_BASE.format(token=bot_token)}/sendMediaGroup"
 
-        caption = text if len(text) <= 1024 else text[:1020] + '...'
+        # Telegram caption лимит 1024 символа — обрезаем если длиннее
+        if len(text) > 1024:
+            caption = text[:1021] + '...'
+        else:
+            caption = text
 
+        # Скачиваем фото и загружаем как файлы для надежности
+        files = {}
         media = []
+        downloaded_any = False
+
         for i, photo_url in enumerate(photo_urls[:10]):
-            item = {'type': 'photo', 'media': photo_url}
-            if i == 0:
-                item['caption'] = caption
-                item['parse_mode'] = 'HTML'
-            media.append(item)
+            photo_data = self._download_photo(photo_url)
+            if photo_data:
+                attach_name = f'photo_{i}'
+                files[attach_name] = (f'{attach_name}.jpg', photo_data, 'image/jpeg')
+                media_item = {'type': 'photo', 'media': f'attach://{attach_name}'}
+                downloaded_any = True
+            else:
+                # Пропускаем фото которые не удалось скачать (битые URL)
+                logger.warning(f"Skipping broken photo URL: {photo_url}")
+                continue
 
-        payload = {
-            'chat_id': chat_id,
-            'media': _json.dumps(media),
-        }
+            if len(media) == 0 and caption:
+                media_item['caption'] = caption
+                media_item['parse_mode'] = 'HTML'
+            media.append(media_item)
 
-        resp = requests.post(url, json=payload, timeout=60)
+        if not media:
+            # Ни одно фото не удалось скачать — отправляем только текст
+            logger.warning("No photos downloaded successfully, falling back to text-only")
+            return self._send_text_message(bot_token, chat_id, text)
+
+        if len(media) == 1:
+            # Только одно фото — используем sendPhoto (надёжнее)
+            attach_name = list(files.keys())[0]
+            return self._send_photo_message(bot_token, chat_id, text, photo_urls[0])
+
+        if downloaded_any:
+            # Отправка через multipart/form-data с файлами
+            resp = requests.post(url, data={
+                'chat_id': chat_id,
+                'media': _json.dumps(media),
+            }, files=files, timeout=60)
+        else:
+            # Нет скачанных фото — отправляем URL напрямую
+            resp = requests.post(url, json={
+                'chat_id': chat_id,
+                'media': media,
+            }, timeout=60)
+
         data = resp.json()
 
         if data.get('ok'):
             results = data.get('result', [])
             message_id = results[0].get('message_id') if results else None
+            post_url = self._build_post_url(chat_id, message_id) if message_id else None
+
             return PublishResult(
                 success=True,
                 external_post_id=str(message_id) if message_id else None,
+                external_post_url=post_url,
             )
         else:
             # Фоллбэк на одно фото
@@ -267,7 +373,11 @@ class TelegramPublisher(BasePublisher):
 
     def format_text(self, item: ContentItem) -> str:
         """Форматирует текст для Telegram (HTML)."""
+        import re
         text = item.body_text or ''
+
+        # Убираем служебные метки AI (ЧЕРНОВИК:, ИТОГОВЫЙ ТЕКСТ: и т.п.)
+        text = re.sub(r'^(?:ЧЕРНОВИК|DRAFT|ИТОГОВЫЙ ТЕКСТ|ИСПРАВЛЕННЫЙ ТЕКСТ|ИТОГОВЫЙ ВАРИАНТ)\s*:\s*\n?', '', text, flags=re.IGNORECASE)
 
         # Добавляем хештеги если они есть и не в тексте
         hashtags = item.get_hashtags()

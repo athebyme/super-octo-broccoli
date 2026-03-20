@@ -632,3 +632,27 @@ def _generate_placeholder_image():
     response.cache_control.max_age = 300
     response.cache_control.private = True
     return response
+
+
+def register_content_photo_routes(app):
+    """Роут для раздачи кэшированных фото контент-фабрики."""
+
+    @app.route('/content-photos/<int:nm_id>/<int:index>.jpg')
+    def serve_content_photo(nm_id, index):
+        """
+        Отдаёт закэшированное фото товара для контент-фабрики.
+        Без авторизации — чтобы VK/Telegram publisher мог скачать.
+        """
+        from services.content_photo_cache import get_cached_photo_path
+
+        if index < 1 or index > 20:
+            abort(404)
+
+        photo_path = get_cached_photo_path(nm_id, index)
+        if not photo_path.exists():
+            abort(404)
+
+        response = send_file(str(photo_path), mimetype='image/jpeg', conditional=True)
+        response.cache_control.max_age = 86400
+        response.cache_control.public = True
+        return response

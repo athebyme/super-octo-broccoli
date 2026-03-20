@@ -910,6 +910,19 @@ def migrate(db_path):
             else:
                 print(f"  ⏭️  {table_name} уже существует")
 
+        # ============================================================
+        # Добавление недостающих колонок в content_factories
+        # ============================================================
+        if 'content_factories' in existing_tables:
+            print("\n📋 Проверяю колонки content_factories...")
+            cf_cols = {row[1] for row in cursor.execute("PRAGMA table_info(content_factories)").fetchall()}
+            add_column_if_missing(cursor, 'content_factories', 'auto_publish', 'BOOLEAN DEFAULT 0', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'publish_interval_minutes', 'INTEGER DEFAULT 60', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'last_auto_publish_at', 'DATETIME', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'auto_generate', 'BOOLEAN DEFAULT 0', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'generate_interval_minutes', 'INTEGER DEFAULT 120', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'last_auto_generate_at', 'DATETIME', cf_cols)
+
         # Индексы
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS idx_sa_seller ON social_accounts(seller_id)",

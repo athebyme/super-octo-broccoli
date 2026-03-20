@@ -43,6 +43,24 @@
                             {id: 'gpt-4o', name: 'GPT-4o'},
                             {id: 'gpt-4-turbo', name: 'GPT-4 Turbo'},
                         ],
+                        mimo: [
+                            {id: 'mimo-v2-pro', name: 'MiMo V2 Pro', rec: true},
+                            {id: 'mimo-v2-flash', name: 'MiMo V2 Flash'},
+                            {id: 'mimo-v2-omni', name: 'MiMo V2 Omni'},
+                        ],
+                        openrouter: [
+                            {id: 'google/gemini-2.5-flash-preview', name: 'Gemini 2.5 Flash', rec: true},
+                            {id: 'google/gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite', rec: true},
+                            {id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', rec: true},
+                            {id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3 0324', rec: true},
+                            {id: 'x-ai/grok-4.1-fast', name: 'Grok 4.1 Fast'},
+                            {id: 'google/gemini-2.5-pro-preview', name: 'Gemini 2.5 Pro'},
+                            {id: 'anthropic/claude-opus-4', name: 'Claude Opus 4'},
+                            {id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini'},
+                            {id: 'openai/gpt-4o', name: 'GPT-4o'},
+                            {id: 'meta-llama/llama-4-maverick', name: 'Llama 4 Maverick'},
+                            {id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B'},
+                        ],
                         custom: []
                     },
                     get currentModels() {
@@ -316,6 +334,8 @@
                                 class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
                                 <option value="openai">OpenAI</option>
                                 <option value="cloudru">Cloud.ru</option>
+                                <option value="mimo">Xiaomi MiMo</option>
+                                <option value="openrouter">OpenRouter (300+ моделей)</option>
                                 <option value="custom">Кастомный API</option>
                             </select>
                         </div>
@@ -353,6 +373,32 @@
                         <input type="url" name="ai_api_base_url"
                             value="{{ supplier.ai_api_base_url if supplier and supplier.ai_api_base_url else '' }}"
                             class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2">
+                    </div>
+                    <!-- Прокси -->
+                    <div class="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3" x-data="proxyStatus()">
+                        <div class="flex items-center gap-3">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" name="ai_proxy_enabled"
+                                    {{ 'checked' if supplier and supplier.ai_proxy_enabled else '' }}
+                                    class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="text-sm font-medium text-gray-700">Использовать прокси (USA)</span>
+                            </label>
+                            <span x-show="status === 'checking'" class="text-xs text-gray-400">проверка...</span>
+                            <span x-show="status === 'ok'" class="flex items-center gap-1 text-xs text-green-600">
+                                <span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
+                                <span x-text="proxyIp"></span>
+                            </span>
+                            <span x-show="status === 'fail'" class="flex items-center gap-1 text-xs text-red-600">
+                                <span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>
+                                не работает
+                            </span>
+                            <span x-show="status === 'none'" class="flex items-center gap-1 text-xs text-yellow-600">
+                                <span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>
+                                не настроен (AI_PROXY)
+                            </span>
+                        </div>
+                        <button type="button" @click="check()" :disabled="status === 'checking'"
+                            class="text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50">Проверить</button>
                     </div>
                     <div class="grid grid-cols-3 gap-4">
                         <div>
@@ -536,4 +582,31 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+function proxyStatus() {
+    return {
+        status: 'idle',
+        proxyIp: '',
+        init() { this.check(); },
+        async check() {
+            this.status = 'checking';
+            try {
+                const resp = await fetch('/api/proxy/status');
+                const data = await resp.json();
+                if (!data.configured) {
+                    this.status = 'none';
+                } else if (data.working) {
+                    this.status = 'ok';
+                    this.proxyIp = data.proxy_ip;
+                } else {
+                    this.status = 'fail';
+                }
+            } catch(e) {
+                this.status = 'fail';
+            }
+        }
+    };
+}
+</script>
 {% endblock %}

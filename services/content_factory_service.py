@@ -13,6 +13,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
 
 import re
+import requests as _requests
 
 from models import (
     db, Product, Seller, SupplierProduct, ImportedProduct,
@@ -59,10 +60,10 @@ _BASE_SYSTEM_RULES = """СТРОГИЕ ПРАВИЛА ФОРМАТИРОВАНИ
 2. Для выделения используй ТОЛЬКО эмодзи и заглавные буквы
 3. Для списков используй эмодзи в начале строки (например: ✅, 🔥, 💰, 👉), НЕ тире и НЕ точки
 4. Фотографии товара будут прикреплены автоматически — НЕ описывай их в тексте
-5. ОБЯЗАТЕЛЬНО вставь ссылку на товар: {wb_url}
-6. ОБЯЗАТЕЛЬНО упомяни магазин: {store_name}
+5. НЕ ВСТАВЛЯЙ ссылки на товар — ссылка будет добавлена автоматически после текста. Не придумывай URL!
+6. ЗАПРЕЩЕНО использовать юридические формы: ИП, ООО, ОАО, ЗАО, индивидуальный предприниматель. Упоминай ТОЛЬКО коммерческое название магазина
 7. Хештеги пиши отдельным блоком в самом конце через пустую строку, каждый начинается с #
-8. Лимит символов: {char_limit}. Не превышай его."""
+8. ВАЖНО: Текст должен быть КОРОТКИМ и ёмким — максимум 800 символов (без учёта хештегов). К посту прикреплены фото — не нужно описывать внешний вид, фокусируйся на преимуществах и эмоциях."""
 
 _BUILTIN_SYSTEM_PROMPTS = {
     'telegram': {
@@ -106,17 +107,15 @@ _BUILTIN_USER_PROMPTS = {
         'Категория: {category}\n'
         'Описание: {description}\n'
         'Рейтинг на WB: {rating}\n'
-        'Ссылка: {wb_url}\n'
-        'Магазин: {store_name}\n'
         'К посту будет прикреплено {photo_count} фото товара.\n\n'
         'Требования:\n'
         '1. Цепляющий заголовок ЗАГЛАВНЫМИ с эмодзи\n'
         '2. 2-3 ключевых преимущества\n'
         '3. Цена (если есть скидка — покажи выгоду)\n'
-        '4. Ссылка на WB: {wb_url}\n'
-        '5. Упомяни магазин {store_name}\n'
-        '6. Призыв к действию\n'
-        '7. 3-5 хештегов в конце отдельным блоком'
+        '4. Призыв к действию\n'
+        '5. 3-5 хештегов в конце отдельным блоком\n'
+        '6. НЕ пиши "ИП", "ООО" и другие юридические формы\n'
+        '7. НЕ вставляй ссылки — ссылка на товар будет добавлена автоматически'
     ),
     'review': (
         'Напиши обзор товара:\n\n'
@@ -126,29 +125,32 @@ _BUILTIN_USER_PROMPTS = {
         'Категория: {category}\n'
         'Описание: {description}\n'
         'Характеристики: {characteristics}\n'
-        'Рейтинг: {rating}\n'
-        'Ссылка: {wb_url}\n'
-        'Магазин: {store_name}\n\n'
+        'Рейтинг: {rating}\n\n'
         'Требования:\n'
         '1. Заголовок с оценкой (звёзды эмодзи)\n'
         '2. Плюсы и минусы\n'
         '3. Для кого подойдёт\n'
-        '4. Ссылка {wb_url}\n'
-        '5. Хештеги в конце'
+        '4. Хештеги в конце\n'
+        '5. НЕ пиши "ИП", "ООО" и другие юридические формы\n'
+        '6. НЕ вставляй ссылки — ссылка на товар будет добавлена автоматически'
     ),
     'story_script': (
         'Создай сценарий Stories/Reels для товара:\n\n'
         'Название: {product_name}\nЦена: {price} руб.\nБренд: {brand}\n'
-        'Описание: {description}\nСсылка: {wb_url}\nМагазин: {store_name}\n\n'
+        'Описание: {description}\n\n'
         'Требования:\n5-7 слайдов, для каждого текст на экране.\n'
-        'Первый — интрига. Последний — CTA + ссылка {wb_url}'
+        'Первый — интрига. Последний — CTA (призыв к действию)\n'
+        'НЕ пиши "ИП", "ООО" и другие юридические формы\n'
+        'НЕ вставляй ссылки — ссылка на товар будет добавлена автоматически'
     ),
     'carousel': (
         'Составь подборку товаров:\n\n'
-        'Тема: {collection_theme}\nМагазин: {store_name}\n\nТовары:\n{products_list}\n\n'
+        'Тема: {collection_theme}\n\nТовары:\n{products_list}\n\n'
         'Требования:\n1. Заголовок подборки\n'
-        '2. Каждый товар: название, описание (1-2 предложения), цена, ссылка\n'
-        '3. Призыв к действию\n4. Хештеги'
+        '2. Каждый товар: название, описание (1-2 предложения), цена\n'
+        '3. Призыв к действию\n4. Хештеги\n'
+        '5. НЕ пиши "ИП", "ООО" и другие юридические формы\n'
+        '6. НЕ вставляй ссылки — ссылки на товары будут добавлены автоматически'
     ),
 }
 
@@ -308,11 +310,16 @@ class ContentFactoryService:
             # ========== ШАГ 3: Программная очистка ==========
             title, body, hashtags = self._parse_ai_response(response, content_type)
 
+            # ========== ШАГ 4: Гарантированная вставка ссылки ==========
+            body = self._ensure_product_url(body, wb_url)
+
             # Собираем медиа и метаданные
+            # Для обзоров берём больше фото
+            max_photos_per_product = 10 if content_type in ('product_review', 'review') else 5
             all_photos = []
             product_names = []
             for pd in products_data:
-                all_photos.extend(pd.get('photos', [])[:5])
+                all_photos.extend(pd.get('photos', [])[:max_photos_per_product])
                 if pd.get('name'):
                     product_names.append(pd['name'])
             media_urls = all_photos[:10]
@@ -455,55 +462,228 @@ class ContentFactoryService:
     # Подбор товаров
     # ================================================================
 
+    # Паттерн для извлечения размера из названия товара
+    _SIZE_PATTERN = re.compile(
+        r'\s+(?:'
+        r'(?:р(?:\.|азмер)?\s*)?'  # опциональный префикс "р.", "р ", "размер "
+        r'(?:'
+        r'(?:\d{1,3}(?:[/-]\d{1,3})?)'  # числовые: 42, 44-46, 48/50
+        r'|(?:XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL)'  # буквенные
+        r'|(?:one\s*size|единый)'  # one size
+        r')'
+        r')\s*$',
+        re.IGNORECASE,
+    )
+
+    def _base_product_name(self, title: str) -> str:
+        """Возвращает название товара без суффикса размера для группировки."""
+        if not title:
+            return ''
+        return self._SIZE_PATTERN.sub('', title).strip()
+
+    def _extract_size_label(self, product: Product) -> Optional[str]:
+        """Извлекает обозначение размера из названия товара."""
+        title = product.title or ''
+        m = self._SIZE_PATTERN.search(title)
+        if m:
+            return m.group(0).strip()
+        # Фоллбэк: берём из sizes_json
+        if product.sizes_json:
+            try:
+                sizes = json.loads(product.sizes_json)
+                if isinstance(sizes, list) and sizes:
+                    for s in sizes:
+                        tech = s.get('techSize') or s.get('origName') or ''
+                        if tech:
+                            return tech
+            except Exception:
+                pass
+        return None
+
+    def _get_available_sizes(self, product: Product) -> List[str]:
+        """Возвращает список доступных размеров из sizes_json."""
+        if not product.sizes_json:
+            return []
+        try:
+            sizes = json.loads(product.sizes_json)
+            if isinstance(sizes, list):
+                result = []
+                for s in sizes:
+                    label = s.get('origName') or s.get('techSize') or ''
+                    if label and label not in result:
+                        result.append(label)
+                return result
+        except Exception:
+            pass
+        return []
+
+    def _deduplicate_products(self, products: List[Dict], limit: int) -> List[Dict]:
+        """Дедуплицирует товары по базовому названию (без размера).
+
+        Группирует вариации одного товара (разные размеры) и обогащает
+        выбранного представителя информацией о доступных размерах.
+        """
+        groups = {}  # base_name -> list of product dicts
+        for p in products:
+            base = self._base_product_name(p.get('name', ''))
+            key = (p.get('brand', '').lower(), base.lower())
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(p)
+
+        result = []
+        for key, group in groups.items():
+            if len(result) >= limit:
+                break
+
+            # Берём первый товар как представителя
+            representative = group[0]
+
+            if len(group) > 1:
+                # Собираем все размеры из группы
+                all_sizes = []
+                seen_sizes = set()
+                for p in group:
+                    name = p.get('name', '')
+                    m = self._SIZE_PATTERN.search(name)
+                    if m:
+                        sz = m.group(0).strip()
+                        if sz.lower() not in seen_sizes:
+                            seen_sizes.add(sz.lower())
+                            all_sizes.append(sz)
+                    # Также берём размеры из sizes_json через _available_sizes
+                    for sz in p.get('available_sizes', []):
+                        if sz.lower() not in seen_sizes:
+                            seen_sizes.add(sz.lower())
+                            all_sizes.append(sz)
+
+                representative['available_sizes'] = all_sizes
+                # Базовое название (без размера) для промпта
+                representative['name'] = self._base_product_name(representative.get('name', ''))
+                # Примечание что есть несколько размеров
+                representative['sizes_info'] = f"Доступные размеры: {', '.join(all_sizes)}" if all_sizes else ''
+
+            result.append(representative)
+
+        return result[:limit]
+
     def select_products(
         self,
         factory: ContentFactory,
         limit: int = 10,
+        exclude_product_ids: set = None,
     ) -> List[Dict[str, Any]]:
         """Подбирает товары для контента на основе режима фабрики."""
+        import random as _random
 
         mode = factory.product_selection_mode or 'manual'
 
+        # Запрашиваем больше товаров чтобы после дедупликации и фильтрации хватило
+        fetch_limit = limit * 5
+
         if mode == 'bestsellers':
-            return self._select_bestsellers(factory.seller_id, limit)
+            raw = self._select_bestsellers(factory.seller_id, fetch_limit)
         elif mode == 'new_arrivals':
-            return self._select_new_arrivals(factory.seller_id, limit)
+            raw = self._select_new_arrivals(factory.seller_id, fetch_limit)
         elif mode == 'rules':
-            return self._select_by_rules(factory, limit)
+            raw = self._select_by_rules(factory, fetch_limit)
         else:
-            # manual — возвращаем все товары для ручного выбора
+            # manual — возвращаем все товары для ручного выбора (без дедупликации)
             return self._select_all_products(factory.seller_id, limit)
+
+        deduped = self._deduplicate_products(raw, fetch_limit)
+
+        # Исключаем уже использованные товары
+        if exclude_product_ids:
+            deduped = [p for p in deduped if p['id'] not in exclude_product_ids]
+
+        # Рандомизируем порядок
+        _random.shuffle(deduped)
+
+        return deduped[:limit]
+
+    # Максимальная адекватная цена для автоподбора (руб.)
+    MAX_SANE_PRICE = 50000
+
+    def _base_product_query(self, seller_id: int) -> db.Query:
+        """Базовый запрос товаров: в наличии + адекватная цена + активный."""
+        return Product.query.filter(
+            Product.seller_id == seller_id,
+            Product.is_active == True,
+            Product.quantity > 0,
+            db.or_(
+                # Цена со скидкой в адекватном диапазоне
+                db.and_(
+                    Product.discount_price.isnot(None),
+                    Product.discount_price > 0,
+                    Product.discount_price <= self.MAX_SANE_PRICE,
+                ),
+                # Или обычная цена в адекватном диапазоне (если нет скидочной)
+                db.and_(
+                    db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
+                    Product.price.isnot(None),
+                    Product.price > 0,
+                    Product.price <= self.MAX_SANE_PRICE,
+                ),
+            ),
+        )
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:
         """Выбирает товары с лучшими продажами (по orders_count из аналитики)."""
-        # Пробуем подобрать по реальным продажам через ProductAnalytics
         products = (
-            Product.query
+            self._base_product_query(seller_id)
             .outerjoin(ProductAnalytics, db.and_(
                 ProductAnalytics.nm_id == Product.nm_id,
                 ProductAnalytics.seller_id == Product.seller_id,
             ))
-            .filter(Product.seller_id == seller_id)
             .order_by(db.func.coalesce(ProductAnalytics.orders_count, 0).desc())
             .limit(limit)
             .all()
         )
         if not products:
-            # Fallback на все товары
-            products = Product.query.filter_by(seller_id=seller_id).limit(limit).all()
+            # Fallback 1: без аналитики, но с фильтром цены и наличия
+            products = (
+                self._base_product_query(seller_id)
+                .order_by(Product.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+        if not products:
+            # Fallback 2: только наличие и активность (без фильтра цены)
+            logger.warning(f"No products with price <= {self.MAX_SANE_PRICE} for seller {seller_id}, "
+                           f"falling back to all active products in stock")
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(Product.created_at.desc()).limit(limit).all()
+        if not products:
+            # Fallback 3: любые активные товары (quantity может быть устаревшим)
+            logger.warning(f"No products in stock for seller {seller_id}, "
+                           f"falling back to active products regardless of stock")
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+            ).order_by(Product.updated_at.desc()).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _select_new_arrivals(self, seller_id: int, limit: int) -> List[Dict]:
         """Выбирает недавно добавленные товары."""
-        products = Product.query.filter_by(seller_id=seller_id).order_by(
+        products = self._base_product_query(seller_id).order_by(
             Product.created_at.desc()
         ).limit(limit).all()
+        if not products:
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(Product.created_at.desc()).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _select_by_rules(self, factory: ContentFactory, limit: int) -> List[Dict]:
         """Выбирает товары по правилам фабрики."""
         rules = factory.get_selection_rules()
-        query = Product.query.filter_by(seller_id=factory.seller_id)
+        query = self._base_product_query(factory.seller_id)
 
         if rules.get('category'):
             query = query.filter(Product.object_name.ilike(f"%{rules['category']}%"))
@@ -518,10 +698,23 @@ class ContentFactoryService:
         return [self._product_to_dict(p) for p in products]
 
     def _select_all_products(self, seller_id: int, limit: int) -> List[Dict]:
-        """Все товары продавца."""
-        products = Product.query.filter_by(seller_id=seller_id).order_by(
+        """Все товары продавца (в наличии, адекватная цена)."""
+        products = self._base_product_query(seller_id).order_by(
             Product.updated_at.desc()
         ).limit(limit).all()
+        if not products:
+            # Fallback: без фильтра цены
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                Product.quantity > 0,
+            ).order_by(Product.updated_at.desc()).limit(limit).all()
+        if not products:
+            # Fallback: любые активные
+            products = Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+            ).order_by(Product.updated_at.desc()).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _collect_products_data(self, product_ids: List[int], seller_id: int) -> List[Dict]:
@@ -534,18 +727,114 @@ class ContentFactoryService:
             Product.seller_id == seller_id,
         ).all()
 
-        return [self._product_to_dict(p) for p in products]
+        return [self._product_to_dict(p, validate_photos=True) for p in products]
 
-    def _product_to_dict(self, product: Product) -> Dict:
-        """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""
-        photos = []
+    def _validate_photo_urls(self, urls: list) -> list:
+        """Проверяет доступность фото по URL. Останавливается на первой ошибке.
+
+        Использует GET с Range header (первые 1KB) вместо HEAD,
+        т.к. WB CDN может блокировать HEAD-запросы.
+        """
+        validated = []
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Range': 'bytes=0-1023',
+        }
+        for url in urls:
+            try:
+                resp = _requests.get(url, timeout=5, allow_redirects=True, headers=headers)
+                # 200 = полный ответ, 206 = partial content (range)
+                if resp.status_code in (200, 206) and len(resp.content) >= 100:
+                    validated.append(url)
+                else:
+                    break  # WB фото последовательные: если одно не найдено, следующие тоже
+            except Exception:
+                break
+        return validated
+
+    def _get_product_photos(self, product: Product, validate: bool = False) -> List[str]:
+        """Получает фото товара и КЭШИРУЕТ их локально.
+
+        Приоритет источников:
+        1. Уже закэшированные фото в content_photos (мгновенно)
+        2. Локальные фото через ImportedProduct (/photos/public/...)
+        3. WB CDN → скачиваем, кэшируем, возвращаем локальный URL
+
+        Всегда возвращает URL на наш сервер, никогда — WB CDN напрямую.
+        """
+        from services.content_photo_cache import (
+            get_cached_photo_urls, cache_product_photos,
+        )
+
+        nm_id = product.nm_id
+
+        # === Приоритет 1: Уже закэшированные content-photos ===
+        if nm_id:
+            cached = get_cached_photo_urls(nm_id)
+            if cached:
+                return cached
+
+        # === Приоритет 2: Локальные фото через ImportedProduct ===
+        try:
+            from models import ImportedProduct
+            from routes.photos import generate_public_photo_urls
+            imported = ImportedProduct.query.filter_by(product_id=product.id).first()
+            if imported:
+                local_urls = generate_public_photo_urls(imported)
+                if local_urls:
+                    logger.info(f"Product {product.id}: using {len(local_urls)} local ImportedProduct photos")
+                    return local_urls
+        except Exception as e:
+            logger.debug(f"Product {product.id}: ImportedProduct lookup failed: {e}")
+
+        # === Приоритет 3: Собираем URL-источники и кэшируем ===
+        source_urls = []
+
+        # Из photos_json
         if product.photos_json:
             try:
-                photos = json.loads(product.photos_json)
-                if isinstance(photos, list):
-                    photos = [p for p in photos if isinstance(p, str) and p.startswith('http')]
+                raw_photos = json.loads(product.photos_json)
+                if isinstance(raw_photos, list):
+                    for p in raw_photos:
+                        if isinstance(p, str) and p.startswith('http'):
+                            source_urls.append(p)
+                        elif isinstance(p, int) and nm_id:
+                            from seller_platform import wb_photo_url
+                            source_urls.append(wb_photo_url(nm_id, p))
             except Exception:
                 pass
+
+        # Дополняем из WB CDN если мало
+        if nm_id and len(source_urls) < 3:
+            try:
+                from seller_platform import wb_photo_url
+                existing = set(source_urls)
+                for i in range(1, 6):
+                    url = wb_photo_url(nm_id, i)
+                    if url not in existing:
+                        source_urls.append(url)
+                        existing.add(url)
+            except Exception:
+                pass
+
+        if not source_urls:
+            return []
+
+        # Скачиваем и кэшируем (конвертируем в JPEG на нашем сервере)
+        if nm_id:
+            cached_urls = cache_product_photos(nm_id, source_urls[:10])
+            if cached_urls:
+                logger.info(
+                    f"Product {product.id} (nm_id={nm_id}): cached {len(cached_urls)} photos locally"
+                )
+                return cached_urls
+
+        # Если кэширование не удалось — возвращаем source_urls как есть (крайний fallback)
+        return source_urls
+
+    def _product_to_dict(self, product: Product, validate_photos: bool = False) -> Dict:
+        """Конвертирует Product в dict для промптов (с фото, ссылкой, рейтингом)."""
+        photos = self._get_product_photos(product, validate_photos)
 
         characteristics = ''
         if product.characteristics_json:
@@ -571,6 +860,12 @@ class ContentFactoryService:
             pct = int((1 - discount_price / price) * 100)
             discount_info = f' (скидка {pct}%, было {int(price)} руб.)'
 
+        # Доступные размеры
+        available_sizes = self._get_available_sizes(product)
+        sizes_info = ''
+        if available_sizes:
+            sizes_info = f"Доступные размеры: {', '.join(available_sizes)}"
+
         return {
             'id': product.id,
             'nm_id': nm_id,
@@ -586,6 +881,8 @@ class ContentFactoryService:
             'rating': product.nm_rating or 0,
             'characteristics': characteristics,
             'discount_info': discount_info,
+            'available_sizes': available_sizes,
+            'sizes_info': sizes_info,
         }
 
     # ================================================================
@@ -671,10 +968,16 @@ class ContentFactoryService:
     # ================================================================
 
     def _get_store_name(self, factory: ContentFactory) -> str:
-        """Получает название магазина."""
+        """Получает коммерческое название магазина (без юр. формы ИП/ООО)."""
+        import re
         try:
             seller = Seller.query.get(factory.seller_id)
-            return seller.company_name if seller else 'Наш магазин'
+            name = seller.company_name if seller else 'Наш магазин'
+            if not name:
+                return 'Наш магазин'
+            # Убираем юридическую форму: ИП, ООО, ОАО, ЗАО и т.д.
+            name = re.sub(r'^(ИП|ООО|ОАО|ЗАО|ПАО)\s+', '', name, flags=re.IGNORECASE).strip()
+            return name or 'Наш магазин'
         except Exception:
             return 'Наш магазин'
 
@@ -692,6 +995,9 @@ class ContentFactoryService:
         rating = product_data.get('rating', 0)
         rating_str = f'{rating}/5' if rating else 'нет данных'
 
+        # Информация о размерах
+        sizes_info = product_data.get('sizes_info', '')
+
         replacements = {
             '{product_name}': product_data.get('name', ''),
             '{price}': str(int(float(price))) if price else '0',
@@ -705,10 +1011,15 @@ class ContentFactoryService:
             '{rating}': rating_str,
             '{photo_count}': str(len(product_data.get('photos', []))),
             '{discount_info}': product_data.get('discount_info', ''),
+            '{sizes_info}': sizes_info,
         }
 
         for placeholder, value in replacements.items():
             prompt = prompt.replace(placeholder, str(value))
+
+        # Добавляем инфу о размерах если есть (даже если нет плейсхолдера в шаблоне)
+        if sizes_info and '{sizes_info}' not in template.user_prompt_template:
+            prompt += f"\n\n{sizes_info}"
 
         if hasattr(template, 'hashtag_strategy') and template.hashtag_strategy:
             prompt += f"\n\nСтратегия хештегов: {template.hashtag_strategy}"
@@ -756,16 +1067,16 @@ class ContentFactoryService:
         try:
             review_prompt = (
                 f'Проверь и улучши этот пост для {PLATFORM_LABELS.get(platform, platform)}.\n\n'
-                f'ЧЕРНОВИК:\n{draft}\n\n'
+                f'--- НАЧАЛО ЧЕРНОВИКА ---\n{draft}\n--- КОНЕЦ ЧЕРНОВИКА ---\n\n'
                 f'ПРОВЕРЬ:\n'
                 f'1. Нет ли markdown-разметки (**, *, ##, ```)? Если есть — убери, замени на эмодзи/заглавные\n'
-                f'2. Есть ли ссылка на товар ({wb_url})? Если нет — добавь\n'
-                f'3. Упомянут ли магазин ({store_name})? Если нет — добавь\n'
+                f'2. УДАЛИ все ссылки на wildberries.ru или любые другие URL — ссылка будет добавлена автоматически\n'
+                f'3. Нет ли юридических форм (ИП, ООО, ОАО, индивидуальный предприниматель)? Если есть — УДАЛИ их полностью\n'
                 f'4. Есть ли призыв к действию?\n'
                 f'5. Есть ли цена?\n'
-                f'6. Хештеги отделены пустой строкой в конце?\n'
+                f'6. Хештеги отделены пустой строкой в конце? Нет ли в хештегах юр. форм (ИП, ООО)?\n'
                 f'7. Текст укладывается в {char_limit} символов?\n\n'
-                f'Верни ТОЛЬКО исправленный текст поста, без комментариев и пояснений.'
+                f'Верни ТОЛЬКО исправленный текст поста. БЕЗ слов "ЧЕРНОВИК:", "ИТОГОВЫЙ ТЕКСТ:", без комментариев и пояснений. Только сам пост.'
             )
 
             response = client.chat_completion(
@@ -806,6 +1117,9 @@ class ContentFactoryService:
         # Очищаем markdown
         text = self._strip_markdown(response)
 
+        # Убираем служебные метки AI (ЧЕРНОВИК:, ИТОГОВЫЙ ТЕКСТ: и т.п.)
+        text = re.sub(r'^(?:ЧЕРНОВИК|DRAFT|ИТОГОВЫЙ ТЕКСТ|ИСПРАВЛЕННЫЙ ТЕКСТ|ИТОГОВЫЙ ВАРИАНТ)\s*:\s*\n?', '', text, flags=re.IGNORECASE)
+
         # Извлекаем и дедуплицируем хештеги
         all_hashtags = re.findall(r'#[А-Яа-яA-Za-z0-9_]+', text)
         seen = set()
@@ -845,6 +1159,41 @@ class ContentFactoryService:
             break
 
         return title, body_text, hashtags
+
+    def _ensure_product_url(self, body: str, wb_url: str) -> str:
+        """Гарантирует наличие правильной ссылки на товар в тексте.
+
+        1. Удаляет все ссылки wildberries.ru которые AI мог нагаллюцинировать
+        2. Вставляет правильную ссылку перед призывом к действию или в конец текста
+        """
+        if not wb_url:
+            return body
+
+        # Убираем все WB-ссылки из текста (AI мог вставить неправильные)
+        # Паттерн: https://www.wildberries.ru/catalog/ЛЮБЫЕ_ЦИФРЫ/detail.aspx
+        body = re.sub(
+            r'https?://(?:www\.)?wildberries\.ru/catalog/\d+/detail\.aspx\S*',
+            '',
+            body,
+        )
+
+        # Убираем оставшиеся пустые строки "Ссылка:" / "Ссылка на товар:" без URL
+        body = re.sub(
+            r'^[🔗📎👉💰🛒]*\s*(?:Ссылка(?:\s+на\s+товар)?|Заказать|Купить)\s*:\s*$',
+            '',
+            body,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+
+        # Убираем лишние пустые строки
+        body = re.sub(r'\n{3,}', '\n\n', body).strip()
+
+        # Вставляем правильную ссылку перед последним абзацем (призыв к действию)
+        # или просто в конец
+        body = body.rstrip()
+        body += f'\n\n👉 {wb_url}'
+
+        return body
 
     def _score_content(
         self,

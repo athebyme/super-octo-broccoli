@@ -659,6 +659,78 @@ def register_supplier_routes(app):
         return redirect(url_for('admin_supplier_product_detail',
                                 supplier_id=supplier_id, product_id=product_id))
 
+    # -------------------------------------------------------------------
+    # AI RICH КОНТЕНТ (инфографика)
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/rich-content', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_rich_content(supplier_id):
+        """Генерация Rich-контента (инфографика) для товара"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id') or request.form.get('product_id', type=int)
+        if not product_id:
+            return jsonify({'success': False, 'error': 'Не указан товар'}), 400
+
+        result = SupplierService.ai_generate_rich_content(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_rich_content_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={'supplier_id': supplier_id, 'success': result.get('success')},
+            request=request
+        )
+        return jsonify(result)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/render-infographic', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_render_infographic(supplier_id):
+        """Рендеринг инфографики из шаблонов (бесплатно, Playwright)"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index')  # None = все слайды
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        result = SupplierService.ai_render_infographic(product_id, slide_index=slide_index)
+        return jsonify(result)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/render-infographic-preview', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_render_infographic_preview(supplier_id):
+        """Быстрый превью слайда инфографики"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index', 0)
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        result = SupplierService.ai_render_infographic_preview(
+            product_id, slide_index=slide_index,
+            preview_width=data.get('preview_width', 720)
+        )
+        return jsonify(result)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/render-hybrid', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_render_hybrid(supplier_id):
+        """Гибридный рендер: AI-фон + Playwright текст (качественная инфографика)"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        result = SupplierService.ai_render_hybrid_infographic(product_id)
+        return jsonify(result)
+
     @app.route('/admin/suppliers/<int:supplier_id>/ai/history')
     @login_required
     @admin_required
@@ -2269,6 +2341,119 @@ def register_supplier_routes(app):
             }), 500
 
     # -------------------------------------------------------------------
+    # Rich-контент (инфографика) для продавца
+    # -------------------------------------------------------------------
+    @app.route('/my-products/<int:product_id>/rich-content', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_rich_content(product_id):
+        """Генерация Rich-контента (инфографика) для товара продавца."""
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        # Получаем SupplierProduct для доступа к AI
+        sp = SupplierProduct.query.get(imp.supplier_product_id) if imp.supplier_product_id else None
+        if not sp:
+            return jsonify({'success': False, 'error': 'Не найден товар поставщика'}), 400
+
+        supplier = Supplier.query.get(sp.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return jsonify({'success': False, 'error': 'AI не включен у поставщика'}), 400
+
+        # Если у SupplierProduct уже есть rich content — копируем
+        if sp.ai_rich_content_json:
+            imp.ai_rich_content = sp.ai_rich_content_json
+            db.session.commit()
+            import json as json_mod
+            return jsonify({'success': True, 'data': json_mod.loads(sp.ai_rich_content_json), 'source': 'supplier'})
+
+        # Генерируем новый
+        result = SupplierService.ai_generate_rich_content(sp.id)
+        if result.get('success'):
+            # Копируем в ImportedProduct
+            sp_refreshed = SupplierProduct.query.get(sp.id)
+            if sp_refreshed and sp_refreshed.ai_rich_content_json:
+                imp.ai_rich_content = sp_refreshed.ai_rich_content_json
+                db.session.commit()
+        return jsonify(result)
+
+    @app.route('/my-products/<int:product_id>/render-infographic', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_render_infographic(product_id):
+        """Рендеринг инфографики (бесплатно, шаблоны + Playwright)."""
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        sp = SupplierProduct.query.get(imp.supplier_product_id) if imp.supplier_product_id else None
+        if not sp:
+            return jsonify({'success': False, 'error': 'Не найден товар поставщика'}), 400
+
+        # Берём rich content из ImportedProduct или SupplierProduct
+        rich_json = imp.ai_rich_content or (sp.ai_rich_content_json if sp else None)
+        if not rich_json:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        data = request.get_json() or {}
+        slide_index = data.get('slide_index')
+
+        result = SupplierService.ai_render_infographic(sp.id, slide_index=slide_index)
+        return jsonify(result)
+
+    @app.route('/my-products/<int:product_id>/render-hybrid', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_render_hybrid(product_id):
+        """Гибридный рендер: AI-фон + Playwright текст (качественная инфографика)."""
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        sp = SupplierProduct.query.get(imp.supplier_product_id) if imp.supplier_product_id else None
+        if not sp:
+            return jsonify({'success': False, 'error': 'Не найден товар поставщика'}), 400
+
+        rich_json = imp.ai_rich_content or (sp.ai_rich_content_json if sp else None)
+        if not rich_json:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        result = SupplierService.ai_render_hybrid_infographic(sp.id)
+        return jsonify(result)
+
+    @app.route('/my-products/<int:product_id>/rich-content-slides')
+    @login_required
+    @seller_required
+    def seller_rich_content_slides(product_id):
+        """Просмотр слайдов Rich-контента."""
+        import json as json_mod
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+
+        sp = SupplierProduct.query.get(imp.supplier_product_id) if imp.supplier_product_id else None
+        rich_json = imp.ai_rich_content or (sp.ai_rich_content_json if sp else None)
+        if not rich_json:
+            return jsonify({'success': False, 'error': 'Rich-контент не найден'}), 404
+
+        try:
+            data = json_mod.loads(rich_json) if isinstance(rich_json, str) else rich_json
+            slides = data.get('slides', [])
+            return jsonify({
+                'success': True,
+                'slides': slides,
+                'design': data.get('design_recommendations', {}),
+                'total': len(slides)
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # -------------------------------------------------------------------
     # Массовая проверка карточек на WB
     # -------------------------------------------------------------------
     @app.route('/my-products/wb-check-bulk', methods=['POST'])
@@ -3142,6 +3327,7 @@ def _extract_supplier_form_data(form) -> dict:
 
     # Булевы поля
     data['ai_enabled'] = form.get('ai_enabled') == 'on'
+    data['ai_proxy_enabled'] = form.get('ai_proxy_enabled') == 'on'
     data['is_active'] = form.get('is_active') == 'on'
     data['resize_images'] = form.get('resize_images') == 'on'
     data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
