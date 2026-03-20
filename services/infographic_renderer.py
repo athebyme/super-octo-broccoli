@@ -3,7 +3,7 @@
 Infographic Renderer — рендеринг инфографики из HTML-шаблонов через Playwright.
 
 Берёт JSON rich_content (слайды с текстами) + фото товара →
-рендерит красивые PNG 1440x810 для WB.
+рендерит красивые PNG 900x1200 (3:4) для WB.
 
 Бесплатно, стабильно, полный контроль над дизайном.
 """
@@ -20,9 +20,9 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Размеры для WB Rich-контента
-WB_WIDTH = 1440
-WB_HEIGHT = 810
+# Размеры для WB Rich-контента (соотношение 3:4, рекомендуемое WB)
+WB_WIDTH = 900
+WB_HEIGHT = 1200
 
 # Автоматический поиск Chromium
 _CHROMIUM_PATH = None
@@ -84,13 +84,13 @@ def _build_bullets_html(bullets: List[str], is_dark: bool) -> str:
         return ''
     text_color = '#ffffff' if is_dark else '#1e293b'
     items = ''.join(
-        f'<li style="margin-bottom:12px;padding-left:12px;position:relative;">'
-        f'<span style="position:absolute;left:-20px;color:{("#a78bfa" if is_dark else "#6366f1")};">&#10003;</span>'
+        f'<li style="margin-bottom:10px;padding-left:10px;position:relative;">'
+        f'<span style="position:absolute;left:-18px;color:{("#a78bfa" if is_dark else "#6366f1")};">&#10003;</span>'
         f'{b}</li>'
-        for b in bullets[:4]
+        for b in bullets[:5]
     )
     return f'''
-    <ul style="list-style:none;padding:0;margin:32px 0 0 24px;font-size:28px;
+    <ul style="list-style:none;padding:0;margin:20px 0 0 22px;font-size:20px;
                line-height:1.5;color:{text_color};font-weight:500;">
         {items}
     </ul>'''
@@ -124,47 +124,46 @@ def _build_slide_html(
         'elegant': "'Playfair Display', 'Georgia', serif",
     }.get(font_style, "'Inter', 'Segoe UI', system-ui, sans-serif")
 
-    # Фото товара — показываем справа на hero, или как фон
+    accent = color_palette[1] if len(color_palette) > 1 else '#8b5cf6'
+
+    # Фото товара — верхняя половина на hero, или вставка на других слайдах
     photo_html = ''
-    if product_photo_b64 and slide_type in ('hero', 'application', 'bundling', 'characteristics'):
+    has_photo = bool(product_photo_b64)
+    if has_photo and slide_type in ('hero', 'application', 'bundling', 'characteristics'):
         if slide_type == 'hero':
             photo_html = f'''
-            <div style="position:absolute;right:40px;top:50%;transform:translateY(-50%);
-                        width:500px;height:650px;border-radius:24px;overflow:hidden;
-                        box-shadow:0 25px 50px rgba(0,0,0,0.3);">
+            <div style="position:absolute;top:0;left:0;right:0;height:580px;overflow:hidden;">
                 <img src="data:image/jpeg;base64,{product_photo_b64}"
                      style="width:100%;height:100%;object-fit:cover;" />
+                <div style="position:absolute;bottom:0;left:0;right:0;height:120px;
+                            background:linear-gradient(transparent, {bg.split(',')[0].replace('linear-gradient(135deg', '').strip() if 'linear-gradient' in bg else '#1e293b'});"></div>
             </div>'''
         else:
             photo_html = f'''
-            <div style="position:absolute;right:60px;bottom:60px;
-                        width:350px;height:350px;border-radius:20px;overflow:hidden;
-                        box-shadow:0 15px 30px rgba(0,0,0,0.15);">
+            <div style="position:absolute;top:40px;right:40px;
+                        width:260px;height:260px;border-radius:20px;overflow:hidden;
+                        box-shadow:0 12px 24px rgba(0,0,0,0.15);">
                 <img src="data:image/jpeg;base64,{product_photo_b64}"
                      style="width:100%;height:100%;object-fit:cover;" />
             </div>'''
 
     # Декоративный элемент
-    accent = color_palette[1] if len(color_palette) > 1 else '#8b5cf6'
     decoration = ''
-    if slide_type == 'hero':
+    if slide_type == 'hero' and not has_photo:
         decoration = f'''
-        <div style="position:absolute;left:-100px;top:-100px;width:400px;height:400px;
+        <div style="position:absolute;right:-80px;top:-80px;width:350px;height:350px;
                     background:radial-gradient(circle, {accent}30, transparent 70%);
-                    border-radius:50%;"></div>
-        <div style="position:absolute;right:500px;bottom:-50px;width:300px;height:300px;
-                    background:radial-gradient(circle, {primary}20, transparent 70%);
                     border-radius:50%;"></div>'''
     elif slide_type == 'trust':
         decoration = f'''
-        <div style="position:absolute;top:40px;right:60px;">
-            <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="{primary}" stroke-width="1.5">
+        <div style="position:absolute;top:36px;right:40px;">
+            <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="{primary}" stroke-width="1.5">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                 <path d="M9 12l2 2 4-4"/>
             </svg>
         </div>'''
 
-    # Номер слайда — маленький бейдж
+    # Бейдж типа слайда
     badge_bg = 'rgba(255,255,255,0.2)' if is_dark else 'rgba(0,0,0,0.08)'
     badge_color = '#ffffff' if is_dark else '#64748b'
     type_labels = {
@@ -175,16 +174,26 @@ def _build_slide_html(
         'application': 'ПРИМЕНЕНИЕ',
         'bundling': 'КОМПЛЕКТАЦИЯ',
         'trust': 'ГАРАНТИЯ',
+        'usage': 'ПРИМЕНЕНИЕ',
     }
     badge_text = type_labels.get(slide_type, slide_type.upper())
 
-    # Контент-зона: текст слева, фото справа (если есть)
-    text_max_width = '780px' if product_photo_b64 and slide_type in ('hero',) else '1200px'
+    # Контент-зона: вертикальный макет 900x1200
+    # Hero с фото: текст снизу, фото сверху
+    # Остальные: текст на всю ширину
+    if has_photo and slide_type == 'hero':
+        content_top = '600px'
+        text_max_width = '820px'
+    else:
+        content_top = '90px'
+        text_max_width = '820px'
 
     bullets_html = _build_bullets_html(bullets, is_dark)
-
-    # Подчёркивание заголовка
     underline_color = accent if is_dark else primary
+
+    # Адаптируем размеры шрифтов под вертикальный формат
+    title_size = '40px' if has_photo and slide_type == 'hero' else '44px'
+    subtitle_size = '22px'
 
     return f'''<!DOCTYPE html>
 <html>
@@ -202,27 +211,27 @@ def _build_slide_html(
     {photo_html}
 
     <!-- Badge -->
-    <div style="position:absolute;top:32px;left:48px;
-                background:{badge_bg};border-radius:8px;padding:6px 16px;">
-        <span style="font-size:14px;font-weight:700;letter-spacing:2px;color:{badge_color};">
+    <div style="position:absolute;top:{'620px' if has_photo and slide_type == 'hero' else '28px'};left:40px;
+                background:{badge_bg};border-radius:8px;padding:5px 14px;z-index:10;">
+        <span style="font-size:12px;font-weight:700;letter-spacing:2px;color:{badge_color};">
             {badge_text}
         </span>
     </div>
 
     <!-- Content -->
-    <div style="position:absolute;left:48px;top:100px;max-width:{text_max_width};padding-right:40px;">
-        <h1 style="font-size:56px;font-weight:900;color:{title_color};
-                   line-height:1.1;letter-spacing:-1px;text-transform:uppercase;
-                   margin-bottom:16px;">
+    <div style="position:absolute;left:40px;top:{content_top};max-width:{text_max_width};padding-right:36px;">
+        <h1 style="font-size:{title_size};font-weight:900;color:{title_color};
+                   line-height:1.1;letter-spacing:-0.5px;text-transform:uppercase;
+                   margin-bottom:12px;margin-top:40px;">
             {title}
         </h1>
-        <div style="width:80px;height:5px;background:{underline_color};border-radius:3px;margin-bottom:20px;"></div>
-        {f'<p style="font-size:30px;font-weight:500;color:{subtitle_color};line-height:1.4;max-width:700px;">{subtitle}</p>' if subtitle else ''}
+        <div style="width:60px;height:4px;background:{underline_color};border-radius:3px;margin-bottom:16px;"></div>
+        {f'<p style="font-size:{subtitle_size};font-weight:500;color:{subtitle_color};line-height:1.4;max-width:700px;">{subtitle}</p>' if subtitle else ''}
         {bullets_html}
     </div>
 
     <!-- Bottom bar -->
-    <div style="position:absolute;bottom:0;left:0;right:0;height:6px;
+    <div style="position:absolute;bottom:0;left:0;right:0;height:5px;
                 background:linear-gradient(90deg, {primary}, {accent});"></div>
 </div>
 </body>
@@ -238,7 +247,7 @@ def _fetch_photo_as_b64(photo_url: str) -> Optional[str]:
             img = Image.open(io.BytesIO(resp.content))
             img = img.convert('RGB')
             # Ресайз до разумного размера
-            img.thumbnail((800, 1000), Image.LANCZOS)
+            img.thumbnail((900, 1200), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=85)
             return base64.b64encode(buf.getvalue()).decode('utf-8')
