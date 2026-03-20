@@ -20,6 +20,7 @@ Credentials формат:
 """
 import io
 import logging
+import time
 from typing import Optional
 
 import requests
@@ -241,13 +242,25 @@ class VKPublisher(BasePublisher):
             attachments = []
             photo_errors = []
 
-            import time as _time
             for i, url in enumerate(media_urls[:10]):
                 if i > 0:
-                    _time.sleep(0.5)  # VK rate limit: не более 3 req/sec
+                    time.sleep(1.0)  # VK rate limit + запас на обработку
                 # Для фото используем user_token (group token не поддерживает photos.getWallUploadServer)
                 photo_token = user_token or access_token
-                attachment, error_reason = self._upload_photo(photo_token, group_id, url, api_version)
+
+                # До 2 попыток на каждое фото (ретрай при vk_upload_empty_photo)
+                attachment, error_reason = None, None
+                for attempt in range(2):
+                    if attempt > 0:
+                        logger.info(f"  photo[{i}] retry attempt {attempt + 1} after 3s...")
+                        time.sleep(3)
+                    attachment, error_reason = self._upload_photo(photo_token, group_id, url, api_version)
+                    if attachment:
+                        break
+                    # Ретраим только при пустом фото (серверная проблема VK)
+                    if error_reason and 'vk_upload_empty_photo' not in error_reason:
+                        break
+
                 if attachment:
                     attachments.append(attachment)
                     logger.info(f"  photo[{i}] OK: {attachment}")
@@ -259,6 +272,10 @@ class VKPublisher(BasePublisher):
 
             if media_urls and not attachments:
                 logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload")
+
+            # Даём VK время обработать загруженные фото перед wall.post
+            if attachments:
+                time.sleep(3)
 
             # wall.post: owner_id отрицательный для сообщества
             params = {
@@ -390,21 +407,47 @@ class VKPublisher(BasePublisher):
                 logger.error(f"VK getWallUploadServer: no upload_url")
                 return None, "no_upload_url"
 
-            # === ШАГ 2: POST фото на upload_url ===
-            upload_resp = requests.post(
-                upload_url,
-                files={'photo': (filename, jpeg_bytes, 'image/jpeg')},
-                timeout=30,
-            )
-            upload_data = upload_resp.json()
-            logger.info(f"VK upload response: server={upload_data.get('server')}, "
-                        f"photo_len={len(upload_data.get('photo', ''))}, "
-                        f"hash={upload_data.get('hash', '')[:16]}...")
+            # === ШАГ 2: POST фото на upload_url (с ретраем при empty photo) ===
+            photo_field = None
+            upload_data = None
+            for upload_attempt in range(2):
+                if upload_attempt > 0:
+                    # Получаем новый upload_url перед ретраем
+                    logger.info(f"VK upload retry: requesting new upload_url (attempt {upload_attempt + 1})")
+                    time.sleep(2)
+                    retry_resp = requests.get(
+                        f'{VK_API_BASE}/photos.getWallUploadServer',
+                        params={
+                            'access_token': access_token,
+                            'group_id': group_id,
+                            'v': api_version,
+                        },
+                        timeout=10,
+                    )
+                    retry_srv = retry_resp.json()
+                    if 'error' in retry_srv:
+                        break
+                    upload_url = retry_srv.get('response', {}).get('upload_url') or upload_url
 
-            # VK возвращает photo как JSON-строку. Пустое = ошибка
-            photo_field = upload_data.get('photo', '')
+                upload_resp = requests.post(
+                    upload_url,
+                    files={'photo': (filename, jpeg_bytes, 'image/jpeg')},
+                    timeout=30,
+                )
+                upload_data = upload_resp.json()
+                logger.info(f"VK upload response (attempt {upload_attempt + 1}): server={upload_data.get('server')}, "
+                            f"photo_len={len(upload_data.get('photo', ''))}, "
+                            f"hash={upload_data.get('hash', '')[:16]}...")
+
+                photo_field = upload_data.get('photo', '')
+                if photo_field and photo_field not in ('[]', ''):
+                    break  # Успешно
+
+                logger.warning(f"VK upload: empty photo field (attempt {upload_attempt + 1}). Response: {upload_data}")
+
+            # После ретраев всё ещё пусто
             if not photo_field or photo_field in ('[]', ''):
-                logger.error(f"VK upload: empty photo field. Full response: {upload_data}")
+                logger.error(f"VK upload: empty photo field after retries. Full response: {upload_data}")
                 return None, f"vk_upload_empty_photo: {str(upload_data)[:200]}"
 
             # === ШАГ 3: photos.saveWallPhoto ===
