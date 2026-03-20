@@ -1511,6 +1511,8 @@ class AIConfig:
     custom_color_instruction: str = ""
     custom_attributes_instruction: str = ""
     custom_parsing_instruction: str = ""
+    # Прокси — флаг от поставщика/продавца
+    proxy_enabled: bool = False
     # Для логирования
     seller_id: int = 0
 
@@ -1645,6 +1647,7 @@ class AIConfig:
             custom_color_instruction=getattr(settings, 'ai_color_instruction', '') or '',
             custom_attributes_instruction=getattr(settings, 'ai_attributes_instruction', '') or '',
             custom_parsing_instruction=getattr(settings, 'ai_parsing_instruction', '') or '',
+            proxy_enabled=getattr(settings, 'ai_proxy_enabled', False) or False,
             seller_id=getattr(settings, 'seller_id', 0) or 0
         )
 
@@ -1663,16 +1666,14 @@ class AIClient:
             'Content-Type': 'application/json'
         })
 
-        # Прокси только для зарубежных провайдеров (OpenRouter, OpenAI)
-        # Cloud.ru, MiMo, Custom — напрямую
-        _PROXY_PROVIDERS = {AIProvider.OPENROUTER, AIProvider.OPENAI}
-        if config.provider in _PROXY_PROVIDERS:
+        # Прокси — включается флагом ai_proxy_enabled в настройках поставщика
+        if config.proxy_enabled:
             proxy_url = os.environ.get('AI_PROXY') or os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
             if proxy_url:
                 self._session.proxies = {'http': proxy_url, 'https': proxy_url}
                 logger.info(f"AI Service [{config.provider.value}] using proxy: {proxy_url}")
             else:
-                logger.warning(f"AI Service [{config.provider.value}] — прокси не настроен (AI_PROXY), запросы пойдут напрямую")
+                logger.warning(f"AI Service [{config.provider.value}] — прокси включен, но AI_PROXY не задан")
 
         # Для Cloud.ru используем TokenManager (нужен token exchange)
         self._token_manager: Optional[CloudRuTokenManager] = None

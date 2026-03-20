@@ -2235,6 +2235,9 @@ class Supplier(db.Model):
     last_description_sync_at = db.Column(db.DateTime)
     last_description_sync_status = db.Column(db.String(50))
 
+    # Прокси для AI запросов (OpenRouter, OpenAI и др. зарубежные провайдеры)
+    ai_proxy_enabled = db.Column(db.Boolean, default=False, nullable=False)
+
     # Настройки генерации изображений для инфографики
     image_gen_enabled = db.Column(db.Boolean, default=False, nullable=False)
     image_gen_provider = db.Column(db.String(50), default='openrouter')  # openrouter, fluxapi, openai_dalle, etc.

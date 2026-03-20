@@ -46,7 +46,7 @@ def _get_proxy_config() -> Optional[Dict[str, str]]:
         http://127.0.0.1:8080
         socks5h://127.0.0.1:1080  (DNS через прокси)
     """
-    proxy_url = os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
+    proxy_url = os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('AI_PROXY') or os.environ.get('HTTPS_PROXY')
     if proxy_url:
         return {'http': proxy_url, 'https': proxy_url}
     return None
@@ -159,6 +159,7 @@ class ImageGenerationConfig:
     default_width: int = 900
     default_height: int = 1200
     timeout: int = 120
+    proxy_enabled: bool = False
 
     @classmethod
     def from_settings(cls, settings) -> Optional['ImageGenerationConfig']:
@@ -180,16 +181,20 @@ class ImageGenerationConfig:
             if not ai_key:
                 ai_key = getattr(settings, '_ai_api_key_encrypted', None)
 
+            proxy_flag = getattr(settings, 'ai_proxy_enabled', False) or False
+
             if ai_provider == 'openrouter' and ai_key:
                 return cls(
                     provider=ImageProvider.OPENROUTER,
                     api_key=ai_key,
                     openrouter_api_key=ai_key,
+                    proxy_enabled=proxy_flag,
                 )
             elif ai_provider == 'openai' and ai_key:
                 return cls(
                     provider=ImageProvider.OPENAI_DALLE,
                     api_key=ai_key,
+                    proxy_enabled=proxy_flag,
                 )
             return None
 
@@ -279,7 +284,7 @@ class OpenAIImageGenerator(ImageGenerator):
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
         self.api_url = "https://api.openai.com/v1/images/generations"
-        self.proxies = _get_proxy_config()
+        self.proxies = _get_proxy_config() if config.proxy_enabled else None
 
     def generate(
         self,
@@ -389,7 +394,7 @@ class OpenRouterImageGenerator(ImageGenerator):
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
         self.api_url = "https://openrouter.ai/api/v1/images/generations"
-        self.proxies = _get_proxy_config()
+        self.proxies = _get_proxy_config() if config.proxy_enabled else None
 
     def generate(
         self,

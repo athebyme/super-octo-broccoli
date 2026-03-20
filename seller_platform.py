@@ -6009,7 +6009,8 @@ def _run_startup_migrations():
         ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
         ('service_agents', 'icon', "TEXT DEFAULT 'cpu'"),
         ('service_agents', 'color', "TEXT DEFAULT 'blue'"),
-        # Supplier image generation
+        # Supplier proxy & image generation
+        ('suppliers', 'ai_proxy_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
     ]

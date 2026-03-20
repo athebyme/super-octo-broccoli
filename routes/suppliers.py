@@ -3327,6 +3327,7 @@ def _extract_supplier_form_data(form) -> dict:
 
     # Булевы поля
     data['ai_enabled'] = form.get('ai_enabled') == 'on'
+    data['ai_proxy_enabled'] = form.get('ai_proxy_enabled') == 'on'
     data['is_active'] = form.get('is_active') == 'on'
     data['resize_images'] = form.get('resize_images') == 'on'
     data['auto_sync_prices'] = form.get('auto_sync_prices') == 'on'
