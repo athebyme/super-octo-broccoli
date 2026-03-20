@@ -5864,10 +5864,8 @@ def apply_migrations():
         conn.close()
 
 
-# ============= РОУТЫ АВТОИМПОРТА =============
-# Регистрация роутов автоимпорта товаров
-from routes.auto_import import register_auto_import_routes
-register_auto_import_routes(app)
+# ============= АВТОИМПОРТ УДАЛЁН =============
+# Функционал заменён разделом «Поставщики» (routes/suppliers.py)
 
 
 # ============= РОУТЫ ДЕФОЛТОВ ТОВАРОВ =============
@@ -6374,6 +6372,19 @@ def api_profile_ai_test():
             })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai/models')
+@login_required
+def api_ai_models():
+    """Список доступных AI моделей по провайдеру."""
+    provider = request.args.get('provider', 'cloudru')
+    try:
+        from services.ai_service import get_available_models
+        models = get_available_models(provider)
+        return jsonify({'success': True, 'models': models})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e), 'models': {}})
 
 
 @app.route('/notifications')

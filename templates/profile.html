@@ -389,7 +389,7 @@ function profilePage() {
 
         async loadModels() {
             try {
-                const res = await fetch(`/auto-import/ai/models?provider=${this.ai.provider}`);
+                const res = await fetch(`/api/ai/models?provider=${this.ai.provider}`);
                 const data = await res.json();
                 if (data.success && data.models) {
                     // API returns {model_id: {name, description}} dict — convert to array

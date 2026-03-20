@@ -791,7 +791,7 @@
             </div>
 
             <!-- Цены -->
-            {% set prices_active = (request.endpoint and request.endpoint.startswith('prices.')) or request.endpoint in ['auto_import_pricing', 'price_monitor_settings', 'suspicious_price_changes'] %}
+            {% set prices_active = (request.endpoint and request.endpoint.startswith('prices.')) or request.endpoint in ['price_monitor_settings', 'suspicious_price_changes'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if prices_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if prices_active else 'false' }} }" :aria-expanded="open" aria-label="Цены">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -804,7 +804,6 @@
                 </button>
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('prices.prices_dashboard') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('prices.') %}active{% endif %}">Управление</a>
-                    <a href="{{ url_for('auto_import_pricing') }}" class="sidebar-sublink {% if request.endpoint == 'auto_import_pricing' %}active{% endif %}">Ценообразование</a>
                     <a href="{{ url_for('price_monitor_settings') }}" class="sidebar-sublink {% if request.endpoint in ['price_monitor_settings', 'suspicious_price_changes'] %}active{% endif %}">Мониторинг</a>
                 </div>
             </div>

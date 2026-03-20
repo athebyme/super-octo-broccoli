@@ -2057,6 +2057,202 @@ class SupplierService:
         }
 
     # ===================================================================
+    # AI RICH КОНТЕНТ (инфографика)
+    # ===================================================================
+
+    @staticmethod
+    def ai_generate_rich_content(product_id: int) -> dict:
+        """
+        AI генерация Rich-контента (слайды инфографики) для товара.
+
+        Returns:
+            dict: {success, data, error}
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier or not supplier.ai_enabled:
+            return {'success': False, 'error': 'AI не включен'}
+
+        ai_svc = SupplierService._get_ai_service(supplier)
+        if not ai_svc:
+            return {'success': False, 'error': 'Не удалось создать AI сервис'}
+
+        # Получаем характеристики
+        characteristics = {}
+        if product.characteristics_json:
+            try:
+                characteristics = json.loads(product.characteristics_json) if isinstance(product.characteristics_json, str) else product.characteristics_json
+            except Exception:
+                pass
+
+        success, result, error = ai_svc.generate_rich_content(
+            title=product.title or '',
+            description=product.description or '',
+            category=product.wb_category_name or product.category or '',
+            brand=product.brand or '',
+            characteristics=characteristics,
+            price=float(product.supplier_price or 0)
+        )
+
+        if success and result:
+            product.ai_rich_content_json = json.dumps(result, ensure_ascii=False)
+            product.updated_at = datetime.utcnow()
+            db.session.commit()
+            return {'success': True, 'data': result}
+
+        return {'success': False, 'error': error or 'Ошибка AI'}
+
+    @staticmethod
+    def ai_render_infographic(product_id: int, slide_index=None) -> dict:
+        """
+        Рендеринг инфографики из HTML-шаблонов через Playwright.
+
+        Returns:
+            dict: {success, results/image_base64, error}
+        """
+        import base64 as b64module
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        if not product.ai_rich_content_json:
+            return {'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}
+
+        try:
+            rich_content = json.loads(product.ai_rich_content_json)
+            slides = rich_content.get('slides', [])
+            design = rich_content.get('design_recommendations', {})
+
+            if not slides:
+                return {'success': False, 'error': 'Нет слайдов в Rich-контенте'}
+
+            # Получаем фотографии товара
+            product_photos = []
+            if product.photo_urls_json:
+                try:
+                    product_photos = json.loads(product.photo_urls_json) if isinstance(product.photo_urls_json, str) else product.photo_urls_json
+                except Exception:
+                    pass
+
+            from services.infographic_renderer import render_all_slides, render_slide_to_png, _fetch_photo_as_b64
+
+            if slide_index is not None:
+                if slide_index >= len(slides):
+                    return {'success': False, 'error': f'Слайд {slide_index} не найден'}
+
+                slide = slides[slide_index]
+                photo_b64 = None
+                for url in product_photos[:3]:
+                    photo_b64 = _fetch_photo_as_b64(url)
+                    if photo_b64:
+                        break
+
+                success, img_bytes, error = render_slide_to_png(slide, design, photo_b64, slide_index)
+                if not success:
+                    return {'success': False, 'error': error}
+
+                return {
+                    'success': True,
+                    'slide_index': slide_index,
+                    'slide_type': slide.get('type', 'unknown'),
+                    'image_base64': b64module.b64encode(img_bytes).decode('utf-8'),
+                    'image_size': len(img_bytes),
+                    'renderer': 'template'
+                }
+            else:
+                results = render_all_slides(rich_content=rich_content, product_photos=product_photos)
+                output = []
+                for r in results:
+                    item = {
+                        'slide_number': r.get('slide_number', 0),
+                        'slide_type': r.get('slide_type', 'unknown'),
+                        'success': r['success'],
+                        'error': r.get('error', '')
+                    }
+                    if r['success'] and r.get('image_bytes'):
+                        item['image_base64'] = b64module.b64encode(r['image_bytes']).decode('utf-8')
+                        item['image_size'] = r.get('image_size', len(r['image_bytes']))
+                    output.append(item)
+
+                successful = sum(1 for r in results if r['success'])
+                return {
+                    'success': True,
+                    'total_slides': len(slides),
+                    'successful': successful,
+                    'failed': len(slides) - successful,
+                    'results': output,
+                    'renderer': 'template'
+                }
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Infographic render error: {e}")
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def ai_render_infographic_preview(product_id: int, slide_index: int = 0, preview_width: int = 720) -> dict:
+        """
+        Быстрый превью одного слайда инфографики.
+
+        Returns:
+            dict: {success, preview_base64, error}
+        """
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        if not product.ai_rich_content_json:
+            return {'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}
+
+        try:
+            rich_content = json.loads(product.ai_rich_content_json)
+            slides = rich_content.get('slides', [])
+            design = rich_content.get('design_recommendations', {})
+
+            if slide_index >= len(slides):
+                return {'success': False, 'error': f'Слайд {slide_index} не найден'}
+
+            slide = slides[slide_index]
+
+            product_photos = []
+            if product.photo_urls_json:
+                try:
+                    product_photos = json.loads(product.photo_urls_json) if isinstance(product.photo_urls_json, str) else product.photo_urls_json
+                except Exception:
+                    pass
+
+            from services.infographic_renderer import render_slide_preview_b64, _fetch_photo_as_b64
+
+            photo_b64 = None
+            for url in product_photos[:3]:
+                photo_b64 = _fetch_photo_as_b64(url)
+                if photo_b64:
+                    break
+
+            success, preview_b64, error = render_slide_preview_b64(
+                slide, design, photo_b64, slide_index, preview_width=preview_width
+            )
+
+            if not success:
+                return {'success': False, 'error': error}
+
+            return {
+                'success': True,
+                'slide_index': slide_index,
+                'slide_type': slide.get('type', 'unknown'),
+                'preview_base64': preview_b64,
+                'renderer': 'template'
+            }
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Preview render error: {e}")
+            return {'success': False, 'error': str(e)}
+
+    # ===================================================================
     # СИНХРОНИЗАЦИЯ ОПИСАНИЙ ИЗ ВНЕШНЕГО CSV
     # ===================================================================
 
@@ -2334,7 +2530,7 @@ class SupplierService:
                             f'У поставщика «{supplier.name}» обработано {succeeded_count} карточек. '
                             f'Доступно {new_count} новых товаров для импорта.'
                         ),
-                        link='/auto-import/products',
+                        link=f'/supplier-catalog/{supplier_id}/products',
                         metadata_json=json.dumps({
                             'type': 'new_supplier_cards',
                             'supplier_id': supplier_id,

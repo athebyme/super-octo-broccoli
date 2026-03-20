@@ -659,6 +659,64 @@ def register_supplier_routes(app):
         return redirect(url_for('admin_supplier_product_detail',
                                 supplier_id=supplier_id, product_id=product_id))
 
+    # -------------------------------------------------------------------
+    # AI RICH КОНТЕНТ (инфографика)
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/rich-content', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_ai_rich_content(supplier_id):
+        """Генерация Rich-контента (инфографика) для товара"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id') or request.form.get('product_id', type=int)
+        if not product_id:
+            return jsonify({'success': False, 'error': 'Не указан товар'}), 400
+
+        result = SupplierService.ai_generate_rich_content(product_id)
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='ai_rich_content_supplier_product',
+            target_type='supplier_product',
+            target_id=product_id,
+            details={'supplier_id': supplier_id, 'success': result.get('success')},
+            request=request
+        )
+        return jsonify(result)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/render-infographic', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_render_infographic(supplier_id):
+        """Рендеринг инфографики из шаблонов (бесплатно, Playwright)"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index')  # None = все слайды
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        result = SupplierService.ai_render_infographic(product_id, slide_index=slide_index)
+        return jsonify(result)
+
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/render-infographic-preview', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_render_infographic_preview(supplier_id):
+        """Быстрый превью слайда инфографики"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index', 0)
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        result = SupplierService.ai_render_infographic_preview(
+            product_id, slide_index=slide_index,
+            preview_width=data.get('preview_width', 720)
+        )
+        return jsonify(result)
+
     @app.route('/admin/suppliers/<int:supplier_id>/ai/history')
     @login_required
     @admin_required

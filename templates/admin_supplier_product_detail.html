@@ -502,6 +502,25 @@
                         </button>
                     </form>
                     <hr class="my-2">
+                    <button type="button" id="richContentBtn" onclick="generateRichContent()"
+                        class="w-full text-left px-3 py-2 text-sm rounded-lg bg-pink-50 text-pink-700 hover:bg-pink-100 transition-colors font-medium">
+                        Rich Контент (инфографика)
+                    </button>
+                    <div id="richContentResult" class="hidden px-3 mt-2"></div>
+                    {% if product.ai_rich_content_json %}
+                    <button type="button" id="renderInfographicBtn" onclick="renderInfographic()"
+                        class="w-full text-left px-3 py-2 text-sm rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors">
+                        Рендер инфографики (бесплатно)
+                    </button>
+                    <button type="button" onclick="viewRichContentSlides()"
+                        class="w-full text-left px-3 py-2 text-sm rounded-lg bg-gray-50 text-gray-600 hover:bg-gray-100 transition-colors">
+                        Просмотр слайдов
+                    </button>
+                    {% set rc = product.ai_rich_content_json | default('{}', true) %}
+                    {% set rc_parsed = rc | tojson | safe %}
+                    <p class="text-xs text-pink-500 px-3 mt-1">Rich-контент сгенерирован</p>
+                    {% endif %}
+                    <hr class="my-2">
                     <button type="button" id="parseBtn" onclick="startAsyncParse()"
                         class="w-full text-left px-3 py-2 text-sm rounded-lg bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors font-medium">
                         AI Полный парсинг
@@ -656,6 +675,152 @@
             btn.disabled = false;
             btn.classList.remove('opacity-50');
         }
+    }
+
+    // ===== Rich Контент (инфографика) =====
+    function generateRichContent() {
+        const btn = document.getElementById('richContentBtn');
+        const resultDiv = document.getElementById('richContentResult');
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+        btn.textContent = 'Генерация...';
+        resultDiv.classList.add('hidden');
+
+        fetch('{{ url_for("admin_supplier_ai_rich_content", supplier_id=supplier.id) }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_id: {{ product.id }} })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                const rc = data.data;
+                const slidesCount = (rc.slides || []).length;
+                let html = `<div class="bg-green-50 rounded-lg p-3 text-xs">`;
+                html += `<p class="text-green-700 font-medium">Rich-контент сгенерирован: ${slidesCount} слайдов</p>`;
+                if (rc.main_usp) html += `<p class="text-green-600 mt-1">УТП: ${rc.main_usp}</p>`;
+                if (rc.design_recommendations) {
+                    const dr = rc.design_recommendations;
+                    if (dr.color_palette) {
+                        html += `<div class="flex gap-1 mt-2">`;
+                        dr.color_palette.forEach(c => {
+                            html += `<span class="w-5 h-5 rounded" style="background:${c}" title="${c}"></span>`;
+                        });
+                        html += `</div>`;
+                    }
+                }
+                html += `<p class="text-green-500 mt-2">Перезагрузите страницу для кнопок рендеринга</p>`;
+                html += `</div>`;
+                resultDiv.innerHTML = html;
+            } else {
+                resultDiv.innerHTML = `<div class="bg-red-50 rounded-lg p-2 text-xs text-red-700">${data.error}</div>`;
+            }
+            resultDiv.classList.remove('hidden');
+        })
+        .catch(err => {
+            resultDiv.innerHTML = `<div class="bg-red-50 rounded-lg p-2 text-xs text-red-700">Ошибка сети: ${err.message}</div>`;
+            resultDiv.classList.remove('hidden');
+        })
+        .finally(() => {
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+            btn.textContent = 'Rich Контент (инфографика)';
+        });
+    }
+
+    function renderInfographic() {
+        const btn = document.getElementById('renderInfographicBtn');
+        if (!btn) return;
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+        btn.textContent = 'Рендеринг...';
+
+        fetch('{{ url_for("admin_supplier_render_infographic", supplier_id=supplier.id) }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_id: {{ product.id }} })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                let html = `<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;overflow-y:auto;padding:2rem">`;
+                html += `<div style="max-width:900px;margin:auto;background:white;border-radius:12px;padding:24px">`;
+                html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">`;
+                html += `<h3 style="font-size:18px;font-weight:bold">Инфографика (${data.successful}/${data.total_slides} слайдов)</h3>`;
+                html += `<button onclick="this.closest('[style*=fixed]').remove()" style="font-size:24px;cursor:pointer;background:none;border:none">&times;</button>`;
+                html += `</div>`;
+                html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">`;
+                (data.results || []).forEach(r => {
+                    if (r.success && r.image_base64) {
+                        html += `<div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">`;
+                        html += `<img src="data:image/jpeg;base64,${r.image_base64}" style="width:100%">`;
+                        html += `<div style="padding:8px;font-size:12px;color:#666">Слайд ${r.slide_number + 1} (${r.slide_type}) — ${(r.image_size / 1024).toFixed(0)} KB</div>`;
+                        html += `</div>`;
+                    } else {
+                        html += `<div style="border:1px solid #fca5a5;border-radius:8px;padding:12px;font-size:12px;color:#dc2626">Слайд ${r.slide_number + 1}: ${r.error}</div>`;
+                    }
+                });
+                html += `</div></div></div>`;
+                document.body.insertAdjacentHTML('beforeend', html);
+            } else {
+                alert('Ошибка: ' + data.error);
+            }
+        })
+        .catch(err => alert('Ошибка сети: ' + err.message))
+        .finally(() => {
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+            btn.textContent = 'Рендер инфографики (бесплатно)';
+        });
+    }
+
+    function viewRichContentSlides() {
+        {% if product.ai_rich_content_json %}
+        const richContent = {{ product.ai_rich_content_json | safe }};
+        const slides = richContent.slides || [];
+        if (!slides.length) { alert('Нет слайдов'); return; }
+
+        let html = `<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;overflow-y:auto;padding:2rem">`;
+        html += `<div style="max-width:800px;margin:auto;background:white;border-radius:12px;padding:24px">`;
+        html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">`;
+        html += `<h3 style="font-size:18px;font-weight:bold">Слайды Rich-контента (${slides.length})</h3>`;
+        html += `<button onclick="this.closest('[style*=fixed]').remove()" style="font-size:24px;cursor:pointer;background:none;border:none">&times;</button>`;
+        html += `</div>`;
+
+        if (richContent.design_recommendations) {
+            const dr = richContent.design_recommendations;
+            html += `<div style="margin-bottom:16px;padding:12px;background:#f9fafb;border-radius:8px;font-size:13px">`;
+            if (dr.mood) html += `<p><b>Настроение:</b> ${dr.mood}</p>`;
+            if (dr.color_palette) {
+                html += `<div style="display:flex;gap:4px;margin-top:4px">`;
+                dr.color_palette.forEach(c => { html += `<span style="width:24px;height:24px;border-radius:4px;background:${c}" title="${c}"></span>`; });
+                html += `</div>`;
+            }
+            html += `</div>`;
+        }
+
+        slides.forEach((s, i) => {
+            html += `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:12px">`;
+            html += `<div style="display:flex;justify-content:space-between;margin-bottom:8px">`;
+            html += `<span style="font-weight:600;font-size:14px">Слайд ${i + 1}: ${s.type || 'unknown'}</span>`;
+            html += `<span style="font-size:12px;color:#6b7280">${s.text_layout || ''}</span>`;
+            html += `</div>`;
+            if (s.headline) html += `<p style="font-weight:bold;font-size:15px;margin-bottom:4px">${s.headline}</p>`;
+            if (s.subheadline) html += `<p style="font-size:13px;color:#4b5563;margin-bottom:8px">${s.subheadline}</p>`;
+            if (s.bullets && s.bullets.length) {
+                html += `<ul style="font-size:13px;list-style:disc;padding-left:20px;margin-bottom:8px">`;
+                s.bullets.forEach(b => { html += `<li>${b}</li>`; });
+                html += `</ul>`;
+            }
+            if (s.image_concept) html += `<p style="font-size:11px;color:#9ca3af;font-style:italic">Концепт: ${s.image_concept}</p>`;
+            html += `</div>`;
+        });
+
+        html += `</div></div>`;
+        document.body.insertAdjacentHTML('beforeend', html);
+        {% else %}
+        alert('Rich-контент ещё не сгенерирован');
+        {% endif %}
     }
 </script>
 {% endblock %}
