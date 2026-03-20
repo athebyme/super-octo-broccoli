@@ -5855,6 +5855,18 @@ def apply_migrations():
         else:
             print("  ✓ Таблица pricing_settings уже существует")
 
+        # Миграция: image_gen поля для suppliers
+        cursor.execute("PRAGMA table_info(suppliers)")
+        sup_columns = {row[1] for row in cursor.fetchall()}
+        if sup_columns and 'image_gen_enabled' not in sup_columns:
+            print("  ➕ Добавление image_gen полей в suppliers...")
+            cursor.execute("ALTER TABLE suppliers ADD COLUMN image_gen_enabled BOOLEAN DEFAULT 0 NOT NULL")
+            cursor.execute("ALTER TABLE suppliers ADD COLUMN image_gen_provider VARCHAR(50) DEFAULT 'openrouter'")
+            conn.commit()
+            print("  ✅ image_gen поля добавлены в suppliers")
+        elif sup_columns:
+            print("  ✓ image_gen поля уже существуют в suppliers")
+
         print("\n✅ Миграции успешно применены!")
 
     except Exception as e:
@@ -5997,6 +6009,9 @@ def _run_startup_migrations():
         ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
         ('service_agents', 'icon', "TEXT DEFAULT 'cpu'"),
         ('service_agents', 'color', "TEXT DEFAULT 'blue'"),
+        # Supplier image generation
+        ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
+        ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
     ]
 
     for table, column, col_type in migrations:

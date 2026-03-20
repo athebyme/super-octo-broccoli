@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 class ImageProvider(Enum):
     """Поддерживаемые провайдеры генерации изображений"""
+    OPENROUTER = "openrouter"  # OpenRouter — доступ к DALL-E, Imagen и др.
     FLUXAPI = "fluxapi"  # FluxAPI.ai - простой API
     TENSORART = "tensorart"  # Tensor.art - дешёвый
     TOGETHER_FLUX = "together_flux"  # Together AI Flux
@@ -45,6 +46,15 @@ class ImageProvider(Enum):
 
 # Конфигурация провайдеров
 PROVIDER_CONFIG = {
+    ImageProvider.OPENROUTER: {
+        "name": "OpenRouter",
+        "description": "Единый API к DALL-E 3, Imagen и др. Использует ваш AI ключ поставщика",
+        "api_url": "https://openrouter.ai/api/v1/images/generations",
+        "price_per_image": "$0.04-0.08",
+        "max_size": "1024x1792",
+        "supports_reference": False,
+        "recommended": True
+    },
     ImageProvider.FLUXAPI: {
         "name": "FluxAPI.ai",
         "description": "Простой API, есть trial credits",
@@ -110,6 +120,9 @@ class ImageGenerationConfig:
     """Конфигурация генерации изображений"""
     provider: ImageProvider
     api_key: str
+    # OpenRouter specific
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openai/dall-e-3"  # или google/imagen-3
     # OpenAI specific
     openai_model: str = "dall-e-3"
     openai_quality: str = "standard"  # standard или hd
@@ -130,24 +143,60 @@ class ImageGenerationConfig:
 
     @classmethod
     def from_settings(cls, settings) -> Optional['ImageGenerationConfig']:
-        """Создает конфигурацию из настроек"""
-        if not hasattr(settings, 'image_gen_enabled') or not settings.image_gen_enabled:
+        """Создает конфигурацию из настроек.
+
+        Поддерживает два варианта:
+        1. Объект с image_gen_enabled/image_gen_provider (AutoImportSettings)
+        2. Объект Supplier с ai_provider/ai_api_key — для OpenRouter/OpenAI
+           fallback на AI ключ поставщика
+        """
+        has_image_gen = hasattr(settings, 'image_gen_enabled') and settings.image_gen_enabled
+
+        if not has_image_gen:
+            # Fallback: если у Supplier включен AI с OpenRouter/OpenAI — используем его для image gen
+            ai_provider = getattr(settings, 'ai_provider', None)
+            ai_key = None
+            if hasattr(settings, 'ai_api_key'):
+                ai_key = settings.ai_api_key
+            if not ai_key:
+                ai_key = getattr(settings, '_ai_api_key_encrypted', None)
+
+            if ai_provider == 'openrouter' and ai_key:
+                return cls(
+                    provider=ImageProvider.OPENROUTER,
+                    api_key=ai_key,
+                    openrouter_api_key=ai_key,
+                )
+            elif ai_provider == 'openai' and ai_key:
+                return cls(
+                    provider=ImageProvider.OPENAI_DALLE,
+                    api_key=ai_key,
+                )
             return None
 
-        provider_str = getattr(settings, 'image_gen_provider', 'fluxapi')  # FluxAPI по умолчанию
+        provider_str = getattr(settings, 'image_gen_provider', 'openrouter')
         try:
             provider = ImageProvider(provider_str)
         except ValueError:
-            provider = ImageProvider.FLUXAPI
+            provider = ImageProvider.OPENROUTER
 
         api_key = ""
+        openrouter_key = ""
         replicate_key = ""
         together_key = ""
         fluxapi_key = ""
         tensorart_app_id = ""
         tensorart_api_key = ""
 
-        if provider == ImageProvider.FLUXAPI:
+        if provider == ImageProvider.OPENROUTER:
+            # Берём ключ из AI настроек поставщика
+            openrouter_key = getattr(settings, 'openrouter_api_key', '') or ''
+            if not openrouter_key:
+                # Fallback на ai_api_key
+                if hasattr(settings, 'ai_api_key'):
+                    openrouter_key = settings.ai_api_key or ''
+            api_key = openrouter_key
+        elif provider == ImageProvider.FLUXAPI:
             fluxapi_key = getattr(settings, 'fluxapi_key', '') or ''
         elif provider == ImageProvider.TENSORART:
             tensorart_app_id = getattr(settings, 'tensorart_app_id', '') or ''
@@ -159,13 +208,14 @@ class ImageGenerationConfig:
         else:
             replicate_key = getattr(settings, 'replicate_api_key', '') or ''
 
-        if not api_key and not replicate_key and not together_key and not fluxapi_key and not tensorart_api_key:
+        if not api_key and not replicate_key and not together_key and not fluxapi_key and not tensorart_api_key and not openrouter_key:
             logger.warning("Image generation включен, но API ключ не указан")
             return None
 
         return cls(
             provider=provider,
             api_key=api_key,
+            openrouter_api_key=openrouter_key,
             replicate_api_key=replicate_key,
             together_api_key=together_key,
             fluxapi_key=fluxapi_key,
@@ -301,6 +351,126 @@ No text overlays, no watermarks, no logos.
             return output.getvalue()
         except Exception as e:
             logger.warning(f"Ошибка resize: {e}, возвращаем оригинал")
+            return image_bytes
+
+
+class OpenRouterImageGenerator(ImageGenerator):
+    """
+    Генератор изображений через OpenRouter API.
+
+    Поддерживает модели:
+    - openai/dall-e-3 (лучшее качество, понимает русский)
+    - google/imagen-3 (если доступен)
+
+    API совместим с OpenAI формат /images/generations.
+    """
+
+    def __init__(self, config: ImageGenerationConfig):
+        self.config = config
+        self.api_url = "https://openrouter.ai/api/v1/images/generations"
+
+    def generate(
+        self,
+        prompt: str,
+        width: int = 900,
+        height: int = 1200,
+        reference_image_url: Optional[str] = None
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Генерирует изображение через OpenRouter"""
+
+        api_key = self.config.openrouter_api_key or self.config.api_key
+        model = self.config.openrouter_model or "openai/dall-e-3"
+
+        # DALL-E 3 через OpenRouter поддерживает стандартные размеры
+        if width > height:
+            size = "1792x1024"
+        elif height > width:
+            size = "1024x1792"
+        else:
+            size = "1024x1024"
+
+        enhanced_prompt = self._enhance_prompt(prompt)
+
+        payload = {
+            "model": model,
+            "prompt": enhanced_prompt,
+            "n": 1,
+            "size": size,
+            "quality": "standard",
+            "response_format": "b64_json"
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://seller-platform.tech",
+            "X-Title": "Seller Platform"
+        }
+
+        try:
+            logger.info(f"OpenRouter image gen ({model}): {prompt[:100]}...")
+
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.config.timeout
+            )
+
+            if response.status_code != 200:
+                error_data = response.json() if response.text else {}
+                error_msg = error_data.get('error', {}).get('message', response.text[:300])
+                logger.error(f"OpenRouter image error: {response.status_code} - {error_msg}")
+                return False, None, f"OpenRouter: {error_msg}"
+
+            data = response.json()
+
+            if 'data' in data and len(data['data']) > 0:
+                image_data = data['data'][0]
+
+                if 'b64_json' in image_data:
+                    image_bytes = base64.b64decode(image_data['b64_json'])
+                elif 'url' in image_data:
+                    img_response = requests.get(image_data['url'], timeout=60)
+                    if img_response.status_code == 200:
+                        image_bytes = img_response.content
+                    else:
+                        return False, None, "Не удалось скачать изображение"
+                else:
+                    return False, None, "Неожиданный формат ответа"
+
+                # Resize к нужным размерам WB (3:4)
+                if size != f"{width}x{height}":
+                    image_bytes = self._resize_image(image_bytes, width, height)
+
+                logger.info(f"OpenRouter image created ({len(image_bytes)} bytes)")
+                return True, image_bytes, ""
+
+            return False, None, "Пустой ответ от OpenRouter"
+
+        except requests.exceptions.Timeout:
+            return False, None, f"Таймаут ({self.config.timeout}с)"
+        except Exception as e:
+            logger.error(f"OpenRouter image error: {e}")
+            return False, None, str(e)
+
+    def _enhance_prompt(self, prompt: str) -> str:
+        return f"""{prompt}
+
+Professional product infographic slide for e-commerce marketplace Wildberries.
+Clean modern design, high quality, commercial photography style.
+Vertical 3:4 aspect ratio (portrait orientation).
+No text overlays, no watermarks, no logos."""
+
+    def _resize_image(self, image_bytes: bytes, width: int, height: int) -> bytes:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format='PNG', quality=95)
+            return output.getvalue()
+        except Exception as e:
+            logger.warning(f"Resize error: {e}, returning original")
             return image_bytes
 
 
@@ -958,7 +1128,9 @@ class ImageGenerationService:
         self.config = config
 
         # Создаем генератор под провайдера
-        if config.provider == ImageProvider.FLUXAPI:
+        if config.provider == ImageProvider.OPENROUTER:
+            self.generator = OpenRouterImageGenerator(config)
+        elif config.provider == ImageProvider.FLUXAPI:
             self.generator = FluxAPIImageGenerator(config)
         elif config.provider == ImageProvider.TENSORART:
             self.generator = TensorArtImageGenerator(config)
