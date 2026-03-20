@@ -124,8 +124,8 @@ class ImageGenerationConfig:
     tensorart_app_id: str = ""
     tensorart_api_key: str = ""  # Private key for signing
     # Общие
-    default_width: int = 1440
-    default_height: int = 810
+    default_width: int = 900
+    default_height: int = 1200
     timeout: int = 120
 
     @classmethod
@@ -173,8 +173,8 @@ class ImageGenerationConfig:
             tensorart_api_key=tensorart_api_key,
             openai_quality=getattr(settings, 'openai_image_quality', 'standard') or 'standard',
             openai_style=getattr(settings, 'openai_image_style', 'vivid') or 'vivid',
-            default_width=getattr(settings, 'image_gen_width', 1440) or 1440,
-            default_height=getattr(settings, 'image_gen_height', 810) or 810
+            default_width=getattr(settings, 'image_gen_width', 900) or 900,
+            default_height=getattr(settings, 'image_gen_height', 1200) or 1200
         )
 
 
@@ -1022,8 +1022,8 @@ class ImageGenerationService:
 
         return self.generate_from_prompt(
             prompt=prompt,
-            width=1440,
-            height=810,
+            width=self.config.default_width,
+            height=self.config.default_height,
             reference_image_url=reference_url
         )
 

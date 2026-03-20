@@ -2264,6 +2264,83 @@ class SupplierService:
             logging.getLogger(__name__).error(f"Preview render error: {e}")
             return {'success': False, 'error': str(e)}
 
+    @staticmethod
+    def ai_render_hybrid_infographic(product_id: int) -> dict:
+        """
+        Гибридный рендер инфографики: AI-фон + Playwright текст/фото.
+        Требует настроенный image_gen провайдер на поставщике.
+
+        Returns:
+            dict: {success, total_slides, successful, results, error}
+        """
+        import base64 as b64module
+        product = SupplierProduct.query.get(product_id)
+        if not product:
+            return {'success': False, 'error': 'Товар не найден'}
+
+        if not product.ai_rich_content_json:
+            return {'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}
+
+        supplier = Supplier.query.get(product.supplier_id)
+        if not supplier:
+            return {'success': False, 'error': 'Поставщик не найден'}
+
+        # Получаем image service
+        from services.image_generation_service import create_image_service
+        img_service = create_image_service(supplier)
+        if not img_service:
+            return {'success': False, 'error': 'Image generation не настроен (нужен API ключ в настройках поставщика)'}
+
+        try:
+            rich_content = json.loads(product.ai_rich_content_json)
+
+            product_photos = []
+            if product.photo_urls_json:
+                try:
+                    product_photos = json.loads(product.photo_urls_json) if isinstance(product.photo_urls_json, str) else product.photo_urls_json
+                except Exception:
+                    pass
+
+            from services.infographic_renderer import render_hybrid_slides
+
+            results = render_hybrid_slides(
+                rich_content=rich_content,
+                image_service=img_service,
+                product_photos=product_photos,
+                product_title=product.title or '',
+                supplier_product_id=product_id
+            )
+
+            output = []
+            for r in results:
+                item = {
+                    'slide_number': r.get('slide_number', 0),
+                    'slide_type': r.get('slide_type', 'unknown'),
+                    'success': r['success'],
+                    'error': r.get('error', ''),
+                    'renderer': r.get('renderer', 'hybrid'),
+                    'has_ai_bg': r.get('has_ai_bg', False)
+                }
+                if r['success'] and r.get('image_bytes'):
+                    item['image_base64'] = b64module.b64encode(r['image_bytes']).decode('utf-8')
+                    item['image_size'] = r.get('image_size', len(r['image_bytes']))
+                output.append(item)
+
+            successful = sum(1 for r in results if r['success'])
+            return {
+                'success': True,
+                'total_slides': len(rich_content.get('slides', [])),
+                'successful': successful,
+                'failed': len(rich_content.get('slides', [])) - successful,
+                'results': output,
+                'renderer': 'hybrid'
+            }
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Hybrid render error: {e}")
+            return {'success': False, 'error': str(e)}
+
     # ===================================================================
     # СИНХРОНИЗАЦИЯ ОПИСАНИЙ ИЗ ВНЕШНЕГО CSV
     # ===================================================================

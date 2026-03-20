@@ -717,6 +717,20 @@ def register_supplier_routes(app):
         )
         return jsonify(result)
 
+    @app.route('/admin/suppliers/<int:supplier_id>/ai/render-hybrid', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_render_hybrid(supplier_id):
+        """Гибридный рендер: AI-фон + Playwright текст (качественная инфографика)"""
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        result = SupplierService.ai_render_hybrid_infographic(product_id)
+        return jsonify(result)
+
     @app.route('/admin/suppliers/<int:supplier_id>/ai/history')
     @login_required
     @admin_required
