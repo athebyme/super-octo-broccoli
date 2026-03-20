@@ -19,6 +19,7 @@ Image Generation Service - Генерация изображений для ин
 
 import json
 import logging
+import os
 import requests
 import time
 import base64
@@ -31,6 +32,24 @@ from enum import Enum
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+
+def _get_proxy_config() -> Optional[Dict[str, str]]:
+    """Получает настройки прокси из переменных окружения.
+
+    Поддерживаемые переменные:
+        IMAGE_GEN_PROXY  — прокси только для image gen (приоритет)
+        HTTPS_PROXY      — общий прокси
+
+    Примеры значений:
+        socks5://127.0.0.1:1080
+        http://127.0.0.1:8080
+        socks5h://127.0.0.1:1080  (DNS через прокси)
+    """
+    proxy_url = os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
+    if proxy_url:
+        return {'http': proxy_url, 'https': proxy_url}
+    return None
 
 
 class ImageProvider(Enum):
@@ -260,6 +279,7 @@ class OpenAIImageGenerator(ImageGenerator):
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
         self.api_url = "https://api.openai.com/v1/images/generations"
+        self.proxies = _get_proxy_config()
 
     def generate(
         self,
@@ -305,7 +325,8 @@ class OpenAIImageGenerator(ImageGenerator):
                 self.api_url,
                 json=payload,
                 headers=headers,
-                timeout=self.config.timeout
+                timeout=self.config.timeout,
+                proxies=self.proxies
             )
 
             if response.status_code != 200:
@@ -368,6 +389,7 @@ class OpenRouterImageGenerator(ImageGenerator):
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
         self.api_url = "https://openrouter.ai/api/v1/images/generations"
+        self.proxies = _get_proxy_config()
 
     def generate(
         self,
@@ -407,14 +429,16 @@ class OpenRouterImageGenerator(ImageGenerator):
             "X-Title": "Seller Platform"
         }
 
+        proxy_info = f" via proxy {list(self.proxies.values())[0]}" if self.proxies else ""
         try:
-            logger.info(f"OpenRouter image gen ({model}): {prompt[:100]}...")
+            logger.info(f"OpenRouter image gen ({model}){proxy_info}: {prompt[:100]}...")
 
             response = requests.post(
                 self.api_url,
                 json=payload,
                 headers=headers,
-                timeout=self.config.timeout
+                timeout=self.config.timeout,
+                proxies=self.proxies
             )
 
             if response.status_code != 200:
@@ -431,7 +455,7 @@ class OpenRouterImageGenerator(ImageGenerator):
                 if 'b64_json' in image_data:
                     image_bytes = base64.b64decode(image_data['b64_json'])
                 elif 'url' in image_data:
-                    img_response = requests.get(image_data['url'], timeout=60)
+                    img_response = requests.get(image_data['url'], timeout=60, proxies=self.proxies)
                     if img_response.status_code == 200:
                         image_bytes = img_response.content
                     else:
