@@ -6402,6 +6402,56 @@ def api_ai_models():
         return jsonify({'success': False, 'error': str(e), 'models': {}})
 
 
+@app.route('/api/proxy/status')
+@login_required
+def api_proxy_status():
+    """Проверка статуса AI прокси (SOCKS5/HTTP)."""
+    import os as _os
+    proxy_url = _os.environ.get('AI_PROXY') or _os.environ.get('IMAGE_GEN_PROXY') or _os.environ.get('HTTPS_PROXY')
+
+    if not proxy_url:
+        return jsonify({
+            'configured': False,
+            'message': 'Прокси не настроен (AI_PROXY не задан)',
+        })
+
+    # Проверяем через прокси
+    try:
+        import requests as _req
+        resp = _req.get(
+            'https://ifconfig.me',
+            proxies={'http': proxy_url, 'https': proxy_url},
+            timeout=10,
+            headers={'User-Agent': 'curl/8.0'}
+        )
+        external_ip = resp.text.strip()
+
+        # Получаем IP без прокси для сравнения
+        try:
+            direct_resp = _req.get('https://ifconfig.me', timeout=5, headers={'User-Agent': 'curl/8.0'})
+            direct_ip = direct_resp.text.strip()
+        except Exception:
+            direct_ip = 'unknown'
+
+        return jsonify({
+            'configured': True,
+            'working': True,
+            'proxy_url': proxy_url,
+            'proxy_ip': external_ip,
+            'direct_ip': direct_ip,
+            'ip_changed': external_ip != direct_ip,
+            'message': f'Прокси работает. IP: {external_ip}' + (f' (прямой: {direct_ip})' if direct_ip != external_ip else ''),
+        })
+    except Exception as e:
+        return jsonify({
+            'configured': True,
+            'working': False,
+            'proxy_url': proxy_url,
+            'error': str(e),
+            'message': f'Прокси не работает: {e}',
+        })
+
+
 @app.route('/notifications')
 @login_required
 def notifications_page():

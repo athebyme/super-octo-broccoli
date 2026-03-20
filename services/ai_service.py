@@ -1663,12 +1663,16 @@ class AIClient:
             'Content-Type': 'application/json'
         })
 
-        # Прокси для AI запросов (OpenRouter, OpenAI и др.)
-        # AI_PROXY или IMAGE_GEN_PROXY или HTTPS_PROXY
-        proxy_url = os.environ.get('AI_PROXY') or os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
-        if proxy_url:
-            self._session.proxies = {'http': proxy_url, 'https': proxy_url}
-            logger.info(f"AI Service using proxy: {proxy_url}")
+        # Прокси только для зарубежных провайдеров (OpenRouter, OpenAI)
+        # Cloud.ru, MiMo, Custom — напрямую
+        _PROXY_PROVIDERS = {AIProvider.OPENROUTER, AIProvider.OPENAI}
+        if config.provider in _PROXY_PROVIDERS:
+            proxy_url = os.environ.get('AI_PROXY') or os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
+            if proxy_url:
+                self._session.proxies = {'http': proxy_url, 'https': proxy_url}
+                logger.info(f"AI Service [{config.provider.value}] using proxy: {proxy_url}")
+            else:
+                logger.warning(f"AI Service [{config.provider.value}] — прокси не настроен (AI_PROXY), запросы пойдут напрямую")
 
         # Для Cloud.ru используем TokenManager (нужен token exchange)
         self._token_manager: Optional[CloudRuTokenManager] = None
