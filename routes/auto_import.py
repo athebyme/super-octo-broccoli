@@ -2587,6 +2587,190 @@ def register_auto_import_routes(app):
             return jsonify({'success': False, 'error': str(e)}), 500
 
     # =====================================
+    # Template-based Infographic Rendering (FREE, no API keys needed)
+    # =====================================
+
+    @app.route('/auto-import/ai/render-infographic', methods=['POST'])
+    @login_required
+    def auto_import_render_infographic():
+        """Рендеринг инфографики из HTML-шаблонов (бесплатно, без API ключей)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index')  # None = все слайды
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        if not product.ai_rich_content:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        try:
+            rich_content = json.loads(product.ai_rich_content)
+            slides = rich_content.get('slides', [])
+            design = rich_content.get('design_recommendations', {})
+
+            if not slides:
+                return jsonify({'success': False, 'error': 'Нет слайдов в Rich-контенте'}), 400
+
+            # Получаем фотографии товара
+            product_photos = []
+            if product.photo_urls:
+                try:
+                    product_photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                except:
+                    pass
+
+            from services.infographic_renderer import render_all_slides, render_slide_to_png, _fetch_photo_as_b64
+
+            if slide_index is not None:
+                # Рендер одного слайда
+                if slide_index >= len(slides):
+                    return jsonify({'success': False, 'error': f'Слайд {slide_index} не найден'}), 400
+
+                slide = slides[slide_index]
+
+                # Скачиваем фото
+                photo_b64 = None
+                for url in product_photos[:3]:
+                    photo_b64 = _fetch_photo_as_b64(url)
+                    if photo_b64:
+                        break
+
+                success, img_bytes, error = render_slide_to_png(slide, design, photo_b64, slide_index)
+
+                if not success:
+                    return jsonify({'success': False, 'error': error}), 500
+
+                import base64 as b64module
+                return jsonify({
+                    'success': True,
+                    'slide_index': slide_index,
+                    'slide_type': slide.get('type', 'unknown'),
+                    'image_base64': b64module.b64encode(img_bytes).decode('utf-8'),
+                    'image_size': len(img_bytes),
+                    'renderer': 'template'
+                })
+            else:
+                # Рендер всех слайдов
+                results = render_all_slides(
+                    rich_content=rich_content,
+                    product_photos=product_photos
+                )
+
+                import base64 as b64module
+                output = []
+                for r in results:
+                    item = {
+                        'slide_number': r.get('slide_number', 0),
+                        'slide_type': r.get('slide_type', 'unknown'),
+                        'success': r['success'],
+                        'error': r.get('error', '')
+                    }
+                    if r['success'] and r.get('image_bytes'):
+                        item['image_base64'] = b64module.b64encode(r['image_bytes']).decode('utf-8')
+                        item['image_size'] = r.get('image_size', len(r['image_bytes']))
+                    output.append(item)
+
+                successful = sum(1 for r in results if r['success'])
+
+                return jsonify({
+                    'success': True,
+                    'total_slides': len(slides),
+                    'successful': successful,
+                    'failed': len(slides) - successful,
+                    'results': output,
+                    'renderer': 'template'
+                })
+
+        except Exception as e:
+            logger.error(f"Infographic render error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/auto-import/ai/render-infographic-preview', methods=['POST'])
+    @login_required
+    def auto_import_render_infographic_preview():
+        """Быстрый превью одного слайда (уменьшенный)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Seller not found'}), 403
+
+        data = request.get_json() or {}
+        product_id = data.get('product_id')
+        slide_index = data.get('slide_index', 0)
+
+        if not product_id:
+            return jsonify({'success': False, 'error': 'product_id required'}), 400
+
+        seller = current_user.seller
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first()
+
+        if not product:
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
+
+        if not product.ai_rich_content:
+            return jsonify({'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}), 400
+
+        try:
+            rich_content = json.loads(product.ai_rich_content)
+            slides = rich_content.get('slides', [])
+            design = rich_content.get('design_recommendations', {})
+
+            if slide_index >= len(slides):
+                return jsonify({'success': False, 'error': f'Слайд {slide_index} не найден'}), 400
+
+            slide = slides[slide_index]
+
+            # Скачиваем фото
+            product_photos = []
+            if product.photo_urls:
+                try:
+                    product_photos = json.loads(product.photo_urls) if isinstance(product.photo_urls, str) else product.photo_urls
+                except:
+                    pass
+
+            from services.infographic_renderer import render_slide_preview_b64, _fetch_photo_as_b64
+
+            photo_b64 = None
+            for url in product_photos[:3]:
+                photo_b64 = _fetch_photo_as_b64(url)
+                if photo_b64:
+                    break
+
+            success, preview_b64, error = render_slide_preview_b64(
+                slide, design, photo_b64, slide_index,
+                preview_width=data.get('preview_width', 720)
+            )
+
+            if not success:
+                return jsonify({'success': False, 'error': error}), 500
+
+            return jsonify({
+                'success': True,
+                'slide_index': slide_index,
+                'slide_type': slide.get('type', 'unknown'),
+                'preview_base64': preview_b64,
+                'renderer': 'template'
+            })
+
+        except Exception as e:
+            logger.error(f"Preview render error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # =====================================
     # AI History Endpoints
     # =====================================
 
