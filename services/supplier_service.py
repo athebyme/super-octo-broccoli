@@ -3408,13 +3408,36 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
     # Удаляем пустые характеристики
     wb_data['characteristics'] = {k: v for k, v in wb_data['characteristics'].items() if v}
 
-    # Добавляем доп характеристики из физических
-    if physical.get('diameter_cm'):
-        wb_data['characteristics']['Диаметр'] = physical['diameter_cm']
+    # Добавляем доп характеристики из физических данных
+    # Используем как общие, так и категорийно-специфичные имена,
+    # чтобы маппинг работал для любых категорий WB
+    if physical.get('diameter_cm') or physical.get('max_diameter_cm'):
+        diameter = physical.get('max_diameter_cm') or physical.get('diameter_cm')
+        wb_data['characteristics']['Диаметр'] = diameter
+        wb_data['characteristics']['Максимальный диаметр'] = diameter
     if physical.get('volume_ml'):
         wb_data['characteristics']['Объем'] = physical['volume_ml']
     if physical.get('working_length_cm'):
         wb_data['characteristics']['Рабочая длина'] = physical['working_length_cm']
+    if physical.get('length_cm'):
+        wb_data['characteristics']['Длина'] = physical['length_cm']
+    if physical.get('width_cm'):
+        wb_data['characteristics']['Ширина'] = physical['width_cm']
+        wb_data['characteristics']['Ширина предмета'] = physical['width_cm']
+    if physical.get('weight_g'):
+        wb_data['characteristics']['Вес товара без упаковки'] = physical['weight_g']
+        wb_data['characteristics']['Вес'] = physical['weight_g']
+
+    # Функциональность / особенности
+    functionality = parsed.get('functionality', {})
+    if functionality.get('special_features'):
+        features = functionality['special_features']
+        wb_data['characteristics']['Особенности'] = '; '.join(features) if isinstance(features, list) else features
+
+    # Комплектация из contents (если не уже заполнена)
+    contents = parsed.get('contents', {})
+    if not wb_data['characteristics'].get('Комплектация') and contents.get('package_contents'):
+        wb_data['characteristics']['Комплектация'] = ', '.join(contents['package_contents'])
 
     return wb_data
 
@@ -3492,12 +3515,26 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
             chars['Страна производства'] = product.country
         if product.season:
             chars['Сезон'] = product.season
-        if physical.get('diameter_cm'):
-            chars['Диаметр'] = str(physical['diameter_cm'])
+        if physical.get('diameter_cm') or physical.get('max_diameter_cm'):
+            diameter = str(physical.get('max_diameter_cm') or physical.get('diameter_cm'))
+            chars['Диаметр'] = diameter
+            chars['Максимальный диаметр'] = diameter
         if physical.get('volume_ml'):
             chars['Объем'] = str(physical['volume_ml'])
         if physical.get('working_length_cm'):
             chars['Рабочая длина'] = str(physical['working_length_cm'])
+        if physical.get('length_cm'):
+            chars['Длина'] = str(physical['length_cm'])
+        if physical.get('width_cm'):
+            chars['Ширина'] = str(physical['width_cm'])
+            chars['Ширина предмета'] = str(physical['width_cm'])
+        if physical.get('weight_g'):
+            chars['Вес товара без упаковки'] = str(physical['weight_g'])
+        # Функциональность / особенности
+        functionality = parsed.get('functionality', {})
+        if functionality.get('special_features'):
+            features = functionality['special_features']
+            chars['Особенности'] = '; '.join(features) if isinstance(features, list) else str(features)
         pkg_contents = parsed.get('contents', {})
         if pkg_contents.get('package_contents'):
             chars['Комплектация'] = ', '.join(pkg_contents['package_contents'])
@@ -3731,8 +3768,49 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     product_info = {
         'title': product.title or product.ai_seo_title,
         'description': product.description or product.ai_description,
-        'brand': product.brand
+        'brand': product.brand,
+        'category': product.wb_category_name or product.category,
+        'wb_category': product.wb_subject_name,
     }
+
+    # Передаём уже извлечённые данные для лучшего маппинга
+    physical = parsed_data.get('physical', {})
+    color = parsed_data.get('color', {})
+    materials = parsed_data.get('materials', {})
+    contents = parsed_data.get('contents', {})
+    functionality = parsed_data.get('functionality', {})
+    audience = parsed_data.get('audience', {})
+
+    if physical:
+        product_info['dimensions'] = physical
+    if color:
+        colors = [color.get('primary_color', '')]
+        if color.get('secondary_colors'):
+            colors.extend(color['secondary_colors'])
+        product_info['colors'] = [c for c in colors if c]
+    if materials.get('materials_list'):
+        product_info['materials'] = materials['materials_list']
+
+    # Собираем уже распарсенные характеристики, чтобы AI их переиспользовал
+    pre_chars = {}
+    if physical.get('diameter_cm') or physical.get('max_diameter_cm'):
+        pre_chars['диаметр'] = physical.get('max_diameter_cm') or physical.get('diameter_cm')
+    if physical.get('working_length_cm'):
+        pre_chars['рабочая длина'] = physical['working_length_cm']
+    if physical.get('length_cm'):
+        pre_chars['длина'] = physical['length_cm']
+    if physical.get('width_cm'):
+        pre_chars['ширина'] = physical['width_cm']
+    if physical.get('weight_g'):
+        pre_chars['вес'] = physical['weight_g']
+    if functionality.get('special_features'):
+        pre_chars['особенности'] = functionality['special_features']
+    if contents.get('package_contents'):
+        pre_chars['комплектация'] = ', '.join(contents['package_contents'])
+    if audience.get('gender'):
+        pre_chars['пол'] = audience['gender']
+    if pre_chars:
+        product_info['characteristics'] = pre_chars
 
     success, result, error = task.execute_two_pass(
         product=product, product_info=product_info, original_data=parsed_data
