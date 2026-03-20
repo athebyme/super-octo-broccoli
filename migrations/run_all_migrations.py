@@ -793,6 +793,151 @@ def migrate(db_path):
             add_column_if_missing(cursor, 'agent_tasks', 'parent_task_id', 'TEXT', at_cols)
 
         # ============================================================
+        # Таблицы контент-фабрики (content_factories, social_accounts, etc.)
+        # ============================================================
+        print("\n📋 Таблицы контент-фабрики")
+        print("-" * 40)
+
+        # Обновляем existing_tables
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = {row[0] for row in cursor.fetchall()}
+
+        cf_tables_to_create = {
+            'social_accounts': """
+                CREATE TABLE social_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    platform VARCHAR(20) NOT NULL,
+                    account_name VARCHAR(200),
+                    account_id VARCHAR(200),
+                    credentials TEXT,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    connected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_used_at DATETIME,
+                    last_error TEXT
+                )
+            """,
+            'content_factories': """
+                CREATE TABLE content_factories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    name VARCHAR(200) NOT NULL,
+                    description TEXT,
+                    platform VARCHAR(20) NOT NULL,
+                    content_types_json TEXT DEFAULT '[]',
+                    tone VARCHAR(20) DEFAULT 'casual',
+                    style_guidelines TEXT,
+                    language VARCHAR(10) DEFAULT 'ru',
+                    product_selection_mode VARCHAR(20) DEFAULT 'manual',
+                    product_selection_rules_json TEXT DEFAULT '{}',
+                    ai_provider VARCHAR(20) DEFAULT 'openai',
+                    schedule_cron VARCHAR(100),
+                    auto_approve BOOLEAN DEFAULT 0,
+                    default_social_account_id INTEGER REFERENCES social_accounts(id),
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+            'content_templates': """
+                CREATE TABLE content_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER REFERENCES sellers(id),
+                    platform VARCHAR(20) NOT NULL,
+                    content_type VARCHAR(30) NOT NULL,
+                    name VARCHAR(200) NOT NULL,
+                    system_prompt TEXT NOT NULL,
+                    user_prompt_template TEXT NOT NULL,
+                    example_output TEXT,
+                    hashtag_strategy TEXT,
+                    is_system BOOLEAN DEFAULT 0,
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+            'content_items': """
+                CREATE TABLE content_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    factory_id INTEGER NOT NULL REFERENCES content_factories(id),
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    template_id INTEGER REFERENCES content_templates(id),
+                    platform VARCHAR(20) NOT NULL,
+                    content_type VARCHAR(30) NOT NULL,
+                    product_ids_json TEXT DEFAULT '[]',
+                    title VARCHAR(500),
+                    body_text TEXT NOT NULL,
+                    hashtags_json TEXT DEFAULT '[]',
+                    media_urls_json TEXT DEFAULT '[]',
+                    platform_specific_json TEXT DEFAULT '{}',
+                    status VARCHAR(20) DEFAULT 'draft',
+                    scheduled_at DATETIME,
+                    published_at DATETIME,
+                    social_account_id INTEGER REFERENCES social_accounts(id),
+                    external_post_id VARCHAR(200),
+                    external_post_url VARCHAR(500),
+                    ai_provider VARCHAR(20),
+                    ai_model VARCHAR(50),
+                    tokens_used INTEGER,
+                    generation_time_ms INTEGER,
+                    error_message TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+            'content_plans': """
+                CREATE TABLE content_plans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    factory_id INTEGER NOT NULL REFERENCES content_factories(id),
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    name VARCHAR(200) NOT NULL,
+                    date_from DATE NOT NULL,
+                    date_to DATE NOT NULL,
+                    slots_json TEXT DEFAULT '[]',
+                    is_active BOOLEAN NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """,
+        }
+
+        # Порядок важен из-за foreign keys
+        for table_name in ['social_accounts', 'content_factories', 'content_templates', 'content_items', 'content_plans']:
+            if table_name not in existing_tables:
+                cursor.execute(cf_tables_to_create[table_name])
+                print(f"  ✅ Таблица {table_name} создана")
+                total_added += 1
+            else:
+                print(f"  ⏭️  {table_name} уже существует")
+
+        # ============================================================
+        # Добавление недостающих колонок в content_factories
+        # ============================================================
+        if 'content_factories' in existing_tables:
+            print("\n📋 Проверяю колонки content_factories...")
+            cf_cols = {row[1] for row in cursor.execute("PRAGMA table_info(content_factories)").fetchall()}
+            add_column_if_missing(cursor, 'content_factories', 'auto_publish', 'BOOLEAN DEFAULT 0', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'publish_interval_minutes', 'INTEGER DEFAULT 60', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'last_auto_publish_at', 'DATETIME', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'auto_generate', 'BOOLEAN DEFAULT 0', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'generate_interval_minutes', 'INTEGER DEFAULT 120', cf_cols)
+            add_column_if_missing(cursor, 'content_factories', 'last_auto_generate_at', 'DATETIME', cf_cols)
+
+        # Индексы
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_sa_seller ON social_accounts(seller_id)",
+            "CREATE INDEX IF NOT EXISTS idx_cf_seller ON content_factories(seller_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ct_platform_type ON content_templates(platform, content_type)",
+            "CREATE INDEX IF NOT EXISTS idx_ci_factory_status ON content_items(factory_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_ci_scheduled ON content_items(status, scheduled_at)",
+            "CREATE INDEX IF NOT EXISTS idx_cp_factory ON content_plans(factory_id)",
+        ]:
+            try:
+                cursor.execute(idx_sql)
+            except sqlite3.OperationalError:
+                pass
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()

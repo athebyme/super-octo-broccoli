@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}Аккаунты соцсетей — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto" x-data="socialAccounts()">
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-sm text-gray-500 mb-4">
+        <a href="{{ url_for('content_factory_dashboard') }}" class="hover:text-brand transition">Контент-фабрика</a>
+        <span>/</span>
+        <span class="text-gray-900">Аккаунты</span>
+    </div>
+
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-display text-gray-900">Подключённые аккаунты</h1>
+        <button @click="showAddModal = true" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
+            Подключить аккаунт
+        </button>
+    </div>
+
+    <!-- Accounts list -->
+    {% if accounts %}
+    <div class="space-y-4">
+        {% for account in accounts %}
+        <div class="bg-white rounded-xl border border-gray-100 p-5 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center
+                    {% if account.platform == 'telegram' %}bg-blue-100 text-blue-600
+                    {% elif account.platform == 'vk' %}bg-sky-100 text-sky-600
+                    {% elif account.platform == 'instagram' %}bg-pink-100 text-pink-600
+                    {% elif account.platform == 'tiktok' %}bg-gray-800 text-white
+                    {% elif account.platform == 'youtube' %}bg-red-100 text-red-600
+                    {% else %}bg-gray-100 text-gray-600{% endif %}">
+                    <span class="text-sm font-bold">{{ platform_labels.get(account.platform, account.platform)[:2] }}</span>
+                </div>
+                <div>
+                    <div class="font-medium text-gray-900">{{ account.account_name or 'Без названия' }}</div>
+                    <div class="text-sm text-gray-500">
+                        {{ platform_labels.get(account.platform, account.platform) }}
+                        {% if account.account_id %} &middot; ID: {{ account.account_id }}{% endif %}
+                        {% if account.connected_at %} &middot; Подключён {{ account.connected_at.strftime('%d.%m.%Y') }}{% endif %}
+                    </div>
+                    {% if account.last_error %}
+                    <div class="text-xs text-red-500 mt-1">{{ account.last_error }}</div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="px-2 py-0.5 rounded-full text-xs font-medium {% if account.is_active %}bg-green-50 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">
+                    {{ 'Активен' if account.is_active else 'Неактивен' }}
+                </span>
+                <button @click="deleteAccount({{ account.id }})" class="p-1.5 text-gray-400 hover:text-red-500 transition" title="Удалить">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-white rounded-xl border border-gray-100 p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+        <h3 class="text-lg font-semibold text-gray-900 mb-2">Нет подключённых аккаунтов</h3>
+        <p class="text-sm text-gray-500 mb-6">Подключите аккаунт социальной сети для публикации контента</p>
+        <button @click="showAddModal = true" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
+            Подключить аккаунт
+        </button>
+    </div>
+    {% endif %}
+
+    <!-- Add Account Modal -->
+    <div x-show="showAddModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.4)" @click.self="showAddModal = false">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6" @click.stop>
+            <h2 class="text-lg font-display text-gray-900 mb-4">Подключить аккаунт</h2>
+
+            <div class="space-y-4">
+                <!-- Platform -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Платформа</label>
+                    <select x-model="newPlatform" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                        {% for p in platforms %}
+                        <option value="{{ p }}">{{ platform_labels.get(p, p) }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Account name -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Название аккаунта</label>
+                    <input type="text" x-model="newAccountName" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Мой Telegram канал">
+                </div>
+
+                <!-- Telegram specific -->
+                <template x-if="newPlatform === 'telegram'">
+                    <div class="space-y-3 p-4 bg-blue-50 rounded-lg">
+                        <div class="text-xs text-blue-800 space-y-1">
+                            <p class="font-semibold">Инструкция:</p>
+                            <ol class="list-decimal list-inside space-y-0.5">
+                                <li>Создайте бота через <a href="https://t.me/BotFather" target="_blank" class="underline font-medium">@BotFather</a> (команда /newbot)</li>
+                                <li>Скопируйте токен бота</li>
+                                <li>Откройте ваш <strong>канал</strong> и добавьте бота как <strong>администратора</strong></li>
+                                <li>Укажите @username канала ниже</li>
+                            </ol>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-blue-700 mb-1">Токен бота</label>
+                            <input type="text" x-model="newCredsBotToken" class="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-blue-700 mb-1">@username или ID канала</label>
+                            <input type="text" x-model="newAccountId" class="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm" placeholder="@mychannel или -1001234567890">
+                            <p class="text-xs text-blue-600 mt-1">Именно <strong>канал</strong>, не личный чат. Бот должен быть администратором канала.</p>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- VK specific -->
+                <template x-if="newPlatform === 'vk'">
+                    <div class="space-y-3 p-4 bg-sky-50 rounded-lg">
+                        <p class="text-xs text-sky-700">Создайте сервисный ключ в настройках сообщества (Управление > Работа с API).</p>
+                        <div>
+                            <label class="block text-xs text-sky-700 mb-1">Access Token</label>
+                            <input type="text" x-model="newCredsAccessToken" class="w-full px-3 py-2 border border-sky-200 rounded-lg text-sm" placeholder="vk1.a.xxx...">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-sky-700 mb-1">ID сообщества</label>
+                            <input type="text" x-model="newAccountId" class="w-full px-3 py-2 border border-sky-200 rounded-lg text-sm" placeholder="123456789">
+                        </div>
+                    </div>
+                </template>
+
+                <!-- Generic (Instagram, TikTok, YouTube) -->
+                <template x-if="!['telegram', 'vk'].includes(newPlatform)">
+                    <div class="space-y-3 p-4 bg-gray-50 rounded-lg">
+                        <p class="text-xs text-gray-600">Укажите ID аккаунта и токен доступа.</p>
+                        <div>
+                            <label class="block text-xs text-gray-600 mb-1">ID аккаунта</label>
+                            <input type="text" x-model="newAccountId" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-600 mb-1">Токен доступа</label>
+                            <input type="text" x-model="newCredsAccessToken" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <div class="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
+                <button @click="addAccount()" :disabled="saving" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand-dark transition disabled:opacity-50">
+                    <span x-show="!saving">Подключить</span>
+                    <span x-show="saving">Сохранение...</span>
+                </button>
+                <button @click="showAddModal = false" class="px-4 py-2.5 text-gray-500 text-sm">Отмена</button>
+            </div>
+
+            <div x-show="addError" class="mt-3 text-sm text-red-500" x-text="addError"></div>
+            <div x-show="addWarning" class="mt-3 text-sm text-amber-600" x-text="addWarning"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+function socialAccounts() {
+    return {
+        showAddModal: false,
+        newPlatform: 'telegram',
+        newAccountName: '',
+        newAccountId: '',
+        newCredsBotToken: '',
+        newCredsAccessToken: '',
+        saving: false,
+        addError: '',
+        addWarning: '',
+
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content; },
+
+        async addAccount() {
+            this.saving = true;
+            this.addError = '';
+            this.addWarning = '';
+
+            let credentials = {};
+            if (this.newPlatform === 'telegram') {
+                if (!this.newCredsBotToken) { this.addError = 'Укажите токен бота'; this.saving = false; return; }
+                if (!this.newAccountId) { this.addError = 'Укажите @username или ID канала (не личного чата!)'; this.saving = false; return; }
+                credentials = { bot_token: this.newCredsBotToken, chat_id: this.newAccountId };
+            } else if (this.newPlatform === 'vk') {
+                if (!this.newCredsAccessToken) { this.addError = 'Укажите Access Token сообщества'; this.saving = false; return; }
+                if (!this.newAccountId) { this.addError = 'Укажите ID сообщества'; this.saving = false; return; }
+                credentials = { access_token: this.newCredsAccessToken, group_id: this.newAccountId };
+            } else {
+                if (!this.newAccountId) { this.addError = 'Укажите ID аккаунта'; this.saving = false; return; }
+                if (this.newCredsAccessToken) credentials = { access_token: this.newCredsAccessToken };
+            }
+
+            try {
+                const resp = await fetch('/api/content-factory/accounts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({
+                        platform: this.newPlatform,
+                        account_name: this.newAccountName,
+                        account_id: this.newAccountId,
+                        credentials: credentials,
+                    }),
+                });
+                const data = await resp.json();
+
+                if (data.error) { this.addError = data.error; }
+                else {
+                    if (data.warning) this.addWarning = data.warning;
+                    else location.reload();
+                }
+            } catch(e) { this.addError = 'Ошибка: ' + e.message; }
+            this.saving = false;
+        },
+
+        async deleteAccount(id) {
+            if (!confirm('Удалить этот аккаунт?')) return;
+            await fetch(`/api/content-factory/accounts/${id}`, { method: 'DELETE', headers: { 'X-CSRFToken': this.csrf() } });
+            location.reload();
+        },
+    }
+}
+</script>
+{% endblock %}

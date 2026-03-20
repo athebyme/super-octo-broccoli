@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактирование' if factory else 'Создание' }} фабрики — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <div class="mb-6">
+        <a href="{{ url_for('content_factory_dashboard') }}" class="text-sm text-gray-500 hover:text-brand transition">&larr; Назад к фабрикам</a>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-100 p-6">
+        <h1 class="text-xl font-display text-gray-900 mb-6">{{ 'Настройки фабрики' if factory else 'Новая контент-фабрика' }}</h1>
+
+        <form method="POST" class="space-y-6" x-data="factoryForm()">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <!-- Название -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Название *</label>
+                <input type="text" name="name" value="{{ factory.name if factory else '' }}" required
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none"
+                    placeholder="Telegram канал — товары для дома">
+            </div>
+
+            <!-- Описание -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Описание</label>
+                <textarea name="description" rows="2"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none"
+                    placeholder="Краткое описание назначения фабрики">{{ factory.description if factory else '' }}</textarea>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <!-- Платформа -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Платформа *</label>
+                    <select name="platform" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                        {% for p in platforms %}
+                        <option value="{{ p }}" {% if factory and factory.platform == p %}selected{% endif %}>{{ platform_labels.get(p, p) }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Тон -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Тон контента</label>
+                    <select name="tone" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                        <option value="casual" {% if factory and factory.tone == 'casual' %}selected{% endif %}>Неформальный</option>
+                        <option value="formal" {% if factory and factory.tone == 'formal' %}selected{% endif %}>Деловой</option>
+                        <option value="creative" {% if factory and factory.tone == 'creative' %}selected{% endif %}>Творческий</option>
+                        <option value="expert" {% if factory and factory.tone == 'expert' %}selected{% endif %}>Экспертный</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Типы контента -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Типы контента</label>
+                <div class="flex flex-wrap gap-3">
+                    {% for ct in content_types %}
+                    <label class="inline-flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50 transition text-sm">
+                        <input type="checkbox" name="content_types" value="{{ ct }}"
+                            {% if factory and ct in factory.get_content_types() %}checked{% elif not factory %}checked{% endif %}
+                            class="rounded border-gray-300 text-brand focus:ring-brand">
+                        {{ content_type_labels.get(ct, ct) }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- AI Provider -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">AI провайдер</label>
+                <select name="ai_provider" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                    <option value="openai" {% if factory and factory.ai_provider == 'openai' %}selected{% endif %}>OpenAI (GPT-4o)</option>
+                    <option value="cloudru" {% if factory and factory.ai_provider == 'cloudru' %}selected{% endif %}>Cloud.ru</option>
+                    <option value="mimo" {% if factory and factory.ai_provider == 'mimo' %}selected{% endif %}>Xiaomi MiMo</option>
+                    <option value="openrouter" {% if factory and factory.ai_provider == 'openrouter' %}selected{% endif %}>OpenRouter (300+ моделей)</option>
+                    <option value="claude" {% if factory and factory.ai_provider == 'claude' %}selected{% endif %}>Claude</option>
+                    <option value="gemini" {% if factory and factory.ai_provider == 'gemini' %}selected{% endif %}>Gemini</option>
+                </select>
+            </div>
+
+            <!-- Style guidelines -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Стилевые указания для AI</label>
+                <textarea name="style_guidelines" rows="3"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none"
+                    placeholder="Дополнительные указания по стилю: тон, запрещённые слова, обязательные элементы...">{{ factory.style_guidelines if factory else '' }}</textarea>
+            </div>
+
+            <!-- Подбор товаров -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Режим подбора товаров</label>
+                <select name="product_selection_mode" x-model="selectionMode" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                    <option value="manual">Ручной выбор</option>
+                    <option value="bestsellers">Бестселлеры</option>
+                    <option value="new_arrivals">Новинки</option>
+                    <option value="rules">По правилам</option>
+                </select>
+            </div>
+
+            <!-- Правила подбора (видны при mode=rules) -->
+            <div x-show="selectionMode === 'rules'" x-collapse class="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Категория</label>
+                    <input type="text" name="rule_category" value="{{ (factory.get_selection_rules() if factory else {}).get('category', '') }}"
+                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Товары для дома">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Бренд</label>
+                    <input type="text" name="rule_brand" value="{{ (factory.get_selection_rules() if factory else {}).get('brand', '') }}"
+                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Samsung">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Мин. цена</label>
+                    <input type="number" name="rule_min_price" value="{{ (factory.get_selection_rules() if factory else {}).get('min_price', '') }}"
+                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="500">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Макс. цена</label>
+                    <input type="number" name="rule_max_price" value="{{ (factory.get_selection_rules() if factory else {}).get('max_price', '') }}"
+                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="10000">
+                </div>
+            </div>
+
+            <!-- Соц. аккаунт по умолчанию -->
+            {% if accounts %}
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Аккаунт для публикации</label>
+                <select name="default_social_account_id" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                    <option value="">Не выбран</option>
+                    {% for a in accounts %}
+                    <option value="{{ a.id }}" {% if factory and factory.default_social_account_id == a.id %}selected{% endif %}>
+                        {{ platform_labels.get(a.platform, a.platform) }}: {{ a.account_name or a.account_id }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+
+            <!-- Авто-одобрение -->
+            <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" name="auto_approve" {% if factory and factory.auto_approve %}checked{% endif %}
+                    class="rounded border-gray-300 text-brand focus:ring-brand">
+                <span class="text-sm text-gray-700">Автоматически одобрять сгенерированный контент</span>
+            </label>
+
+            <!-- Автопостинг (полный цикл) -->
+            <div class="border border-purple-100 bg-purple-50/30 rounded-lg p-4 space-y-3" x-data="{ autoGenerate: {{ 'true' if factory and factory.auto_generate else 'false' }} }">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="auto_generate" x-model="autoGenerate"
+                        class="rounded border-purple-300 text-purple-600 focus:ring-purple-500">
+                    <div>
+                        <span class="text-sm font-medium text-gray-700">Автопостинг</span>
+                        <p class="text-xs text-gray-400">Автоматически выбирает рандомный товар, генерирует пост через AI и ставит в очередь</p>
+                    </div>
+                </label>
+                <div x-show="autoGenerate" x-cloak class="ml-7 space-y-3">
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Интервал генерации</label>
+                        <div class="flex items-center gap-2">
+                            <input type="number" name="generate_interval_minutes" min="30" max="1440"
+                                value="{{ factory.generate_interval_minutes if factory and factory.generate_interval_minutes else 120 }}"
+                                class="w-24 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 outline-none">
+                            <span class="text-sm text-gray-500">минут</span>
+                        </div>
+                        <p class="text-xs text-gray-400 mt-1">Как часто генерировать новый пост. Минимум 30 мин.</p>
+                    </div>
+                    <div class="bg-white/60 rounded-md p-3 text-xs text-gray-500 space-y-1">
+                        <p><strong>Как работает:</strong></p>
+                        <p>1. Выбирает случайный товар (избегая повторов за 7 дней)</p>
+                        <p>2. Генерирует пост через AI (рандомный тип из настроек фабрики)</p>
+                        <p>3. Если включено «Авто-одобрение» — сразу одобряет</p>
+                        <p>4. Если включена «Автопубликация» — публикует по расписанию</p>
+                        <p class="text-purple-600 font-medium mt-1">Для полного автопилота включите все три: Автопостинг + Авто-одобрение + Автопубликация</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Автопубликация -->
+            <div class="border border-gray-100 rounded-lg p-4 space-y-3" x-data="{ autoPublish: {{ 'true' if factory and factory.auto_publish else 'false' }} }">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="auto_publish" x-model="autoPublish"
+                        class="rounded border-gray-300 text-brand focus:ring-brand">
+                    <div>
+                        <span class="text-sm font-medium text-gray-700">Автопубликация</span>
+                        <p class="text-xs text-gray-400">Одобренные посты будут публиковаться автоматически</p>
+                    </div>
+                </label>
+                <div x-show="autoPublish" x-cloak class="ml-7">
+                    <label class="block text-sm text-gray-600 mb-1">Интервал между постами</label>
+                    <div class="flex items-center gap-2">
+                        <input type="number" name="publish_interval_minutes" min="1" max="1440"
+                            value="{{ factory.publish_interval_minutes if factory and factory.publish_interval_minutes else 60 }}"
+                            class="w-24 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none">
+                        <span class="text-sm text-gray-500">минут</span>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1">Минимум 1 мин. Рекомендуемый: 30-120 мин.</p>
+                </div>
+            </div>
+
+            {% if factory %}
+            <label class="flex items-center gap-3 cursor-pointer">
+                <input type="checkbox" name="is_active" {% if factory.is_active %}checked{% endif %}
+                    class="rounded border-gray-300 text-brand focus:ring-brand">
+                <span class="text-sm text-gray-700">Фабрика активна</span>
+            </label>
+            {% endif %}
+
+            <div class="flex items-center gap-3 pt-4 border-t border-gray-100">
+                <button type="submit" class="px-5 py-2.5 bg-brand text-white rounded-lg hover:bg-brand-dark transition text-sm font-medium">
+                    {{ 'Сохранить' if factory else 'Создать фабрику' }}
+                </button>
+                <a href="{{ url_for('content_factory_dashboard') }}" class="px-4 py-2.5 text-gray-500 hover:text-gray-700 text-sm">Отмена</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function factoryForm() {
+    return {
+        selectionMode: '{{ factory.product_selection_mode if factory else "manual" }}',
+    }
+}
+</script>
+{% endblock %}

@@ -510,40 +510,18 @@ def _try_ai_generate(seller, item_type, text, rating, product_name, pros, cons, 
         if not settings.get('ai_enabled'):
             return None, None  # AI not enabled, silent fallback
 
-        # Get AI config from AutoImportSettings (don't require ai_enabled for auto-import)
-        from models import AutoImportSettings
-        ai_settings = AutoImportSettings.query.filter_by(seller_id=seller.id).first()
-        if not ai_settings:
-            logger.warning("AI enabled for reviews but no AutoImportSettings found")
-            return None, 'Настройки AI не найдены. Перейдите в Профиль → AI-провайдер и укажите API ключ.'
+        # Единая точка создания AI-клиента
+        from services.ai_service import AIConfig, AIClient
+        try:
+            config = AIConfig.for_seller(
+                seller_id=seller.id,
+                temperature=0.7,
+                max_tokens=500,
+            )
+        except ValueError as e:
+            logger.warning(f"AI for reviews: {e}")
+            return None, str(e)
 
-        # Build AI config directly — don't use from_settings() which requires ai_enabled
-        from services.ai_service import AIConfig, AIClient, AIProvider
-        ai_api_key = getattr(ai_settings, 'ai_api_key', '')
-        if not ai_api_key:
-            logger.warning("AI enabled for reviews but no AI API key configured")
-            return None, 'API ключ AI не указан. Перейдите в Профиль → AI-провайдер и укажите API ключ.'
-
-        provider = AIProvider(getattr(ai_settings, 'ai_provider', 'cloudru') or 'cloudru')
-        if provider == AIProvider.CLOUDRU:
-            api_base = getattr(ai_settings, 'ai_api_base_url', '') or "https://foundation-models.api.cloud.ru/v1"
-            default_model = "openai/gpt-oss-120b"
-        elif provider == AIProvider.CUSTOM:
-            api_base = getattr(ai_settings, 'ai_api_base_url', '') or "https://api.openai.com/v1"
-            default_model = "gpt-4o-mini"
-        else:
-            api_base = "https://api.openai.com/v1"
-            default_model = "gpt-4o-mini"
-
-        config = AIConfig(
-            provider=provider,
-            api_key=ai_api_key,
-            api_base_url=api_base,
-            model=getattr(ai_settings, 'ai_model', '') or default_model,
-        )
-
-        config.temperature = 0.7
-        config.max_tokens = 500
         ai_client = AIClient(config)
 
         tone = settings.get('tone', 'professional')

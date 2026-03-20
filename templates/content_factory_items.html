@@ -1,0 +1,1040 @@
+{% extends "base.html" %}
+{% block title %}{{ factory.name }} — Контент{% endblock %}
+
+{% block content %}
+{% set platform_limits = {'telegram': 4096, 'vk': 16000, 'instagram': 2200, 'tiktok': 300, 'youtube': 5000} %}
+{% set char_limit = platform_limits.get(factory.platform, 5000) %}
+
+<div class="max-w-7xl mx-auto" x-data="contentItems()">
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-sm text-gray-500 mb-4">
+        <a href="{{ url_for('content_factory_dashboard') }}" class="hover:text-brand transition">Контент-фабрика</a>
+        <span>/</span>
+        <span class="text-gray-900">{{ factory.name }}</span>
+    </div>
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+        <div class="flex items-center gap-3">
+            <h1 class="text-xl font-display text-gray-900">{{ factory.name }}</h1>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium
+                {% if factory.platform == 'telegram' %}bg-blue-100 text-blue-700
+                {% elif factory.platform == 'vk' %}bg-sky-100 text-sky-700
+                {% elif factory.platform == 'instagram' %}bg-pink-100 text-pink-700
+                {% elif factory.platform == 'tiktok' %}bg-gray-900 text-white
+                {% elif factory.platform == 'youtube' %}bg-red-100 text-red-700
+                {% endif %}">{{ platform_labels.get(factory.platform, factory.platform) }}</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="{{ url_for('content_factory_calendar', factory_id=factory.id) }}" class="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                Календарь
+            </a>
+            <a href="{{ url_for('content_factory_edit', factory_id=factory.id) }}" class="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition">Настройки</a>
+            <button @click="showGenerateModal = true" class="px-4 py-2 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
+                Генерировать
+            </button>
+        </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="flex flex-wrap gap-3 mb-6">
+        <span class="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-700">Всего: {{ stats.total }}</span>
+        {% for status, count in stats.by_status.items() %}
+        <a href="?status={{ status }}" class="px-3 py-1.5 rounded-lg text-xs font-medium
+            {% if status == 'draft' %}bg-amber-50 text-amber-700
+            {% elif status == 'approved' %}bg-blue-50 text-blue-700
+            {% elif status == 'scheduled' %}bg-indigo-50 text-indigo-700
+            {% elif status == 'published' %}bg-green-50 text-green-700
+            {% elif status == 'failed' %}bg-red-50 text-red-700
+            {% else %}bg-gray-50 text-gray-600{% endif %}
+            hover:opacity-80 transition {% if status_filter == status %}ring-2 ring-brand/30{% endif %}">
+            {{ status_labels.get(status, status) }}: {{ count }}
+        </a>
+        {% endfor %}
+        {% if status_filter %}
+        <a href="{{ url_for('content_factory_items', factory_id=factory.id) }}" class="px-3 py-1.5 rounded-lg text-xs text-gray-500 hover:text-brand transition">Сбросить фильтр</a>
+        {% endif %}
+    </div>
+
+    <!-- Generation progress banner -->
+    <div x-show="bulkProgress.active" x-cloak
+         class="mb-4 bg-gradient-to-r from-brand/5 to-brand/10 border border-brand/20 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-brand animate-spin" x-show="bulkProgress.running" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <svg class="w-5 h-5 text-green-500" x-show="!bulkProgress.running" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span class="text-sm font-medium text-gray-700" x-text="bulkProgress.running ? 'Генерация контента...' : 'Генерация завершена'"></span>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-gray-500">
+                    <span x-text="bulkProgress.done"></span> / <span x-text="bulkProgress.total"></span>
+                </span>
+                <button x-show="bulkProgress.running" @click="cancelBulk()" class="text-xs text-red-500 hover:text-red-700">Отмена</button>
+                <button x-show="!bulkProgress.running" @click="bulkProgress.active = false" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+            </div>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-1.5">
+            <div class="bg-brand h-1.5 rounded-full transition-all duration-300"
+                 :style="'width: ' + (bulkProgress.total ? (bulkProgress.done / bulkProgress.total * 100) : 0) + '%'"></div>
+        </div>
+        <div x-show="bulkProgress.errors.length > 0" class="mt-2 text-xs text-red-500" x-text="'Ошибки: ' + bulkProgress.errors.join('; ')"></div>
+    </div>
+
+    <!-- Dynamically generated items container -->
+    <div id="generated-items-container" class="space-y-4 mb-4" x-show="generatedItems.length > 0">
+        <template x-for="item in generatedItems" :key="item.id">
+            <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow animate-fadeIn"
+                 x-data="{ expanded: false }">
+                <div class="p-5">
+                    <div class="flex gap-4">
+                        <!-- Photo -->
+                        <div class="shrink-0">
+                            <template x-if="item.media_urls && item.media_urls.length > 0">
+                                <img :src="item.media_urls[0]" alt="Product"
+                                     class="w-20 h-20 rounded-lg object-cover border border-gray-100"
+                                     onerror="this.onerror=null;this.style.display='none';this.nextElementSibling?.classList.remove('hidden')">
+                            </template>
+                            <div class="w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300"
+                                 :class="item.media_urls && item.media_urls.length > 0 ? 'hidden' : ''">
+                                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </div>
+                        </div>
+                        <!-- Content -->
+                        <div class="flex-1 min-w-0">
+                            <div class="flex flex-wrap items-center gap-2 mb-2">
+                                <span class="px-2 py-0.5 rounded text-xs font-medium"
+                                      :class="item.status === 'draft' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'"
+                                      x-text="item.status === 'draft' ? 'Черновик' : 'Одобрен'"></span>
+                                <span class="text-xs text-gray-400" x-text="item._content_type_label || item.content_type"></span>
+                                <span class="text-xs text-gray-300" x-text="item._created_label || ''"></span>
+                                <template x-if="item.ai_provider">
+                                    <span class="text-xs text-gray-300" x-text="item.ai_provider + (item.generation_time_ms ? ' (' + (item.generation_time_ms / 1000).toFixed(1) + 'с)' : '')"></span>
+                                </template>
+                                <template x-if="item.platform_specific && item.platform_specific.quality_score">
+                                    <span class="inline-flex items-center gap-1 text-xs font-medium"
+                                          :class="item.platform_specific.quality_score >= 80 ? 'text-green-600' : item.platform_specific.quality_score >= 50 ? 'text-yellow-600' : 'text-red-500'">
+                                        <span class="w-2 h-2 rounded-full"
+                                              :class="item.platform_specific.quality_score >= 80 ? 'bg-green-500' : item.platform_specific.quality_score >= 50 ? 'bg-yellow-400' : 'bg-red-400'"></span>
+                                        <span x-text="item.platform_specific.quality_score"></span>
+                                    </span>
+                                </template>
+                            </div>
+                            <!-- Product names -->
+                            <template x-if="item.platform_specific && item.platform_specific.product_names && item.platform_specific.product_names.length">
+                                <div class="flex flex-wrap items-center gap-1.5 mb-2">
+                                    <template x-for="pname in item.platform_specific.product_names.slice(0, 3)">
+                                        <span class="px-2 py-0.5 bg-gray-50 text-gray-400 text-[11px] rounded-full border border-gray-100 truncate max-w-[200px]" x-text="pname"></span>
+                                    </template>
+                                </div>
+                            </template>
+                            <!-- Title -->
+                            <template x-if="item.title">
+                                <h3 class="font-medium text-gray-900 mb-1 leading-snug" x-text="item.title"></h3>
+                            </template>
+                            <!-- Body -->
+                            <div class="text-sm text-gray-600 cursor-pointer select-text" @click="expanded = !expanded">
+                                <template x-if="!expanded">
+                                    <div class="line-clamp-3 whitespace-pre-wrap break-words" x-text="(item.body_text || '').substring(0, 500)"></div>
+                                </template>
+                                <template x-if="expanded">
+                                    <div class="whitespace-pre-wrap break-words" x-text="item.body_text"></div>
+                                </template>
+                            </div>
+                            <button @click="expanded = !expanded" class="text-xs text-brand hover:text-brand-dark mt-1 transition">
+                                <span x-text="expanded ? 'Свернуть' : 'Показать полностью'"></span>
+                            </button>
+                            <!-- Hashtags -->
+                            <template x-if="item.hashtags && item.hashtags.length">
+                                <div class="mt-2 flex flex-wrap gap-1">
+                                    <template x-for="tag in item.hashtags">
+                                        <span class="px-2 py-0.5 bg-blue-50 text-blue-600 text-[11px] rounded-full" x-text="tag.startsWith('#') ? tag : '#' + tag"></span>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
+                        <!-- Actions -->
+                        <div class="flex flex-col gap-1.5 shrink-0">
+                            <template x-if="item.status === 'draft'">
+                                <button @click="approveItem(item.id)" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Одобрить</button>
+                            </template>
+                            <button @click="publishItem(item.id)" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium"
+                                    :id="'pub-btn-' + item.id">Опубликовать</button>
+                            <button @click="regenerateItem(item.id)" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
+                            <button @click="deleteItem(item.id)" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Content items -->
+    {% if items.items %}
+    <div class="space-y-4">
+        {% for item in items.items %}
+        {% set media_urls = item.get_media_urls() %}
+        {% set ps = item.get_platform_specific() %}
+        {% set hashtags = item.get_hashtags() %}
+        {% set quality_score = ps.get('quality_score', 0) %}
+        {% set wb_url = ps.get('wb_url') %}
+        {% set store_name = ps.get('store_name') %}
+        {% set product_names = ps.get('product_names', []) %}
+        {% set body_len = item.body_text|length if item.body_text else 0 %}
+
+        <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
+             data-item-id="{{ item.id }}"
+             x-data="{ expanded: false, showPreview: false, showGallery: false }">
+            <div class="p-5">
+                <div class="flex gap-4">
+                    <!-- Left column: Product image gallery -->
+                    <div class="shrink-0 flex flex-col gap-1.5">
+                        {% if media_urls %}
+                        <div class="relative cursor-pointer group" @click="showGallery = true">
+                            <img src="{{ media_urls[0] }}" alt="Product"
+                                 class="w-20 h-20 rounded-lg object-cover border border-gray-100 group-hover:border-brand/40 transition"
+                                 onerror="this.onerror=null;this.style.display='none';this.parentElement.querySelector('.img-fallback')?.classList.remove('hidden')">
+                            <div class="img-fallback hidden w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300">
+                                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            </div>
+                            {% if media_urls|length > 1 %}
+                            <span class="absolute -bottom-1 -right-1 bg-gray-800 text-white text-[10px] font-medium rounded-full w-5 h-5 flex items-center justify-center shadow">
+                                +{{ media_urls|length - 1 }}
+                            </span>
+                            {% endif %}
+                        </div>
+                        {% if media_urls|length > 1 %}
+                        <div class="flex gap-1 flex-wrap max-w-[84px]">
+                            {% for url in media_urls[1:3] %}
+                            <img src="{{ url }}" alt="" class="w-[38px] h-[38px] rounded object-cover border border-gray-100 cursor-pointer hover:border-brand/40 transition"
+                                 onerror="this.onerror=null;this.style.display='none'"
+                                 @click="showGallery = true">
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        {% else %}
+                        <div class="w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300">
+                            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Center column: Content body -->
+                    <div class="flex-1 min-w-0">
+                        <!-- Top meta row -->
+                        <div class="flex flex-wrap items-center gap-2 mb-2">
+                            <span class="status-badge px-2 py-0.5 rounded text-xs font-medium
+                                {% if item.status == 'draft' %}bg-amber-50 text-amber-700
+                                {% elif item.status == 'approved' %}bg-blue-50 text-blue-700
+                                {% elif item.status == 'scheduled' %}bg-indigo-50 text-indigo-700
+                                {% elif item.status == 'published' %}bg-green-50 text-green-700
+                                {% elif item.status == 'failed' %}bg-red-50 text-red-700
+                                {% else %}bg-gray-50 text-gray-600{% endif %}">
+                                {{ status_labels.get(item.status, item.status) }}
+                            </span>
+                            <span class="text-xs text-gray-400">{{ content_type_labels.get(item.content_type, item.content_type) }}</span>
+                            <span class="text-xs text-gray-300">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '' }}</span>
+                            {% if item.ai_provider %}
+                            <span class="text-xs text-gray-300">{{ item.ai_provider }}{% if item.generation_time_ms %} ({{ (item.generation_time_ms / 1000)|round(1) }}с){% endif %}</span>
+                            {% endif %}
+
+                            <!-- Quality score badge -->
+                            {% if quality_score %}
+                            <span class="inline-flex items-center gap-1 text-xs font-medium
+                                {% if quality_score >= 80 %}text-green-600
+                                {% elif quality_score >= 50 %}text-yellow-600
+                                {% else %}text-red-500{% endif %}">
+                                <span class="w-2 h-2 rounded-full
+                                    {% if quality_score >= 80 %}bg-green-500
+                                    {% elif quality_score >= 50 %}bg-yellow-400
+                                    {% else %}bg-red-400{% endif %}"></span>
+                                {{ quality_score }}
+                            </span>
+                            {% endif %}
+
+                            <!-- Character count -->
+                            <span class="text-[11px] text-gray-300 ml-auto tabular-nums">
+                                {{ body_len }} / {{ char_limit }}
+                                {% if body_len > char_limit %}
+                                <span class="text-red-400 font-medium ml-0.5">!</span>
+                                {% endif %}
+                            </span>
+                        </div>
+
+                        <!-- Store name + product info -->
+                        {% if store_name or product_names %}
+                        <div class="flex flex-wrap items-center gap-1.5 mb-2">
+                            {% if store_name %}
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-500 text-[11px] rounded-full border border-gray-100">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z"/></svg>
+                                {{ store_name }}
+                            </span>
+                            {% endif %}
+                            {% for pname in product_names[:3] %}
+                            <span class="px-2 py-0.5 bg-gray-50 text-gray-400 text-[11px] rounded-full border border-gray-100 truncate max-w-[200px]">{{ pname }}</span>
+                            {% endfor %}
+                            {% if product_names|length > 3 %}
+                            <span class="text-[11px] text-gray-300">+{{ product_names|length - 3 }}</span>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
+                        <!-- Title -->
+                        {% if item.title %}
+                        <h3 class="font-medium text-gray-900 mb-1 leading-snug">{{ item.title }}</h3>
+                        {% endif %}
+
+                        <!-- Body text -->
+                        <div class="text-sm text-gray-600 cursor-pointer select-text" @click="expanded = !expanded">
+                            <template x-if="!expanded">
+                                <div class="line-clamp-3 whitespace-pre-wrap break-words">{{ item.body_text[:500] if item.body_text else '' }}</div>
+                            </template>
+                            <template x-if="expanded">
+                                <div class="whitespace-pre-wrap break-words">{{ item.body_text }}</div>
+                            </template>
+                        </div>
+                        <button @click="expanded = !expanded" class="text-xs text-brand hover:text-brand-dark mt-1 transition">
+                            <span x-text="expanded ? 'Свернуть' : 'Показать полностью'"></span>
+                        </button>
+
+                        <!-- Bottom meta section -->
+                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                            <!-- WB product link -->
+                            {% if wb_url %}
+                            <a href="{{ wb_url }}" target="_blank" rel="noopener"
+                               class="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-50 text-purple-700 text-xs font-medium rounded-full border border-purple-100 hover:bg-purple-100 transition">
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M3.5 5L6 17h1.5l2-8 2 8H13l2.5-12h-1.5l-2 8.5-2-8.5h-1l-2 8.5L5 5H3.5zm13 0L19 17h1.5L23 5h-1.5l-2 8.5L17.5 5H16z"/></svg>
+                                Товар на WB
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                            </a>
+                            {% endif %}
+
+                            <!-- External post URL -->
+                            {% if item.external_post_url %}
+                            <a href="{{ item.external_post_url }}" target="_blank"
+                               class="inline-flex items-center gap-1 px-2.5 py-1 bg-green-50 text-green-700 text-xs font-medium rounded-full border border-green-100 hover:bg-green-100 transition">
+                                Открыть пост
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                            </a>
+                            {% endif %}
+
+                            <!-- Hashtags as blue chips -->
+                            {% if hashtags %}
+                            <div class="flex flex-wrap gap-1">
+                                {% for tag in hashtags %}
+                                <span class="px-2 py-0.5 bg-blue-50 text-blue-600 text-[11px] rounded-full">{{ tag if tag.startswith('#') else '#' ~ tag }}</span>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        {% if item.error_message %}
+                        <div class="mt-2 text-xs text-red-500 bg-red-50 rounded-lg px-3 py-2">{{ item.error_message }}</div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Right column: Actions -->
+                    <div class="flex flex-col gap-1.5 shrink-0">
+                        {% if item.status == 'draft' %}
+                        <button @click="approveItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Одобрить</button>
+                        {% endif %}
+                        {% if item.status in ('draft', 'approved', 'failed') %}
+                        <button @click="publishItem({{ item.id }})" id="pub-btn-{{ item.id }}" class="px-3 py-1.5 text-xs bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium">Опубликовать</button>
+                        {% endif %}
+                        <button @click="regenerateItem({{ item.id }})" class="px-3 py-1.5 text-xs bg-gray-50 text-gray-600 rounded-lg hover:bg-gray-100 transition">Перегенерировать</button>
+
+                        <!-- Preview button -->
+                        <button @click="showPreview = true" class="px-3 py-1.5 text-xs bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition">
+                            <svg class="w-3.5 h-3.5 inline mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                            Превью
+                        </button>
+
+                        <!-- Copy button -->
+                        <button @click="copyToClipboard({{ item.id }})" class="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50 rounded-lg transition" :id="'copy-btn-' + {{ item.id }}">
+                            <svg class="w-3.5 h-3.5 inline mr-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                            Копировать
+                        </button>
+
+                        <button @click="deleteItem({{ item.id }})" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Image Gallery Modal -->
+            {% if media_urls %}
+            <div x-show="showGallery" x-cloak
+                 class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                 style="background:rgba(0,0,0,0.7)"
+                 @click.self="showGallery = false"
+                 @keydown.escape.window="showGallery = false"
+                 x-data="{ currentImg: 0 }">
+                <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-hidden" @click.stop>
+                    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                        <span class="text-sm font-medium text-gray-700">Изображения ({{ media_urls|length }})</span>
+                        <button @click="showGallery = false" class="text-gray-400 hover:text-gray-600 transition">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <div class="relative bg-gray-50">
+                        {% for url in media_urls %}
+                        <img x-show="currentImg === {{ loop.index0 }}" src="{{ url }}" alt="Product image {{ loop.index }}"
+                             class="w-full max-h-[60vh] object-contain"
+                             onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22 fill=%22%23f3f4f6%22%3E%3Crect width=%22200%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 fill=%22%23d1d5db%22 font-size=%2214%22%3ENo image%3C/text%3E%3C/svg%3E'">
+                        {% endfor %}
+                        {% if media_urls|length > 1 %}
+                        <button @click="currentImg = (currentImg - 1 + {{ media_urls|length }}) % {{ media_urls|length }}"
+                                class="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-white/80 hover:bg-white rounded-full shadow flex items-center justify-center transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                        </button>
+                        <button @click="currentImg = (currentImg + 1) % {{ media_urls|length }}"
+                                class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-white/80 hover:bg-white rounded-full shadow flex items-center justify-center transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                        </button>
+                        {% endif %}
+                    </div>
+                    {% if media_urls|length > 1 %}
+                    <div class="flex gap-2 p-3 overflow-x-auto">
+                        {% for url in media_urls %}
+                        <img @click="currentImg = {{ loop.index0 }}" src="{{ url }}" alt=""
+                             class="w-16 h-16 rounded-lg object-cover cursor-pointer border-2 transition"
+                             :class="currentImg === {{ loop.index0 }} ? 'border-brand' : 'border-transparent hover:border-gray-200'">
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Preview Modal — Platform-aware -->
+            <div x-show="showPreview" x-cloak
+                 class="fixed inset-0 z-50 flex items-center justify-center p-4"
+                 style="background:rgba(0,0,0,0.6)"
+                 @click.self="showPreview = false"
+                 @keydown.escape.window="showPreview = false">
+                <div class="w-full max-w-[420px] max-h-[90vh] overflow-hidden flex flex-col rounded-xl shadow-2xl" @click.stop>
+
+                    {% if factory.platform == 'vk' %}
+                    {# ═══ VK Preview ═══ #}
+                    <!-- Header bar -->
+                    <div class="flex items-center justify-between px-4 py-2.5 bg-white border-b border-gray-200">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-gray-900">Превью поста</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-sky-100 text-sky-700">ВКонтакте</span>
+                        </div>
+                        <button @click="showPreview = false" class="text-gray-400 hover:text-gray-600 transition">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <!-- VK post body -->
+                    <div class="overflow-y-auto flex-1 bg-[#EDEEF0]">
+                        <div class="bg-white mx-0">
+                            <!-- Community header -->
+                            <div class="flex items-center gap-2.5 px-4 pt-4 pb-2">
+                                <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white bg-sky-500">{{ factory.name[:1]|upper }}</div>
+                                <div>
+                                    <div class="text-[13px] font-semibold text-[#2a5885] leading-tight">{{ factory.name }}</div>
+                                    <div class="text-[12px] text-[#939CB0] leading-tight">{{ item.created_at.strftime('%d %b в %H:%M') if item.created_at else 'сегодня' }}</div>
+                                </div>
+                            </div>
+                            <!-- Text -->
+                            <div class="px-4 pb-2">
+                                <div class="text-[13px] leading-[1.462] text-[#000] whitespace-pre-wrap break-words">{{ item.body_text }}</div>
+                                {% if hashtags %}
+                                <div class="mt-1 text-[13px] text-[#4a76a8]">{{ hashtags|join(' ') }}</div>
+                                {% endif %}
+                            </div>
+                            {% if media_urls %}
+                            <!-- Photos grid -->
+                            <div class="relative">
+                                {% if media_urls|length == 1 %}
+                                <img src="{{ media_urls[0] }}" alt="" class="w-full max-h-[400px] object-cover"
+                                     onerror="this.onerror=null;this.style.display='none'">
+                                {% elif media_urls|length == 2 %}
+                                <div class="flex gap-[2px]">
+                                    {% for url in media_urls[:2] %}
+                                    <img src="{{ url }}" alt="" class="w-1/2 h-[240px] object-cover" onerror="this.onerror=null;this.style.display='none'">
+                                    {% endfor %}
+                                </div>
+                                {% else %}
+                                <div class="flex gap-[2px]">
+                                    <img src="{{ media_urls[0] }}" alt="" class="w-2/3 h-[280px] object-cover" onerror="this.onerror=null;this.style.display='none'">
+                                    <div class="w-1/3 flex flex-col gap-[2px]">
+                                        {% for url in media_urls[1:3] %}
+                                        <img src="{{ url }}" alt="" class="w-full h-[139px] object-cover" onerror="this.onerror=null;this.style.display='none'">
+                                        {% endfor %}
+                                        {% if media_urls|length > 3 %}
+                                        <div class="relative h-[139px]">
+                                            <img src="{{ media_urls[3] if media_urls|length > 3 else '' }}" alt="" class="w-full h-full object-cover" onerror="this.onerror=null;this.style.display='none'">
+                                            {% if media_urls|length > 4 %}
+                                            <div class="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                                <span class="text-white text-xl font-medium">+{{ media_urls|length - 4 }}</span>
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            <!-- VK actions bar -->
+                            <div class="flex items-center justify-between px-4 py-2.5 border-t border-gray-100">
+                                <div class="flex items-center gap-4">
+                                    <button class="flex items-center gap-1 text-[#939CB0] hover:text-[#4a76a8] transition">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+                                        <span class="text-[13px]">0</span>
+                                    </button>
+                                    <button class="flex items-center gap-1 text-[#939CB0] hover:text-[#4a76a8] transition">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                                        <span class="text-[13px]">0</span>
+                                    </button>
+                                    <button class="flex items-center gap-1 text-[#939CB0] hover:text-[#4a76a8] transition">
+                                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+                                        <span class="text-[13px]">0</span>
+                                    </button>
+                                </div>
+                                <div class="flex items-center gap-1 text-[#939CB0]">
+                                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                                    <span class="text-[12px]">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Footer info -->
+                    <div class="px-4 py-2 text-center bg-white border-t border-gray-200">
+                        <span class="text-xs {% if body_len > char_limit %}text-red-500{% else %}text-gray-400{% endif %}">
+                            {{ body_len }} / {{ char_limit }} символов
+                            {% if body_len > char_limit %} — превышен лимит!{% endif %}
+                        </span>
+                    </div>
+
+                    {% else %}
+                    {# ═══ Telegram Preview (default) ═══ #}
+                    <!-- Header bar -->
+                    <div class="flex items-center justify-between px-4 py-2.5" style="background:#1e2a38">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-medium text-white/90">Превью поста</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-[#2AABEE]/20 text-[#2AABEE]">Telegram</span>
+                        </div>
+                        <button @click="showPreview = false" class="text-white/50 hover:text-white transition">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <!-- Telegram chat background -->
+                    <div class="overflow-y-auto flex-1 px-3 py-4" style="background:#0e1621">
+                        <!-- Channel name header -->
+                        <div class="flex items-center gap-2.5 mb-3 px-1">
+                            <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#2AABEE">{{ factory.name[:1]|upper }}</div>
+                            <span class="text-sm font-medium text-white/90">{{ factory.name }}</span>
+                        </div>
+                        <!-- Message bubble -->
+                        <div class="rounded-xl overflow-hidden" style="background:#182533">
+                            {% if media_urls %}
+                            <!-- Photo(s) -->
+                            <div class="relative">
+                                <img src="{{ media_urls[0] }}" alt="" class="w-full max-h-80 object-cover"
+                                     onerror="this.onerror=null;this.style.display='none'">
+                                {% if media_urls|length > 1 %}
+                                <div class="absolute top-2 right-2 bg-black/60 text-white text-[10px] font-medium px-2 py-0.5 rounded-full">
+                                    1 / {{ media_urls|length }}
+                                </div>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            <!-- Text -->
+                            <div class="px-3 py-2.5">
+                                <div class="text-[14px] leading-[1.45] text-white/90 whitespace-pre-wrap break-words">{{ item.body_text }}</div>
+                                {% if hashtags %}
+                                <div class="mt-1.5 text-[14px] text-[#6AB2F2]">{{ hashtags|join(' ') }}</div>
+                                {% endif %}
+                                <!-- Time + views -->
+                                <div class="flex items-center justify-end gap-1.5 mt-1.5">
+                                    <span class="text-[11px] text-white/30">{{ item.created_at.strftime('%H:%M') if item.created_at else '' }}</span>
+                                    <svg class="w-3 h-3 text-white/30" fill="currentColor" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                                    <span class="text-[11px] text-white/30">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Footer info -->
+                    <div class="px-4 py-2 text-center border-t" style="background:#1e2a38; border-color:#2b3e50">
+                        <span class="text-xs {% if body_len > char_limit %}text-red-400{% else %}text-white/40{% endif %}">
+                            {{ body_len }} / {{ char_limit }} символов
+                            {% if body_len > char_limit %} — превышен лимит!{% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+
+                </div>
+            </div>
+
+            <!-- Hidden textarea for copy functionality -->
+            <textarea id="copy-text-{{ item.id }}" class="sr-only" aria-hidden="true">{{ item.body_text }}{% if hashtags %}
+
+{{ hashtags|join(' ') }}{% endif %}</textarea>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if items.pages > 1 %}
+    <div class="flex justify-center gap-2 mt-8">
+        {% for p in items.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+            {% if p %}
+                <a href="?page={{ p }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="px-3 py-1.5 rounded-lg text-sm {% if p == items.page %}bg-brand text-white{% else %}bg-gray-100 text-gray-700 hover:bg-gray-200{% endif %} transition">{{ p }}</a>
+            {% else %}
+                <span class="px-2 py-1.5 text-gray-400">...</span>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="bg-white rounded-xl border border-gray-100 p-12 text-center">
+        <div class="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+            <svg class="w-8 h-8 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>
+        </div>
+        <p class="text-gray-500 mb-4">Нет контента. Нажмите "Генерировать" для создания.</p>
+        <button @click="showGenerateModal = true" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm hover:bg-brand-dark transition font-medium">
+            Генерировать контент
+        </button>
+    </div>
+    {% endif %}
+
+    <!-- Generate Modal -->
+    <div x-show="showGenerateModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(0,0,0,0.4)" @click.self="showGenerateModal = false">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-6 max-h-[90vh] flex flex-col" @click.stop>
+            <h2 class="text-lg font-display text-gray-900 mb-4">Генерация контента</h2>
+
+            <div class="space-y-4 overflow-y-auto flex-1 min-h-0">
+                <!-- Content type -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Тип контента</label>
+                    <select x-model="genContentType" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                        {% for ct in content_types %}
+                        <option value="{{ ct }}">{{ content_type_labels.get(ct, ct) }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Mode -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Режим</label>
+                    <div class="flex gap-2">
+                        <button @click="genMode = 'single'" :class="genMode === 'single' ? 'bg-brand text-white' : 'bg-gray-100 text-gray-700'" class="px-3 py-1.5 rounded-lg text-sm transition">Один пост</button>
+                        <button @click="genMode = 'bulk'" :class="genMode === 'bulk' ? 'bg-brand text-white' : 'bg-gray-100 text-gray-700'" class="px-3 py-1.5 rounded-lg text-sm transition">Массово</button>
+                    </div>
+                </div>
+
+                <!-- Product selection (single mode) -->
+                <div x-show="genMode === 'single'">
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-sm font-medium text-gray-700">Товар</label>
+                        <button @click="pickRandomProduct()" class="flex items-center gap-1 px-2.5 py-1 bg-purple-50 text-purple-700 rounded-lg text-xs font-medium hover:bg-purple-100 transition">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            Случайный товар
+                        </button>
+                    </div>
+
+                    <!-- Selected product card -->
+                    <template x-if="selectedProduct">
+                        <div class="flex items-center gap-3 p-3 bg-brand/5 border border-brand/20 rounded-xl mb-2">
+                            <img :src="selectedProduct.photos[0]" class="w-16 h-16 object-cover rounded-lg bg-gray-100" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><rect fill=%22%23f3f4f6%22 width=%2240%22 height=%2240%22/><text x=%2220%22 y=%2224%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2212%22>?</text></svg>'">
+                            <div class="flex-1 min-w-0">
+                                <div class="font-medium text-sm text-gray-900 truncate" x-text="selectedProduct.name"></div>
+                                <div class="text-xs text-gray-500 mt-0.5">
+                                    <span x-text="selectedProduct.brand" class="text-gray-400"></span>
+                                    <span class="mx-1">&middot;</span>
+                                    <span x-text="(selectedProduct.discount_price || selectedProduct.price) + ' руб.'" class="font-medium text-brand"></span>
+                                    <template x-if="selectedProduct.discount_price && selectedProduct.discount_price < selectedProduct.price">
+                                        <span class="line-through text-gray-300 ml-1" x-text="selectedProduct.price + ' руб.'"></span>
+                                    </template>
+                                </div>
+                            </div>
+                            <button @click="selectedProduct = null; genProductId = ''" class="p-1 text-gray-400 hover:text-red-500 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                    </template>
+
+                    <!-- Product picker button -->
+                    <button x-show="!selectedProduct" @click="showProductPicker = true" class="w-full px-4 py-3 border-2 border-dashed border-gray-200 rounded-xl text-sm text-gray-500 hover:border-brand/40 hover:text-brand hover:bg-brand/5 transition flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        Выбрать товар из каталога
+                    </button>
+                </div>
+
+                <!-- Count (bulk mode) -->
+                <div x-show="genMode === 'bulk'">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Количество постов</label>
+                    <input type="number" x-model="genCount" min="1" max="20" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm">
+                    <p class="text-xs text-gray-400 mt-1">Товары будут подобраны автоматически ({{ factory.product_selection_mode }})</p>
+                </div>
+
+                <!-- Custom prompt -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Дополнительные указания (опционально)</label>
+                    <textarea x-model="genCustomPrompt" rows="2" class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Например: сделай акцент на скидке 30%"></textarea>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
+                <button @click="generate()" :disabled="generating" class="px-4 py-2.5 bg-brand text-white rounded-lg text-sm font-medium hover:bg-brand-dark transition disabled:opacity-50">
+                    <span x-show="!generating">Генерировать</span>
+                    <span x-show="generating">Генерация...</span>
+                </button>
+                <button @click="showGenerateModal = false" class="px-4 py-2.5 text-gray-500 text-sm">Отмена</button>
+            </div>
+
+            <div x-show="genError" class="mt-3 text-sm text-red-500" x-text="genError"></div>
+        </div>
+    </div>
+
+    <!-- Product Picker Overlay -->
+    <div x-show="showProductPicker" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center p-4" style="background:rgba(0,0,0,0.5)" @click.self="showProductPicker = false">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col" @click.stop>
+            <!-- Header -->
+            <div class="p-5 border-b border-gray-100 flex items-center justify-between shrink-0">
+                <h3 class="text-lg font-display text-gray-900">Выбор товара</h3>
+                <button @click="showProductPicker = false" class="p-1.5 text-gray-400 hover:text-gray-600 transition">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+
+            <!-- Search -->
+            <div class="px-5 py-3 border-b border-gray-50 shrink-0">
+                <div class="relative">
+                    <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    <input type="text" x-model="productSearch" placeholder="Поиск по названию, бренду..." class="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand transition">
+                </div>
+            </div>
+
+            <!-- Product grid -->
+            <div class="flex-1 overflow-y-auto p-5">
+                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <template x-for="p in filteredProducts" :key="p.id">
+                        <button @click="selectProductFromPicker(p)" class="group text-left bg-white border border-gray-100 rounded-xl overflow-hidden hover:border-brand/40 hover:shadow-md transition-all duration-200">
+                            <div class="aspect-square bg-gray-50 relative overflow-hidden">
+                                <img :src="p.photos && p.photos[0] ? p.photos[0] : ''" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" onerror="this.style.display='none'">
+                                <div x-show="!p.photos || !p.photos.length" class="absolute inset-0 flex items-center justify-center text-gray-300">
+                                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                </div>
+                                <template x-if="p.discount_price && p.discount_price < p.price && p.price > 0">
+                                    <div class="absolute top-2 left-2 px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-bold rounded">
+                                        <span x-text="'-' + Math.round((1 - p.discount_price / p.price) * 100) + '%'"></span>
+                                    </div>
+                                </template>
+                            </div>
+                            <div class="p-2.5">
+                                <div class="text-xs text-gray-400 truncate" x-text="p.brand"></div>
+                                <div class="text-sm text-gray-900 leading-tight mt-0.5 line-clamp-2" x-text="p.name" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;"></div>
+                                <div class="flex items-baseline gap-1.5 mt-1.5">
+                                    <span class="text-sm font-semibold text-gray-900" x-text="Math.round(p.discount_price || p.price) + ' ₽'"></span>
+                                    <template x-if="p.discount_price && p.discount_price < p.price">
+                                        <span class="text-xs text-gray-400 line-through" x-text="Math.round(p.price) + ' ₽'"></span>
+                                    </template>
+                                </div>
+                            </div>
+                        </button>
+                    </template>
+                </div>
+                <div x-show="filteredProducts.length === 0" class="text-center text-gray-400 py-12">
+                    <svg class="w-12 h-12 mx-auto text-gray-200 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    <p class="text-sm">Ничего не найдено</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+</style>
+<script>
+const CONTENT_TYPE_LABELS = {{ content_type_labels | tojson }};
+const STATUS_LABELS = {{ status_labels | tojson }};
+const ALL_PRODUCTS = {{ products | tojson }};
+
+function contentItems() {
+    return {
+        showGenerateModal: false,
+        showProductPicker: false,
+        productSearch: '',
+        allProducts: ALL_PRODUCTS,
+        selectedProduct: null,
+        genMode: 'single',
+        genContentType: '{{ content_types[0] if content_types else "promo_post" }}',
+        genProductId: '',
+        genCount: 5,
+        genCustomPrompt: '',
+        generating: false,
+        genError: '',
+        generatedItems: [],
+        bulkProgress: { active: false, running: false, total: 0, done: 0, errors: [] },
+        _bulkCancelled: false,
+
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content; },
+
+        get filteredProducts() {
+            const q = (this.productSearch || '').toLowerCase().trim();
+            if (!q) return this.allProducts;
+            return this.allProducts.filter(p =>
+                (p.name || '').toLowerCase().includes(q) ||
+                (p.brand || '').toLowerCase().includes(q) ||
+                (p.category || '').toLowerCase().includes(q) ||
+                String(p.nm_id || '').includes(q)
+            );
+        },
+
+        selectProductFromPicker(product) {
+            this.selectedProduct = product;
+            this.genProductId = String(product.id);
+            this.showProductPicker = false;
+            this.productSearch = '';
+        },
+
+        async pickRandomProduct() {
+            try {
+                const resp = await fetch(`/api/content-factory/{{ factory.id }}/random-product`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({ exclude_ids: this.selectedProduct ? [this.selectedProduct.id] : [] }),
+                });
+                const data = await resp.json();
+                if (data.product) {
+                    this.selectedProduct = data.product;
+                    this.genProductId = String(data.product.id);
+                } else if (data.error) {
+                    this.genError = data.error;
+                }
+            } catch (e) {
+                this.genError = 'Ошибка: ' + e.message;
+            }
+        },
+
+        async generate() {
+            this.generating = true;
+            this.genError = '';
+
+            if (this.genMode === 'single') {
+                if (!this.genProductId) { this.genError = 'Выберите товар'; this.generating = false; return; }
+                try {
+                    const resp = await fetch(`/api/content-factory/{{ factory.id }}/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                        body: JSON.stringify({
+                            product_ids: [parseInt(this.genProductId)],
+                            content_type: this.genContentType,
+                            custom_prompt: this.genCustomPrompt || undefined,
+                        }),
+                    });
+                    const data = await resp.json();
+                    if (data.error) {
+                        this.genError = data.error;
+                    } else {
+                        this.showGenerateModal = false;
+                        this._addGeneratedItem(data.item);
+                    }
+                } catch (e) { this.genError = 'Ошибка: ' + e.message; }
+                this.generating = false;
+            } else {
+                // Массовая генерация — в фон
+                await this._startBulkGeneration();
+            }
+        },
+
+        async _startBulkGeneration() {
+            const count = parseInt(this.genCount);
+            this.showGenerateModal = false;
+            this.generating = false;
+            this._bulkCancelled = false;
+
+            // Показываем прогресс-бар
+            this.bulkProgress = { active: true, running: true, total: count, done: 0, errors: [] };
+
+            // Получаем список товаров
+            try {
+                const resp = await fetch(`/api/content-factory/{{ factory.id }}/select-products`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({ count }),
+                });
+                const data = await resp.json();
+                if (data.error || !data.products || data.products.length === 0) {
+                    this.bulkProgress.running = false;
+                    this.bulkProgress.errors.push(data.error || 'Не найдены товары для генерации');
+                    return;
+                }
+
+                const products = data.products.slice(0, count);
+                this.bulkProgress.total = products.length;
+
+                // Генерируем по одному
+                for (const product of products) {
+                    if (this._bulkCancelled) break;
+
+                    try {
+                        const genResp = await fetch(`/api/content-factory/{{ factory.id }}/generate`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                            body: JSON.stringify({
+                                product_ids: [product.id],
+                                content_type: this.genContentType,
+                                custom_prompt: this.genCustomPrompt || undefined,
+                            }),
+                        });
+                        const genData = await genResp.json();
+                        if (genData.error) {
+                            this.bulkProgress.errors.push(product.name + ': ' + genData.error);
+                        } else if (genData.item) {
+                            this._addGeneratedItem(genData.item);
+                        }
+                    } catch (e) {
+                        this.bulkProgress.errors.push(product.name + ': ' + e.message);
+                    }
+                    this.bulkProgress.done++;
+                }
+            } catch (e) {
+                this.bulkProgress.errors.push('Ошибка: ' + e.message);
+            }
+            this.bulkProgress.running = false;
+        },
+
+        cancelBulk() {
+            this._bulkCancelled = true;
+        },
+
+        _addGeneratedItem(item) {
+            item._content_type_label = CONTENT_TYPE_LABELS[item.content_type] || item.content_type;
+            if (item.created_at) {
+                const d = new Date(item.created_at);
+                item._created_label = d.toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+            }
+            this.generatedItems.unshift(item);
+        },
+
+        async approveItem(id) {
+            const resp = await fetch(`/api/content-factory/items/${id}/approve`, { method: 'POST', headers: { 'X-CSRFToken': this.csrf() } });
+            const data = await resp.json();
+            if (data.success) {
+                // Обновляем в динамическом списке
+                const item = this.generatedItems.find(i => i.id === id);
+                if (item) item.status = 'approved';
+                // Обновляем в статическом DOM
+                this._updateStatusBadge(id, 'approved', 'Одобрен', 'bg-blue-50 text-blue-700');
+            }
+        },
+
+        _publishingIds: new Set(),
+
+        async publishItem(id) {
+            // Защита от двойного нажатия
+            if (this._publishingIds.has(id)) return;
+            if (!confirm('Опубликовать контент сейчас?')) return;
+            this._publishingIds.add(id);
+
+            // Показываем состояние загрузки
+            const btn = document.getElementById('pub-btn-' + id);
+            const origText = btn ? btn.textContent : '';
+            if (btn) { btn.textContent = 'Публикация...'; btn.disabled = true; btn.classList.add('opacity-50'); }
+
+            try {
+                const resp = await fetch(`/api/content-factory/items/${id}/publish`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({}),
+                });
+                const data = await resp.json();
+                if (data.error) {
+                    alert('Ошибка: ' + data.error);
+                    if (btn) { btn.textContent = origText; btn.disabled = false; btn.classList.remove('opacity-50'); }
+                    this._publishingIds.delete(id);
+                } else {
+                    // Обновляем статус без перезагрузки
+                    const item = this.generatedItems.find(i => i.id === id);
+                    if (item) {
+                        item.status = 'published';
+                        item.external_post_url = data.external_post_url;
+                    }
+                    this._updateStatusBadge(id, 'published', 'Опубликован', 'bg-green-50 text-green-700');
+                    if (btn) { btn.textContent = 'Опубликован'; btn.classList.add('!bg-green-100', '!text-green-700'); }
+                }
+            } catch (e) {
+                alert('Ошибка публикации: ' + e.message);
+                if (btn) { btn.textContent = origText; btn.disabled = false; btn.classList.remove('opacity-50'); }
+                this._publishingIds.delete(id);
+            }
+        },
+
+        async regenerateItem(id) {
+            if (!confirm('Перегенерировать контент?')) return;
+            const resp = await fetch(`/api/content-factory/items/${id}/regenerate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                body: '{}',
+            });
+            const data = await resp.json();
+            if (data.item) {
+                // Обновляем в динамическом списке
+                const idx = this.generatedItems.findIndex(i => i.id === id);
+                if (idx >= 0) {
+                    data.item._content_type_label = CONTENT_TYPE_LABELS[data.item.content_type] || data.item.content_type;
+                    this.generatedItems[idx] = data.item;
+                } else {
+                    location.reload();
+                }
+            } else {
+                location.reload();
+            }
+        },
+
+        async deleteItem(id) {
+            if (!confirm('Удалить этот контент?')) return;
+            await fetch(`/api/content-factory/items/${id}`, { method: 'DELETE', headers: { 'X-CSRFToken': this.csrf() } });
+            // Убираем из динамического списка
+            this.generatedItems = this.generatedItems.filter(i => i.id !== id);
+            // Убираем из статического DOM
+            const el = document.querySelector(`[data-item-id="${id}"]`);
+            if (el) el.remove();
+            else location.reload();
+        },
+
+        _updateStatusBadge(id, status, label, classes) {
+            // Для статических (серверных) элементов — обновляем DOM напрямую
+            const container = document.querySelector(`[data-item-id="${id}"]`);
+            if (!container) return;
+            const badge = container.querySelector('.status-badge');
+            if (badge) {
+                badge.className = 'status-badge px-2 py-0.5 rounded text-xs font-medium ' + classes;
+                badge.textContent = label;
+            }
+        },
+
+        async copyToClipboard(id) {
+            const el = document.getElementById('copy-text-' + id);
+            if (!el) return;
+            try {
+                await navigator.clipboard.writeText(el.value);
+                const btn = document.getElementById('copy-btn-' + id);
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = '<svg class="w-3.5 h-3.5 inline mr-0.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Скопировано';
+                    setTimeout(() => { btn.innerHTML = orig; }, 1500);
+                }
+            } catch (e) {
+                el.classList.remove('sr-only');
+                el.select();
+                document.execCommand('copy');
+                el.classList.add('sr-only');
+            }
+        },
+    }
+}
+</script>
+{% endblock %}

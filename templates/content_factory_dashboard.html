@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Контент-фабрика — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto" x-data="contentDashboard()">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+        <div>
+            <h1 class="text-2xl font-display text-gray-900">Контент-фабрика</h1>
+            <p class="text-sm text-gray-500 mt-1">Генерация и публикация контента в социальных сетях</p>
+        </div>
+        <a href="{{ url_for('content_factory_create') }}" class="inline-flex items-center gap-2 px-4 py-2.5 bg-brand text-white rounded-lg hover:bg-brand-dark transition text-sm font-medium">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Создать фабрику
+        </a>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-8">
+        <div class="bg-white rounded-xl border border-gray-100 p-5">
+            <div class="text-2xl font-semibold text-gray-900">{{ factories|length }}</div>
+            <div class="text-sm text-gray-500 mt-1">Фабрик</div>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-100 p-5">
+            <div class="text-2xl font-semibold text-gray-900">{{ total_items }}</div>
+            <div class="text-sm text-gray-500 mt-1">Единиц контента</div>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-100 p-5">
+            <div class="text-2xl font-semibold text-green-600">{{ total_published }}</div>
+            <div class="text-sm text-gray-500 mt-1">Опубликовано</div>
+        </div>
+        <div class="bg-white rounded-xl border border-gray-100 p-5">
+            <div class="text-2xl font-semibold text-blue-600">{{ total_scheduled }}</div>
+            <div class="text-sm text-gray-500 mt-1">Запланировано</div>
+        </div>
+    </div>
+
+    <!-- Connected accounts -->
+    {% if accounts %}
+    <div class="mb-6">
+        <div class="flex items-center gap-2 text-sm text-gray-500 mb-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+            Подключено аккаунтов: {{ accounts|length }}
+            {% for a in accounts %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">{{ platform_labels.get(a.platform, a.platform) }}: {{ a.account_name or a.account_id }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Factories list -->
+    {% if factories %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {% for fd in factories %}
+        {% set f = fd.factory %}
+        {% set stats = fd.stats %}
+        <div class="bg-white rounded-xl border border-gray-100 overflow-hidden hover:shadow-md transition group">
+            <div class="p-5">
+                <div class="flex items-start justify-between mb-3">
+                    <div class="flex items-center gap-2">
+                        <span class="px-2 py-0.5 rounded-full text-xs font-medium
+                            {% if f.platform == 'telegram' %}bg-blue-100 text-blue-700
+                            {% elif f.platform == 'vk' %}bg-sky-100 text-sky-700
+                            {% elif f.platform == 'instagram' %}bg-pink-100 text-pink-700
+                            {% elif f.platform == 'tiktok' %}bg-gray-900 text-white
+                            {% elif f.platform == 'youtube' %}bg-red-100 text-red-700
+                            {% endif %}">
+                            {{ platform_labels.get(f.platform, f.platform) }}
+                        </span>
+                        {% if not f.is_active %}
+                        <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">Неактивна</span>
+                        {% endif %}
+                    </div>
+                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <a href="{{ url_for('content_factory_edit', factory_id=f.id) }}" class="p-1 text-gray-400 hover:text-gray-600" title="Настройки">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                        </a>
+                        <button @click="deleteFactory({{ f.id }}, {{ f.name|tojson }})" class="p-1 text-gray-400 hover:text-red-500" title="Удалить">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        </button>
+                    </div>
+                </div>
+                <a href="{{ url_for('content_factory_items', factory_id=f.id) }}" class="block">
+                    <h3 class="font-semibold text-gray-900 mb-1">{{ f.name }}</h3>
+                    {% if f.description %}
+                    <p class="text-sm text-gray-500 line-clamp-2 mb-3">{{ f.description }}</p>
+                    {% endif %}
+                </a>
+                <div class="flex items-center gap-4 text-xs text-gray-400 mt-3">
+                    <span>{{ stats.total }} шт.</span>
+                    {% if stats.drafts %}<span class="text-amber-500">{{ stats.drafts }} черновиков</span>{% endif %}
+                    {% if stats.published %}<span class="text-green-500">{{ stats.published }} опубл.</span>{% endif %}
+                    {% if stats.scheduled %}<span class="text-blue-500">{{ stats.scheduled }} заплан.</span>{% endif %}
+                </div>
+            </div>
+            <a href="{{ url_for('content_factory_items', factory_id=f.id) }}" class="block px-5 py-3 bg-gray-50 border-t border-gray-100 text-sm text-brand font-medium hover:bg-gray-100 transition text-center">
+                Открыть контент
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-white rounded-xl border border-gray-100 p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>
+        <h3 class="text-lg font-semibold text-gray-900 mb-2">Нет контент-фабрик</h3>
+        <p class="text-sm text-gray-500 mb-6">Создайте первую фабрику для генерации контента в социальных сетях</p>
+        <a href="{{ url_for('content_factory_create') }}" class="inline-flex items-center gap-2 px-4 py-2.5 bg-brand text-white rounded-lg hover:bg-brand-dark transition text-sm font-medium">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Создать фабрику
+        </a>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function contentDashboard() {
+    return {
+        async deleteFactory(id, name) {
+            if (!confirm(`Удалить фабрику "${name}" и весь её контент?`)) return;
+            try {
+                const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                const resp = await fetch(`/api/content-factory/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                    body: JSON.stringify({})
+                });
+                const data = await resp.json();
+                if (data.success) location.reload();
+                else alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+            } catch (e) {
+                alert('Ошибка удаления: ' + e.message);
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

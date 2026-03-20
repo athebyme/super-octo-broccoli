@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Календарь — {{ factory.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto" x-data="contentCalendar()">
+    <!-- Breadcrumb -->
+    <div class="flex items-center gap-2 text-sm text-gray-500 mb-4">
+        <a href="{{ url_for('content_factory_dashboard') }}" class="hover:text-brand transition">Контент-фабрика</a>
+        <span>/</span>
+        <a href="{{ url_for('content_factory_items', factory_id=factory.id) }}" class="hover:text-brand transition">{{ factory.name }}</a>
+        <span>/</span>
+        <span class="text-gray-900">Календарь</span>
+    </div>
+
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-display text-gray-900">Контент-календарь</h1>
+        <div class="flex items-center gap-2">
+            <button @click="prevMonth()" class="p-2 hover:bg-gray-100 rounded-lg transition">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            </button>
+            <span class="text-sm font-medium px-3" x-text="monthLabel"></span>
+            <button @click="nextMonth()" class="p-2 hover:bg-gray-100 rounded-lg transition">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Calendar grid -->
+    <div class="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <!-- Day headers -->
+        <div class="grid grid-cols-7 border-b border-gray-100">
+            <template x-for="day in ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']">
+                <div class="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase" x-text="day"></div>
+            </template>
+        </div>
+
+        <!-- Calendar cells -->
+        <div class="grid grid-cols-7">
+            <template x-for="cell in calendarCells" :key="cell.date">
+                <div class="min-h-[100px] border-b border-r border-gray-50 p-2" :class="{ 'bg-gray-50/50': !cell.isCurrentMonth }">
+                    <div class="text-xs font-medium mb-1" :class="cell.isToday ? 'text-brand font-bold' : (cell.isCurrentMonth ? 'text-gray-700' : 'text-gray-300')" x-text="cell.day"></div>
+                    <template x-for="event in cell.events" :key="event.id">
+                        <div class="mb-1 px-1.5 py-0.5 rounded text-xs truncate cursor-pointer"
+                            :class="{
+                                'bg-amber-50 text-amber-700': event.status === 'approved',
+                                'bg-indigo-50 text-indigo-700': event.status === 'scheduled',
+                                'bg-green-50 text-green-700': event.status === 'published',
+                            }"
+                            :title="event.title + ' (' + (event.time || '') + ')'"
+                            x-text="(event.time || '') + ' ' + event.title">
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="flex items-center gap-4 mt-4 text-xs text-gray-500">
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-amber-50 border border-amber-200"></span> Одобрен</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-indigo-50 border border-indigo-200"></span> Запланирован</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-green-50 border border-green-200"></span> Опубликован</span>
+    </div>
+</div>
+
+<script>
+function contentCalendar() {
+    const now = new Date();
+    return {
+        currentYear: now.getFullYear(),
+        currentMonth: now.getMonth(),
+        events: [],
+        calendarCells: [],
+
+        get monthLabel() {
+            const months = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+            return months[this.currentMonth] + ' ' + this.currentYear;
+        },
+
+        prevMonth() { if (this.currentMonth === 0) { this.currentMonth = 11; this.currentYear--; } else { this.currentMonth--; } this.loadEvents(); },
+        nextMonth() { if (this.currentMonth === 11) { this.currentMonth = 0; this.currentYear++; } else { this.currentMonth++; } this.loadEvents(); },
+
+        async loadEvents() {
+            const dateFrom = `${this.currentYear}-${String(this.currentMonth+1).padStart(2,'0')}-01`;
+            const lastDay = new Date(this.currentYear, this.currentMonth+1, 0).getDate();
+            const dateTo = `${this.currentYear}-${String(this.currentMonth+1).padStart(2,'0')}-${lastDay}`;
+
+            try {
+                const resp = await fetch(`/api/content-factory/{{ factory.id }}/calendar?date_from=${dateFrom}&date_to=${dateTo}`);
+                const data = await resp.json();
+                this.events = data.events || [];
+            } catch(e) { this.events = []; }
+
+            this.buildCalendar();
+        },
+
+        buildCalendar() {
+            const cells = [];
+            const firstDay = new Date(this.currentYear, this.currentMonth, 1);
+            let startDow = firstDay.getDay(); // 0=Sun
+            startDow = startDow === 0 ? 6 : startDow - 1; // Convert to Mon=0
+            const daysInMonth = new Date(this.currentYear, this.currentMonth+1, 0).getDate();
+            const today = new Date();
+            const todayStr = today.toISOString().split('T')[0];
+
+            // Previous month padding
+            const prevMonthDays = new Date(this.currentYear, this.currentMonth, 0).getDate();
+            for (let i = startDow - 1; i >= 0; i--) {
+                const d = prevMonthDays - i;
+                const m = this.currentMonth === 0 ? 12 : this.currentMonth;
+                const y = this.currentMonth === 0 ? this.currentYear - 1 : this.currentYear;
+                const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                cells.push({ date: dateStr, day: d, isCurrentMonth: false, isToday: false, events: [] });
+            }
+
+            // Current month
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateStr = `${this.currentYear}-${String(this.currentMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+                const dayEvents = this.events.filter(e => e.date === dateStr);
+                cells.push({ date: dateStr, day: d, isCurrentMonth: true, isToday: dateStr === todayStr, events: dayEvents });
+            }
+
+            // Next month padding
+            const remaining = 42 - cells.length;
+            for (let d = 1; d <= remaining; d++) {
+                cells.push({ date: '', day: d, isCurrentMonth: false, isToday: false, events: [] });
+            }
+
+            this.calendarCells = cells;
+        },
+
+        init() { this.loadEvents(); }
+    }
+}
+</script>
+{% endblock %}

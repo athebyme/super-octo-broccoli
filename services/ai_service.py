@@ -10,6 +10,7 @@ AI Service - Универсальный модуль для интеграции
 - Автоматическую ротацию токенов для Cloud.ru
 """
 import json
+import os
 import re
 import logging
 import threading
@@ -319,6 +320,8 @@ class AIProvider(Enum):
     """Поддерживаемые AI провайдеры"""
     OPENAI = "openai"
     CLOUDRU = "cloudru"  # Cloud.ru Foundation Models
+    MIMO = "mimo"  # Xiaomi MiMo (OpenAI-совместимый API)
+    OPENROUTER = "openrouter"  # OpenRouter — единый доступ к 300+ моделям
     CUSTOM = "custom"  # Любой OpenAI-совместимый API
 
 
@@ -348,7 +351,85 @@ CLOUDRU_MODELS = {
         "name": "Llama 3.3 70B Instruct",
         "description": "Модель от Meta",
         "recommended": False
-    }
+    },
+}
+
+# Модели Xiaomi MiMo
+MIMO_MODELS = {
+    "mimo-v2-pro": {
+        "name": "MiMo V2 Pro",
+        "description": "Флагман — 1T параметров (42B active MoE), контекст 1M токенов, рассуждения и агенты",
+        "recommended": True
+    },
+    "mimo-v2-flash": {
+        "name": "MiMo V2 Flash",
+        "description": "Быстрая и дешёвая — 309B параметров (15B active MoE), контекст 256K, open-source",
+        "recommended": False
+    },
+    "mimo-v2-omni": {
+        "name": "MiMo V2 Omni",
+        "description": "Мультимодальная — текст, изображения, видео, аудио (до 10ч)",
+        "recommended": False
+    },
+}
+
+# Модели OpenRouter (популярные, доступны 300+)
+OPENROUTER_MODELS = {
+    "google/gemini-2.5-flash-preview": {
+        "name": "Gemini 2.5 Flash",
+        "description": "Быстрая и дешёвая, отличное качество",
+        "recommended": True
+    },
+    "google/gemini-3.1-flash-lite-preview": {
+        "name": "Gemini 3.1 Flash Lite",
+        "description": "Самая дешёвая Gemini, быстрая, для парсинга",
+        "recommended": True
+    },
+    "x-ai/grok-4.1-fast": {
+        "name": "Grok 4.1 Fast",
+        "description": "xAI Grok — быстрый, большой контекст 131K",
+        "recommended": False
+    },
+    "anthropic/claude-sonnet-4": {
+        "name": "Claude Sonnet 4",
+        "description": "Мощная модель Anthropic",
+        "recommended": True
+    },
+    "deepseek/deepseek-chat-v3-0324": {
+        "name": "DeepSeek V3 0324",
+        "description": "Дешёвая, хорошее качество для парсинга",
+        "recommended": True
+    },
+    "google/gemini-2.5-pro-preview": {
+        "name": "Gemini 2.5 Pro",
+        "description": "Лучшее качество Google",
+        "recommended": False
+    },
+    "anthropic/claude-opus-4": {
+        "name": "Claude Opus 4",
+        "description": "Самая мощная модель Anthropic",
+        "recommended": False
+    },
+    "openai/gpt-4o-mini": {
+        "name": "GPT-4o Mini (через OpenRouter)",
+        "description": "OpenAI через OpenRouter",
+        "recommended": False
+    },
+    "openai/gpt-4o": {
+        "name": "GPT-4o (через OpenRouter)",
+        "description": "OpenAI через OpenRouter",
+        "recommended": False
+    },
+    "meta-llama/llama-4-maverick": {
+        "name": "Llama 4 Maverick",
+        "description": "Открытая модель Meta, бесплатная",
+        "recommended": False
+    },
+    "qwen/qwen3-235b-a22b": {
+        "name": "Qwen3 235B",
+        "description": "Мощная модель Alibaba",
+        "recommended": False
+    },
 }
 
 # Модели OpenAI
@@ -614,6 +695,115 @@ Rich-контент на WB - это визуальные блоки (слайд
         "рекомендация 2"
     ],
     "strengths": ["сильная сторона 1"]
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
+    },
+
+    "unified_optimize": {
+        "name": "Полная оптимизация карточки (1 запрос)",
+        "description": "SEO заголовок + ключевые слова + буллеты + описание + анализ — всё за один вызов AI",
+        "template": """Ты SEO-эксперт и копирайтер для маркетплейса Wildberries.
+Выполни ВСЕ 5 задач за один проход.
+
+═══ ЗАДАЧА 1: SEO-ЗАГОЛОВОК ═══
+- МАКСИМУМ 60 символов (жёсткое ограничение WB API!)
+- Начинай с типа товара
+- 1-2 ключевые характеристики
+- Без CAPS, спецсимволов (™®©), "лучший/топ/хит"
+
+═══ ЗАДАЧА 2: КЛЮЧЕВЫЕ СЛОВА ═══
+- 15-30 релевантных слов/фраз
+- Синонимы, транслитерация, вариации
+- Общие + специфичные запросы
+
+═══ ЗАДАЧА 3: ПРЕИМУЩЕСТВА (BULLET POINTS) ═══
+- 4-6 кратких пунктов (до 50 символов каждый)
+- Фокус на пользе для покупателя
+- БЕЗ эмодзи
+
+═══ ЗАДАЧА 4: ОПИСАНИЕ ═══
+- Максимум 2000 символов
+- Структура: УТП → подробности → особенности → призыв
+- Все факты из оригинала сохранены
+- Без ™®©
+
+═══ ЗАДАЧА 5: АНАЛИЗ КАРТОЧКИ ═══
+- Оценка 1-100
+- Проблемы с приоритетами
+- Рекомендации по улучшению
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "seo_title": {
+        "title": "<заголовок до 60 символов>",
+        "length": <число символов>,
+        "keywords_used": ["слово1", "слово2"]
+    },
+    "keywords": {
+        "keywords": ["слово1", "слово2", "...до 30"],
+        "search_queries": ["запрос1", "запрос2"]
+    },
+    "bullet_points": {
+        "bullet_points": ["Преимущество 1", "Преимущество 2"],
+        "target_audience": "<аудитория>"
+    },
+    "enhanced_description": {
+        "description": "<улучшенное описание до 2000 символов>"
+    },
+    "analysis": {
+        "score": <1-100>,
+        "issues": [{"priority": "high/medium/low", "issue": "проблема", "fix": "решение"}],
+        "recommendations": ["рекомендация"],
+        "strengths": ["сильная сторона"]
+    }
+}
+
+ВАЖНО: Отвечай ТОЛЬКО валидным JSON. SEO заголовок СТРОГО <= 60 символов!"""
+    },
+
+    "unified_detect": {
+        "name": "Определение бренда + материалов + цвета (1 запрос)",
+        "description": "Извлекает бренд, материалы и цвет товара за один вызов AI",
+        "template": """Ты эксперт по товарным карточкам Wildberries.
+Определи бренд, материалы и цвет товара за один проход.
+
+═══ БРЕНД ═══
+- Точное название бренда из текста
+- Если бренд не указан явно — попробуй определить по контексту
+- Нормализуй для WB (латиница → как есть, кириллица → как есть)
+
+═══ МАТЕРИАЛЫ ═══
+- Основной материал
+- Полный состав с процентами если есть
+- Свойства: гипоаллергенный, водонепроницаемый и т.д.
+
+═══ ЦВЕТ ═══
+- Основной цвет
+- Цвет для WB (стандартные: белый, чёрный, красный, синий, зелёный, розовый, фиолетовый, серый, бежевый, коричневый, оранжевый, жёлтый, голубой, бордовый, золотой, серебристый, телесный, прозрачный, мультиколор)
+- Дополнительные цвета
+
+ФОРМАТ ОТВЕТА (СТРОГО JSON):
+{
+    "brand": {
+        "brand": "<название бренда или null>",
+        "brand_normalized": "<нормализованное для WB>",
+        "brand_type": "exact/inferred/unknown",
+        "confidence": <0.0-1.0>
+    },
+    "materials": {
+        "primary_material": "<основной>",
+        "composition": "<полный состав>",
+        "materials_list": ["материал1", "материал2"],
+        "properties": ["свойство1"],
+        "confidence": <0.0-1.0>
+    },
+    "color": {
+        "primary_color": "<основной цвет>",
+        "wb_color": "<цвет для WB>",
+        "secondary_colors": [],
+        "confidence": <0.0-1.0>
+    }
 }
 
 ВАЖНО: Отвечай ТОЛЬКО валидным JSON."""
@@ -1148,8 +1338,11 @@ Rich-контент на WB - это визуальные блоки (слайд
 3. СПИСКИ — массив строк: "materials_list": ["силикон", "ABS пластик"]
 4. БУЛЕВЫ — true/false: "waterproof": true
 5. Запятые → точки: 7,5 → 7.5
-6. НЕ придумывай данных — только из текста. Если не ясно — не включай
+6. НЕ придумывай данных — только из текста или логический вывод. Если не ясно — не включай
 7. Вес ВСЕГДА в граммах, длины в см, объём в мл
+8a. ДОПОЛНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ: если в тексте есть данные, которые не вписываются
+    ни в одну из 16 категорий выше — добавь их в секцию "extra" с понятными ключами.
+    Примеры: "modes_description", "charging_time_hours", "noise_level_db", "ip_rating", "bluetooth_version"
 8. Для WB цветов используй стандартные: белый, чёрный, красный, синий, зелёный, розовый, фиолетовый, серый, бежевый, коричневый, оранжевый, жёлтый, голубой, бордовый, золотой, серебристый, телесный, прозрачный, мультиколор
 9. ЗАПРЕЩЁННЫЕ СИМВОЛЫ: ™ ® © ℠ ℗ — НЕ ИСПОЛЬЗУЙ их НИКОГДА в текстовых полях
 10. wb_subject ДОЛЖЕН точно совпадать с одной из ДОСТУПНЫХ КАТЕГОРИЙ МАРКЕТПЛЕЙСА (если список предоставлен ниже)
@@ -1328,8 +1521,84 @@ class AIConfig:
     custom_color_instruction: str = ""
     custom_attributes_instruction: str = ""
     custom_parsing_instruction: str = ""
+    # Прокси — флаг от поставщика/продавца
+    proxy_enabled: bool = False
     # Для логирования
     seller_id: int = 0
+
+    @classmethod
+    def for_seller(cls, seller_id: int, provider_override: str = None,
+                   temperature: float = None, max_tokens: int = None,
+                   timeout: int = None) -> 'AIConfig':
+        """Единая точка создания AI-конфига для любого seller_id.
+
+        Используется контент-фабрикой, отзывами, авто-импортом и любыми другими
+        модулями, которым нужен AI-клиент.
+
+        Args:
+            seller_id: ID продавца
+            provider_override: переопределить провайдера (иначе из настроек)
+            temperature: переопределить temperature
+            max_tokens: переопределить max_tokens
+            timeout: переопределить timeout
+
+        Returns:
+            AIConfig
+
+        Raises:
+            ValueError: если настройки не найдены или API ключ не указан
+        """
+        from models import AutoImportSettings
+        ai_settings = AutoImportSettings.query.filter_by(seller_id=seller_id).first()
+        if not ai_settings:
+            raise ValueError("AI не настроен. Перейдите в Профиль → AI-провайдер и укажите API ключ.")
+
+        # Определяем провайдер
+        provider_name = provider_override or getattr(ai_settings, 'ai_provider', 'cloudru') or 'cloudru'
+        if provider_name == 'gigachat':
+            provider_name = 'cloudru'
+        provider = AIProvider(provider_name)
+
+        # Определяем API ключ — единая логика для всех модулей
+        api_key = getattr(ai_settings, 'ai_api_key', '') or ''
+        if not api_key:
+            # Фоллбэк на ai_client_secret (legacy поле)
+            api_key = getattr(ai_settings, 'ai_client_secret', '') or ''
+        if not api_key:
+            raise ValueError("API ключ AI не указан. Перейдите в Профиль → AI-провайдер и укажите API ключ.")
+
+        # Определяем URL и модель по умолчанию
+        if provider == AIProvider.CLOUDRU:
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://foundation-models.api.cloud.ru/v1'
+            default_model = 'openai/gpt-oss-120b'
+        elif provider == AIProvider.OPENAI:
+            api_base = 'https://api.openai.com/v1'
+            default_model = 'gpt-4o-mini'
+        elif provider == AIProvider.MIMO:
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.xiaomimimo.com/v1'
+            default_model = 'mimo-v2-pro'
+        elif provider == AIProvider.OPENROUTER:
+            api_base = 'https://openrouter.ai/api/v1'
+            default_model = 'google/gemini-2.5-flash-preview'
+        else:  # CUSTOM
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
+            default_model = 'gpt-4o-mini'
+
+        model = getattr(ai_settings, 'ai_model', '') or default_model
+
+        return cls(
+            provider=provider,
+            api_key=api_key,
+            api_base_url=api_base,
+            model=model,
+            temperature=temperature if temperature is not None else (getattr(ai_settings, 'ai_temperature', 0.3) or 0.3),
+            max_tokens=max_tokens if max_tokens is not None else (getattr(ai_settings, 'ai_max_tokens', 2000) or 2000),
+            timeout=timeout if timeout is not None else (getattr(ai_settings, 'ai_timeout', 120) or 120),
+            top_p=getattr(ai_settings, 'ai_top_p', 0.95) or 0.95,
+            presence_penalty=getattr(ai_settings, 'ai_presence_penalty', 0.0) or 0.0,
+            frequency_penalty=getattr(ai_settings, 'ai_frequency_penalty', 0.0) or 0.0,
+            seller_id=seller_id,
+        )
 
     @classmethod
     def from_settings(cls, settings) -> Optional['AIConfig']:
@@ -1348,6 +1617,12 @@ class AIConfig:
         if provider == AIProvider.CLOUDRU:
             api_base = settings.ai_api_base_url or "https://foundation-models.api.cloud.ru/v1"
             default_model = "openai/gpt-oss-120b"
+        elif provider == AIProvider.MIMO:
+            api_base = settings.ai_api_base_url or "https://api.xiaomimimo.com/v1"
+            default_model = "mimo-v2-pro"
+        elif provider == AIProvider.OPENROUTER:
+            api_base = "https://openrouter.ai/api/v1"
+            default_model = "google/gemini-2.5-flash-preview"
         elif provider == AIProvider.CUSTOM:
             api_base = settings.ai_api_base_url or "https://api.openai.com/v1"
             default_model = "gpt-4o-mini"
@@ -1382,6 +1657,7 @@ class AIConfig:
             custom_color_instruction=getattr(settings, 'ai_color_instruction', '') or '',
             custom_attributes_instruction=getattr(settings, 'ai_attributes_instruction', '') or '',
             custom_parsing_instruction=getattr(settings, 'ai_parsing_instruction', '') or '',
+            proxy_enabled=getattr(settings, 'ai_proxy_enabled', False) or False,
             seller_id=getattr(settings, 'seller_id', 0) or 0
         )
 
@@ -1400,13 +1676,27 @@ class AIClient:
             'Content-Type': 'application/json'
         })
 
+        # Прокси — включается флагом ai_proxy_enabled в настройках поставщика
+        if config.proxy_enabled:
+            proxy_url = os.environ.get('AI_PROXY') or os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
+            if proxy_url:
+                self._session.proxies = {'http': proxy_url, 'https': proxy_url}
+                logger.info(f"AI Service [{config.provider.value}] using proxy: {proxy_url}")
+            else:
+                logger.warning(f"AI Service [{config.provider.value}] — прокси включен, но AI_PROXY не задан")
+
         # Для Cloud.ru используем TokenManager (нужен token exchange)
         self._token_manager: Optional[CloudRuTokenManager] = None
         if config.provider == AIProvider.CLOUDRU:
             self._token_manager = get_cloudru_token_manager(config.api_key)
         else:
-            # Для OpenAI/Custom используем API key напрямую
+            # Для OpenAI/OpenRouter/Custom используем API key напрямую
             self._session.headers['Authorization'] = f'Bearer {config.api_key}'
+
+        # OpenRouter требует доп. заголовки
+        if config.provider == AIProvider.OPENROUTER:
+            self._session.headers['HTTP-Referer'] = 'https://seller-platform.tech'
+            self._session.headers['X-Title'] = 'Seller Platform'
 
     def _get_auth_header(self) -> Optional[str]:
         """Получает актуальный Authorization header"""
@@ -1459,7 +1749,8 @@ class AIClient:
         }
 
         # response_format не все модели поддерживают, добавляем опционально
-        if response_format and self.config.provider != AIProvider.CLOUDRU:
+        # Cloud.ru не поддерживает; OpenRouter и OpenAI — поддерживают
+        if response_format and self.config.provider not in (AIProvider.CLOUDRU,):
             payload["response_format"] = response_format
 
         self.last_error = None
@@ -2200,6 +2491,112 @@ class CardAnalysisTask(AITask):
 
 
 # ============================================================================
+# ОБЪЕДИНЁННЫЕ AI ЗАДАЧИ (ЭКОНОМИЯ ТОКЕНОВ)
+# ============================================================================
+
+class UnifiedOptimizeTask(AITask):
+    """SEO заголовок + ключевые слова + буллеты + описание + анализ = 1 вызов вместо 5"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["unified_optimize"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        category = kwargs.get('category', '')
+        brand = kwargs.get('brand', '')
+        characteristics = kwargs.get('characteristics', {})
+        photos_count = kwargs.get('photos_count', 0)
+        price = kwargs.get('price', 0)
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Оптимизируй карточку товара:
+
+НАЗВАНИЕ: {title}
+БРЕНД: {brand or 'Не указан'}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ОПИСАНИЕ: {description[:1500] if description else 'Отсутствует'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не заполнены'}
+ФОТО: {photos_count} шт.
+ЦЕНА: {price} руб."""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'seo_title': data.get('seo_title'),
+                'keywords': data.get('keywords'),
+                'bullet_points': data.get('bullet_points'),
+                'enhanced_description': data.get('enhanced_description'),
+                'analysis': data.get('analysis'),
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+class UnifiedDetectTask(AITask):
+    """Бренд + материалы + цвет = 1 вызов вместо 3"""
+
+    def get_system_prompt(self) -> str:
+        if self.custom_instruction:
+            return self.custom_instruction
+        return DEFAULT_INSTRUCTIONS["unified_detect"]["template"]
+
+    def build_user_prompt(self, **kwargs) -> str:
+        title = kwargs.get('title', '')
+        description = kwargs.get('description', '')
+        characteristics = kwargs.get('characteristics', {})
+        category = kwargs.get('category', '')
+
+        chars_str = ""
+        if characteristics:
+            chars_str = "\n".join([f"- {k}: {v}" for k, v in characteristics.items()])
+
+        return f"""Определи бренд, материалы и цвет товара:
+
+НАЗВАНИЕ: {title}
+КАТЕГОРИЯ: {category or 'Не указана'}
+ХАРАКТЕРИСТИКИ:
+{chars_str or 'Не указаны'}
+ОПИСАНИЕ: {description[:1000] if description else 'Не указано'}"""
+
+    def parse_response(self, response: str) -> Optional[Dict]:
+        try:
+            json_str = self._extract_json(response)
+            data = json.loads(json_str)
+            return {
+                'brand': data.get('brand', {}),
+                'materials': data.get('materials', {}),
+                'color': data.get('color', {}),
+            }
+        except:
+            return None
+
+    def _extract_json(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\n?', '', text)
+            text = re.sub(r'\n?```$', '', text)
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        return match.group() if match else text
+
+
+# ============================================================================
 # НОВЫЕ AI ЗАДАЧИ ДЛЯ РАСШИРЕННОГО АНАЛИЗА ТОВАРОВ
 # ============================================================================
 
@@ -2272,7 +2669,7 @@ class CategoryDimensionsTask(AITask):
 {chars_list}
 
 ВАЖНЫЕ ПРАВИЛА:
-1. Заполняй ТОЛЬКО характеристики из списка выше
+1. В extracted_values — характеристики из списка выше
 2. Если характеристика помечена [ОБЯЗАТЕЛЬНО] - постарайся найти или вычислить значение
 3. Для веса (г, кг) - ВСЕГДА указывай в граммах
 4. Для длины/ширины/высоты - указывай в сантиметрах
@@ -2280,6 +2677,12 @@ class CategoryDimensionsTask(AITask):
 6. Если есть несколько похожих характеристик (Длина, Длина изделия, Максимальная длина) - заполни ВСЕ подходящие одним значением
 7. Числа с запятой (7,5) преобразуй в формат с точкой (7.5)
 8. Для диапазонов (15-20 см) можно указать либо диапазон, либо максимальное значение
+
+ДОПОЛНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ:
+Помимо списка выше, найди и выведи в inferred_attributes характеристики,
+которых НЕТ в списке категории, но которые РЕАЛЬНО есть в тексте или
+ЛОГИЧЕСКИ следуют из данных товара. Примеры: количество режимов, тип зарядки,
+степень защиты (IPX), гипоаллергенность, тип батареек и т.д.
 
 ПРИМЕРЫ:
 - "длина 7,5 см, диаметр 2 см, вес 50 г"
@@ -2291,8 +2694,11 @@ class CategoryDimensionsTask(AITask):
 ФОРМАТ ОТВЕТА (СТРОГО JSON):
 {{
     "extracted_values": {{
-        "Название характеристики": "значение",
+        "Название характеристики из списка": "значение",
         ...
+    }},
+    "inferred_attributes": {{
+        "Название характеристики НЕ из списка": "значение"
     }},
     "missing_required": ["список обязательных характеристик которые не удалось найти"],
     "suggestions": {{
@@ -2328,6 +2734,7 @@ class CategoryDimensionsTask(AITask):
             data = json.loads(json_str)
             return {
                 'extracted_values': data.get('extracted_values', {}),
+                'inferred_attributes': data.get('inferred_attributes', {}),
                 'missing_required': data.get('missing_required', []),
                 'suggestions': data.get('suggestions', {}),
                 'raw_found': data.get('raw_found', []),
@@ -2480,6 +2887,13 @@ class AllCharacteristicsTask(AITask):
         "Бренд": "Название бренда"
     }}}},
     "missing_required": ["характеристики которые не удалось найти"],
+    "inferred_attributes": {{{{
+        "Название характеристики НЕ из списка": "значение",
+        "Количество режимов": 10,
+        "Тип зарядки": "USB",
+        "Степень защиты": "IPX7",
+        "Гипоаллергенный": "да"
+    }}}},
     "fill_summary": {{{{
         "filled_count": 10,
         "total_available": 15,
@@ -2489,13 +2903,34 @@ class AllCharacteristicsTask(AITask):
 }}}}
 
 ═══════════════════════════════════════════════════════════════
+ДОПОЛНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ (НЕ ИЗ СПИСКА):
+═══════════════════════════════════════════════════════════════
+
+Помимо характеристик из списка выше, проанализируй текст и ВЫВЕДИ
+характеристики, которых НЕТ в списке категории, но которые РЕАЛЬНО
+присутствуют в данных или ЛОГИЧЕСКИ следуют из них.
+
+ПРИМЕРЫ:
+- В описании "10 режимов вибрации, USB зарядка, водонепроницаемый IPX7"
+  → "Количество режимов": 10, "Тип зарядки": "USB", "Степень защиты": "IPX7"
+  (даже если этих полей нет в списке категории)
+
+- В названии "Набор из 3 штук разного размера S/M/L"
+  → "Количество в наборе": 3, "Размеры в наборе": "S, M, L"
+
+- Из контекста товара "силикон, без запаха, гипоаллергенный"
+  → "Гипоаллергенный": "да", "Без запаха": "да"
+
+Добавь найденные доп. характеристики в секцию "inferred_attributes".
+
+═══════════════════════════════════════════════════════════════
 ФИНАЛЬНЫЕ ТРЕБОВАНИЯ:
 ═══════════════════════════════════════════════════════════════
-✓ Используй ТОЧНЫЕ названия характеристик из списка выше
+✓ Используй ТОЧНЫЕ названия характеристик из списка выше для extracted_values
 ✓ Каждое значение - в СВОЁ поле
 ✓ Числа без единиц измерения
 ✓ Текст - полный, не обрезанный
-✓ НЕ придумывай данные - только из текста товара
+✓ НЕ придумывай данные — только из текста товара или логический вывод
 ✓ Отвечай ТОЛЬКО валидным JSON"""
 
     def build_user_prompt(self, **kwargs) -> str:
@@ -2588,6 +3023,7 @@ class AllCharacteristicsTask(AITask):
             return {
                 'extracted_values': data.get('extracted_values', {}),
                 'missing_required': data.get('missing_required', []),
+                'inferred_attributes': data.get('inferred_attributes', {}),
                 'fill_summary': data.get('fill_summary', {}),
                 'confidence': max(0.0, min(1.0, float(data.get('confidence', 0.5))))
             }
@@ -3491,6 +3927,30 @@ class AIService:
             return True, result, ""
         return False, {}, error or "Ошибка AI"
 
+    def detect_brand_materials_color(
+        self,
+        title: str,
+        description: str = '',
+        characteristics: Optional[Dict] = None,
+        category: str = ''
+    ) -> Tuple[bool, Dict, str]:
+        """
+        Определяет бренд + материалы + цвет за 1 вызов AI (вместо 3 отдельных).
+
+        Returns:
+            Tuple[success, {brand, materials, color}, error]
+        """
+        task = UnifiedDetectTask(self.client)
+        success, result, error = task.execute(
+            title=title,
+            description=description,
+            characteristics=characteristics or {},
+            category=category
+        )
+        if success and result:
+            return True, result, ""
+        return False, {}, error or "Ошибка AI"
+
     def extract_all_attributes(
         self,
         title: str,
@@ -3557,7 +4017,8 @@ class AIService:
         price: float = 0
     ) -> Dict:
         """
-        Полная оптимизация карточки - все AI функции за один вызов
+        Полная оптимизация карточки — 1 вызов AI вместо 5.
+        При ошибке парсинга unified-ответа — fallback на отдельные вызовы.
 
         Returns:
             Dict с результатами всех оптимизаций
@@ -3571,29 +4032,62 @@ class AIService:
             'errors': []
         }
 
+        # --- Попытка unified (1 вызов вместо 5) ---
+        try:
+            task = UnifiedOptimizeTask(self.client)
+            success, data, error = task.execute(
+                title=title,
+                description=description,
+                category=category,
+                brand=brand,
+                characteristics=characteristics or {},
+                photos_count=photos_count,
+                price=price
+            )
+            if success and data:
+                results['seo_title'] = data.get('seo_title')
+                results['keywords'] = data.get('keywords')
+                results['bullet_points'] = data.get('bullet_points')
+                results['enhanced_description'] = data.get('enhanced_description')
+                results['analysis'] = data.get('analysis')
+
+                # Проверяем что хотя бы основные секции заполнились
+                filled = sum(1 for k in ['seo_title', 'keywords', 'bullet_points'] if results[k])
+                if filled >= 2:
+                    logger.info(f"[UnifiedOptimize] Успешно: {filled}/5 секций за 1 вызов")
+                    return results
+
+                logger.warning("[UnifiedOptimize] Мало секций заполнено, fallback на отдельные вызовы")
+        except Exception as e:
+            logger.warning(f"[UnifiedOptimize] Ошибка: {e}, fallback на отдельные вызовы")
+
+        # --- Fallback: старый подход (5 отдельных вызовов) ---
         # SEO заголовок
-        success, data, error = self.generate_seo_title(title, category, brand, description)
-        if success:
-            results['seo_title'] = data
-        else:
-            results['errors'].append(f"SEO заголовок: {error}")
+        if not results['seo_title']:
+            success, data, error = self.generate_seo_title(title, category, brand, description)
+            if success:
+                results['seo_title'] = data
+            else:
+                results['errors'].append(f"SEO заголовок: {error}")
 
         # Ключевые слова
-        success, data, error = self.generate_keywords(title, category, description)
-        if success:
-            results['keywords'] = data
-        else:
-            results['errors'].append(f"Ключевые слова: {error}")
+        if not results['keywords']:
+            success, data, error = self.generate_keywords(title, category, description)
+            if success:
+                results['keywords'] = data
+            else:
+                results['errors'].append(f"Ключевые слова: {error}")
 
         # Bullet points
-        success, data, error = self.generate_bullet_points(title, description, characteristics)
-        if success:
-            results['bullet_points'] = data
-        else:
-            results['errors'].append(f"Преимущества: {error}")
+        if not results['bullet_points']:
+            success, data, error = self.generate_bullet_points(title, description, characteristics)
+            if success:
+                results['bullet_points'] = data
+            else:
+                results['errors'].append(f"Преимущества: {error}")
 
         # Улучшенное описание
-        if description:
+        if not results['enhanced_description'] and description:
             success, data, error = self.enhance_description(title, description, category)
             if success:
                 results['enhanced_description'] = data
@@ -3601,13 +4095,14 @@ class AIService:
                 results['errors'].append(f"Описание: {error}")
 
         # Анализ карточки
-        success, data, error = self.analyze_card(
-            title, description, category, characteristics, photos_count, price
-        )
-        if success:
-            results['analysis'] = data
-        else:
-            results['errors'].append(f"Анализ: {error}")
+        if not results['analysis']:
+            success, data, error = self.analyze_card(
+                title, description, category, characteristics, photos_count, price
+            )
+            if success:
+                results['analysis'] = data
+            else:
+                results['errors'].append(f"Анализ: {error}")
 
         return results
 
@@ -3718,9 +4213,13 @@ def get_available_models(provider: str) -> Dict[str, Dict]:
         return CLOUDRU_MODELS
     elif provider == 'openai':
         return OPENAI_MODELS
+    elif provider == 'mimo':
+        return MIMO_MODELS
+    elif provider == 'openrouter':
+        return OPENROUTER_MODELS
     else:
         # Для custom возвращаем объединенный список
-        return {**CLOUDRU_MODELS, **OPENAI_MODELS}
+        return {**CLOUDRU_MODELS, **OPENAI_MODELS, **MIMO_MODELS, **OPENROUTER_MODELS}
 
 
 def get_default_instructions() -> Dict[str, Dict]:
