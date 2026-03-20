@@ -1554,10 +1554,10 @@ class AIClient:
                 # Таймауты не ретраим: если модель зависла, повтор тоже зависнет.
                 # Лучше быстро вернуть ошибку и перейти к следующему товару.
                 return None
-            except requests.exceptions.ConnectionError as e:
+            except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
                 self.last_error = (
-                    f"Нет соединения с AI API ({self.config.provider.value}): "
-                    f"{str(e)[:150]} (попытка {attempt}/{max_retries})"
+                    f"Ошибка соединения с AI API ({self.config.provider.value}): "
+                    f"{type(e).__name__}: {str(e)[:150]} (попытка {attempt}/{max_retries})"
                 )
                 logger.error(f"❌ {self.last_error}")
                 if attempt < max_retries:
