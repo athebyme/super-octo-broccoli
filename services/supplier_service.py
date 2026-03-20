@@ -2137,18 +2137,25 @@ class SupplierService:
                 except Exception:
                     pass
 
-            from services.infographic_renderer import render_all_slides, render_slide_to_png, _fetch_photo_as_b64
+            from services.infographic_renderer import render_all_slides, render_slide_to_png, _fetch_photo_as_b64, _fetch_photo_from_cache
 
             if slide_index is not None:
                 if slide_index >= len(slides):
                     return {'success': False, 'error': f'Слайд {slide_index} не найден'}
 
                 slide = slides[slide_index]
+
+                # Сначала из кэша, потом по URL
                 photo_b64 = None
-                for url in product_photos[:3]:
-                    photo_b64 = _fetch_photo_as_b64(url)
+                for idx in range(min(3, len(product_photos) if product_photos else 0)):
+                    photo_b64 = _fetch_photo_from_cache(product_id, idx)
                     if photo_b64:
                         break
+                if not photo_b64:
+                    for entry in product_photos[:3]:
+                        photo_b64 = _fetch_photo_as_b64(entry)
+                        if photo_b64:
+                            break
 
                 success, img_bytes, error = render_slide_to_png(slide, design, photo_b64, slide_index)
                 if not success:
@@ -2163,7 +2170,7 @@ class SupplierService:
                     'renderer': 'template'
                 }
             else:
-                results = render_all_slides(rich_content=rich_content, product_photos=product_photos)
+                results = render_all_slides(rich_content=rich_content, product_photos=product_photos, supplier_product_id=product_id)
                 output = []
                 for r in results:
                     item = {
@@ -2224,13 +2231,18 @@ class SupplierService:
                 except Exception:
                     pass
 
-            from services.infographic_renderer import render_slide_preview_b64, _fetch_photo_as_b64
+            from services.infographic_renderer import render_slide_preview_b64, _fetch_photo_as_b64, _fetch_photo_from_cache
 
             photo_b64 = None
-            for url in product_photos[:3]:
-                photo_b64 = _fetch_photo_as_b64(url)
+            for idx in range(min(3, len(product_photos) if product_photos else 0)):
+                photo_b64 = _fetch_photo_from_cache(product_id, idx)
                 if photo_b64:
                     break
+            if not photo_b64:
+                for entry in product_photos[:3]:
+                    photo_b64 = _fetch_photo_as_b64(entry)
+                    if photo_b64:
+                        break
 
             success, preview_b64, error = render_slide_preview_b64(
                 slide, design, photo_b64, slide_index, preview_width=preview_width

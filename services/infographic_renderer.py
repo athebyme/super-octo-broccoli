@@ -261,18 +261,83 @@ def _fetch_photo_as_b64(photo_entry) -> Optional[str]:
         return None
     try:
         import requests as req
-        resp = req.get(url, timeout=15)
-        if resp.status_code == 200 and len(resp.content) > 1000:
-            img = Image.open(io.BytesIO(resp.content))
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+        }
+        if 'sexoptovik.ru' in url:
+            headers['Referer'] = 'https://sexoptovik.ru/admin/'
+
+        # Пробуем все URL из dict если доступны
+        urls_to_try = [url]
+        if isinstance(photo_entry, dict):
+            for key in ('original', 'blur', 'sexoptovik'):
+                u = photo_entry.get(key)
+                if u and u != url and u not in urls_to_try:
+                    urls_to_try.append(u)
+
+        for try_url in urls_to_try:
+            try:
+                resp = req.get(try_url, headers=headers, timeout=15, allow_redirects=True)
+                content_type = resp.headers.get('Content-Type', '')
+                if resp.status_code == 200 and len(resp.content) > 1000 and (
+                    content_type.startswith('image/') or len(resp.content) > 5000
+                ):
+                    img = Image.open(io.BytesIO(resp.content))
+                    img = img.convert('RGB')
+                    img.thumbnail((900, 1200), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format='JPEG', quality=85)
+                    return base64.b64encode(buf.getvalue()).decode('utf-8')
+            except Exception as e:
+                logger.debug(f"Photo fetch failed {try_url}: {e}")
+                continue
+
+        logger.warning(f"All photo URLs failed for entry: {list(urls_to_try)}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch photo: {e}")
+    return None
+
+
+def _fetch_photo_from_cache(product_id: int, photo_idx: int = 0) -> Optional[str]:
+    """Загружает фото из локального кэша через photo_cache сервис."""
+    try:
+        from models import SupplierProduct
+        from services.photo_cache import get_photo_cache
+        import json as _json
+
+        product = SupplierProduct.query.get(product_id)
+        if not product or not product.photo_urls_json:
+            return None
+
+        photos = _json.loads(product.photo_urls_json)
+        if photo_idx >= len(photos):
+            return None
+
+        ph = photos[photo_idx]
+        if isinstance(ph, dict):
+            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+        elif isinstance(ph, str):
+            url = ph
+        else:
+            return None
+
+        supplier_type = product.supplier.code if product.supplier else 'unknown'
+        external_id = product.external_id or ''
+        cache = get_photo_cache()
+
+        if cache.is_cached(supplier_type, external_id, url):
+            cache_path = cache.get_cache_path(supplier_type, external_id, url)
+            with open(cache_path, 'rb') as f:
+                img_data = f.read()
+            img = Image.open(io.BytesIO(img_data))
             img = img.convert('RGB')
             img.thumbnail((900, 1200), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=85)
             return base64.b64encode(buf.getvalue()).decode('utf-8')
-        else:
-            logger.warning(f"Photo fetch failed: {url} status={resp.status_code} size={len(resp.content)}")
     except Exception as e:
-        logger.warning(f"Failed to fetch photo {url}: {e}")
+        logger.debug(f"Cache photo load failed for product {product_id}: {e}")
     return None
 
 
@@ -341,16 +406,18 @@ def render_slide_to_png(
 
 def render_all_slides(
     rich_content: Dict,
-    product_photos: Optional[List[str]] = None,
-    max_slides: int = 10
+    product_photos: Optional[List] = None,
+    max_slides: int = 10,
+    supplier_product_id: int = None
 ) -> List[Dict]:
     """
     Рендерит все слайды из rich_content.
 
     Args:
         rich_content: Полный JSON rich_content от AI
-        product_photos: Список URL фотографий товара
+        product_photos: Список URL/dict фотографий товара
         max_slides: Максимум слайдов
+        supplier_product_id: ID SupplierProduct для загрузки фото из кэша
 
     Returns:
         [{slide_number, slide_type, success, image_bytes, error}]
@@ -361,11 +428,18 @@ def render_all_slides(
     if not slides:
         return [{'slide_number': 0, 'success': False, 'error': 'Нет слайдов в rich_content'}]
 
-    # Скачиваем первое фото для использования в слайдах
+    # Сначала пробуем из локального кэша, потом по URL
     photo_b64 = None
-    if product_photos:
-        for url in product_photos[:3]:
-            photo_b64 = _fetch_photo_as_b64(url)
+    if supplier_product_id:
+        for idx in range(3):
+            photo_b64 = _fetch_photo_from_cache(supplier_product_id, idx)
+            if photo_b64:
+                logger.info(f"Photo loaded from cache for product {supplier_product_id}")
+                break
+
+    if not photo_b64 and product_photos:
+        for entry in product_photos[:3]:
+            photo_b64 = _fetch_photo_as_b64(entry)
             if photo_b64:
                 break
 
