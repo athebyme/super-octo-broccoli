@@ -40,8 +40,9 @@ services:
       - DISABLE_HTTP_REDIRECT=1
       # Публичный URL для раздачи фото (WB скачивает по этим URL)
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
-      # Прокси для image generation (OpenRouter/DALL-E) — обход региональных блокировок
-      # Формат: socks5://127.0.0.1:1080  или  http://127.0.0.1:8080
+      # Прокси для AI и image generation (OpenRouter, OpenAI, Claude, Gemini)
+      # Формат: socks5://172.17.0.1:10808  (xray SOCKS5 на хосте)
+      - AI_PROXY=${AI_PROXY:-}
       - IMAGE_GEN_PROXY=${IMAGE_GEN_PROXY:-}
     # Порты НЕ пробрасываем наружу — доступ только через Caddy
     expose:

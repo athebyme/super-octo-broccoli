@@ -10,6 +10,7 @@ AI Service - Универсальный модуль для интеграции
 - Автоматическую ротацию токенов для Cloud.ru
 """
 import json
+import os
 import re
 import logging
 import threading
@@ -1661,6 +1662,13 @@ class AIClient:
         self._session.headers.update({
             'Content-Type': 'application/json'
         })
+
+        # Прокси для AI запросов (OpenRouter, OpenAI и др.)
+        # AI_PROXY или IMAGE_GEN_PROXY или HTTPS_PROXY
+        proxy_url = os.environ.get('AI_PROXY') or os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
+        if proxy_url:
+            self._session.proxies = {'http': proxy_url, 'https': proxy_url}
+            logger.info(f"AI Service using proxy: {proxy_url}")
 
         # Для Cloud.ru используем TokenManager (нужен token exchange)
         self._token_manager: Optional[CloudRuTokenManager] = None
