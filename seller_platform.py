@@ -5995,6 +5995,7 @@ def _run_startup_migrations():
     migrations = [
         # (таблица, колонка, тип)
         ('ai_parse_jobs', 'model_used', 'VARCHAR(100)'),
+        ('ai_parse_jobs', 'heartbeat_at', 'DATETIME'),
         # Brand registry columns
         ('imported_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
         ('imported_products', 'brand_status', 'VARCHAR(20)'),
@@ -6027,6 +6028,24 @@ def _run_startup_migrations():
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+
+    # Помечаем зависшие AI parse задачи как failed при старте
+    # (daemon-потоки не выживают при рестарте процесса)
+    if 'ai_parse_jobs' in insp.get_table_names():
+        try:
+            result = db.session.execute(db.text(
+                "UPDATE ai_parse_jobs SET status = 'failed', "
+                "error_message = 'Задача зависла при перезапуске сервера. "
+                "Воркер-поток был убит. Токены за необработанные товары могли быть списаны.' "
+                "WHERE status IN ('pending', 'running')"
+            ))
+            if result.rowcount > 0:
+                db.session.commit()
+                logger.warning(f"[Startup] Marked {result.rowcount} stale AI parse jobs as failed")
+            else:
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     # Create indexes for brand registry columns
     indexes = [

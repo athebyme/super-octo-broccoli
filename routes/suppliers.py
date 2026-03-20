@@ -817,6 +817,23 @@ def register_supplier_routes(app):
     @admin_required
     def admin_supplier_ai_parse_status(supplier_id, job_id):
         """API: статус фоновой задачи AI парсинга (поллинг)"""
+        from models import AIParseJob
+        # Проверяем stale job при каждом поллинге
+        job = AIParseJob.query.get(job_id)
+        if job and job.status in ('pending', 'running') and job.is_stale:
+            job.status = 'failed'
+            job.error_message = (
+                f'Задача зависла (воркер не отвечает). '
+                f'Обработано {job.processed} из {job.total} товаров '
+                f'({job.succeeded} успешно, {job.failed} с ошибкой). '
+                f'Токены за необработанные товары могли быть списаны.'
+            )
+            job.updated_at = datetime.utcnow()
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
         data = SupplierService.get_ai_parse_job(job_id)
         if not data:
             return jsonify({'error': 'Задача не найдена'}), 404

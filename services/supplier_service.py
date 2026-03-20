@@ -2662,6 +2662,7 @@ class SupplierService:
                 return
 
             job.status = 'running'
+            job.heartbeat_at = datetime.utcnow()
             db.session.commit()
 
             supplier = Supplier.query.get(supplier_id)
@@ -2719,6 +2720,7 @@ class SupplierService:
                     job_ref.succeeded = counters['succeeded']
                     job_ref.failed = counters['failed']
                     job_ref.current_product_title = current_title
+                    job_ref.heartbeat_at = datetime.utcnow()
                     job_ref.results = json.dumps(results[-100:], ensure_ascii=False)
                     _commit_with_retry(db.session)
                 except Exception:
@@ -2860,6 +2862,7 @@ class SupplierService:
                         results.append(res)
 
                     # Обновляем прогресс в БД каждые N завершений
+                    # + heartbeat обновляется каждый раз для обнаружения stale jobs
                     if done_count % check_interval == 0 or done_count == len(product_ids):
                         current_title = res.get('title') if res.get('status') != 'success' else None
                         _update_job_progress(current_title)
@@ -2870,6 +2873,18 @@ class SupplierService:
                             if cancelled.is_set():
                                 pool.shutdown(wait=False, cancel_futures=True)
                                 break
+                    else:
+                        # Обновляем только heartbeat даже если не обновляем полный прогресс
+                        try:
+                            job_hb = AIParseJob.query.get(job_id)
+                            if job_hb:
+                                job_hb.heartbeat_at = datetime.utcnow()
+                                _commit_with_retry(db.session)
+                        except Exception:
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                pass
 
             # Завершение задачи
             try:
@@ -2881,6 +2896,7 @@ class SupplierService:
                     job_final.succeeded = counters['succeeded']
                     job_final.failed = counters['failed']
                     job_final.current_product_title = None
+                    job_final.heartbeat_at = datetime.utcnow()
                     job_final.results = json.dumps(results[-100:], ensure_ascii=False)
                     job_final.updated_at = datetime.utcnow()
                     _commit_with_retry(db.session)
@@ -2924,6 +2940,7 @@ class SupplierService:
             return
 
         job.current_product_title = (product.title or 'Без названия')[:200]
+        job.heartbeat_at = datetime.utcnow()
         db.session.commit()
 
         try:
@@ -3106,6 +3123,8 @@ class SupplierService:
             'results': results[-50:],
             'created_at': job.created_at.isoformat() if job.created_at else None,
             'updated_at': job.updated_at.isoformat() if job.updated_at else None,
+            'heartbeat_at': job.heartbeat_at.isoformat() if getattr(job, 'heartbeat_at', None) else None,
+            'is_stale': job.is_stale if hasattr(job, 'is_stale') else False,
         }
 
     @staticmethod
@@ -3122,7 +3141,11 @@ class SupplierService:
 
     @staticmethod
     def get_active_ai_parse_jobs(supplier_id: int) -> List[dict]:
-        """Получить активные задачи AI парсинга для поставщика."""
+        """Получить активные задачи AI парсинга для поставщика.
+
+        Автоматически обнаруживает и помечает зависшие задачи (stale jobs),
+        у которых heartbeat не обновлялся дольше STALE_TIMEOUT_SECONDS.
+        """
         from models import AIParseJob
 
         jobs = AIParseJob.query.filter(
@@ -3130,7 +3153,34 @@ class SupplierService:
             AIParseJob.status.in_(['pending', 'running'])
         ).order_by(AIParseJob.created_at.desc()).all()
 
-        return [r for r in (SupplierService.get_ai_parse_job(j.id) for j in jobs) if r]
+        # Проверяем stale jobs и помечаем их как failed
+        active_jobs = []
+        for j in jobs:
+            if j.is_stale:
+                logger.warning(
+                    f"[AI Parse] Stale job detected: {j.id}, "
+                    f"status={j.status}, heartbeat_at={j.heartbeat_at}, "
+                    f"processed={j.processed}/{j.total}"
+                )
+                j.status = 'failed'
+                j.error_message = (
+                    f'Задача зависла (воркер не отвечает). '
+                    f'Обработано {j.processed} из {j.total} товаров '
+                    f'({j.succeeded} успешно, {j.failed} с ошибкой). '
+                    f'Токены за необработанные товары могли быть списаны.'
+                )
+                j.updated_at = datetime.utcnow()
+                try:
+                    _commit_with_retry(db.session)
+                except Exception:
+                    db.session.rollback()
+                # Не добавляем в active_jobs — она больше не активна
+            else:
+                data = SupplierService.get_ai_parse_job(j.id)
+                if data:
+                    active_jobs.append(data)
+
+        return active_jobs
 
     @staticmethod
     def get_recent_ai_parse_jobs(supplier_id: int, limit: int = 10) -> List[dict]:

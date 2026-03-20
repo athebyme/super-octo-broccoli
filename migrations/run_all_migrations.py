@@ -307,6 +307,7 @@ def migrate(db_path):
                     model_used VARCHAR(100),
                     results TEXT,
                     error_message TEXT,
+                    heartbeat_at DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -321,6 +322,19 @@ def migrate(db_path):
             existing_ajc = get_existing_columns(cursor, 'ai_parse_jobs')
             if add_column_if_missing(cursor, 'ai_parse_jobs', 'model_used', 'VARCHAR(100)', existing_ajc):
                 total_added += 1
+            if add_column_if_missing(cursor, 'ai_parse_jobs', 'heartbeat_at', 'DATETIME', existing_ajc):
+                total_added += 1
+
+            # Помечаем старые running/pending задачи как failed (stale jobs)
+            cursor.execute("""
+                UPDATE ai_parse_jobs
+                SET status = 'failed',
+                    error_message = 'Задача зависла (обнаружено при миграции). Воркер-поток был убит до завершения.'
+                WHERE status IN ('pending', 'running')
+            """)
+            stale_fixed = cursor.rowcount
+            if stale_fixed > 0:
+                print(f"  ✅ Помечено {stale_fixed} зависших задач как failed")
 
         # ============================================================
         # Создание таблицы enrichment_jobs (если не существует)

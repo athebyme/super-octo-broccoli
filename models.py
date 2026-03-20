@@ -2748,10 +2748,28 @@ class AIParseJob(db.Model):
     model_used     = db.Column(db.String(100))                    # Название AI модели (gpt-4o, claude-sonnet и т.д.)
     results        = db.Column(db.Text)                           # JSON [{product_id, title, status, fill_pct, error}]
     error_message  = db.Column(db.Text)                           # Общая ошибка если failed
+    heartbeat_at   = db.Column(db.DateTime)                        # Последний heartbeat от воркера
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Таймаут: если heartbeat_at старше STALE_TIMEOUT_SECONDS — задача считается зависшей
+    STALE_TIMEOUT_SECONDS = 120  # 2 минуты без heartbeat = stale
+
     supplier = db.relationship('Supplier', foreign_keys=[supplier_id])
+
+    @property
+    def is_stale(self):
+        """Проверяет, зависла ли задача (нет heartbeat дольше таймаута)."""
+        if self.status not in ('pending', 'running'):
+            return False
+        if not self.heartbeat_at:
+            # Если heartbeat ни разу не обновлялся — смотрим на created_at
+            check_time = self.created_at
+        else:
+            check_time = self.heartbeat_at
+        if not check_time:
+            return False
+        return (datetime.utcnow() - check_time).total_seconds() > self.STALE_TIMEOUT_SECONDS
 
 
 # ============= MARKETPLACE INTEGRATION MODELS =============
