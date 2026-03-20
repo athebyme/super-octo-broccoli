@@ -46,7 +46,12 @@ def _sanitize_wb_text(text: str) -> str:
 
 
 def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
-    """Коммит с retry для SQLite (database is locked)."""
+    """Коммит с retry для SQLite (database is locked).
+
+    При 'locked'/'busy' ошибках — rollback и повтор (данные остаются в сессии).
+    При невосстановимой ошибке сессии (prepared state) — remove() и raise
+    (данные потеряны, но сессия очищена для следующих операций).
+    """
     for attempt in range(1, max_retries + 1):
         try:
             session.commit()
@@ -60,13 +65,15 @@ def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
                     try:
                         session.rollback()
                     except Exception:
+                        # Сессия сломана — remove() и прекращаем ретраи (данные потеряны)
                         session.remove()
+                        raise
                     time.sleep(delay)
                     continue
+            # Не-locked ошибка или исчерпаны ретраи — cleanup и raise
             try:
                 session.rollback()
             except Exception:
-                # Сессия в невосстановимом состоянии (prepared/invalid) — сбрасываем полностью
                 session.remove()
             raise
 
@@ -2763,16 +2770,21 @@ class SupplierService:
                     return {'product_id': pid, 'status': 'cancelled'}
 
                 with flask_app.app_context():
-                    product = SupplierProduct.query.get(pid)
-                    if not product or product.supplier_id != supplier_id:
-                        return {
-                            'product_id': pid, 'title': '',
-                            'status': 'error', 'error': 'Товар не найден',
-                        }
-
-                    title = (product.title or '')[:80]
-
+                    # ВАЖНО: try/finally охватывает ВСЕ DB-операции, включая первый query.
+                    # Иначе при сломанной сессии (от предыдущего товара в этом потоке)
+                    # начальный query падает, finally не срабатывает, и сессия остаётся
+                    # отравленной для ВСЕХ последующих товаров в этом потоке.
+                    title = ''
                     try:
+                        product = SupplierProduct.query.get(pid)
+                        if not product or product.supplier_id != supplier_id:
+                            return {
+                                'product_id': pid, 'title': '',
+                                'status': 'error', 'error': 'Товар не найден',
+                            }
+
+                        title = (product.title or '')[:80]
+
                         product_data = product.get_all_data_for_parsing()
 
                         # Создаём отдельный AIService для этого воркера
@@ -2872,7 +2884,15 @@ class SupplierService:
                 done_count = 0
 
                 for fut in as_completed(futures):
-                    res = fut.result()
+                    try:
+                        res = fut.result()
+                    except Exception as fut_err:
+                        pid = futures.get(fut, 0)
+                        logger.error(f"[AI Parse] Unhandled worker error pid={pid}: {fut_err}")
+                        res = {
+                            'product_id': pid, 'title': '',
+                            'status': 'error', 'error': str(fut_err)[:200],
+                        }
                     done_count += 1
 
                     with lock:

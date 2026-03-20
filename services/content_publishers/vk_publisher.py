@@ -271,7 +271,12 @@ class VKPublisher(BasePublisher):
                     logger.warning(f"  photo[{i}] FAILED: {error_reason} URL: {url[:80]}")
 
             if media_urls and not attachments:
-                logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload")
+                error_summary = '; '.join(photo_errors[:5])
+                logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload: {error_summary}")
+                return PublishResult(
+                    success=False,
+                    error=f"Все {len(media_urls)} фото не загружены в VK: {error_summary}"
+                )
 
             # Даём VK время обработать загруженные фото перед wall.post
             if attachments:

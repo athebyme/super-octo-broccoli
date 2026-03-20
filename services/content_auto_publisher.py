@@ -48,9 +48,18 @@ def auto_generate_content(flask_app):
                     _auto_generate_for_factory(factory, now, db)
                 except Exception as e:
                     logger.error(f"Auto-generate error for factory {factory.id}: {e}", exc_info=True)
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
         except Exception as e:
             logger.error(f"Auto-generate global error: {e}", exc_info=True)
+            try:
+                from models import db
+                db.session.remove()
+            except Exception:
+                pass
 
 
 def _auto_generate_for_factory(factory, now, db):
@@ -174,9 +183,18 @@ def auto_publish_content(flask_app):
                     _auto_publish_for_factory(factory, now, db)
                 except Exception as e:
                     logger.error(f"Auto-publish error for factory {factory.id}: {e}", exc_info=True)
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
         except Exception as e:
             logger.error(f"Auto-publish global error: {e}", exc_info=True)
+            try:
+                from models import db
+                db.session.remove()
+            except Exception:
+                pass
 
 
 def _auto_publish_for_factory(factory, now, db):
@@ -258,12 +276,24 @@ def _auto_publish_for_factory(factory, now, db):
         db.session.commit()
 
     except ValueError as e:
-        item.status = 'failed'
-        item.error_message = str(e)
-        db.session.commit()
+        try:
+            item.status = 'failed'
+            item.error_message = str(e)
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
         logger.error(f"Auto-publish ValueError for item {item.id}: {e}")
     except Exception as e:
-        item.status = 'failed'
-        item.error_message = str(e)
-        db.session.commit()
+        try:
+            item.status = 'failed'
+            item.error_message = str(e)
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
         logger.error(f"Auto-publish error for item {item.id}: {e}", exc_info=True)
