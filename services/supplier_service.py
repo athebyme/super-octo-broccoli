@@ -747,6 +747,7 @@ class SupplierService:
             'default_markup_percent', 'is_active',
             'price_file_url', 'price_file_inf_url', 'price_file_delimiter',
             'price_file_encoding', 'auto_sync_prices', 'auto_sync_interval_minutes',
+            'ai_proxy_enabled',
             'ai_category_instruction', 'ai_size_instruction',
             'ai_seo_title_instruction', 'ai_keywords_instruction',
             'ai_description_instruction', 'ai_analysis_instruction',
