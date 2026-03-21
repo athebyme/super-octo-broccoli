@@ -643,30 +643,12 @@ class ContentFactoryService:
 
         return deduped[:limit]
 
-    # Максимальная адекватная цена для автоподбора (руб.)
-    MAX_SANE_PRICE = 20000
-
     def _base_product_query(self, seller_id: int) -> db.Query:
-        """Базовый запрос товаров: в наличии + адекватная цена + активный."""
+        """Базовый запрос товаров: в наличии + активный."""
         return Product.query.filter(
             Product.seller_id == seller_id,
             Product.is_active == True,
             Product.quantity > 0,
-            db.or_(
-                # Цена со скидкой в адекватном диапазоне
-                db.and_(
-                    Product.discount_price.isnot(None),
-                    Product.discount_price > 0,
-                    Product.discount_price <= self.MAX_SANE_PRICE,
-                ),
-                # Или обычная цена в адекватном диапазоне (если нет скидочной)
-                db.and_(
-                    db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
-                    Product.price.isnot(None),
-                    Product.price > 0,
-                    Product.price <= self.MAX_SANE_PRICE,
-                ),
-            ),
         )
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:
@@ -690,9 +672,8 @@ class ContentFactoryService:
                 .all()
             )
         if not products:
-            # Fallback 2: наличие и активность (без фильтра цены) — НО фильтруем по MAX_SANE_PRICE
-            logger.warning(f"No products with analytics and price <= {self.MAX_SANE_PRICE} for seller {seller_id}")
-            # Не снимаем фильтр цены — дорогие товары не должны попадать в автоподбор
+            # Fallback 2: ничего не найдено
+            logger.warning(f"No products in stock for seller {seller_id}")
         return [self._product_to_dict(p) for p in products]
 
     def _select_new_arrivals(self, seller_id: int, limit: int) -> List[Dict]:
@@ -700,7 +681,7 @@ class ContentFactoryService:
         products = self._base_product_query(seller_id).order_by(
             Product.created_at.desc()
         ).limit(limit).all()
-        # Не снимаем фильтр цены/наличия — дорогие и отсутствующие товары не должны попадать
+        # Фильтр наличия остаётся — товары без остатков не подбираем
         return [self._product_to_dict(p) for p in products]
 
     def _select_by_rules(self, factory: ContentFactory, limit: int) -> List[Dict]:
@@ -725,7 +706,7 @@ class ContentFactoryService:
         products = self._base_product_query(seller_id).order_by(
             Product.updated_at.desc()
         ).limit(limit).all()
-        # Не снимаем фильтр цены/наличия — дорогие и отсутствующие товары не должны попадать
+        # Фильтр наличия остаётся — товары без остатков не подбираем
         return [self._product_to_dict(p) for p in products]
 
     def _collect_products_data(self, product_ids: List[int], seller_id: int) -> List[Dict]:

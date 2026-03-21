@@ -409,11 +409,8 @@ def register_content_factory_routes(app):
         data = request.get_json() or {}
         exclude_ids = data.get('exclude_ids', [])
 
-        from sqlalchemy import func as sa_func
-        from services.content_factory_service import ContentFactoryService
-        from datetime import datetime, timedelta
+        from datetime import datetime
         import random as _random
-        _max_price = ContentFactoryService.MAX_SANE_PRICE
 
         # Собираем историю использования для ротации
         used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
@@ -429,34 +426,19 @@ def register_content_factory_routes(app):
         for eid in exclude_ids:
             hard_exclude.add(int(eid))
 
-        # Базовый фильтр: наличие + цена + активность
-        base_filter = [
+        # Базовый фильтр: в наличии + активный
+        query = Product.query.filter(
             Product.seller_id == factory.seller_id,
             Product.is_active == True,
             Product.quantity > 0,
-            db.or_(
-                db.and_(
-                    Product.discount_price.isnot(None),
-                    Product.discount_price > 0,
-                    Product.discount_price <= _max_price,
-                ),
-                db.and_(
-                    db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
-                    Product.price.isnot(None),
-                    Product.price > 0,
-                    Product.price <= _max_price,
-                ),
-            ),
-        ]
-
-        query = Product.query.filter(*base_filter)
+        )
         if hard_exclude:
             query = query.filter(~Product.id.in_(hard_exclude))
 
         # Берём все подходящие товары и сортируем по давности использования
         candidates = query.all()
         if not candidates:
-            return jsonify({'error': 'Нет доступных товаров (в наличии, до {:.0f}₽)'.format(_max_price)}), 404
+            return jsonify({'error': 'Нет доступных товаров (в наличии)'}), 404
 
         # Сортируем: неиспользованные первые, затем давно использованные
         def _sort_key(p):
