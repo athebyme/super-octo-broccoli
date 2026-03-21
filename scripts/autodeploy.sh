@@ -57,7 +57,9 @@ tg_send() {
     local text="$1"
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
         local response
-        response=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+        log "Sending Telegram notification..."
+        response=$(curl -s --connect-timeout 10 --max-time 30 \
+            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             --data-urlencode "text=$text" \
             -d "chat_id=$TG_CHAT_ID" \
             -d "parse_mode=HTML" \
