@@ -58,11 +58,13 @@ tg_send() {
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
         local response
         response=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            -d chat_id="$TG_CHAT_ID" \
-            -d parse_mode="HTML" \
-            -d disable_web_page_preview=true \
-            -d text="$text" 2>&1) || true
-        if echo "$response" | grep -q '"ok":false'; then
+            --data-urlencode "text=$text" \
+            -d "chat_id=$TG_CHAT_ID" \
+            -d "parse_mode=HTML" \
+            -d "disable_web_page_preview=true" 2>&1) || true
+        if echo "$response" | grep -q '"ok":true'; then
+            log "Telegram notification sent"
+        else
             log "WARNING: Telegram send failed: $response"
         fi
     else
