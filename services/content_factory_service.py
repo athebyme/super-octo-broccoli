@@ -324,6 +324,13 @@ class ContentFactoryService:
                     product_names.append(pd['name'])
             media_urls = all_photos[:10]
 
+            if not media_urls:
+                product_ids_str = ','.join(str(pd.get('id', '?')) for pd in products_data)
+                logger.warning(
+                    f"Content generation: no photos found for products [{product_ids_str}] "
+                    f"(factory={factory.id}, type={content_type})"
+                )
+
             quality = self._score_content(body, content_type, factory.platform, wb_url, store_name)
 
             elapsed_ms = int((time.time() - start_time) * 1000)

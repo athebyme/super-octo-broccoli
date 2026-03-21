@@ -112,12 +112,25 @@ def _auto_generate_for_factory(factory, now, db):
         logger.warning(f"Auto-generate: no products for factory {factory.id}")
         return
 
-    # Рандомный товар
-    product = _random.choice(products)
+    # Фильтруем: выбираем только товары с фотографиями
+    products_with_photos = [p for p in products if p.get('photos')]
+    if not products_with_photos:
+        logger.warning(
+            f"Auto-generate: {len(products)} products found but none have photos "
+            f"for factory {factory.id}"
+        )
+        # Fallback: берём любой товар (фото попробуем восстановить при публикации)
+        products_with_photos = products
+
+    # Рандомный товар (приоритет — с фото)
+    product = _random.choice(products_with_photos)
     product_id = product.get('id')
     if not product_id:
         logger.warning(f"Auto-generate: product without id for factory {factory.id}")
         return
+
+    photo_count = len(product.get('photos', []))
+    logger.info(f"Auto-generate: selected product {product_id} with {photo_count} photos")
 
     # Рандомный тип контента из настроек фабрики
     content_types = factory.get_content_types()
