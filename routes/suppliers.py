@@ -822,11 +822,12 @@ def register_supplier_routes(app):
         job = AIParseJob.query.get(job_id)
         if job and job.status in ('pending', 'running') and job.is_stale:
             job.status = 'failed'
+            stale_sec = int((datetime.utcnow() - (job.heartbeat_at or job.created_at)).total_seconds())
             job.error_message = (
-                f'Задача зависла (воркер не отвечает). '
+                f'Задача зависла (воркер не отвечает {stale_sec}с). '
                 f'Обработано {job.processed} из {job.total} товаров '
                 f'({job.succeeded} успешно, {job.failed} с ошибкой). '
-                f'Токены за необработанные товары могли быть списаны.'
+                f'Попробуйте повторить запуск.'
             )
             job.updated_at = datetime.utcnow()
             try:

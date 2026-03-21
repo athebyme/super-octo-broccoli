@@ -2753,7 +2753,9 @@ class AIParseJob(db.Model):
     updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Таймаут: если heartbeat_at старше STALE_TIMEOUT_SECONDS — задача считается зависшей
-    STALE_TIMEOUT_SECONDS = 120  # 2 минуты без heartbeat = stale
+    # 5 минут: с фоновым heartbeat-потоком (обновляется каждые 30с) это сработает
+    # только при реальном зависании, а не при долгих AI-запросах (DeepSeek, two-pass)
+    STALE_TIMEOUT_SECONDS = 300
 
     supplier = db.relationship('Supplier', foreign_keys=[supplier_id])
 

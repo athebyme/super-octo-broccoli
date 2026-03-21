@@ -2724,6 +2724,37 @@ class SupplierService:
             counters = {'processed': 0, 'succeeded': 0, 'failed': 0}
             results = []
             cancelled = threading.Event()
+            job_done = threading.Event()  # Сигнал завершения для heartbeat-потока
+
+            def _heartbeat_loop():
+                """Фоновый поток: обновляет heartbeat каждые 30 секунд,
+                пока AI-воркеры работают. Предотвращает ложное срабатывание
+                stale-детекции при долгих AI-запросах (DeepSeek, two-pass)."""
+                with flask_app.app_context():
+                    while not job_done.wait(timeout=30):
+                        try:
+                            job_hb = AIParseJob.query.get(job_id)
+                            if not job_hb or job_hb.status not in ('pending', 'running'):
+                                break
+                            job_hb.heartbeat_at = datetime.utcnow()
+                            with lock:
+                                job_hb.processed = counters['processed']
+                                job_hb.succeeded = counters['succeeded']
+                                job_hb.failed = counters['failed']
+                            _commit_with_retry(db.session)
+                        except Exception:
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                db.session.remove()
+
+            # Запускаем фоновый heartbeat-поток
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_loop,
+                daemon=True,
+                name=f'AIParse-HB-{job_id[:8]}'
+            )
+            heartbeat_thread.start()
 
             def _update_job_progress(current_title=None):
                 """Обновляет прогресс в БД (вызывается под lock из main thread)."""
@@ -2917,18 +2948,12 @@ class SupplierService:
                             if cancelled.is_set():
                                 pool.shutdown(wait=False, cancel_futures=True)
                                 break
-                    else:
-                        # Обновляем только heartbeat даже если не обновляем полный прогресс
-                        try:
-                            job_hb = AIParseJob.query.get(job_id)
-                            if job_hb:
-                                job_hb.heartbeat_at = datetime.utcnow()
-                                _commit_with_retry(db.session)
-                        except Exception:
-                            try:
-                                db.session.rollback()
-                            except Exception:
-                                db.session.remove()
+                    # Heartbeat обновляется фоновым потоком (_heartbeat_loop)
+                    # каждые 30 секунд, независимо от прогресса AI-запросов
+
+            # Останавливаем heartbeat-поток
+            job_done.set()
+            heartbeat_thread.join(timeout=5)
 
             # Завершение задачи
             try:
