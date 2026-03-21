@@ -53,14 +53,20 @@ log() {
 }
 
 tg_send() {
-    # Отправка сообщения в Telegram (тихо, без остановки при ошибке)
+    # Отправка сообщения в Telegram (логируем ошибки, но не останавливаемся)
     local text="$1"
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-        curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+        local response
+        response=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="$TG_CHAT_ID" \
             -d parse_mode="HTML" \
             -d disable_web_page_preview=true \
-            -d text="$text" > /dev/null 2>&1 || true
+            -d text="$text" 2>&1) || true
+        if echo "$response" | grep -q '"ok":false'; then
+            log "WARNING: Telegram send failed: $response"
+        fi
+    else
+        log "WARNING: TG_BOT_TOKEN or TG_CHAT_ID not set, skipping notification"
     fi
 }
 
