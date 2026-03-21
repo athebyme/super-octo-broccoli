@@ -2712,6 +2712,11 @@ class SupplierService:
             # Resolve marketplace categories once for all workers
             mp_categories = _get_marketplace_categories_block(supplier_id)
 
+            # Сохраняем AIConfig ДО запуска пула — это plain dataclass,
+            # не ORM-объект, безопасен для использования из любого потока.
+            # Каждый воркер создаст свой AIService с отдельной HTTP-сессией.
+            ai_config = test_svc.config
+
             # --- Параллельный режим ---
             effective_workers = min(max_workers, len(product_ids))
             logger.info(
@@ -2840,12 +2845,10 @@ class SupplierService:
                                 pass
 
                         # --- Фаза 2: AI-вызов (долгая операция, БЕЗ DB-соединения) ---
-                        worker_svc = SupplierService._get_ai_service(supplier, model_override=model_override)
-                        if not worker_svc:
-                            return {
-                                'product_id': pid, 'title': title,
-                                'status': 'error', 'error': 'AI сервис недоступен',
-                            }
+                        # Создаём AIService из заранее подготовленного config (plain dataclass),
+                        # а не из ORM-объекта supplier, который отвязан от сессии после remove().
+                        from services.ai_service import AIService as AISvc
+                        worker_svc = AISvc(ai_config)
 
                         success, result, error = worker_svc.full_product_parse(
                             product_data, marketplace_categories_block=mp_categories
