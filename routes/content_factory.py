@@ -394,6 +394,8 @@ def register_content_factory_routes(app):
 
         # Берём товары продавца с фильтрами (наличие, цена, активность)
         from sqlalchemy import func as sa_func
+        from services.content_factory_service import ContentFactoryService
+        _max_price = ContentFactoryService.MAX_SANE_PRICE
         query = Product.query.filter(
             Product.seller_id == factory.seller_id,
             Product.is_active == True,
@@ -402,13 +404,13 @@ def register_content_factory_routes(app):
                 db.and_(
                     Product.discount_price.isnot(None),
                     Product.discount_price > 0,
-                    Product.discount_price <= 50000,
+                    Product.discount_price <= _max_price,
                 ),
                 db.and_(
                     db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
                     Product.price.isnot(None),
                     Product.price > 0,
-                    Product.price <= 50000,
+                    Product.price <= _max_price,
                 ),
             ),
         )
@@ -417,12 +419,26 @@ def register_content_factory_routes(app):
         product = query.order_by(sa_func.random()).first()
 
         if not product:
-            # Fallback: без исключений (все уже использованы)
-            product = Product.query.filter(
+            # Fallback: без исключений (все уже использованы), но с фильтром цены и наличия
+            query_fallback = Product.query.filter(
                 Product.seller_id == factory.seller_id,
                 Product.is_active == True,
                 Product.quantity > 0,
-            ).order_by(sa_func.random()).first()
+                db.or_(
+                    db.and_(
+                        Product.discount_price.isnot(None),
+                        Product.discount_price > 0,
+                        Product.discount_price <= _max_price,
+                    ),
+                    db.and_(
+                        db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
+                        Product.price.isnot(None),
+                        Product.price > 0,
+                        Product.price <= _max_price,
+                    ),
+                ),
+            )
+            product = query_fallback.order_by(sa_func.random()).first()
             if not product:
                 return jsonify({'error': 'Нет доступных товаров'}), 404
 

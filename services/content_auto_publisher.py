@@ -91,22 +91,33 @@ def _auto_generate_for_factory(factory, now, db):
 
     service = ContentFactoryService()
 
-    # Подбираем товар
-    # Собираем ID товаров, для которых уже есть недавние посты (за последние 7 дней)
-    recent_cutoff = now - timedelta(days=7)
-    recent_items = ContentItem.query.filter(
+    # Подбираем товар с ротацией — приоритет товарам, которые давно не использовались
+    # Собираем все использованные товары с датой последнего использования
+    all_factory_items = ContentItem.query.filter(
         ContentItem.factory_id == factory.id,
-        ContentItem.created_at >= recent_cutoff,
     ).all()
 
-    exclude_ids = set()
-    for item in recent_items:
-        exclude_ids.update(item.get_product_ids())
+    # product_id -> дата последнего поста с этим товаром
+    product_last_used = {}
+    for item in all_factory_items:
+        for pid in item.get_product_ids():
+            prev = product_last_used.get(pid)
+            if prev is None or item.created_at > prev:
+                product_last_used[pid] = item.created_at
 
-    products = service.select_products(factory, limit=5, exclude_product_ids=exclude_ids)
+    # Исключаем товары, использованные за последние 3 дня (жёсткий кулдаун)
+    hard_cooldown = now - timedelta(days=3)
+    exclude_ids = {pid for pid, dt in product_last_used.items() if dt >= hard_cooldown}
+
+    products = service.select_products(factory, limit=20, exclude_product_ids=exclude_ids)
     if not products:
-        # Если все товары использованы за 7 дней — берём без исключений
-        products = service.select_products(factory, limit=5)
+        # Смягчаем: исключаем только за последние сутки
+        soft_cooldown = now - timedelta(days=1)
+        exclude_ids = {pid for pid, dt in product_last_used.items() if dt >= soft_cooldown}
+        products = service.select_products(factory, limit=20, exclude_product_ids=exclude_ids)
+    if not products:
+        # Крайний случай: берём всё, но сортируем по давности использования
+        products = service.select_products(factory, limit=20)
 
     if not products:
         logger.warning(f"Auto-generate: no products for factory {factory.id}")
@@ -119,11 +130,20 @@ def _auto_generate_for_factory(factory, now, db):
             f"Auto-generate: {len(products)} products found but none have photos "
             f"for factory {factory.id}"
         )
-        # Fallback: берём любой товар (фото попробуем восстановить при публикации)
         products_with_photos = products
 
-    # Рандомный товар (приоритет — с фото)
-    product = _random.choice(products_with_photos)
+    # Сортируем по давности использования (давно не использованные — первые)
+    def _last_used_sort(p):
+        last = product_last_used.get(p['id'])
+        if last is None:
+            return datetime.min  # Никогда не использовался — максимальный приоритет
+        return last
+
+    products_with_photos.sort(key=_last_used_sort)
+
+    # Берём из топ-5 наименее использованных, чтобы добавить немного рандома
+    top_candidates = products_with_photos[:5]
+    product = _random.choice(top_candidates)
     product_id = product.get('id')
     if not product_id:
         logger.warning(f"Auto-generate: product without id for factory {factory.id}")
