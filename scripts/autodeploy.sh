@@ -24,8 +24,10 @@ LOG_PREFIX="[autodeploy]"
 # Telegram-уведомления (задай в .env.autodeploy или через env)
 # AUTODEPLOY_TG_BOT_TOKEN=123456:ABC...
 # AUTODEPLOY_TG_CHAT_ID=-100123456789
+# AUTODEPLOY_TG_PROXY=socks5h://172.17.0.1:10808  (для обхода блокировки TG)
 TG_BOT_TOKEN="${AUTODEPLOY_TG_BOT_TOKEN:-}"
 TG_CHAT_ID="${AUTODEPLOY_TG_CHAT_ID:-}"
+TG_PROXY="${AUTODEPLOY_TG_PROXY:-}"
 
 # --- Парсинг аргументов ---
 while [[ $# -gt 0 ]]; do
@@ -46,6 +48,7 @@ if [ -f "$PROJECT_DIR/.env.autodeploy" ]; then
     set +a
     TG_BOT_TOKEN="${AUTODEPLOY_TG_BOT_TOKEN:-$TG_BOT_TOKEN}"
     TG_CHAT_ID="${AUTODEPLOY_TG_CHAT_ID:-$TG_CHAT_ID}"
+    TG_PROXY="${AUTODEPLOY_TG_PROXY:-$TG_PROXY}"
 fi
 
 log() {
@@ -57,8 +60,12 @@ tg_send() {
     local text="$1"
     if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
         local response
-        log "Sending Telegram notification..."
-        response=$(curl -s --connect-timeout 10 --max-time 30 \
+        local proxy_args=""
+        if [ -n "$TG_PROXY" ]; then
+            proxy_args="--proxy $TG_PROXY"
+        fi
+        log "Sending Telegram notification...${TG_PROXY:+ (proxy: $TG_PROXY)}"
+        response=$(curl -s --connect-timeout 10 --max-time 30 $proxy_args \
             -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             --data-urlencode "text=$text" \
             -d "chat_id=$TG_CHAT_ID" \
