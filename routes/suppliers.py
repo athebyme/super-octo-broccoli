@@ -1142,6 +1142,30 @@ def register_supplier_routes(app):
             flash('Поставщик не найден', 'danger')
             return redirect(url_for('admin_suppliers'))
 
+        # Ленивый backfill ai_fill_pct для товаров спарсенных до добавления колонки
+        try:
+            stale = SupplierProduct.query.filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.ai_parsed_data_json.isnot(None),
+                SupplierProduct.ai_fill_pct.is_(None)
+            ).limit(500).all()
+            if stale:
+                import json as _json
+                for p in stale:
+                    try:
+                        data = _json.loads(p.ai_parsed_data_json)
+                        p.ai_fill_pct = data.get('parsing_meta', {}).get('fill_percentage', 0)
+                    except Exception:
+                        p.ai_fill_pct = 0
+                db.session.commit()
+                app.logger.info(f"Backfilled ai_fill_pct for {len(stale)} products (supplier {supplier_id})")
+        except Exception as e:
+            app.logger.debug(f"ai_fill_pct backfill skipped: {e}")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         stock_status = request.args.get('stock_status', '').strip()

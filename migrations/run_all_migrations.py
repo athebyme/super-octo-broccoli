@@ -224,6 +224,30 @@ def migrate(db_path):
             except sqlite3.OperationalError:
                 pass
 
+        # Backfill ai_fill_pct из ai_parsed_data_json для ранее спарсенных товаров
+        try:
+            cursor.execute("""
+                SELECT id, ai_parsed_data_json FROM supplier_products
+                WHERE ai_parsed_data_json IS NOT NULL AND ai_fill_pct IS NULL
+            """)
+            rows = cursor.fetchall()
+            if rows:
+                import json as _json
+                backfilled = 0
+                for row_id, json_text in rows:
+                    try:
+                        data = _json.loads(json_text)
+                        pct = data.get('parsing_meta', {}).get('fill_percentage', 0)
+                        cursor.execute("UPDATE supplier_products SET ai_fill_pct = ? WHERE id = ?", (pct, row_id))
+                        backfilled += 1
+                    except Exception:
+                        pass
+                if backfilled:
+                    conn.commit()
+                    print(f"  ✅ Backfill ai_fill_pct: {backfilled} товаров обновлено")
+        except Exception as e:
+            print(f"  ⚠️ Backfill ai_fill_pct пропущен: {e}")
+
         # ============================================================
         # Миграция suppliers (AI parser + description columns)
         # ============================================================
