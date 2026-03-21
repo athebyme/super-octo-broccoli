@@ -866,6 +866,12 @@ def register_supplier_routes(app):
         max_workers = request.form.get('max_workers', 8, type=int)
         max_workers = max(1, min(max_workers, 16))
         model_override = request.form.get('model_override', '').strip() or None
+        category_filter = request.form.get('category', '').strip()
+        brand_filter = request.form.get('brand', '').strip()
+        model_filter_param = request.form.get('ai_model', '').strip()
+        has_description = request.form.get('has_description', '').strip()
+        price_min = request.form.get('price_min', '').strip()
+        price_max = request.form.get('price_max', '').strip()
 
         # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)
         query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
@@ -893,10 +899,37 @@ def register_supplier_routes(app):
                 fill_threshold = float(fill_max)
                 query = query.filter(
                     db.or_(
-                        SupplierProduct.marketplace_fill_pct.is_(None),
-                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                        SupplierProduct.ai_fill_pct.is_(None),
+                        SupplierProduct.ai_fill_pct < fill_threshold
                     )
                 )
+            except (ValueError, TypeError):
+                pass
+
+        if category_filter:
+            cat_term = f'%{category_filter}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.wb_category_name.ilike(cat_term),
+                    SupplierProduct.category.ilike(cat_term),
+                )
+            )
+        if brand_filter:
+            query = query.filter(SupplierProduct.brand.ilike(f'%{brand_filter}%'))
+        if model_filter_param:
+            query = query.filter(SupplierProduct.ai_model_used.ilike(f'%{model_filter_param}%'))
+        if has_description == 'yes':
+            query = query.filter(SupplierProduct.description.isnot(None), SupplierProduct.description != '')
+        elif has_description == 'no':
+            query = query.filter(db.or_(SupplierProduct.description.is_(None), SupplierProduct.description == ''))
+        if price_min:
+            try:
+                query = query.filter(SupplierProduct.supplier_price >= float(price_min))
+            except (ValueError, TypeError):
+                pass
+        if price_max:
+            try:
+                query = query.filter(SupplierProduct.supplier_price <= float(price_max))
             except (ValueError, TypeError):
                 pass
 
@@ -1117,6 +1150,13 @@ def register_supplier_routes(app):
         per_page = request.args.get('per_page', 50, type=int)
         per_page = max(10, min(per_page, 500))
         auto_select = request.args.get('auto_select', '').strip()
+        # Новые фильтры
+        category_filter = request.args.get('category', '').strip()
+        brand_filter = request.args.get('brand', '').strip()
+        model_filter = request.args.get('ai_model', '').strip()
+        has_description = request.args.get('has_description', '').strip()
+        price_min = request.args.get('price_min', '', type=str).strip()
+        price_max = request.args.get('price_max', '', type=str).strip()
 
         query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         if search:
@@ -1141,13 +1181,56 @@ def register_supplier_routes(app):
         elif parse_status == 'fill_below' and fill_max:
             try:
                 fill_threshold = float(fill_max)
-                # Товары, которые не спарсены ИЛИ у которых fill_pct < threshold
                 query = query.filter(
                     db.or_(
-                        SupplierProduct.marketplace_fill_pct.is_(None),
-                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                        SupplierProduct.ai_fill_pct.is_(None),
+                        SupplierProduct.ai_fill_pct < fill_threshold
                     )
                 )
+            except (ValueError, TypeError):
+                pass
+
+        # Фильтр по категории
+        if category_filter:
+            cat_term = f'%{category_filter}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.wb_category_name.ilike(cat_term),
+                    SupplierProduct.category.ilike(cat_term),
+                )
+            )
+
+        # Фильтр по бренду
+        if brand_filter:
+            query = query.filter(SupplierProduct.brand.ilike(f'%{brand_filter}%'))
+
+        # Фильтр по AI модели
+        if model_filter:
+            query = query.filter(SupplierProduct.ai_model_used.ilike(f'%{model_filter}%'))
+
+        # Фильтр по наличию описания
+        if has_description == 'yes':
+            query = query.filter(
+                SupplierProduct.description.isnot(None),
+                SupplierProduct.description != ''
+            )
+        elif has_description == 'no':
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.description.is_(None),
+                    SupplierProduct.description == ''
+                )
+            )
+
+        # Фильтр по цене
+        if price_min:
+            try:
+                query = query.filter(SupplierProduct.supplier_price >= float(price_min))
+            except (ValueError, TypeError):
+                pass
+        if price_max:
+            try:
+                query = query.filter(SupplierProduct.supplier_price <= float(price_max))
             except (ValueError, TypeError):
                 pass
 
@@ -1177,6 +1260,43 @@ def register_supplier_routes(app):
         from services.ai_service import get_available_models
         available_models = get_available_models(supplier.ai_provider or 'cloudru')
 
+        # Уникальные категории и бренды для выпадающих списков
+        try:
+            categories_list = [r[0] for r in db.session.query(
+                db.func.coalesce(SupplierProduct.wb_category_name, SupplierProduct.category)
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                db.or_(
+                    SupplierProduct.wb_category_name.isnot(None),
+                    SupplierProduct.category.isnot(None)
+                )
+            ).distinct().order_by(
+                db.func.coalesce(SupplierProduct.wb_category_name, SupplierProduct.category)
+            ).all() if r[0]]
+        except Exception:
+            categories_list = []
+
+        try:
+            brands_list = [r[0] for r in db.session.query(
+                SupplierProduct.brand
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.brand.isnot(None),
+                SupplierProduct.brand != ''
+            ).distinct().order_by(SupplierProduct.brand).all() if r[0]]
+        except Exception:
+            brands_list = []
+
+        try:
+            models_list = [r[0] for r in db.session.query(
+                SupplierProduct.ai_model_used
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.ai_model_used.isnot(None)
+            ).distinct().order_by(SupplierProduct.ai_model_used).all() if r[0]]
+        except Exception:
+            models_list = []
+
         return render_template('admin_supplier_ai_parser.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
@@ -1188,7 +1308,16 @@ def register_supplier_routes(app):
                                parsed_count=parsed_count,
                                active_jobs=active_jobs,
                                recent_jobs=recent_jobs,
-                               available_models=available_models)
+                               available_models=available_models,
+                               category_filter=category_filter,
+                               brand_filter=brand_filter,
+                               model_filter=model_filter,
+                               has_description=has_description,
+                               price_min=price_min,
+                               price_max=price_max,
+                               categories_list=categories_list,
+                               brands_list=brands_list,
+                               models_list=models_list)
 
     # -------------------------------------------------------------------
     # Управление подключёнными продавцами

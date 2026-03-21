@@ -209,6 +209,7 @@ def migrate(db_path):
                 ("ai_parsed_at", "DATETIME"),
                 ("ai_model_used", "VARCHAR(100)"),
                 ("ai_marketplace_json", "TEXT"),
+                ("ai_fill_pct", "FLOAT"),
                 ("description_source", "VARCHAR(50)"),
                 # Marketplace columns
                 ("marketplace_fields_json", "TEXT"),

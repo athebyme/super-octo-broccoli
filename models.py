@@ -2441,6 +2441,7 @@ class SupplierProduct(db.Model):
     ai_parsed_at = db.Column(db.DateTime)     # Когда был выполнен парсинг
     ai_model_used = db.Column(db.String(100)) # Какой AI моделью спарсено (e.g. "openai/gpt-oss-120b")
     ai_marketplace_json = db.Column(db.Text)  # Данные форматированные для маркетплейса (WB)
+    ai_fill_pct = db.Column(db.Float)          # Процент заполнения из AI парсинга (0-100)
     description_source = db.Column(db.String(50))  # csv/ai/manual — откуда описание
 
     # Оригинальные данные для отката

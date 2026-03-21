@@ -2487,6 +2487,7 @@ class SupplierService:
             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
             product.ai_parsed_at = datetime.utcnow()
             product.ai_model_used = ai_svc.config.model
+            product.ai_fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
             # Формируем данные для маркетплейса (WB)
             marketplace_data = _build_marketplace_data(product, result)
@@ -2873,6 +2874,7 @@ class SupplierService:
                                 product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                                 product.ai_parsed_at = datetime.utcnow()
                                 product.ai_model_used = worker_svc.config.model
+                                product.ai_fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
                                 marketplace_data = _build_marketplace_data(product, result)
                                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
@@ -3101,6 +3103,7 @@ class SupplierService:
                     product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                     product.ai_parsed_at = datetime.utcnow()
                     product.ai_model_used = ai_svc.config.model
+                    product.ai_fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                     marketplace_data = _build_marketplace_data(product, result)
                     product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                     _apply_parsed_data_to_product(product, result)
