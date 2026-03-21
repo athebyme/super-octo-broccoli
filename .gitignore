@@ -35,6 +35,7 @@ instance/
 
 # Environment
 .env
+.env.autodeploy
 .flaskenv
 
 # IDE

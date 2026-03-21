@@ -26,13 +26,30 @@ AUTODEPLOY_SCRIPT="$SCRIPT_DIR/autodeploy.sh"
 # Определяем пользователя, от которого запускать
 DEPLOY_USER="${SUDO_USER:-root}"
 
+ENV_FILE="$PROJECT_DIR/.env.autodeploy"
+
 echo "Installing autodeploy service..."
-echo "  Project: $PROJECT_DIR"
-echo "  Script:  $AUTODEPLOY_SCRIPT"
-echo "  User:    $DEPLOY_USER"
+echo "  Project:  $PROJECT_DIR"
+echo "  Script:   $AUTODEPLOY_SCRIPT"
+echo "  User:     $DEPLOY_USER"
+echo "  Env file: $ENV_FILE"
 
 # Делаем скрипт исполняемым
 chmod +x "$AUTODEPLOY_SCRIPT"
+
+# Создаём .env.autodeploy если нет
+if [ ! -f "$ENV_FILE" ]; then
+    cat > "$ENV_FILE" << 'ENVEOF'
+# Telegram-уведомления о деплоях
+# Получи токен бота у @BotFather, chat_id — у @userinfobot или из группы
+AUTODEPLOY_TG_BOT_TOKEN=
+AUTODEPLOY_TG_CHAT_ID=
+ENVEOF
+    chown "$DEPLOY_USER:$DEPLOY_USER" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    echo ""
+    echo "  Created $ENV_FILE — fill in TG bot token and chat ID for notifications"
+fi
 
 # Создаём systemd unit
 cat > /etc/systemd/system/seller-autodeploy.service << EOF
