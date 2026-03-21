@@ -146,10 +146,25 @@ def register_supplier_routes(app):
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
         sellers = SupplierService.get_supplier_sellers(supplier_id)
+
+        # Примеры external_id для превью артикулов
+        sample_products = db.session.query(
+            SupplierProduct.external_id, SupplierProduct.vendor_code
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.external_id.isnot(None),
+            SupplierProduct.external_id != ''
+        ).limit(3).all()
+        sample_external_ids = [
+            {'external_id': p.external_id, 'vendor_code': p.vendor_code or ''}
+            for p in sample_products
+        ]
+
         return render_template('admin_supplier_form.html',
                                supplier=supplier, mode='edit',
                                stats=stats, price_stock_stats=price_stock_stats,
-                               sellers=sellers)
+                               sellers=sellers,
+                               sample_external_ids=sample_external_ids)
 
     # -------------------------------------------------------------------
     # Удаление поставщика
@@ -1360,10 +1375,24 @@ def register_supplier_routes(app):
         all_sellers = Seller.query.join(Seller.user).order_by(Seller.company_name).all()
         connected_seller_ids = {c.seller_id for c in connections if c.is_active}
 
+        # Примеры external_id для live-preview артикулов
+        sample_products = db.session.query(
+            SupplierProduct.external_id, SupplierProduct.vendor_code
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.external_id.isnot(None),
+            SupplierProduct.external_id != ''
+        ).limit(3).all()
+        sample_external_ids = [
+            {'external_id': p.external_id, 'vendor_code': p.vendor_code or ''}
+            for p in sample_products
+        ]
+
         return render_template('admin_supplier_sellers.html',
                                supplier=supplier, connections=connections,
                                all_sellers=all_sellers,
-                               connected_seller_ids=connected_seller_ids)
+                               connected_seller_ids=connected_seller_ids,
+                               sample_external_ids=sample_external_ids)
 
     @app.route('/admin/suppliers/<int:supplier_id>/sellers/connect', methods=['POST'])
     @login_required
