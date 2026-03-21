@@ -1534,6 +1534,7 @@ class AIConfig:
 
     @classmethod
     def for_seller(cls, seller_id: int, provider_override: str = None,
+                   model_override: str = None,
                    temperature: float = None, max_tokens: int = None,
                    timeout: int = None) -> 'AIConfig':
         """Единая точка создания AI-конфига для любого seller_id.
@@ -1544,6 +1545,7 @@ class AIConfig:
         Args:
             seller_id: ID продавца
             provider_override: переопределить провайдера (иначе из настроек)
+            model_override: переопределить модель (иначе из настроек/дефолт)
             temperature: переопределить temperature
             max_tokens: переопределить max_tokens
             timeout: переопределить timeout
@@ -1590,7 +1592,7 @@ class AIConfig:
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
 
-        model = getattr(ai_settings, 'ai_model', '') or default_model
+        model = model_override or getattr(ai_settings, 'ai_model', '') or default_model
 
         return cls(
             provider=provider,

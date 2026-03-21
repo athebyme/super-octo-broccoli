@@ -4045,6 +4045,7 @@ class ContentFactory(db.Model):
     product_selection_rules_json = db.Column(db.Text, default='{}')  # {category, brand, price_range}
 
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
+    ai_model = db.Column(db.String(100))  # Конкретная модель (если пусто — дефолт провайдера)
     schedule_cron = db.Column(db.String(100))  # cron-выражение для автогенерации
     auto_approve = db.Column(db.Boolean, default=False)
     auto_generate = db.Column(db.Boolean, default=False)  # Автогенерация: рандомный товар → AI → пост

@@ -204,10 +204,12 @@ class ContentFactoryService:
             Tuple[AIClient, provider_name, model_name]
         """
         provider_name = factory.ai_provider or 'cloudru'
+        model_name = getattr(factory, 'ai_model', None) or None
 
         config = AIConfig.for_seller(
             seller_id=factory.seller_id,
             provider_override=provider_name,
+            model_override=model_name,
             temperature=0.7,  # Более креативно для контента
             max_tokens=3000,
         )

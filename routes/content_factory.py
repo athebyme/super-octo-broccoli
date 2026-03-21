@@ -108,6 +108,7 @@ def register_content_factory_routes(app):
                 tone=request.form.get('tone', 'casual'),
                 style_guidelines=request.form.get('style_guidelines', '').strip(),
                 ai_provider=request.form.get('ai_provider', 'openai'),
+                ai_model=request.form.get('ai_model', '').strip() or None,
                 product_selection_mode=request.form.get('product_selection_mode', 'manual'),
                 auto_approve=bool(request.form.get('auto_approve')),
                 auto_generate=bool(request.form.get('auto_generate')),
@@ -180,6 +181,7 @@ def register_content_factory_routes(app):
             factory.tone = request.form.get('tone', factory.tone)
             factory.style_guidelines = request.form.get('style_guidelines', '').strip()
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
+            factory.ai_model = request.form.get('ai_model', '').strip() or None
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
             factory.auto_approve = bool(request.form.get('auto_approve'))
             factory.auto_generate = bool(request.form.get('auto_generate'))
