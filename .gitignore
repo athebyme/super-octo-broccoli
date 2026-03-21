@@ -56,3 +56,4 @@ processed/*
 Thumbs.db
 *.log
 seller_platform.log
+*.log.*
