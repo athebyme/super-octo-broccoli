@@ -2746,7 +2746,13 @@ class SupplierService:
                             try:
                                 db.session.rollback()
                             except Exception:
+                                pass
+                        finally:
+                            # Освобождаем соединение между heartbeat-ами (30 сек простоя)
+                            try:
                                 db.session.remove()
+                            except Exception:
+                                pass
 
             # Запускаем фоновый heartbeat-поток
             heartbeat_thread = threading.Thread(
@@ -2773,7 +2779,13 @@ class SupplierService:
                     try:
                         db.session.rollback()
                     except Exception:
+                        pass
+                finally:
+                    # Освобождаем соединение сразу после обновления прогресса
+                    try:
                         db.session.remove()
+                    except Exception:
+                        pass
 
             def _check_cancelled():
                 """Проверяет не отменена ли задача."""
@@ -2787,38 +2799,47 @@ class SupplierService:
                     try:
                         db.session.rollback()
                     except Exception:
+                        pass
+                finally:
+                    try:
                         db.session.remove()
+                    except Exception:
+                        pass
                 return False
 
             def _parse_one(pid: int) -> dict:
                 """
                 Парсит один товар. Запускается в воркер-потоке.
-                Каждый вызов создаёт свой AIService (свою HTTP-сессию).
-                Оборачивается в app_context(), т.к. потоки пула не наследуют
-                Flask application context из родительского потока.
+
+                ВАЖНО: DB-соединение освобождается (session.remove()) перед долгим
+                AI-вызовом и заново берётся из пула для сохранения результатов.
+                Это предотвращает исчерпание QueuePool при параллельных воркерах.
                 """
                 if cancelled.is_set():
                     return {'product_id': pid, 'status': 'cancelled'}
 
                 with flask_app.app_context():
-                    # ВАЖНО: try/finally охватывает ВСЕ DB-операции, включая первый query.
-                    # Иначе при сломанной сессии (от предыдущего товара в этом потоке)
-                    # начальный query падает, finally не срабатывает, и сессия остаётся
-                    # отравленной для ВСЕХ последующих товаров в этом потоке.
                     title = ''
                     try:
-                        product = SupplierProduct.query.get(pid)
-                        if not product or product.supplier_id != supplier_id:
-                            return {
-                                'product_id': pid, 'title': '',
-                                'status': 'error', 'error': 'Товар не найден',
-                            }
+                        # --- Фаза 1: читаем данные из БД и СРАЗУ освобождаем соединение ---
+                        product_data = None
+                        try:
+                            product = SupplierProduct.query.get(pid)
+                            if not product or product.supplier_id != supplier_id:
+                                return {
+                                    'product_id': pid, 'title': '',
+                                    'status': 'error', 'error': 'Товар не найден',
+                                }
+                            title = (product.title or '')[:80]
+                            product_data = product.get_all_data_for_parsing()
+                        finally:
+                            # Освобождаем соединение ДО долгого AI-вызова
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
 
-                        title = (product.title or '')[:80]
-
-                        product_data = product.get_all_data_for_parsing()
-
-                        # Создаём отдельный AIService для этого воркера
+                        # --- Фаза 2: AI-вызов (долгая операция, БЕЗ DB-соединения) ---
                         worker_svc = SupplierService._get_ai_service(supplier, model_override=model_override)
                         if not worker_svc:
                             return {
@@ -2830,9 +2851,21 @@ class SupplierService:
                             product_data, marketplace_categories_block=mp_categories
                         )
 
-                        if success and result:
-                            # no_autoflush предотвращает преждевременную запись
-                            # при запросах к БД внутри _run_marketplace_aware_parse
+                        if not success or not result:
+                            return {
+                                'product_id': pid, 'title': title,
+                                'status': 'error', 'error': error or 'Ошибка AI',
+                            }
+
+                        # --- Фаза 3: сохраняем результат (заново берём соединение из пула) ---
+                        try:
+                            product = SupplierProduct.query.get(pid)
+                            if not product:
+                                return {
+                                    'product_id': pid, 'title': title,
+                                    'status': 'error', 'error': 'Товар удалён во время парсинга',
+                                }
+
                             with db.session.no_autoflush:
                                 product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                                 product.ai_parsed_at = datetime.utcnow()
@@ -2842,59 +2875,67 @@ class SupplierService:
                                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
 
                                 _apply_parsed_data_to_product(product, result)
-
-                                # Верификация категории (отдельный этап — до marketplace parse)
                                 _verify_and_fix_category(product, result, worker_svc)
-
-                                # Интеграция с MarketplaceAwareParsingTask
                                 _run_marketplace_aware_parse(product, result, worker_svc)
 
                                 product.updated_at = datetime.utcnow()
 
-                            # Коммит с retry для SQLite (concurrent writes)
                             _commit_with_retry(db.session)
-
-                            # Валидация и автокоррекция AI-характеристик
-                            validation_info = {}
+                        finally:
                             try:
-                                from services.smart_product_parser import CharacteristicsValidator
-                                val_result = CharacteristicsValidator.validate_product(
-                                    pid, auto_correct=True
-                                )
-                                validation_info = {
-                                    'chars_valid': val_result.is_valid,
-                                    'chars_corrected': val_result.corrected_count,
-                                    'chars_invalid': val_result.invalid_count,
-                                }
-                            except Exception as ve:
-                                logger.debug(f"Characteristics validation skipped: {ve}")
+                                db.session.remove()
+                            except Exception:
+                                pass
 
-                            fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
-                            card_pct = _calc_card_completeness_pct(product)
-                            return {
-                                'product_id': pid, 'title': title,
-                                'status': 'success', 'fill_pct': fill_pct,
-                                'card_pct': card_pct,
-                                **validation_info,
+                        # --- Фаза 4: валидация (отдельное короткое соединение) ---
+                        validation_info = {}
+                        try:
+                            from services.smart_product_parser import CharacteristicsValidator
+                            val_result = CharacteristicsValidator.validate_product(
+                                pid, auto_correct=True
+                            )
+                            validation_info = {
+                                'chars_valid': val_result.is_valid,
+                                'chars_corrected': val_result.corrected_count,
+                                'chars_invalid': val_result.invalid_count,
                             }
-                        else:
-                            return {
-                                'product_id': pid, 'title': title,
-                                'status': 'error', 'error': error or 'Ошибка AI',
-                            }
+                        except Exception as ve:
+                            logger.debug(f"Characteristics validation skipped: {ve}")
+                        finally:
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
+
+                        fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+                        try:
+                            product = SupplierProduct.query.get(pid)
+                            card_pct = _calc_card_completeness_pct(product) if product else 0
+                        except Exception:
+                            card_pct = 0
+                        finally:
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
+
+                        return {
+                            'product_id': pid, 'title': title,
+                            'status': 'success', 'fill_pct': fill_pct,
+                            'card_pct': card_pct,
+                            **validation_info,
+                        }
                     except Exception as e:
                         try:
                             db.session.rollback()
                         except Exception:
-                            # Сессия в невосстановимом состоянии (prepared/invalid)
-                            db.session.remove()
+                            pass
                         logger.error(f"[AI Parse] Worker error pid={pid}: {e}")
                         return {
                             'product_id': pid, 'title': title,
                             'status': 'error', 'error': str(e)[:200],
                         }
                     finally:
-                        # Гарантируем чистую сессию для следующего использования потока
                         try:
                             db.session.remove()
                         except Exception:
@@ -2973,7 +3014,12 @@ class SupplierService:
                 try:
                     db.session.rollback()
                 except Exception:
+                    pass
+            finally:
+                try:
                     db.session.remove()
+                except Exception:
+                    pass
 
             logger.info(
                 f"[AI Parse] Job {job_id} done: "
@@ -3013,16 +3059,41 @@ class SupplierService:
 
         job.current_product_title = (product.title or 'Без названия')[:200]
         job.heartbeat_at = datetime.utcnow()
+        product_title_short = (product.title or '')[:80]
         db.session.commit()
 
         try:
             product_data = product.get_all_data_for_parsing()
             mp_categories = _get_marketplace_categories_block(supplier_id)
+
+            # Освобождаем соединение перед долгим AI-вызовом
+            try:
+                db.session.remove()
+            except Exception:
+                pass
+
             success, result, error = ai_svc.full_product_parse(
                 product_data, marketplace_categories_block=mp_categories
             )
 
             if success and result:
+                # Заново берём product из БД
+                product = SupplierProduct.query.get(product_id)
+                if not product:
+                    job = AIParseJob.query.get(job_id)
+                    if job:
+                        job.status = 'done'
+                        job.processed = 1
+                        job.failed = 1
+                        job.results = json.dumps([{
+                            'product_id': product_id, 'status': 'error',
+                            'error': 'Товар удалён во время парсинга',
+                        }], ensure_ascii=False)
+                        job.current_product_title = None
+                        job.updated_at = datetime.utcnow()
+                        _commit_with_retry(db.session)
+                    return
+
                 with db.session.no_autoflush:
                     product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                     product.ai_parsed_at = datetime.utcnow()
@@ -3030,53 +3101,65 @@ class SupplierService:
                     marketplace_data = _build_marketplace_data(product, result)
                     product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                     _apply_parsed_data_to_product(product, result)
-
-                    # Верификация категории (отдельный этап — до marketplace parse)
                     _verify_and_fix_category(product, result, ai_svc)
-
-                    # Интеграция с MarketplaceAwareParsingTask
                     _run_marketplace_aware_parse(product, result, ai_svc)
-
                     product.updated_at = datetime.utcnow()
 
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                 card_pct = _calc_card_completeness_pct(product)
 
-                job.status = 'done'
-                job.processed = 1
-                job.succeeded = 1
-                job.results = json.dumps([{
-                    'product_id': product_id,
-                    'title': (product.title or '')[:80],
-                    'status': 'success',
-                    'fill_pct': fill_pct,
-                    'card_pct': card_pct,
-                }], ensure_ascii=False)
+                job = AIParseJob.query.get(job_id)
+                if job:
+                    job.status = 'done'
+                    job.processed = 1
+                    job.succeeded = 1
+                    job.results = json.dumps([{
+                        'product_id': product_id,
+                        'title': product_title_short,
+                        'status': 'success',
+                        'fill_pct': fill_pct,
+                        'card_pct': card_pct,
+                    }], ensure_ascii=False)
             else:
+                job = AIParseJob.query.get(job_id)
+                if job:
+                    job.status = 'done'
+                    job.processed = 1
+                    job.failed = 1
+                    job.results = json.dumps([{
+                        'product_id': product_id,
+                        'title': product_title_short,
+                        'status': 'error',
+                        'error': error or 'Ошибка AI',
+                    }], ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[AI Parse] Single parse error {product_id}: {e}")
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
+            job = AIParseJob.query.get(job_id)
+            if job:
                 job.status = 'done'
                 job.processed = 1
                 job.failed = 1
                 job.results = json.dumps([{
                     'product_id': product_id,
-                    'title': (product.title or '')[:80],
                     'status': 'error',
-                    'error': error or 'Ошибка AI',
+                    'error': str(e)[:200],
                 }], ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[AI Parse] Single parse error {product_id}: {e}")
-            db.session.rollback()
-            job.status = 'done'
-            job.processed = 1
-            job.failed = 1
-            job.results = json.dumps([{
-                'product_id': product_id,
-                'status': 'error',
-                'error': str(e)[:200],
-            }], ensure_ascii=False)
 
-        job.current_product_title = None
-        job.updated_at = datetime.utcnow()
-        _commit_with_retry(db.session)
+        try:
+            job = AIParseJob.query.get(job_id)
+            if job:
+                job.current_product_title = None
+                job.updated_at = datetime.utcnow()
+                _commit_with_retry(db.session)
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
         # Уведомляем продавцов (аналогично batch-парсингу)
         if job.succeeded and job.succeeded > 0:
