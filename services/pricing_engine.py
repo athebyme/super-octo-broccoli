@@ -328,3 +328,83 @@ def extract_product_id_for_vendor_code(external_id: str, supplier=None) -> str:
         return m.group(1)
 
     return external_id
+
+
+# ---------------------------------------------------------------------------
+# Централизованная генерация артикула (vendor code)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_VENDOR_CODE_PATTERN = 'id-{product_id}-{supplier_code}'
+
+
+def resolve_vendor_code_settings(seller_id: int, supplier_id: int = None):
+    """Определить шаблон артикула и supplier_code с правильным приоритетом.
+
+    Приоритет: SellerSupplier → AutoImportSettings → default.
+    Возвращает (pattern, supplier_code, supplier_obj).
+    """
+    from models import SellerSupplier, Supplier, Seller
+
+    pattern = None
+    sup_code = None
+    supplier_obj = None
+
+    if supplier_id:
+        ss = SellerSupplier.query.filter_by(
+            seller_id=seller_id,
+            supplier_id=supplier_id,
+            is_active=True,
+        ).first()
+        if ss:
+            pattern = ss.vendor_code_pattern
+            sup_code = ss.supplier_code
+        supplier_obj = Supplier.query.get(supplier_id)
+
+    if not pattern:
+        seller = Seller.query.get(seller_id)
+        if seller:
+            settings = seller.auto_import_settings
+            if settings and settings.vendor_code_pattern:
+                pattern = settings.vendor_code_pattern
+                if not sup_code:
+                    sup_code = settings.supplier_code
+
+    return pattern, sup_code, supplier_obj
+
+
+def generate_vendor_code(
+    pattern: str = None,
+    supplier_code: str = None,
+    external_id: str = None,
+    external_vendor_code: str = None,
+    supplier=None,
+    fallback_id=None,
+    fallback_seller_id=None,
+) -> str:
+    """Сгенерировать артикул (vendorCode) по шаблону.
+
+    Переменные шаблона:
+      {product_id}          — извлечённый из external_id по regex поставщика
+      {supplier_code}       — код продавца (SellerSupplier.supplier_code)
+      {external_vendor_code} — артикул из CSV поставщика
+      {external_id}         — полный external_id товара
+
+    Если pattern не задан:
+      - и есть fallback_id/fallback_seller_id → 'id-<fallback_id>-<fallback_seller_id>'
+      - иначе → 'id-{product_id}-{supplier_code}' (default шаблон)
+    """
+    ext_id = str(external_id or '')
+
+    if not pattern:
+        if fallback_id is not None and fallback_seller_id is not None:
+            return f"id-{fallback_id}-{fallback_seller_id}"
+        pattern = _DEFAULT_VENDOR_CODE_PATTERN
+
+    product_id_val = extract_product_id_for_vendor_code(ext_id, supplier)
+
+    result = pattern.replace('{product_id}', product_id_val)
+    result = result.replace('{supplier_code}', supplier_code or '')
+    result = result.replace('{external_vendor_code}', str(external_vendor_code or ''))
+    result = result.replace('{external_id}', ext_id)
+
+    return result

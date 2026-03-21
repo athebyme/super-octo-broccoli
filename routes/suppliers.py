@@ -1522,16 +1522,11 @@ def register_supplier_routes(app):
         )
 
         # Дополнительно: определяем товары на WB по совпадению артикула (vendor_code)
-        settings = seller.auto_import_settings
-        if settings and settings.vendor_code_pattern:
-            vc_pattern = settings.vendor_code_pattern
-            vc_supplier_code = settings.supplier_code or ''
-        elif conn.vendor_code_pattern:
-            vc_pattern = conn.vendor_code_pattern
-            vc_supplier_code = conn.supplier_code or ''
-        else:
-            vc_pattern = 'id-{product_id}-{supplier_code}'
-            vc_supplier_code = conn.supplier_code or ''
+        from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
+
+        vc_pattern, vc_supplier_code, _ = resolve_vendor_code_settings(
+            seller.id, supplier_id
+        )
 
         # Получаем все external_id и vendor_code поставщика и вычисляем артикулы WB
         all_sp_data = db.session.query(
@@ -1543,15 +1538,15 @@ def register_supplier_routes(app):
         all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
         all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
         if all_sp_external_ids:
-            from services.pricing_engine import extract_product_id_for_vendor_code
             vc_to_sp = {}
             for sp_id, ext_id in all_sp_external_ids.items():
-                ext_id_str = str(ext_id or '')
-                product_id_val = extract_product_id_for_vendor_code(ext_id_str, supplier)
-                vc = vc_pattern.replace('{product_id}', product_id_val)
-                vc = vc.replace('{supplier_code}', vc_supplier_code)
-                vc = vc.replace('{external_vendor_code}', str(all_sp_vendor_codes.get(sp_id) or ''))
-                vc = vc.replace('{external_id}', ext_id_str)
+                vc = generate_vendor_code(
+                    pattern=vc_pattern,
+                    supplier_code=vc_supplier_code,
+                    external_id=ext_id,
+                    external_vendor_code=str(all_sp_vendor_codes.get(sp_id) or ''),
+                    supplier=supplier,
+                )
                 if vc:
                     vc_to_sp[vc] = sp_id
 
