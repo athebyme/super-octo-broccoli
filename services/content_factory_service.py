@@ -16,7 +16,7 @@ import re
 import requests as _requests
 
 from models import (
-    db, Product, Seller, SupplierProduct, ImportedProduct,
+    db, Product, ProductStock, Seller, SupplierProduct, ImportedProduct,
     ProductAnalytics, ContentFactory, ContentItem,
     ContentTemplate, ContentPlan, SocialAccount,
     CONTENT_PLATFORMS, CONTENT_TYPES, CONTENT_STATUSES,
@@ -644,11 +644,31 @@ class ContentFactoryService:
         return deduped[:limit]
 
     def _base_product_query(self, seller_id: int) -> db.Query:
-        """Базовый запрос товаров: в наличии + активный."""
-        return Product.query.filter(
-            Product.seller_id == seller_id,
-            Product.is_active == True,
-            Product.quantity > 0,
+        """Базовый запрос товаров: в наличии + активный.
+
+        Проверяет наличие через ProductStock (складские остатки),
+        т.к. Product.quantity может быть не синхронизирован.
+        """
+        # Subquery: сумма остатков по всем складам
+        stock_subquery = (
+            db.session.query(
+                ProductStock.product_id,
+                db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+            )
+            .group_by(ProductStock.product_id)
+            .subquery()
+        )
+        return (
+            Product.query
+            .outerjoin(stock_subquery, Product.id == stock_subquery.c.product_id)
+            .filter(
+                Product.seller_id == seller_id,
+                Product.is_active == True,
+                db.or_(
+                    stock_subquery.c.total_qty > 0,
+                    Product.quantity > 0,
+                ),
+            )
         )
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:

@@ -13,7 +13,7 @@ from flask_login import login_required, current_user
 
 from models import (
     db, ContentFactory, ContentItem, ContentTemplate,
-    ContentPlan, SocialAccount, Product,
+    ContentPlan, SocialAccount, Product, ProductStock,
     CONTENT_PLATFORMS, CONTENT_TYPES, CONTENT_TONES,
     CONTENT_STATUSES, PRODUCT_SELECTION_MODES,
 )
@@ -427,10 +427,27 @@ def register_content_factory_routes(app):
             hard_exclude.add(int(eid))
 
         # Базовый фильтр: в наличии + активный
-        query = Product.query.filter(
-            Product.seller_id == factory.seller_id,
-            Product.is_active == True,
-            Product.quantity > 0,
+        # Используем ProductStock для проверки наличия,
+        # т.к. Product.quantity может быть не синхронизирован (Content API не возвращает остатки)
+        stock_subquery = (
+            db.session.query(
+                ProductStock.product_id,
+                db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+            )
+            .group_by(ProductStock.product_id)
+            .subquery()
+        )
+        query = (
+            Product.query
+            .outerjoin(stock_subquery, Product.id == stock_subquery.c.product_id)
+            .filter(
+                Product.seller_id == factory.seller_id,
+                Product.is_active == True,
+                db.or_(
+                    stock_subquery.c.total_qty > 0,
+                    Product.quantity > 0,
+                ),
+            )
         )
         if hard_exclude:
             query = query.filter(~Product.id.in_(hard_exclude))

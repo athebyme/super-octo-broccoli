@@ -1984,6 +1984,28 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     db_commit_with_retry(db.session)
                     app.logger.info(f"💾 Stocks saved: {stocks_created} new, {stocks_updated} updated")
 
+                    # Обновляем Product.quantity из суммы складских остатков
+                    try:
+                        seller_products = Product.query.filter_by(seller_id=seller.id).all()
+                        product_ids = [p.id for p in seller_products]
+                        if product_ids:
+                            stock_totals = (
+                                db.session.query(
+                                    ProductStock.product_id,
+                                    db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                                )
+                                .filter(ProductStock.product_id.in_(product_ids))
+                                .group_by(ProductStock.product_id)
+                                .all()
+                            )
+                            qty_map = {pid: int(total) for pid, total in stock_totals}
+                            for p in seller_products:
+                                p.quantity = qty_map.get(p.id, 0)
+                            db_commit_with_retry(db.session)
+                            app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
+                    except Exception as qty_error:
+                        app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
+
                 except Exception as stock_error:
                     app.logger.warning(f"⚠️ Failed to fetch stocks from Statistics API: {stock_error}")
                     # Не прерываем синхронизацию из-за ошибки остатков
@@ -2295,6 +2317,28 @@ def sync_warehouse_stocks():
 
             # Сохраняем все изменения
             db.session.commit()
+
+            # Обновляем Product.quantity из суммы складских остатков
+            try:
+                seller_products = Product.query.filter_by(seller_id=current_user.seller.id).all()
+                product_ids = [p.id for p in seller_products]
+                if product_ids:
+                    stock_totals = (
+                        db.session.query(
+                            ProductStock.product_id,
+                            db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                        )
+                        .filter(ProductStock.product_id.in_(product_ids))
+                        .group_by(ProductStock.product_id)
+                        .all()
+                    )
+                    qty_map = {pid: int(total) for pid, total in stock_totals}
+                    for p in seller_products:
+                        p.quantity = qty_map.get(p.id, 0)
+                    db.session.commit()
+                    app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
+            except Exception as qty_error:
+                app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
 
             app.logger.info(f"💾 Сохранено остатков в БД: {created_count} новых, {updated_count} обновлено")
 
