@@ -678,6 +678,67 @@ def register_merge_routes(app):
             flash('Ошибка при получении рекомендаций', 'danger')
             return redirect(url_for('products_merge'))
 
+    @app.route('/products/merge/confirm')
+    @login_required
+    def products_merge_confirm():
+        """Страница подтверждения объединения из рекомендации.
+        Показывает только выбранные карточки — без каталога и пагинации."""
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            flash('Для объединения карточек необходимо настроить API ключ WB', 'warning')
+            return redirect(url_for('settings'))
+
+        target_nm_id = request.args.get('target_nm_id', type=int)
+        nm_ids_str = request.args.get('nm_ids', '')
+        reason = request.args.get('reason', '')
+        score = request.args.get('score', 0, type=float)
+
+        if not target_nm_id or not nm_ids_str:
+            flash('Не указаны карточки для объединения', 'warning')
+            return redirect(url_for('products_merge_recommendations'))
+
+        nm_ids = [int(x.strip()) for x in nm_ids_str.split(',') if x.strip().isdigit()]
+        # Убираем target из списка (он передаётся отдельно)
+        nm_ids = [nm for nm in nm_ids if nm != target_nm_id]
+
+        if not nm_ids:
+            flash('Нужна хотя бы одна карточка кроме главной', 'warning')
+            return redirect(url_for('products_merge_recommendations'))
+
+        # Загружаем все карточки одним запросом
+        all_nm_ids = [target_nm_id] + nm_ids
+        products = Product.query.filter(
+            Product.nm_id.in_(all_nm_ids),
+            Product.seller_id == current_user.seller.id,
+            Product.is_active == True
+        ).all()
+        products_map = {p.nm_id: p for p in products}
+
+        target_product = products_map.get(target_nm_id)
+        if not target_product:
+            flash('Целевая карточка не найдена', 'danger')
+            return redirect(url_for('products_merge_recommendations'))
+
+        merge_products = [products_map[nm] for nm in nm_ids if nm in products_map]
+        if not merge_products:
+            flash('Карточки для объединения не найдены', 'danger')
+            return redirect(url_for('products_merge_recommendations'))
+
+        # Проверка одинаковой категории
+        category_mismatch = [
+            p for p in merge_products
+            if p.subject_id != target_product.subject_id
+        ]
+
+        return render_template(
+            'products_merge_confirm.html',
+            target=target_product,
+            merge_cards=merge_products,
+            reason=reason,
+            score=score,
+            category_mismatch=category_mismatch,
+            nm_ids=nm_ids
+        )
+
     @app.route('/products/merge/revert/<int:id>', methods=['POST'])
     @login_required
     def products_merge_revert(id):
