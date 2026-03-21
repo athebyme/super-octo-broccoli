@@ -1445,6 +1445,86 @@ def register_supplier_routes(app):
         flash('Настройки подключения обновлены', 'success')
         return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
 
+    @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/regenerate-vendor-codes', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_regenerate_vendor_codes(supplier_id, seller_id):
+        """Пересобрать артикулы (vendorCode) для товаров продавца у поставщика"""
+        from services.pricing_engine import generate_vendor_code
+
+        conn = SellerSupplier.query.filter_by(
+            seller_id=seller_id, supplier_id=supplier_id, is_active=True
+        ).first_or_404()
+
+        supplier = SupplierService.get_supplier(supplier_id)
+
+        # Фильтр: только в наличии?
+        stock_only = request.form.get('stock_only') == '1'
+        limit = request.form.get('limit', 0, type=int)
+
+        # Находим ImportedProduct для этого продавца+поставщика
+        query = ImportedProduct.query.filter_by(
+            seller_id=seller_id,
+            supplier_id=supplier_id
+        )
+
+        if stock_only:
+            # Только товары, у которых SupplierProduct в наличии
+            query = query.join(
+                SupplierProduct,
+                ImportedProduct.supplier_product_id == SupplierProduct.id
+            ).filter(
+                SupplierProduct.supplier_status == 'in_stock',
+                SupplierProduct.supplier_quantity > 0
+            )
+
+        if limit > 0:
+            query = query.limit(limit)
+
+        imported_products = query.all()
+
+        pattern = conn.vendor_code_pattern or supplier.default_vendor_code_pattern or 'id-{product_id}-{supplier_code}'
+        sup_code = conn.supplier_code or ''
+
+        updated = 0
+        for ip in imported_products:
+            new_vc = generate_vendor_code(
+                pattern=pattern,
+                supplier_code=sup_code,
+                external_id=ip.external_id,
+                external_vendor_code=ip.external_vendor_code or '',
+                supplier=supplier,
+                fallback_id=ip.id,
+                fallback_seller_id=seller_id,
+            )
+
+            # Обновляем Product.vendor_code если есть связанный товар
+            if ip.product_id:
+                product = Product.query.get(ip.product_id)
+                if product and product.vendor_code != new_vc:
+                    product.vendor_code = new_vc
+                    updated += 1
+
+        db.session.commit()
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='regenerate_vendor_codes',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'seller_id': seller_id,
+                'pattern': pattern,
+                'total_processed': len(imported_products),
+                'updated': updated,
+                'stock_only': stock_only,
+            },
+            request=request
+        )
+
+        flash(f'Артикулы пересобраны: {updated} обновлено из {len(imported_products)} обработанных', 'success')
+        return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
+
     @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/disconnect', methods=['POST'])
     @login_required
     @admin_required

@@ -179,6 +179,30 @@
                     </div>
                 </form>
                 <form method="POST" action="{{ url_for('admin_supplier_disconnect_seller', supplier_id=supplier.id, seller_id=conn.seller_id) }}" class="disconnect-form" style="display:none"></form>
+
+                <!-- Пересобрать артикулы -->
+                <div class="border-t border-gray-100 mt-4 pt-4">
+                    <form method="POST" action="{{ url_for('admin_supplier_regenerate_vendor_codes', supplier_id=supplier.id, seller_id=conn.seller_id) }}"
+                          class="flex flex-wrap items-end gap-3"
+                          onsubmit="return confirm('Пересобрать артикулы по текущему шаблону? Это обновит vendorCode у товаров на WB.')">
+                        <div>
+                            <label class="flex items-center gap-2 text-xs text-gray-600">
+                                <input type="checkbox" name="stock_only" value="1" checked
+                                       class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+                                Только в наличии
+                            </label>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Лимит (0 = все)</label>
+                            <input type="number" name="limit" value="0" min="0" step="100"
+                                   class="w-24 rounded-lg border-gray-300 text-xs border px-2 py-1.5">
+                        </div>
+                        <button type="submit"
+                                class="px-4 py-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 font-medium">
+                            Пересобрать артикулы
+                        </button>
+                    </form>
+                </div>
                 {% else %}
                 <div class="flex items-center gap-3">
                     <span class="text-sm text-gray-500">Код: {{ conn.supplier_code or '—' }} · Шаблон: <code class="text-xs">{{ conn.vendor_code_pattern or 'id-{product_id}-{supplier_code}' }}</code></span>
