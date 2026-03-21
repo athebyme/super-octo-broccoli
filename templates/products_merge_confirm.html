@@ -2,41 +2,47 @@
 
 {% block content %}
 <div class="container mx-auto px-4 py-8">
-    <!-- Заголовок -->
+    <!-- Шапка -->
     <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
-        <div class="relative flex items-center justify-between">
-            <div>
-                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Подтверждение объединения</h1>
-                <p class="mt-2 text-sm text-gray-400">Проверьте карточки перед объединением</p>
+        <div class="relative">
+            <div class="flex items-center space-x-3 mb-2">
+                <a href="{{ url_for('products_merge_recommendations') }}"
+                   class="text-white/70 hover:text-white transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                    </svg>
+                </a>
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">
+                    Подтверждение объединения
+                </h1>
             </div>
-            <a href="{{ url_for('products_merge_recommendations') }}"
-               class="inline-flex items-center px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
-                </svg>
-                Назад к рекомендациям
-            </a>
+            <p class="mt-2 text-sm text-gray-400">
+                Объединение {{ merge_cards|length + 1 }} карточек под одним imtID
+            </p>
         </div>
     </div>
 
     {% if reason %}
     <!-- Причина рекомендации -->
     <div class="bg-white border border-gray-100 rounded-xl p-5 mb-6">
-        <div class="flex items-center gap-4">
-            <div class="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center
-                        {% if score >= 0.9 %}bg-green-600{% elif score >= 0.7 %}bg-blue-600{% else %}bg-yellow-600{% endif %}">
+        <div class="flex items-start gap-4">
+            <div class="flex-shrink-0 w-10 h-10 bg-[#0a0a0a] rounded-xl flex items-center justify-center">
                 <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
                 </svg>
             </div>
-            <div>
+            <div class="flex-1">
                 <span class="text-sm font-medium text-gray-900">{{ reason }}</span>
                 {% if score > 0 %}
-                <span class="ml-2 px-2 py-0.5 text-xs rounded-full
-                             {% if score >= 0.9 %}bg-green-100 text-green-700{% elif score >= 0.7 %}bg-blue-100 text-blue-700{% else %}bg-yellow-100 text-yellow-700{% endif %}">
+                <span class="ml-2 px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded-full">
                     {{ (score * 100)|round|int }}% схожесть
                 </span>
                 {% endif %}
+                <div class="mt-1 flex flex-wrap gap-3 text-xs text-gray-500">
+                    {% if target.brand %}<span>{{ target.brand }}</span><span>·</span>{% endif %}
+                    {% if target.object_name %}<span>{{ target.object_name }}</span><span>·</span>{% endif %}
+                    <span>{{ merge_cards|length + 1 }} карточек</span>
+                </div>
             </div>
         </div>
     </div>
@@ -44,84 +50,99 @@
 
     {% if category_mismatch %}
     <!-- Предупреждение о разных категориях -->
-    <div class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded-r-lg">
-        <div class="flex items-center">
-            <svg class="w-5 h-5 text-red-500 mr-3" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
-            </svg>
-            <div>
-                <p class="font-medium text-red-800">Разные категории!</p>
-                <p class="text-sm text-red-700 mt-1">{{ category_mismatch|length }} карточек имеют другую категорию. Объединение невозможно.</p>
+    <div class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-red-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm text-red-700">
+                    <strong>Разные категории!</strong> {{ category_mismatch|length }} карточек имеют другую категорию. Объединение невозможно.
+                </p>
             </div>
         </div>
     </div>
     {% endif %}
 
-    <!-- Главная карточка -->
-    <div class="mb-4">
-        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Главная карточка (target)</h3>
-        <div class="bg-white rounded-xl shadow-sm border-2 border-indigo-500 p-5">
-            <div class="flex items-center gap-4">
-                <div class="flex-shrink-0 w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
-                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <!-- Карточки -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+        <!-- Главная карточка -->
+        <div class="bg-gray-50 px-6 py-3">
+            <div class="flex items-center justify-between text-gray-800">
+                <div class="flex items-center gap-3">
+                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path>
                     </svg>
+                    <span class="font-medium">Главная карточка</span>
                 </div>
+                <span class="px-2.5 py-1 text-xs bg-indigo-100 text-indigo-700 rounded-full">target</span>
+            </div>
+        </div>
+        <div class="p-4 bg-indigo-50 border-l-4 border-indigo-500">
+            <div class="flex items-center gap-4">
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-1">
                         <span class="font-semibold text-gray-900">{{ target.vendor_code }}</span>
-                        <span class="text-xs px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded">nmID: {{ target.nm_id }}</span>
+                        <span class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">nmID: {{ target.nm_id }}</span>
                         {% if target.imt_id %}
                         <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">imtID: {{ target.imt_id }}</span>
                         {% endif %}
                     </div>
                     <p class="text-sm text-gray-600 truncate">{{ target.title }}</p>
-                    <div class="flex gap-3 mt-1 text-xs text-gray-500">
-                        {% if target.brand %}<span>{{ target.brand }}</span>{% endif %}
-                        {% if target.object_name %}<span>{{ target.object_name }}</span>{% endif %}
-                    </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Карточки для присоединения -->
-    <div class="mb-6">
-        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-            Карточки для присоединения ({{ merge_cards|length }})
-        </h3>
-        <div class="space-y-2">
-            {% for card in merge_cards %}
-            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:bg-purple-50/50 transition">
-                <div class="flex items-center gap-4">
-                    <div class="flex-shrink-0 w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
-                        <span class="text-sm font-bold text-purple-600">{{ loop.index }}</span>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2 mb-1">
-                            <span class="font-semibold text-gray-900">{{ card.vendor_code }}</span>
-                            <span class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">nmID: {{ card.nm_id }}</span>
-                            {% if card.imt_id %}
-                            <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">imtID: {{ card.imt_id }}</span>
-                            {% endif %}
-                        </div>
-                        <p class="text-sm text-gray-600 truncate">{{ card.title }}</p>
-                    </div>
-                    {% if card.subject_id != target.subject_id %}
-                    <span class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded-full">Другая категория!</span>
-                    {% endif %}
+        <!-- Разделитель -->
+        <div class="bg-gray-50 px-6 py-3">
+            <div class="flex items-center justify-between text-gray-800">
+                <div class="flex items-center gap-3">
+                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
+                    </svg>
+                    <span class="font-medium">Присоединяемые карточки</span>
                 </div>
+                <span class="px-2.5 py-1 text-xs bg-gray-200 text-gray-600 rounded-full">{{ merge_cards|length }} шт.</span>
+            </div>
+        </div>
+
+        <!-- Список карточек -->
+        <div class="divide-y divide-gray-100">
+            {% for card in merge_cards %}
+            <div class="flex items-center gap-4 p-4 hover:bg-gray-50 transition
+                        {% if card.subject_id != target.subject_id %}bg-red-50{% endif %}">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="font-semibold text-gray-900">{{ card.vendor_code }}</span>
+                        <span class="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">nmID: {{ card.nm_id }}</span>
+                        {% if card.imt_id %}
+                        <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">imtID: {{ card.imt_id }}</span>
+                        {% endif %}
+                    </div>
+                    <p class="text-sm text-gray-600 truncate">{{ card.title }}</p>
+                </div>
+                {% if card.subject_id != target.subject_id %}
+                <span class="px-2.5 py-1 text-xs bg-red-100 text-red-700 rounded-full flex-shrink-0">Другая категория</span>
+                {% else %}
+                <svg class="w-5 h-5 text-gray-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                </svg>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
     </div>
 
-    <!-- Итого и кнопка -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <!-- Действия -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
         <div class="flex items-center justify-between">
             <div class="text-sm text-gray-600">
-                <p>Будет объединено <strong class="text-gray-900">{{ merge_cards|length }}</strong> карточек под imtID главной карточки</p>
-                <p class="text-xs text-gray-500 mt-1">nmID {{ target.nm_id }} ({{ target.vendor_code }})</p>
+                <p>Будет объединено <strong class="text-gray-900">{{ merge_cards|length + 1 }}</strong> карточек</p>
+                <p class="text-xs text-gray-500 mt-1">
+                    Все карточки получат imtID главной: {{ target.vendor_code }} (nmID {{ target.nm_id }})
+                </p>
             </div>
             <div class="flex gap-3">
                 <a href="{{ url_for('products_merge_recommendations') }}"
@@ -137,7 +158,7 @@
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                         </svg>
-                        Объединить {{ merge_cards|length + 1 }} карточек
+                        Объединить
                     </button>
                 </form>
                 {% else %}
