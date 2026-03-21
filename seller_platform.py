@@ -6030,6 +6030,8 @@ def _run_startup_migrations():
         ('suppliers', 'ai_proxy_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
+        # Content factory AI model selection
+        ('content_factories', 'ai_model', 'VARCHAR(100)'),
     ]
 
     for table, column, col_type in migrations:
