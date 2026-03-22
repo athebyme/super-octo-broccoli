@@ -101,6 +101,8 @@ with app.app_context():
             print(f"✅ Администратор '{username}' обновлён из переменных окружения")
         else:
             print(f"✅ Администратор уже существует: {admin_user.username}")
+
+import os as _os; _os._exit(0)
 PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
@@ -125,6 +127,7 @@ python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality 
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
 python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
 python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
+DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
 fi
