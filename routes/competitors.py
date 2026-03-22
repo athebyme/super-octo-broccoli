@@ -328,6 +328,7 @@ def register_competitor_routes(app):
                 if not existing.is_active:
                     # Реактивируем ранее удалённый товар
                     existing.is_active = True
+                    existing.fetch_error_count = 0
                     existing.title = pd.get('title') or existing.title
                     existing.brand = pd.get('brand') or existing.brand
                     existing.supplier_name = pd.get('supplier_name') or existing.supplier_name

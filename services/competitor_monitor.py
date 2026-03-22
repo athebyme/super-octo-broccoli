@@ -117,40 +117,59 @@ class CompetitorMonitorService:
         if not uncached_ids:
             return results
 
-        # Запрос к API
-        self._rate_limiter.wait_if_needed()
-
+        # Запрос к API — пробуем v1, затем v2
         nm_str = ';'.join(str(x) for x in uncached_ids)
-        params = {**self.DEFAULT_PARAMS, 'nm': nm_str}
 
-        try:
-            response = self._session.get(
-                self.DETAIL_URL,
-                params=params,
-                timeout=30
+        detail_urls = [self.DETAIL_URL, self.DETAIL_URL_V2]
+
+        for url in detail_urls:
+            self._rate_limiter.wait_if_needed()
+            params = {**self.DEFAULT_PARAMS, 'nm': nm_str}
+
+            try:
+                logger.info(f"Запрос деталей товаров: {url}, nm_ids={uncached_ids[:5]}...")
+                response = self._session.get(url, params=params, timeout=30)
+
+                if response.status_code == 404:
+                    logger.warning(f"URL {url} вернул 404, пробуем следующий")
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+
+                products = data.get('data', {}).get('products', [])
+
+                if not products:
+                    logger.info(
+                        f"URL {url}: пустой список products. "
+                        f"Ответ: {str(data)[:300]}"
+                    )
+                    continue
+
+                with _cache_lock:
+                    for product in products:
+                        nm_id = product.get('id')
+                        if nm_id:
+                            parsed = self._parse_product_data(product)
+                            results[nm_id] = parsed
+                            _product_cache[nm_id] = (parsed, time.time())
+
+                # Нашли товары — выходим из цикла
+                break
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Ошибка при запросе {url}: {e}")
+                continue
+            except (ValueError, KeyError) as e:
+                logger.error(f"Ошибка парсинга ответа WB ({url}): {e}")
+                continue
+
+        # Логируем не найденные товары
+        not_found = [nm_id for nm_id in uncached_ids if nm_id not in results]
+        if not_found:
+            logger.warning(
+                f"Товары не найдены ни через v1, ни через v2 API: {not_found}"
             )
-            if response.status_code == 404:
-                # Попробуем v2 endpoint как fallback
-                v2_url = self.DETAIL_URL.replace('/cards/detail', '/cards/v2/detail')
-                logger.info(f"Detail v1 вернул 404, пробуем v2: {v2_url}")
-                response = self._session.get(v2_url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-
-            products = data.get('data', {}).get('products', [])
-
-            with _cache_lock:
-                for product in products:
-                    nm_id = product.get('id')
-                    if nm_id:
-                        parsed = self._parse_product_data(product)
-                        results[nm_id] = parsed
-                        _product_cache[nm_id] = (parsed, time.time())
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Ошибка при запросе данных конкурентов: {e}")
-        except (ValueError, KeyError) as e:
-            logger.error(f"Ошибка парсинга ответа WB: {e}")
 
         return results
 
@@ -400,26 +419,30 @@ class CompetitorMonitorService:
                         data = fetched_data.get(product.nm_id)
                         if not data:
                             product.fetch_error_count += 1
-                            # Деактивируем после 10 ошибок подряд
-                            if product.fetch_error_count >= 10:
+                            logger.warning(
+                                f"[Seller {seller_id}] Товар {product.nm_id} не найден в API "
+                                f"(ошибка #{product.fetch_error_count})"
+                            )
+                            # Деактивируем после 20 ошибок подряд
+                            if product.fetch_error_count >= 20:
                                 product.is_active = False
                                 logger.warning(
-                                    f"Деактивирован товар {product.nm_id} после 10 ошибок"
+                                    f"Деактивирован товар {product.nm_id} после 20 ошибок подряд"
                                 )
                             continue
 
                         product.fetch_error_count = 0
 
-                        # Обновляем метаданные если пустые
-                        if not product.title and data.get('title'):
+                        # Обновляем метаданные (всегда, чтобы заполнить заглушки)
+                        if data.get('title'):
                             product.title = data['title']
-                        if not product.brand and data.get('brand'):
+                        if data.get('brand'):
                             product.brand = data['brand']
-                        if not product.supplier_name and data.get('supplier_name'):
+                        if data.get('supplier_name'):
                             product.supplier_name = data['supplier_name']
-                        if not product.wb_supplier_id and data.get('wb_supplier_id'):
+                        if data.get('wb_supplier_id'):
                             product.wb_supplier_id = data['wb_supplier_id']
-                        if not product.image_url and data.get('image_url'):
+                        if data.get('image_url'):
                             product.image_url = data['image_url']
 
                         # Delta storage: создаём снимок только если что-то изменилось
