@@ -965,8 +965,8 @@ def start_competitor_monitor_loop(seller_id, flask_app):
                         ).first()
                         pause = settings.pause_between_cycles_seconds if settings else 60
 
-                    pause = max(pause, 60)
-                    stop_event.wait(timeout=pause)
+                    if pause > 0:
+                        stop_event.wait(timeout=pause)
 
                 except Exception as e:
                     logger.error(f"[Seller {seller_id}] Ошибка в цикле мониторинга: {e}")
