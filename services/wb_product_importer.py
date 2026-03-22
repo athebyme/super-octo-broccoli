@@ -163,47 +163,20 @@ class WBProductImporter:
                 has_real_sizes = False
 
             # Формируем артикул по шаблону из настроек
-            # Поддерживаемые переменные: {product_id}, {supplier_code}, {external_vendor_code}, {external_id}
-            #
-            # Приоритет настроек:
-            # 1) SellerSupplier (подключение продавца к поставщику) — если товар привязан к поставщику
-            # 2) AutoImportSettings (глобальные настройки автоимпорта) — fallback
-            from models import SellerSupplier, Supplier
-            from services.pricing_engine import extract_product_id_for_vendor_code
+            from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
 
-            pattern = None
-            sup_code = None
-            supplier_obj = None
-
-            # Сначала пробуем SellerSupplier — настройки конкретного подключения к поставщику
-            if imported_product.supplier_id:
-                seller_supplier = SellerSupplier.query.filter_by(
-                    seller_id=self.seller.id,
-                    supplier_id=imported_product.supplier_id,
-                    is_active=True
-                ).first()
-                if seller_supplier:
-                    pattern = seller_supplier.vendor_code_pattern
-                    sup_code = seller_supplier.supplier_code
-                supplier_obj = Supplier.query.get(imported_product.supplier_id)
-
-            # Fallback на AutoImportSettings
-            if not pattern:
-                settings = self.seller.auto_import_settings
-                if settings and settings.vendor_code_pattern:
-                    pattern = settings.vendor_code_pattern
-                    if not sup_code:
-                        sup_code = settings.supplier_code
-
-            if pattern:
-                ext_id = str(imported_product.external_id or '')
-                product_id_val = extract_product_id_for_vendor_code(ext_id, supplier_obj)
-                vendor_code = pattern.replace('{product_id}', product_id_val)
-                vendor_code = vendor_code.replace('{supplier_code}', sup_code or '')
-                vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
-                vendor_code = vendor_code.replace('{external_id}', ext_id)
-            else:
-                vendor_code = f"id-{imported_product.id}-{self.seller.id}"
+            pattern, sup_code, supplier_obj = resolve_vendor_code_settings(
+                self.seller.id, imported_product.supplier_id
+            )
+            vendor_code = generate_vendor_code(
+                pattern=pattern,
+                supplier_code=sup_code,
+                external_id=imported_product.external_id,
+                external_vendor_code=imported_product.external_vendor_code,
+                supplier=supplier_obj,
+                fallback_id=imported_product.id,
+                fallback_seller_id=self.seller.id,
+            )
 
             # Формируем sizes для WB API v2
             # WB различает:
@@ -2390,42 +2363,20 @@ class WBProductImporter:
                 issues.append({'field': 'barcodes', 'level': 'warning', 'message': 'Нет баркодов'})
 
         # --- Vendor code ---
-        # Используем ту же логику формирования артикула, что и при реальном импорте
-        from models import SellerSupplier as _SS, Supplier as _Sup
-        from services.pricing_engine import extract_product_id_for_vendor_code
+        from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
 
-        _vc_pattern = None
-        _sup_code = None
-        _supplier_obj = None
-
-        # Приоритет: SellerSupplier → AutoImportSettings → fallback
-        if imported_product.supplier_id:
-            _ss = _SS.query.filter_by(
-                seller_id=self.seller.id,
-                supplier_id=imported_product.supplier_id,
-                is_active=True
-            ).first()
-            if _ss:
-                _vc_pattern = _ss.vendor_code_pattern
-                _sup_code = _ss.supplier_code
-            _supplier_obj = _Sup.query.get(imported_product.supplier_id)
-
-        if not _vc_pattern:
-            _aim_settings = self.seller.auto_import_settings
-            if _aim_settings and _aim_settings.vendor_code_pattern:
-                _vc_pattern = _aim_settings.vendor_code_pattern
-                if not _sup_code:
-                    _sup_code = _aim_settings.supplier_code
-
-        if _vc_pattern:
-            _ext_id = str(imported_product.external_id or '')
-            _pid = extract_product_id_for_vendor_code(_ext_id, _supplier_obj)
-            vendor_code = _vc_pattern.replace('{product_id}', _pid)
-            vendor_code = vendor_code.replace('{supplier_code}', _sup_code or '')
-            vendor_code = vendor_code.replace('{external_vendor_code}', imported_product.external_vendor_code or '')
-            vendor_code = vendor_code.replace('{external_id}', _ext_id)
-        else:
-            vendor_code = f"id-{imported_product.id}-{self.seller.id}"
+        _vc_pattern, _sup_code, _supplier_obj = resolve_vendor_code_settings(
+            self.seller.id, imported_product.supplier_id
+        )
+        vendor_code = generate_vendor_code(
+            pattern=_vc_pattern,
+            supplier_code=_sup_code,
+            external_id=imported_product.external_id,
+            external_vendor_code=imported_product.external_vendor_code,
+            supplier=_supplier_obj,
+            fallback_id=imported_product.id,
+            fallback_seller_id=self.seller.id,
+        )
 
         # --- Characteristics ---
         chars_dict = {}

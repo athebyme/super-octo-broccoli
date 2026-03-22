@@ -1751,6 +1751,65 @@ class WildberriesAPIClient:
             logger.error(f"❌ Unexpected error in unmerge_cards: {str(e)}")
             raise
 
+    def get_cards_error_list(
+        self,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Получить список ошибок создания/обновления карточек (Content API v2)
+
+        WB API возвращает 200 даже при ошибке merge/unmerge.
+        Реальные ошибки нужно проверять через этот endpoint.
+
+        Returns:
+            Список ошибок: [{"object": "...", "nmID": 123, "updatedAt": "...", "errors": ["..."]}]
+        """
+        endpoint = "/content/v2/cards/error/list"
+
+        try:
+            response = self._make_request(
+                'GET', 'content', endpoint,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            result = response.json()
+            errors = result.get('data', []) or []
+            if errors:
+                logger.warning(f"WB cards error list: {len(errors)} errors found")
+            return errors
+        except Exception as e:
+            logger.error(f"Failed to get cards error list: {e}")
+            return []
+
+    def get_card_by_nm_id(
+        self,
+        nm_id: int,
+        log_to_db: bool = False,
+        seller_id: int = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Получить карточку по nmID для определения актуального imtID.
+
+        Returns:
+            Данные карточки или None
+        """
+        try:
+            result = self.get_cards_list(
+                limit=100,
+                filter_nm_id=nm_id,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            cards = result.get('cards', [])
+            for card in cards:
+                if card.get('nmID') == nm_id:
+                    return card
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get card by nmID={nm_id}: {e}")
+            return None
+
     def get_subjects_list(
         self,
         name: Optional[str] = None,

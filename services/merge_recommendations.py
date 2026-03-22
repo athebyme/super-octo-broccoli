@@ -28,11 +28,14 @@ def normalize_text(text: str) -> str:
     # Убираем размеры (буквенные)
     text = re.sub(r'\b(x{0,3}s|x{0,3}m|x{0,3}l|xs|xxl|xxxl|xxs)\b', '', text, flags=re.IGNORECASE)
 
-    # Убираем числовые размеры (42, 44-46, 50/52)
+    # Убираем числовые размеры (42, 44-46, 50/52, 36-38)
     text = re.sub(r'\b\d{2}([\-/]\d{2})?\b', '', text)
 
-    # Убираем размеры с единицами (10 см, 250 мл)
-    text = re.sub(r'\b\d+\s*(см|мм|м|г|кг|мл|л|шт)\b', '', text, flags=re.IGNORECASE)
+    # Убираем размеры с единицами (10 см, 250 мл, 1.5 л)
+    text = re.sub(r'\b\d+[.,]?\d*\s*(см|мм|м|г|кг|мл|л|шт|пар|штук)\b', '', text, flags=re.IGNORECASE)
+
+    # Убираем "размер X", "рост X", "обхват X"
+    text = re.sub(r'\b(размер|рост|обхват|длина|ширина)\s*\d+\b', '', text, flags=re.IGNORECASE)
 
     # Убираем цвета (расширенный список)
     colors_ru = [
@@ -202,6 +205,36 @@ def calculate_similarity(text1: str, text2: str) -> float:
 
 # ============ СТРАТЕГИИ ПОИСКА ============
 
+def strategy_exact_vendor_code(products: List[Dict], used_nm_ids: Set[int]) -> List[Dict]:
+    """
+    Стратегия 0: Точное совпадение артикула (с учётом бренда и категории).
+    Самый надёжный сигнал — абсолютно одинаковые артикулы.
+    """
+    recommendations = []
+
+    by_vendor_brand = defaultdict(list)
+    for product in products:
+        if product['nm_id'] in used_nm_ids:
+            continue
+        vendor = (product.get('vendor_code') or '').strip().lower()
+        brand = (product.get('brand') or '').strip().lower()
+        if vendor and brand:
+            key = (vendor, brand)
+            by_vendor_brand[key].append(product)
+
+    for (vendor, brand), group in by_vendor_brand.items():
+        if 2 <= len(group) <= 30:
+            recommendations.append({
+                'cards': group,
+                'score': 0.98,
+                'reason': f'Одинаковый артикул: {group[0].get("vendor_code", vendor)}',
+                'suggested_target': select_best_target(group),
+                'strategy': 'exact_vendor_code'
+            })
+
+    return recommendations
+
+
 def strategy_base_vendor_code(products: List[Dict], used_nm_ids: Set[int]) -> List[Dict]:
     """
     Стратегия 1: По базовому артикулу
@@ -227,7 +260,7 @@ def strategy_base_vendor_code(products: List[Dict], used_nm_ids: Set[int]) -> Li
                 'cards': group,
                 'score': 0.95,
                 'reason': f'Одинаковый базовый артикул: {base_code}',
-                'suggested_target': group[0],
+                'suggested_target': select_best_target(group),
                 'strategy': 'base_vendor_code'
             })
 
@@ -266,7 +299,7 @@ def strategy_model_series(products: List[Dict], used_nm_ids: Set[int]) -> List[D
                     'cards': group,
                     'score': 0.90,
                     'reason': f'Серия моделей: {prefix}XXX',
-                    'suggested_target': group[0],
+                    'suggested_target': select_best_target(group),
                     'strategy': 'model_series'
                 })
 
@@ -300,7 +333,7 @@ def strategy_numeric_suffix(products: List[Dict], used_nm_ids: Set[int]) -> List
                 'cards': group,
                 'score': 0.88,
                 'reason': f'Нумерованная серия: "{base_title[:30]}..."',
-                'suggested_target': group[0],
+                'suggested_target': select_best_target(group),
                 'strategy': 'numeric_suffix'
             })
 
@@ -369,7 +402,7 @@ def strategy_similar_titles(products: List[Dict], used_nm_ids: Set[int], min_sim
                     'cards': similar_group,
                     'score': 0.6 + avg_sim * 0.3,
                     'reason': f'Похожие названия (схожесть {avg_sim:.0%})',
-                    'suggested_target': similar_group[0],
+                    'suggested_target': select_best_target(similar_group),
                     'strategy': 'similar_titles'
                 })
 
@@ -399,7 +432,7 @@ def strategy_vendor_prefix(products: List[Dict], used_nm_ids: Set[int], prefix_l
                 'cards': group,
                 'score': 0.75,
                 'reason': f'Общий префикс артикула: {prefix}...',
-                'suggested_target': group[0],
+                'suggested_target': select_best_target(group),
                 'strategy': 'vendor_prefix'
             })
 
@@ -464,7 +497,7 @@ def strategy_key_words(products: List[Dict], used_nm_ids: Set[int], min_common_w
                     'cards': similar_group,
                     'score': 0.70,
                     'reason': f'Общие ключевые слова ({min_common_words}+ совпадений)',
-                    'suggested_target': similar_group[0],
+                    'suggested_target': select_best_target(similar_group),
                     'strategy': 'key_words'
                 })
 
@@ -519,7 +552,7 @@ def strategy_learn_from_merged(products: List[Dict], merged_groups: Dict[int, Li
                 'cards': matching[:30],
                 'score': 0.85,
                 'reason': f'Паттерн из группы imtID={imt_id}: {common_prefix}...',
-                'suggested_target': matching[0],
+                'suggested_target': select_best_target(matching[:30]),
                 'strategy': 'learn_from_merged'
             })
 
@@ -551,73 +584,54 @@ def find_merge_recommendations(products: List[Dict], min_score: float = 0.5, max
 
         used_nm_ids = set()
 
-        # Применяем стратегии в порядке приоритета
-
-        # 1. Базовый артикул (самая надёжная)
-        recs = strategy_base_vendor_code(category_products, used_nm_ids)
-        for r in recs:
-            r['subject_id'] = subject_id
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
-
-        # 2. Серии моделей
-        recs = strategy_model_series(category_products, used_nm_ids)
-        for r in recs:
-            r['subject_id'] = subject_id
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
-
-        # 3. Числовые суффиксы в названии
-        recs = strategy_numeric_suffix(category_products, used_nm_ids)
-        for r in recs:
-            r['subject_id'] = subject_id
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
-
-        # 4. Учимся на объединённых группах
-        if merged_groups:
-            recs = strategy_learn_from_merged(category_products, merged_groups, used_nm_ids)
+        def _enrich_and_collect(recs, extra_score_delta=0):
+            """Добавляет subject_id и brand, помечает nm_ids как использованные."""
             for r in recs:
                 r['subject_id'] = subject_id
+                # Определяем бренд из карточек (все карточки одного бренда)
+                brands = [p.get('brand', '') for p in r['cards'] if p.get('brand')]
+                r['brand'] = brands[0] if brands else ''
+                # Категория
+                names = [p.get('subject_name', '') for p in r['cards'] if p.get('subject_name')]
+                r['subject_name'] = names[0] if names else ''
+                if extra_score_delta:
+                    r['score'] = max(r['score'] + extra_score_delta, 0.5)
                 for p in r['cards']:
                     used_nm_ids.add(p['nm_id'])
             all_recommendations.extend(recs)
 
+        # Применяем стратегии в порядке приоритета
+
+        # 0. Точное совпадение артикула (самая надёжная)
+        _enrich_and_collect(strategy_exact_vendor_code(category_products, used_nm_ids))
+
+        # 1. Базовый артикул
+        _enrich_and_collect(strategy_base_vendor_code(category_products, used_nm_ids))
+
+        # 2. Серии моделей
+        _enrich_and_collect(strategy_model_series(category_products, used_nm_ids))
+
+        # 3. Числовые суффиксы в названии
+        _enrich_and_collect(strategy_numeric_suffix(category_products, used_nm_ids))
+
+        # 4. Учимся на объединённых группах
+        if merged_groups:
+            _enrich_and_collect(strategy_learn_from_merged(category_products, merged_groups, used_nm_ids))
+
         # 5. Общий префикс артикула (5+ символов)
-        recs = strategy_vendor_prefix(category_products, used_nm_ids, prefix_length=5)
-        for r in recs:
-            r['subject_id'] = subject_id
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
+        _enrich_and_collect(strategy_vendor_prefix(category_products, used_nm_ids, prefix_length=5))
 
         # 6. Похожие названия
-        recs = strategy_similar_titles(category_products, used_nm_ids, min_similarity=0.7)
-        for r in recs:
-            r['subject_id'] = subject_id
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
+        _enrich_and_collect(strategy_similar_titles(category_products, used_nm_ids, min_similarity=0.7))
 
         # 7. Ключевые слова
-        recs = strategy_key_words(category_products, used_nm_ids, min_common_words=3)
-        for r in recs:
-            r['subject_id'] = subject_id
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
+        _enrich_and_collect(strategy_key_words(category_products, used_nm_ids, min_common_words=3))
 
         # 8. Более короткий префикс (4 символа) - менее надёжно
-        recs = strategy_vendor_prefix(category_products, used_nm_ids, prefix_length=4)
-        for r in recs:
-            r['subject_id'] = subject_id
-            r['score'] = max(r['score'] - 0.1, 0.5)  # Снижаем оценку
-            for p in r['cards']:
-                used_nm_ids.add(p['nm_id'])
-        all_recommendations.extend(recs)
+        _enrich_and_collect(
+            strategy_vendor_prefix(category_products, used_nm_ids, prefix_length=4),
+            extra_score_delta=-0.1
+        )
 
     # Фильтруем по минимальной оценке
     all_recommendations = [r for r in all_recommendations if r['score'] >= min_score]
@@ -688,6 +702,27 @@ def calculate_merge_score(prod1: Dict, prod2: Dict) -> Tuple[float, str]:
     return min(score, 1.0), reason.capitalize()
 
 
+def select_best_target(cards: List[Dict]) -> Dict:
+    """
+    Выбирает лучшую карточку для target из группы.
+    Критерии (в порядке приоритета):
+    1. Карточка с наибольшим рейтингом (nm_rating)
+    2. Карточка с наибольшим остатком (quantity)
+    3. Карточка с самым коротким vendor_code (обычно базовый артикул)
+    """
+    if not cards:
+        return cards[0] if cards else None
+
+    def sort_key(card):
+        rating = card.get('nm_rating') or 0
+        qty = card.get('quantity') or 0
+        vendor_len = len(card.get('vendor_code', '') or '')
+        # Больше рейтинг → лучше; больше остаток → лучше; короче артикул → лучше
+        return (-rating, -qty, vendor_len)
+
+    return min(cards, key=sort_key)
+
+
 def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: float = 0.5, max_products: int = 2000) -> List[Dict]:
     """
     Получает рекомендации для конкретного продавца из БД
@@ -707,7 +742,9 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
         Product.title,
         Product.brand,
         Product.subject_id,
-        Product.object_name
+        Product.object_name,
+        Product.nm_rating,
+        Product.quantity
     ).all()
 
     print(f"⏱️  Loaded {len(all_products)} products in {time.time() - start_time:.2f}s")
@@ -725,7 +762,9 @@ def get_merge_recommendations_for_seller(seller_id: int, db_session, min_score: 
                 'title': p.title,
                 'brand': p.brand,
                 'subject_id': p.subject_id,
-                'subject_name': p.object_name
+                'subject_name': p.object_name,
+                'nm_rating': p.nm_rating,
+                'quantity': p.quantity
             })
 
     # Находим необъединенные карточки (группы размером 1)

@@ -46,7 +46,12 @@ def _sanitize_wb_text(text: str) -> str:
 
 
 def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
-    """Коммит с retry для SQLite (database is locked)."""
+    """Коммит с retry для SQLite (database is locked).
+
+    При 'locked'/'busy' ошибках — rollback и повтор (данные остаются в сессии).
+    При невосстановимой ошибке сессии (prepared state) — remove() и raise
+    (данные потеряны, но сессия очищена для следующих операций).
+    """
     for attempt in range(1, max_retries + 1):
         try:
             session.commit()
@@ -57,9 +62,19 @@ def _commit_with_retry(session, max_retries: int = 5, base_delay: float = 0.3):
                 if attempt < max_retries:
                     delay = base_delay * (2 ** (attempt - 1))
                     logger.warning(f"SQLite locked, retry {attempt}/{max_retries} in {delay:.1f}s")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        # Сессия сломана — remove() и прекращаем ретраи (данные потеряны)
+                        session.remove()
+                        raise
                     time.sleep(delay)
                     continue
-            session.rollback()
+            # Не-locked ошибка или исчерпаны ретраи — cleanup и raise
+            try:
+                session.rollback()
+            except Exception:
+                session.remove()
             raise
 
 
@@ -2472,6 +2487,7 @@ class SupplierService:
             product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
             product.ai_parsed_at = datetime.utcnow()
             product.ai_model_used = ai_svc.config.model
+            product.ai_fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
             # Формируем данные для маркетплейса (WB)
             marketplace_data = _build_marketplace_data(product, result)
@@ -2662,6 +2678,7 @@ class SupplierService:
                 return
 
             job.status = 'running'
+            job.heartbeat_at = datetime.utcnow()
             db.session.commit()
 
             supplier = Supplier.query.get(supplier_id)
@@ -2696,6 +2713,11 @@ class SupplierService:
             # Resolve marketplace categories once for all workers
             mp_categories = _get_marketplace_categories_block(supplier_id)
 
+            # Сохраняем AIConfig ДО запуска пула — это plain dataclass,
+            # не ORM-объект, безопасен для использования из любого потока.
+            # Каждый воркер создаст свой AIService с отдельной HTTP-сессией.
+            ai_config = test_svc.config
+
             # --- Параллельный режим ---
             effective_workers = min(max_workers, len(product_ids))
             logger.info(
@@ -2708,6 +2730,43 @@ class SupplierService:
             counters = {'processed': 0, 'succeeded': 0, 'failed': 0}
             results = []
             cancelled = threading.Event()
+            job_done = threading.Event()  # Сигнал завершения для heartbeat-потока
+
+            def _heartbeat_loop():
+                """Фоновый поток: обновляет heartbeat каждые 30 секунд,
+                пока AI-воркеры работают. Предотвращает ложное срабатывание
+                stale-детекции при долгих AI-запросах (DeepSeek, two-pass)."""
+                with flask_app.app_context():
+                    while not job_done.wait(timeout=30):
+                        try:
+                            job_hb = AIParseJob.query.get(job_id)
+                            if not job_hb or job_hb.status not in ('pending', 'running'):
+                                break
+                            job_hb.heartbeat_at = datetime.utcnow()
+                            with lock:
+                                job_hb.processed = counters['processed']
+                                job_hb.succeeded = counters['succeeded']
+                                job_hb.failed = counters['failed']
+                            _commit_with_retry(db.session)
+                        except Exception:
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                pass
+                        finally:
+                            # Освобождаем соединение между heartbeat-ами (30 сек простоя)
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
+
+            # Запускаем фоновый heartbeat-поток
+            heartbeat_thread = threading.Thread(
+                target=_heartbeat_loop,
+                daemon=True,
+                name=f'AIParse-HB-{job_id[:8]}'
+            )
+            heartbeat_thread.start()
 
             def _update_job_progress(current_title=None):
                 """Обновляет прогресс в БД (вызывается под lock из main thread)."""
@@ -2719,10 +2778,20 @@ class SupplierService:
                     job_ref.succeeded = counters['succeeded']
                     job_ref.failed = counters['failed']
                     job_ref.current_product_title = current_title
+                    job_ref.heartbeat_at = datetime.utcnow()
                     job_ref.results = json.dumps(results[-100:], ensure_ascii=False)
                     _commit_with_retry(db.session)
                 except Exception:
-                    db.session.rollback()
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        pass
+                finally:
+                    # Освобождаем соединение сразу после обновления прогресса
+                    try:
+                        db.session.remove()
+                    except Exception:
+                        pass
 
             def _check_cancelled():
                 """Проверяет не отменена ли задача."""
@@ -2733,103 +2802,149 @@ class SupplierService:
                         cancelled.set()
                         return True
                 except Exception:
-                    pass
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        pass
+                finally:
+                    try:
+                        db.session.remove()
+                    except Exception:
+                        pass
                 return False
 
             def _parse_one(pid: int) -> dict:
                 """
                 Парсит один товар. Запускается в воркер-потоке.
-                Каждый вызов создаёт свой AIService (свою HTTP-сессию).
-                Оборачивается в app_context(), т.к. потоки пула не наследуют
-                Flask application context из родительского потока.
+
+                ВАЖНО: DB-соединение освобождается (session.remove()) перед долгим
+                AI-вызовом и заново берётся из пула для сохранения результатов.
+                Это предотвращает исчерпание QueuePool при параллельных воркерах.
                 """
                 if cancelled.is_set():
                     return {'product_id': pid, 'status': 'cancelled'}
 
                 with flask_app.app_context():
-                    product = SupplierProduct.query.get(pid)
-                    if not product or product.supplier_id != supplier_id:
-                        return {
-                            'product_id': pid, 'title': '',
-                            'status': 'error', 'error': 'Товар не найден',
-                        }
-
-                    title = (product.title or '')[:80]
-
+                    title = ''
                     try:
-                        product_data = product.get_all_data_for_parsing()
+                        # --- Фаза 1: читаем данные из БД и СРАЗУ освобождаем соединение ---
+                        product_data = None
+                        try:
+                            product = SupplierProduct.query.get(pid)
+                            if not product or product.supplier_id != supplier_id:
+                                return {
+                                    'product_id': pid, 'title': '',
+                                    'status': 'error', 'error': 'Товар не найден',
+                                }
+                            title = (product.title or '')[:80]
+                            product_data = product.get_all_data_for_parsing()
+                        finally:
+                            # Освобождаем соединение ДО долгого AI-вызова
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
 
-                        # Создаём отдельный AIService для этого воркера
-                        worker_svc = SupplierService._get_ai_service(supplier, model_override=model_override)
-                        if not worker_svc:
-                            return {
-                                'product_id': pid, 'title': title,
-                                'status': 'error', 'error': 'AI сервис недоступен',
-                            }
+                        # --- Фаза 2: AI-вызов (долгая операция, БЕЗ DB-соединения) ---
+                        # Создаём AIService из заранее подготовленного config (plain dataclass),
+                        # а не из ORM-объекта supplier, который отвязан от сессии после remove().
+                        from services.ai_service import AIService as AISvc
+                        worker_svc = AISvc(ai_config)
 
                         success, result, error = worker_svc.full_product_parse(
                             product_data, marketplace_categories_block=mp_categories
                         )
 
-                        if success and result:
-                            # no_autoflush предотвращает преждевременную запись
-                            # при запросах к БД внутри _run_marketplace_aware_parse
+                        if not success or not result:
+                            return {
+                                'product_id': pid, 'title': title,
+                                'status': 'error', 'error': error or 'Ошибка AI',
+                            }
+
+                        # --- Фаза 3: сохраняем результат (заново берём соединение из пула) ---
+                        try:
+                            product = SupplierProduct.query.get(pid)
+                            if not product:
+                                return {
+                                    'product_id': pid, 'title': title,
+                                    'status': 'error', 'error': 'Товар удалён во время парсинга',
+                                }
+
                             with db.session.no_autoflush:
                                 product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                                 product.ai_parsed_at = datetime.utcnow()
                                 product.ai_model_used = worker_svc.config.model
+                                product.ai_fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
 
                                 marketplace_data = _build_marketplace_data(product, result)
                                 product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
 
                                 _apply_parsed_data_to_product(product, result)
-
-                                # Верификация категории (отдельный этап — до marketplace parse)
                                 _verify_and_fix_category(product, result, worker_svc)
-
-                                # Интеграция с MarketplaceAwareParsingTask
                                 _run_marketplace_aware_parse(product, result, worker_svc)
 
                                 product.updated_at = datetime.utcnow()
 
-                            # Коммит с retry для SQLite (concurrent writes)
                             _commit_with_retry(db.session)
-
-                            # Валидация и автокоррекция AI-характеристик
-                            validation_info = {}
+                        finally:
                             try:
-                                from services.smart_product_parser import CharacteristicsValidator
-                                val_result = CharacteristicsValidator.validate_product(
-                                    pid, auto_correct=True
-                                )
-                                validation_info = {
-                                    'chars_valid': val_result.is_valid,
-                                    'chars_corrected': val_result.corrected_count,
-                                    'chars_invalid': val_result.invalid_count,
-                                }
-                            except Exception as ve:
-                                logger.debug(f"Characteristics validation skipped: {ve}")
+                                db.session.remove()
+                            except Exception:
+                                pass
 
-                            fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
-                            card_pct = _calc_card_completeness_pct(product)
-                            return {
-                                'product_id': pid, 'title': title,
-                                'status': 'success', 'fill_pct': fill_pct,
-                                'card_pct': card_pct,
-                                **validation_info,
+                        # --- Фаза 4: валидация (отдельное короткое соединение) ---
+                        validation_info = {}
+                        try:
+                            from services.smart_product_parser import CharacteristicsValidator
+                            val_result = CharacteristicsValidator.validate_product(
+                                pid, auto_correct=True
+                            )
+                            validation_info = {
+                                'chars_valid': val_result.is_valid,
+                                'chars_corrected': val_result.corrected_count,
+                                'chars_invalid': val_result.invalid_count,
                             }
-                        else:
-                            return {
-                                'product_id': pid, 'title': title,
-                                'status': 'error', 'error': error or 'Ошибка AI',
-                            }
+                        except Exception as ve:
+                            logger.debug(f"Characteristics validation skipped: {ve}")
+                        finally:
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
+
+                        fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
+                        try:
+                            product = SupplierProduct.query.get(pid)
+                            card_pct = _calc_card_completeness_pct(product) if product else 0
+                        except Exception:
+                            card_pct = 0
+                        finally:
+                            try:
+                                db.session.remove()
+                            except Exception:
+                                pass
+
+                        return {
+                            'product_id': pid, 'title': title,
+                            'status': 'success', 'fill_pct': fill_pct,
+                            'card_pct': card_pct,
+                            **validation_info,
+                        }
                     except Exception as e:
-                        db.session.rollback()
+                        try:
+                            db.session.rollback()
+                        except Exception:
+                            pass
                         logger.error(f"[AI Parse] Worker error pid={pid}: {e}")
                         return {
                             'product_id': pid, 'title': title,
                             'status': 'error', 'error': str(e)[:200],
                         }
+                    finally:
+                        try:
+                            db.session.remove()
+                        except Exception:
+                            pass
 
             # Запускаем пул
             with ThreadPoolExecutor(max_workers=effective_workers,
@@ -2846,7 +2961,15 @@ class SupplierService:
                 done_count = 0
 
                 for fut in as_completed(futures):
-                    res = fut.result()
+                    try:
+                        res = fut.result()
+                    except Exception as fut_err:
+                        pid = futures.get(fut, 0)
+                        logger.error(f"[AI Parse] Unhandled worker error pid={pid}: {fut_err}")
+                        res = {
+                            'product_id': pid, 'title': '',
+                            'status': 'error', 'error': str(fut_err)[:200],
+                        }
                     done_count += 1
 
                     with lock:
@@ -2860,6 +2983,7 @@ class SupplierService:
                         results.append(res)
 
                     # Обновляем прогресс в БД каждые N завершений
+                    # + heartbeat обновляется каждый раз для обнаружения stale jobs
                     if done_count % check_interval == 0 or done_count == len(product_ids):
                         current_title = res.get('title') if res.get('status') != 'success' else None
                         _update_job_progress(current_title)
@@ -2870,6 +2994,12 @@ class SupplierService:
                             if cancelled.is_set():
                                 pool.shutdown(wait=False, cancel_futures=True)
                                 break
+                    # Heartbeat обновляется фоновым потоком (_heartbeat_loop)
+                    # каждые 30 секунд, независимо от прогресса AI-запросов
+
+            # Останавливаем heartbeat-поток
+            job_done.set()
+            heartbeat_thread.join(timeout=5)
 
             # Завершение задачи
             try:
@@ -2881,11 +3011,20 @@ class SupplierService:
                     job_final.succeeded = counters['succeeded']
                     job_final.failed = counters['failed']
                     job_final.current_product_title = None
+                    job_final.heartbeat_at = datetime.utcnow()
                     job_final.results = json.dumps(results[-100:], ensure_ascii=False)
                     job_final.updated_at = datetime.utcnow()
                     _commit_with_retry(db.session)
             except Exception:
-                db.session.rollback()
+                try:
+                    db.session.rollback()
+                except Exception:
+                    pass
+            finally:
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
 
             logger.info(
                 f"[AI Parse] Job {job_id} done: "
@@ -2924,70 +3063,109 @@ class SupplierService:
             return
 
         job.current_product_title = (product.title or 'Без названия')[:200]
+        job.heartbeat_at = datetime.utcnow()
+        product_title_short = (product.title or '')[:80]
         db.session.commit()
 
         try:
             product_data = product.get_all_data_for_parsing()
             mp_categories = _get_marketplace_categories_block(supplier_id)
+
+            # Освобождаем соединение перед долгим AI-вызовом
+            try:
+                db.session.remove()
+            except Exception:
+                pass
+
             success, result, error = ai_svc.full_product_parse(
                 product_data, marketplace_categories_block=mp_categories
             )
 
             if success and result:
+                # Заново берём product из БД
+                product = SupplierProduct.query.get(product_id)
+                if not product:
+                    job = AIParseJob.query.get(job_id)
+                    if job:
+                        job.status = 'done'
+                        job.processed = 1
+                        job.failed = 1
+                        job.results = json.dumps([{
+                            'product_id': product_id, 'status': 'error',
+                            'error': 'Товар удалён во время парсинга',
+                        }], ensure_ascii=False)
+                        job.current_product_title = None
+                        job.updated_at = datetime.utcnow()
+                        _commit_with_retry(db.session)
+                    return
+
                 with db.session.no_autoflush:
                     product.ai_parsed_data_json = json.dumps(result, ensure_ascii=False)
                     product.ai_parsed_at = datetime.utcnow()
                     product.ai_model_used = ai_svc.config.model
+                    product.ai_fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                     marketplace_data = _build_marketplace_data(product, result)
                     product.ai_marketplace_json = json.dumps(marketplace_data, ensure_ascii=False)
                     _apply_parsed_data_to_product(product, result)
-
-                    # Верификация категории (отдельный этап — до marketplace parse)
                     _verify_and_fix_category(product, result, ai_svc)
-
-                    # Интеграция с MarketplaceAwareParsingTask
                     _run_marketplace_aware_parse(product, result, ai_svc)
-
                     product.updated_at = datetime.utcnow()
 
                 fill_pct = result.get('parsing_meta', {}).get('fill_percentage', 0)
                 card_pct = _calc_card_completeness_pct(product)
 
-                job.status = 'done'
-                job.processed = 1
-                job.succeeded = 1
-                job.results = json.dumps([{
-                    'product_id': product_id,
-                    'title': (product.title or '')[:80],
-                    'status': 'success',
-                    'fill_pct': fill_pct,
-                    'card_pct': card_pct,
-                }], ensure_ascii=False)
+                job = AIParseJob.query.get(job_id)
+                if job:
+                    job.status = 'done'
+                    job.processed = 1
+                    job.succeeded = 1
+                    job.results = json.dumps([{
+                        'product_id': product_id,
+                        'title': product_title_short,
+                        'status': 'success',
+                        'fill_pct': fill_pct,
+                        'card_pct': card_pct,
+                    }], ensure_ascii=False)
             else:
+                job = AIParseJob.query.get(job_id)
+                if job:
+                    job.status = 'done'
+                    job.processed = 1
+                    job.failed = 1
+                    job.results = json.dumps([{
+                        'product_id': product_id,
+                        'title': product_title_short,
+                        'status': 'error',
+                        'error': error or 'Ошибка AI',
+                    }], ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[AI Parse] Single parse error {product_id}: {e}")
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
+            job = AIParseJob.query.get(job_id)
+            if job:
                 job.status = 'done'
                 job.processed = 1
                 job.failed = 1
                 job.results = json.dumps([{
                     'product_id': product_id,
-                    'title': (product.title or '')[:80],
                     'status': 'error',
-                    'error': error or 'Ошибка AI',
+                    'error': str(e)[:200],
                 }], ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[AI Parse] Single parse error {product_id}: {e}")
-            db.session.rollback()
-            job.status = 'done'
-            job.processed = 1
-            job.failed = 1
-            job.results = json.dumps([{
-                'product_id': product_id,
-                'status': 'error',
-                'error': str(e)[:200],
-            }], ensure_ascii=False)
 
-        job.current_product_title = None
-        job.updated_at = datetime.utcnow()
-        _commit_with_retry(db.session)
+        try:
+            job = AIParseJob.query.get(job_id)
+            if job:
+                job.current_product_title = None
+                job.updated_at = datetime.utcnow()
+                _commit_with_retry(db.session)
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
         # Уведомляем продавцов (аналогично batch-парсингу)
         if job.succeeded and job.succeeded > 0:
@@ -3106,6 +3284,8 @@ class SupplierService:
             'results': results[-50:],
             'created_at': job.created_at.isoformat() if job.created_at else None,
             'updated_at': job.updated_at.isoformat() if job.updated_at else None,
+            'heartbeat_at': job.heartbeat_at.isoformat() if getattr(job, 'heartbeat_at', None) else None,
+            'is_stale': job.is_stale if hasattr(job, 'is_stale') else False,
         }
 
     @staticmethod
@@ -3122,7 +3302,11 @@ class SupplierService:
 
     @staticmethod
     def get_active_ai_parse_jobs(supplier_id: int) -> List[dict]:
-        """Получить активные задачи AI парсинга для поставщика."""
+        """Получить активные задачи AI парсинга для поставщика.
+
+        Автоматически обнаруживает и помечает зависшие задачи (stale jobs),
+        у которых heartbeat не обновлялся дольше STALE_TIMEOUT_SECONDS.
+        """
         from models import AIParseJob
 
         jobs = AIParseJob.query.filter(
@@ -3130,7 +3314,34 @@ class SupplierService:
             AIParseJob.status.in_(['pending', 'running'])
         ).order_by(AIParseJob.created_at.desc()).all()
 
-        return [r for r in (SupplierService.get_ai_parse_job(j.id) for j in jobs) if r]
+        # Проверяем stale jobs и помечаем их как failed
+        active_jobs = []
+        for j in jobs:
+            if j.is_stale:
+                logger.warning(
+                    f"[AI Parse] Stale job detected: {j.id}, "
+                    f"status={j.status}, heartbeat_at={j.heartbeat_at}, "
+                    f"processed={j.processed}/{j.total}"
+                )
+                j.status = 'failed'
+                j.error_message = (
+                    f'Задача зависла (воркер не отвечает). '
+                    f'Обработано {j.processed} из {j.total} товаров '
+                    f'({j.succeeded} успешно, {j.failed} с ошибкой). '
+                    f'Токены за необработанные товары могли быть списаны.'
+                )
+                j.updated_at = datetime.utcnow()
+                try:
+                    _commit_with_retry(db.session)
+                except Exception:
+                    db.session.rollback()
+                # Не добавляем в active_jobs — она больше не активна
+            else:
+                data = SupplierService.get_ai_parse_job(j.id)
+                if data:
+                    active_jobs.append(data)
+
+        return active_jobs
 
     @staticmethod
     def get_recent_ai_parse_jobs(supplier_id: int, limit: int = 10) -> List[dict]:
@@ -3358,13 +3569,36 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
     # Удаляем пустые характеристики
     wb_data['characteristics'] = {k: v for k, v in wb_data['characteristics'].items() if v}
 
-    # Добавляем доп характеристики из физических
-    if physical.get('diameter_cm'):
-        wb_data['characteristics']['Диаметр'] = physical['diameter_cm']
+    # Добавляем доп характеристики из физических данных
+    # Используем как общие, так и категорийно-специфичные имена,
+    # чтобы маппинг работал для любых категорий WB
+    if physical.get('diameter_cm') or physical.get('max_diameter_cm'):
+        diameter = physical.get('max_diameter_cm') or physical.get('diameter_cm')
+        wb_data['characteristics']['Диаметр'] = diameter
+        wb_data['characteristics']['Максимальный диаметр'] = diameter
     if physical.get('volume_ml'):
         wb_data['characteristics']['Объем'] = physical['volume_ml']
     if physical.get('working_length_cm'):
         wb_data['characteristics']['Рабочая длина'] = physical['working_length_cm']
+    if physical.get('length_cm'):
+        wb_data['characteristics']['Длина'] = physical['length_cm']
+    if physical.get('width_cm'):
+        wb_data['characteristics']['Ширина'] = physical['width_cm']
+        wb_data['characteristics']['Ширина предмета'] = physical['width_cm']
+    if physical.get('weight_g'):
+        wb_data['characteristics']['Вес товара без упаковки'] = physical['weight_g']
+        wb_data['characteristics']['Вес'] = physical['weight_g']
+
+    # Функциональность / особенности
+    functionality = parsed.get('functionality', {})
+    if functionality.get('special_features'):
+        features = functionality['special_features']
+        wb_data['characteristics']['Особенности'] = '; '.join(features) if isinstance(features, list) else features
+
+    # Комплектация из contents (если не уже заполнена)
+    contents = parsed.get('contents', {})
+    if not wb_data['characteristics'].get('Комплектация') and contents.get('package_contents'):
+        wb_data['characteristics']['Комплектация'] = ', '.join(contents['package_contents'])
 
     return wb_data
 
@@ -3442,12 +3676,26 @@ def _apply_parsed_data_to_product(product: SupplierProduct, parsed: dict) -> Non
             chars['Страна производства'] = product.country
         if product.season:
             chars['Сезон'] = product.season
-        if physical.get('diameter_cm'):
-            chars['Диаметр'] = str(physical['diameter_cm'])
+        if physical.get('diameter_cm') or physical.get('max_diameter_cm'):
+            diameter = str(physical.get('max_diameter_cm') or physical.get('diameter_cm'))
+            chars['Диаметр'] = diameter
+            chars['Максимальный диаметр'] = diameter
         if physical.get('volume_ml'):
             chars['Объем'] = str(physical['volume_ml'])
         if physical.get('working_length_cm'):
             chars['Рабочая длина'] = str(physical['working_length_cm'])
+        if physical.get('length_cm'):
+            chars['Длина'] = str(physical['length_cm'])
+        if physical.get('width_cm'):
+            chars['Ширина'] = str(physical['width_cm'])
+            chars['Ширина предмета'] = str(physical['width_cm'])
+        if physical.get('weight_g'):
+            chars['Вес товара без упаковки'] = str(physical['weight_g'])
+        # Функциональность / особенности
+        functionality = parsed.get('functionality', {})
+        if functionality.get('special_features'):
+            features = functionality['special_features']
+            chars['Особенности'] = '; '.join(features) if isinstance(features, list) else str(features)
         pkg_contents = parsed.get('contents', {})
         if pkg_contents.get('package_contents'):
             chars['Комплектация'] = ', '.join(pkg_contents['package_contents'])
@@ -3668,8 +3916,9 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
         
     characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=cat.id, is_enabled=True).all()
     if not characteristics:
+        logger.info(f"No characteristics found for category {cat.id} ({cat.subject_name}), skipping MarketplaceAwareParsingTask")
         return
-        
+
     # Запускаем таску с двухпроходным парсингом и кэшированием
     task = MarketplaceAwareParsingTask(
         client=ai_svc.client,
@@ -3681,8 +3930,49 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     product_info = {
         'title': product.title or product.ai_seo_title,
         'description': product.description or product.ai_description,
-        'brand': product.brand
+        'brand': product.brand,
+        'category': product.wb_category_name or product.category,
+        'wb_category': product.wb_subject_name,
     }
+
+    # Передаём уже извлечённые данные для лучшего маппинга
+    physical = parsed_data.get('physical', {})
+    color = parsed_data.get('color', {})
+    materials = parsed_data.get('materials', {})
+    contents = parsed_data.get('contents', {})
+    functionality = parsed_data.get('functionality', {})
+    audience = parsed_data.get('audience', {})
+
+    if physical:
+        product_info['dimensions'] = physical
+    if color:
+        colors = [color.get('primary_color', '')]
+        if color.get('secondary_colors'):
+            colors.extend(color['secondary_colors'])
+        product_info['colors'] = [c for c in colors if c]
+    if materials.get('materials_list'):
+        product_info['materials'] = materials['materials_list']
+
+    # Собираем уже распарсенные характеристики, чтобы AI их переиспользовал
+    pre_chars = {}
+    if physical.get('diameter_cm') or physical.get('max_diameter_cm'):
+        pre_chars['диаметр'] = physical.get('max_diameter_cm') or physical.get('diameter_cm')
+    if physical.get('working_length_cm'):
+        pre_chars['рабочая длина'] = physical['working_length_cm']
+    if physical.get('length_cm'):
+        pre_chars['длина'] = physical['length_cm']
+    if physical.get('width_cm'):
+        pre_chars['ширина'] = physical['width_cm']
+    if physical.get('weight_g'):
+        pre_chars['вес'] = physical['weight_g']
+    if functionality.get('special_features'):
+        pre_chars['особенности'] = functionality['special_features']
+    if contents.get('package_contents'):
+        pre_chars['комплектация'] = ', '.join(contents['package_contents'])
+    if audience.get('gender'):
+        pre_chars['пол'] = audience['gender']
+    if pre_chars:
+        product_info['characteristics'] = pre_chars
 
     success, result, error = task.execute_two_pass(
         product=product, product_info=product_info, original_data=parsed_data
@@ -3691,6 +3981,11 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
     if success and result:
         # Убираем метаданные из результата перед сохранением
         clean_fields = {k: v for k, v in result.items() if k != '_meta'}
+
+        # Post-fill: досыпаем значения из physical/functionality для полей,
+        # которые AI не заполнил во втором проходе, но данные уже есть.
+        # Маппинг generic → category-specific через fuzzy-match по имени характеристики.
+        _post_fill_marketplace_fields(clean_fields, parsed_data, characteristics)
 
         # Сохраняем плоские поля для формы (массивы → строки через ";")
         flat_fields = {}
@@ -3711,7 +4006,135 @@ def _run_marketplace_aware_parse(product: SupplierProduct, parsed_data: dict, ai
 
         logger.info(f"Marketplace aware parse success for {product.id}, status: {validation_result.get('validation_status')}")
     else:
+        # Даже если AI второй проход не сработал — пробуем заполнить из physical данных
+        _post_fill_marketplace_fields_fallback(product, parsed_data, characteristics)
         logger.error(f"Marketplace aware parse failed for {product.id}: {error}")
+
+
+# ============================================================================
+# POST-FILL: физические данные → WB-характеристики
+# ============================================================================
+
+# Маппинг ключевых слов в именах WB характеристик на physical/functionality поля.
+# Ключ — подстрока (lowercase) в имени WB характеристики.
+# Значение — (секция parsed_data, поле, [альтернативные поля]).
+_PHYSICAL_TO_WB_KEYWORDS = [
+    # Диаметр
+    (['диаметр'], 'physical', ['max_diameter_cm', 'diameter_cm']),
+    # Длина
+    (['общая длина', 'длина'], 'physical', ['working_length_cm', 'length_cm']),
+    # Рабочая длина (более специфичная)
+    (['рабочая длина'], 'physical', ['working_length_cm']),
+    # Ширина
+    (['ширина'], 'physical', ['width_cm']),
+    # Вес
+    (['вес'], 'physical', ['weight_g']),
+    # Объём
+    (['объем', 'объём'], 'physical', ['volume_ml']),
+    # Глубина
+    (['глубина'], 'physical', ['depth_cm']),
+    # Толщина
+    (['толщина'], 'physical', ['thickness_cm']),
+    # Особенности
+    (['особенности', 'особенность'], 'functionality', ['special_features']),
+]
+
+
+def _post_fill_marketplace_fields(
+    fields: dict,
+    parsed_data: dict,
+    characteristics: list,
+) -> None:
+    """
+    Досыпает значения в marketplace fields из уже распарсенных физических данных.
+
+    Если AI во втором проходе не заполнил поле (например "Диаметр секс игрушки (см)"),
+    но в parsed_data.physical.diameter_cm есть значение — подставляем его.
+
+    Работает по fuzzy-match ключевых слов в именах WB характеристик.
+    """
+    for charc in characteristics:
+        if not charc.is_enabled:
+            continue
+        name = charc.name
+        # Уже заполнено AI
+        if name in fields and fields[name] not in (None, '', [], '[]'):
+            continue
+
+        name_lower = name.lower()
+
+        for keywords, section_key, field_names in _PHYSICAL_TO_WB_KEYWORDS:
+            if not any(kw in name_lower for kw in keywords):
+                continue
+
+            section = parsed_data.get(section_key, {})
+            value = None
+            for fn in field_names:
+                value = section.get(fn)
+                if value is not None:
+                    break
+
+            if value is None:
+                continue
+
+            # Тип 4 (NUMBER) — нужно число
+            if charc.charc_type == 4:
+                if isinstance(value, (int, float)):
+                    fields[name] = value
+                    logger.debug(f"[PostFill] {name} = {value} (from {section_key}.{field_names})")
+                elif isinstance(value, str):
+                    match = re.search(r'([\d]+[.,]?[\d]*)', value.replace(',', '.'))
+                    if match:
+                        num = float(match.group(1))
+                        fields[name] = int(num) if num == int(num) else num
+            # Тип 1 (STRING ARRAY) — массив строк
+            elif charc.charc_type == 1:
+                if isinstance(value, list):
+                    str_values = [str(v) for v in value if v]
+                    if str_values:
+                        fields[name] = str_values
+                elif isinstance(value, str) and value:
+                    fields[name] = [value]
+            else:
+                # Другие типы — строка
+                if isinstance(value, list):
+                    fields[name] = '; '.join(str(v) for v in value if v)
+                elif value:
+                    fields[name] = value
+
+            break  # Одно совпадение на характеристику
+
+
+def _post_fill_marketplace_fields_fallback(
+    product: SupplierProduct,
+    parsed_data: dict,
+    characteristics: list,
+) -> None:
+    """
+    Fallback: если _run_marketplace_aware_parse полностью провалился,
+    заполняем marketplace_fields_json напрямую из physical данных.
+    """
+    try:
+        existing = {}
+        if product.marketplace_fields_json:
+            try:
+                existing = json.loads(product.marketplace_fields_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        _post_fill_marketplace_fields(existing, parsed_data, characteristics)
+
+        if existing:
+            # Flatten lists to strings for form
+            flat = {}
+            for k, v in existing.items():
+                if isinstance(v, list):
+                    flat[k] = '; '.join(str(x) for x in v) if v else ''
+                elif v is not None:
+                    flat[k] = v
+            product.marketplace_fields_json = json.dumps(flat, ensure_ascii=False)
+    except Exception as e:
+        logger.debug(f"[PostFill fallback] Error: {e}")
 
 
 # ============================================================================

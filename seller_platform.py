@@ -96,6 +96,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'timeout': 30,  # Увеличенный timeout до 30 секунд
         'check_same_thread': False,  # Разрешить использование из разных потоков
     },
+    'pool_size': 20,        # Базовый размер пула соединений (дефолт 5 — мало для фоновых потоков)
+    'max_overflow': 30,     # Доп. соединения сверх pool_size при пиковой нагрузке
+    'pool_timeout': 60,     # Ждать свободное соединение до 60 сек (дефолт 30)
     'pool_pre_ping': True,  # Проверка соединений перед использованием
     'pool_recycle': 3600,   # Переиспользование соединений каждый час
 }
@@ -1636,11 +1639,18 @@ def db_commit_with_retry(session, max_retries=3, initial_delay=0.5):
             if 'database is locked' in str(e).lower():
                 if attempt < max_retries - 1:
                     delay = initial_delay * (2 ** attempt)  # Экспоненциальная задержка
-                    app.logger.warning(f"⚠️ Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
+                    app.logger.warning(f"Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
                     time.sleep(delay)
-                    session.rollback()
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                 else:
-                    app.logger.error(f"❌ Database locked after {max_retries} retries")
+                    app.logger.error(f"Database locked after {max_retries} retries")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                     raise
             else:
                 # Другая ошибка - пробрасываем сразу
@@ -1724,8 +1734,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         db_commit_with_retry(db.session)
                         app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
                 except Exception as dedup_err:
-                    app.logger.warning(f"⚠️ Deduplication failed (non-critical): {dedup_err}")
-                    db.session.rollback()
+                    app.logger.warning(f"Deduplication failed (non-critical): {dedup_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
                 # Статистика
                 created_count = 0
@@ -1858,18 +1871,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                             app.logger.info(f"💾 Batch saved: {processed_in_batch} products ({created_count} new, {updated_count} updated so far)")
                             processed_in_batch = 0
                         except Exception as commit_error:
-                            app.logger.warning(f"⚠️ Batch commit failed, rolling back: {commit_error}")
-                            db.session.rollback()
+                            app.logger.warning(f"Batch commit failed, rolling back: {commit_error}")
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                db.session.remove()
                             # Продолжаем со следующей batch
 
                 # Сохраняем оставшиеся изменения
                 try:
                     db_commit_with_retry(db.session)
                     if processed_in_batch > 0:
-                        app.logger.info(f"💾 Final batch saved: {processed_in_batch} products")
+                        app.logger.info(f"Final batch saved: {processed_in_batch} products")
                 except Exception as commit_error:
-                    app.logger.warning(f"⚠️ Final commit failed: {commit_error}")
-                    db.session.rollback()
+                    app.logger.warning(f"Final commit failed: {commit_error}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 
@@ -1967,6 +1986,28 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                     db_commit_with_retry(db.session)
                     app.logger.info(f"💾 Stocks saved: {stocks_created} new, {stocks_updated} updated")
+
+                    # Обновляем Product.quantity из суммы складских остатков
+                    try:
+                        seller_products = Product.query.filter_by(seller_id=seller.id).all()
+                        product_ids = [p.id for p in seller_products]
+                        if product_ids:
+                            stock_totals = (
+                                db.session.query(
+                                    ProductStock.product_id,
+                                    db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                                )
+                                .filter(ProductStock.product_id.in_(product_ids))
+                                .group_by(ProductStock.product_id)
+                                .all()
+                            )
+                            qty_map = {pid: int(total) for pid, total in stock_totals}
+                            for p in seller_products:
+                                p.quantity = qty_map.get(p.id, 0)
+                            db_commit_with_retry(db.session)
+                            app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
+                    except Exception as qty_error:
+                        app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
 
                 except Exception as stock_error:
                     app.logger.warning(f"⚠️ Failed to fetch stocks from Statistics API: {stock_error}")
@@ -2279,6 +2320,28 @@ def sync_warehouse_stocks():
 
             # Сохраняем все изменения
             db.session.commit()
+
+            # Обновляем Product.quantity из суммы складских остатков
+            try:
+                seller_products = Product.query.filter_by(seller_id=current_user.seller.id).all()
+                product_ids = [p.id for p in seller_products]
+                if product_ids:
+                    stock_totals = (
+                        db.session.query(
+                            ProductStock.product_id,
+                            db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                        )
+                        .filter(ProductStock.product_id.in_(product_ids))
+                        .group_by(ProductStock.product_id)
+                        .all()
+                    )
+                    qty_map = {pid: int(total) for pid, total in stock_totals}
+                    for p in seller_products:
+                        p.quantity = qty_map.get(p.id, 0)
+                    db.session.commit()
+                    app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
+            except Exception as qty_error:
+                app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
 
             app.logger.info(f"💾 Сохранено остатков в БД: {created_count} новых, {updated_count} обновлено")
 
@@ -5995,6 +6058,7 @@ def _run_startup_migrations():
     migrations = [
         # (таблица, колонка, тип)
         ('ai_parse_jobs', 'model_used', 'VARCHAR(100)'),
+        ('ai_parse_jobs', 'heartbeat_at', 'DATETIME'),
         # Brand registry columns
         ('imported_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
         ('imported_products', 'brand_status', 'VARCHAR(20)'),
@@ -6013,6 +6077,8 @@ def _run_startup_migrations():
         ('suppliers', 'ai_proxy_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
+        # Content factory AI model selection
+        ('content_factories', 'ai_model', 'VARCHAR(100)'),
     ]
 
     for table, column, col_type in migrations:
@@ -6027,6 +6093,24 @@ def _run_startup_migrations():
                 db.session.commit()
             except Exception:
                 db.session.rollback()
+
+    # Помечаем зависшие AI parse задачи как failed при старте
+    # (daemon-потоки не выживают при рестарте процесса)
+    if 'ai_parse_jobs' in insp.get_table_names():
+        try:
+            result = db.session.execute(db.text(
+                "UPDATE ai_parse_jobs SET status = 'failed', "
+                "error_message = 'Задача зависла при перезапуске сервера. "
+                "Воркер-поток был убит. Токены за необработанные товары могли быть списаны.' "
+                "WHERE status IN ('pending', 'running')"
+            ))
+            if result.rowcount > 0:
+                db.session.commit()
+                logger.warning(f"[Startup] Marked {result.rowcount} stale AI parse jobs as failed")
+            else:
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
 
     # Create indexes for brand registry columns
     indexes = [

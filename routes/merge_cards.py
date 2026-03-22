@@ -194,6 +194,13 @@ def register_merge_routes(app):
                 flash('Выберите главную карточку и карточки для объединения', 'warning')
                 return redirect(url_for('products_merge'))
 
+            # Убираем target из списка nm_ids (нельзя перемещать карточку в саму себя)
+            nm_ids = [nm for nm in nm_ids if nm != target_nm_id]
+
+            if not nm_ids:
+                flash('Выберите хотя бы одну карточку для объединения (кроме главной)', 'warning')
+                return redirect(url_for('products_merge'))
+
             if len(nm_ids) > 30:
                 flash('Можно объединить максимум 30 карточек за раз', 'warning')
                 return redirect(url_for('products_merge'))
@@ -204,9 +211,30 @@ def register_merge_routes(app):
                 seller_id=current_user.seller.id
             ).first()
 
-            if not target_product or not target_product.imt_id:
-                flash('Целевая карточка не найдена или не имеет imtID', 'danger')
+            if not target_product:
+                flash('Целевая карточка не найдена', 'danger')
                 return redirect(url_for('products_merge'))
+
+            # Если imt_id отсутствует в локальной БД — получаем актуальный с WB
+            client = _get_wb_client(current_user.seller)
+            target_imt_id = target_product.imt_id
+
+            if not target_imt_id:
+                app.logger.info(f"Target nmID={target_nm_id} has no local imtID, fetching from WB...")
+                wb_card = client.get_card_by_nm_id(
+                    target_nm_id,
+                    log_to_db=True,
+                    seller_id=current_user.seller.id
+                )
+                if wb_card and wb_card.get('imtID'):
+                    target_imt_id = wb_card['imtID']
+                    # Обновляем локальную БД
+                    target_product.imt_id = target_imt_id
+                    db.session.commit()
+                    app.logger.info(f"Fetched imtID={target_imt_id} for nmID={target_nm_id}")
+                else:
+                    flash('Не удалось получить imtID целевой карточки с WB. Выполните синхронизацию.', 'danger')
+                    return redirect(url_for('products_merge'))
 
             # Проверка что все карточки имеют одинаковый subject_id
             products_to_merge = Product.query.filter(
@@ -234,7 +262,7 @@ def register_merge_routes(app):
             merge_history = CardMergeHistory(
                 seller_id=current_user.seller.id,
                 operation_type='merge',
-                target_imt_id=target_product.imt_id,
+                target_imt_id=target_imt_id,
                 merged_nm_ids=nm_ids,
                 snapshot_before=snapshot_before,
                 status='in_progress'
@@ -242,20 +270,51 @@ def register_merge_routes(app):
             db.session.add(merge_history)
             db.session.commit()
 
-            # Выполняем объединение через API
-            client = _get_wb_client(current_user.seller)
-
             try:
                 result = client.merge_cards(
-                    target_imt_id=target_product.imt_id,
+                    target_imt_id=target_imt_id,
                     nm_ids=nm_ids,
                     log_to_db=True,
                     seller_id=current_user.seller.id
                 )
 
-                # Обновляем БД
+                # WB API возвращает 200 даже при ошибке merge.
+                # Проверяем ошибки через отдельный endpoint.
+                import time
+                time.sleep(1)  # Даём WB время на обработку
+                wb_errors = client.get_cards_error_list(
+                    log_to_db=True,
+                    seller_id=current_user.seller.id
+                )
+
+                # Проверяем, есть ли ошибки для наших nmID
+                merge_nm_set = set(nm_ids)
+                related_errors = [
+                    e for e in wb_errors
+                    if e.get('nmID') in merge_nm_set
+                ]
+
+                if related_errors:
+                    error_msgs = []
+                    for err in related_errors:
+                        err_texts = err.get('errors', [])
+                        nm = err.get('nmID', '?')
+                        error_msgs.append(f"nmID {nm}: {'; '.join(err_texts)}")
+
+                    merge_history.status = 'failed'
+                    merge_history.wb_synced = False
+                    merge_history.wb_sync_status = 'failed'
+                    merge_history.wb_error_message = ' | '.join(error_msgs)
+                    merge_history.completed_at = datetime.utcnow()
+                    merge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
+                    db.session.commit()
+
+                    flash(f'WB отклонил объединение: {" | ".join(error_msgs[:3])}', 'danger')
+                    return redirect(url_for('products_merge_history', id=merge_history.id))
+
+                # Успех — обновляем БД
                 for product in products_to_merge:
-                    product.imt_id = target_product.imt_id
+                    product.imt_id = target_imt_id
 
                 # Снимок ПОСЛЕ
                 snapshot_after = {
@@ -276,7 +335,7 @@ def register_merge_routes(app):
 
                 db.session.commit()
 
-                flash(f'Успешно объединено {len(nm_ids)} карточек к imtID={target_product.imt_id}', 'success')
+                flash(f'Успешно объединено {len(nm_ids)} карточек к imtID={target_imt_id}', 'success')
                 return redirect(url_for('products_merge_history', id=merge_history.id))
 
             except WBAPIException as e:
@@ -284,6 +343,8 @@ def register_merge_routes(app):
                 merge_history.wb_synced = False
                 merge_history.wb_sync_status = 'failed'
                 merge_history.wb_error_message = str(e)
+                merge_history.completed_at = datetime.utcnow()
+                merge_history.duration_seconds = (datetime.utcnow() - start_time).total_seconds()
                 db.session.commit()
 
                 flash(f'Ошибка при объединении карточек: {str(e)}', 'danger')
@@ -374,16 +435,27 @@ def register_merge_routes(app):
                         api_errors.append(err_str)
                     time.sleep(0.3)
 
-                # Обновляем imt_id в локальной БД: сбрасываем в None
-                # (реальные новые imtID подтянутся при следующей синхронизации с WB)
+                # Пытаемся получить новые imtID с WB после разъединения
+                time.sleep(1)  # Даём WB время на обработку
                 for product in products:
-                    product.imt_id = None
+                    try:
+                        wb_card = client.get_card_by_nm_id(
+                            product.nm_id,
+                            log_to_db=False,
+                            seller_id=current_user.seller.id
+                        )
+                        if wb_card and wb_card.get('imtID'):
+                            product.imt_id = wb_card['imtID']
+                        else:
+                            product.imt_id = None
+                    except Exception:
+                        product.imt_id = None
                     product.last_sync = datetime.utcnow()
 
-                # Снимок ПОСЛЕ — imt_id сброшен в None
+                # Снимок ПОСЛЕ — с новыми imtID от WB
                 snapshot_after = {
                     str(p.nm_id): {
-                        'imt_id': None,
+                        'imt_id': p.imt_id,
                         'vendor_code': p.vendor_code,
                         'title': p.title,
                         'subject_id': p.subject_id
@@ -406,10 +478,8 @@ def register_merge_routes(app):
                 return redirect(url_for('products_merge_history', id=unmerge_history.id))
 
             except Exception as e:
-                # Даже при ошибке сбрасываем imt_id в БД, чтобы карточки
-                # не зависали в состоянии "объединено" вечно
-                for product in products:
-                    product.imt_id = None
+                # При ошибке НЕ сбрасываем imt_id — оставляем как есть,
+                # чтобы не потерять связь. Пользователь может повторить или использовать "Уже на WB".
                 unmerge_history.status = 'failed'
                 unmerge_history.wb_synced = False
                 unmerge_history.wb_sync_status = 'failed'
@@ -497,13 +567,26 @@ def register_merge_routes(app):
                 wb_error = str(e)
                 app.logger.warning(f"unmerge single nm_id={nm_id}: {wb_error}")
 
-            # В любом случае обновляем локальную БД
-            product.imt_id = None
+            # Получаем новый imtID с WB после разъединения
+            import time
+            time.sleep(1)
+            try:
+                wb_card = client.get_card_by_nm_id(
+                    nm_id,
+                    log_to_db=False,
+                    seller_id=current_user.seller.id
+                )
+                if wb_card and wb_card.get('imtID'):
+                    product.imt_id = wb_card['imtID']
+                else:
+                    product.imt_id = None
+            except Exception:
+                product.imt_id = None
             product.last_sync = datetime.utcnow()
 
             unmerge_history.snapshot_after = {
                 str(product.nm_id): {
-                    'imt_id': None,
+                    'imt_id': product.imt_id,
                     'vendor_code': product.vendor_code,
                     'title': product.title,
                     'subject_id': product.subject_id
@@ -595,6 +678,67 @@ def register_merge_routes(app):
             flash('Ошибка при получении рекомендаций', 'danger')
             return redirect(url_for('products_merge'))
 
+    @app.route('/products/merge/confirm')
+    @login_required
+    def products_merge_confirm():
+        """Страница подтверждения объединения из рекомендации.
+        Показывает только выбранные карточки — без каталога и пагинации."""
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            flash('Для объединения карточек необходимо настроить API ключ WB', 'warning')
+            return redirect(url_for('settings'))
+
+        target_nm_id = request.args.get('target_nm_id', type=int)
+        nm_ids_str = request.args.get('nm_ids', '')
+        reason = request.args.get('reason', '')
+        score = request.args.get('score', 0, type=float)
+
+        if not target_nm_id or not nm_ids_str:
+            flash('Не указаны карточки для объединения', 'warning')
+            return redirect(url_for('products_merge_recommendations'))
+
+        nm_ids = [int(x.strip()) for x in nm_ids_str.split(',') if x.strip().isdigit()]
+        # Убираем target из списка (он передаётся отдельно)
+        nm_ids = [nm for nm in nm_ids if nm != target_nm_id]
+
+        if not nm_ids:
+            flash('Нужна хотя бы одна карточка кроме главной', 'warning')
+            return redirect(url_for('products_merge_recommendations'))
+
+        # Загружаем все карточки одним запросом
+        all_nm_ids = [target_nm_id] + nm_ids
+        products = Product.query.filter(
+            Product.nm_id.in_(all_nm_ids),
+            Product.seller_id == current_user.seller.id,
+            Product.is_active == True
+        ).all()
+        products_map = {p.nm_id: p for p in products}
+
+        target_product = products_map.get(target_nm_id)
+        if not target_product:
+            flash('Целевая карточка не найдена', 'danger')
+            return redirect(url_for('products_merge_recommendations'))
+
+        merge_products = [products_map[nm] for nm in nm_ids if nm in products_map]
+        if not merge_products:
+            flash('Карточки для объединения не найдены', 'danger')
+            return redirect(url_for('products_merge_recommendations'))
+
+        # Проверка одинаковой категории
+        category_mismatch = [
+            p for p in merge_products
+            if p.subject_id != target_product.subject_id
+        ]
+
+        return render_template(
+            'products_merge_confirm.html',
+            target=target_product,
+            merge_cards=merge_products,
+            reason=reason,
+            score=score,
+            category_mismatch=category_mismatch,
+            nm_ids=nm_ids
+        )
+
     @app.route('/products/merge/revert/<int:id>', methods=['POST'])
     @login_required
     def products_merge_revert(id):
@@ -657,13 +801,25 @@ def register_merge_routes(app):
                         api_errors.append(err_str)
                     time.sleep(0.3)
 
-                # Сбрасываем imt_id в локальной БД
+                # Получаем новые imtID с WB после разъединения
                 products_to_reset = Product.query.filter(
                     Product.nm_id.in_(all_nm_ids),
                     Product.seller_id == current_user.seller.id
                 ).all()
+                time.sleep(1)
                 for product in products_to_reset:
-                    product.imt_id = None
+                    try:
+                        wb_card = client.get_card_by_nm_id(
+                            product.nm_id,
+                            log_to_db=False,
+                            seller_id=current_user.seller.id
+                        )
+                        if wb_card and wb_card.get('imtID'):
+                            product.imt_id = wb_card['imtID']
+                        else:
+                            product.imt_id = None
+                    except Exception:
+                        product.imt_id = None
                     product.last_sync = datetime.utcnow()
 
                 # Отмечаем оригинальную операцию как откаченную

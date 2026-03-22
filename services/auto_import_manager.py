@@ -1118,26 +1118,19 @@ class AutoImportManager:
             external_id = product_data['external_id']
 
             # Формируем артикул по шаблону из настроек
-            from services.pricing_engine import extract_product_id_for_vendor_code
+            from services.pricing_engine import generate_vendor_code
             from models import Supplier as _Supplier
 
-            vendor_code_pattern = self.settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}'
-
-            # Находим поставщика для использования его external_id_pattern
             _supplier_obj = None
             if self.settings.csv_source_type:
                 _supplier_obj = _Supplier.query.filter_by(code=self.settings.csv_source_type).first()
 
-            product_id = extract_product_id_for_vendor_code(external_id, _supplier_obj)
-
-            # Артикул поставщика из CSV (колонка vendor_code / article)
-            external_vendor_code = product_data.get('external_vendor_code', '')
-
-            generated_vendor_code = vendor_code_pattern.format(
-                product_id=product_id,
-                supplier_code=self.settings.supplier_code or '',
-                external_vendor_code=external_vendor_code,
-                external_id=external_id
+            generated_vendor_code = generate_vendor_code(
+                pattern=self.settings.vendor_code_pattern,
+                supplier_code=self.settings.supplier_code,
+                external_id=external_id,
+                external_vendor_code=product_data.get('external_vendor_code', ''),
+                supplier=_supplier_obj,
             )
 
             # ПРОВЕРКА ДУБЛИКАТОВ: проверяем, есть ли уже товар с таким артикулом в WB

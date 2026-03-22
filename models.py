@@ -2441,6 +2441,7 @@ class SupplierProduct(db.Model):
     ai_parsed_at = db.Column(db.DateTime)     # Когда был выполнен парсинг
     ai_model_used = db.Column(db.String(100)) # Какой AI моделью спарсено (e.g. "openai/gpt-oss-120b")
     ai_marketplace_json = db.Column(db.Text)  # Данные форматированные для маркетплейса (WB)
+    ai_fill_pct = db.Column(db.Float)          # Процент заполнения из AI парсинга (0-100)
     description_source = db.Column(db.String(50))  # csv/ai/manual — откуда описание
 
     # Оригинальные данные для отката
@@ -2748,10 +2749,30 @@ class AIParseJob(db.Model):
     model_used     = db.Column(db.String(100))                    # Название AI модели (gpt-4o, claude-sonnet и т.д.)
     results        = db.Column(db.Text)                           # JSON [{product_id, title, status, fill_pct, error}]
     error_message  = db.Column(db.Text)                           # Общая ошибка если failed
+    heartbeat_at   = db.Column(db.DateTime)                        # Последний heartbeat от воркера
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at     = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Таймаут: если heartbeat_at старше STALE_TIMEOUT_SECONDS — задача считается зависшей
+    # 5 минут: с фоновым heartbeat-потоком (обновляется каждые 30с) это сработает
+    # только при реальном зависании, а не при долгих AI-запросах (DeepSeek, two-pass)
+    STALE_TIMEOUT_SECONDS = 300
+
     supplier = db.relationship('Supplier', foreign_keys=[supplier_id])
+
+    @property
+    def is_stale(self):
+        """Проверяет, зависла ли задача (нет heartbeat дольше таймаута)."""
+        if self.status not in ('pending', 'running'):
+            return False
+        if not self.heartbeat_at:
+            # Если heartbeat ни разу не обновлялся — смотрим на created_at
+            check_time = self.created_at
+        else:
+            check_time = self.heartbeat_at
+        if not check_time:
+            return False
+        return (datetime.utcnow() - check_time).total_seconds() > self.STALE_TIMEOUT_SECONDS
 
 
 # ============= MARKETPLACE INTEGRATION MODELS =============
@@ -4027,6 +4048,7 @@ class ContentFactory(db.Model):
     product_selection_rules_json = db.Column(db.Text, default='{}')  # {category, brand, price_range}
 
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
+    ai_model = db.Column(db.String(100))  # Конкретная модель (если пусто — дефолт провайдера)
     schedule_cron = db.Column(db.String(100))  # cron-выражение для автогенерации
     auto_approve = db.Column(db.Boolean, default=False)
     auto_generate = db.Column(db.Boolean, default=False)  # Автогенерация: рандомный товар → AI → пост

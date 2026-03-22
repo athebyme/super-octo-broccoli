@@ -215,6 +215,10 @@ class VKPublisher(BasePublisher):
         text = self.format_text(item)
         media_urls = item.get_media_urls()
 
+        # Если media_urls пустой — пробуем скачать и закэшировать фото из WB CDN
+        if not media_urls:
+            media_urls = self._recover_photos(item)
+
         # Относительные URL → абсолютные (для скачивания с нашего сервера)
         try:
             from flask import current_app
@@ -271,7 +275,12 @@ class VKPublisher(BasePublisher):
                     logger.warning(f"  photo[{i}] FAILED: {error_reason} URL: {url[:80]}")
 
             if media_urls and not attachments:
-                logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload")
+                error_summary = '; '.join(photo_errors[:5])
+                logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload: {error_summary}")
+                return PublishResult(
+                    success=False,
+                    error=f"Все {len(media_urls)} фото не загружены в VK: {error_summary}"
+                )
 
             # Даём VK время обработать загруженные фото перед wall.post
             if attachments:
@@ -361,6 +370,45 @@ class VKPublisher(BasePublisher):
 
         except requests.exceptions.RequestException as e:
             return False, f"Ошибка подключения к VK API: {e}"
+
+    @staticmethod
+    def _recover_photos(item: ContentItem) -> list:
+        """Пробует восстановить фото товара из WB CDN кэша.
+
+        Вызывается когда media_urls_json пустой (авто-генерация не сохранила фото).
+        Скачивает фото с WB CDN, кэширует локально, возвращает URL.
+        """
+        try:
+            from models import Product
+            product_ids = item.get_product_ids()
+            if not product_ids:
+                return []
+
+            product = Product.query.get(product_ids[0])
+            if not product or not product.nm_id:
+                return []
+
+            nm_id = product.nm_id
+
+            # Сначала проверяем кэш (может уже скачано)
+            from services.content_photo_cache import get_cached_photo_urls, cache_product_photos
+            cached = get_cached_photo_urls(nm_id)
+            if cached:
+                logger.info(f"VK photo recovery: found {len(cached)} cached photos for nm_id={nm_id}")
+                return cached
+
+            # Скачиваем с WB CDN и кэшируем
+            from seller_platform import wb_photo_url
+            source_urls = [wb_photo_url(nm_id, i) for i in range(1, 6)]
+            cached_urls = cache_product_photos(nm_id, source_urls)
+            if cached_urls:
+                logger.info(f"VK photo recovery: downloaded {len(cached_urls)} photos from WB CDN for nm_id={nm_id}")
+                return cached_urls
+
+            logger.warning(f"VK photo recovery: no photos found for nm_id={nm_id}")
+        except Exception as e:
+            logger.warning(f"VK photo recovery failed: {e}")
+        return []
 
     def _upload_photo(
         self,
