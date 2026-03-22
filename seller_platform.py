@@ -232,8 +232,11 @@ app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 час
 app.config['WTF_CSRF_SSL_STRICT'] = False
 
 # Инициализация планировщика автоматической синхронизации
-from services.product_sync_scheduler import init_scheduler
-init_scheduler(app)
+# Не запускаем при импорте из миграций/инит-скриптов
+import os as _os
+if _os.environ.get('SKIP_SCHEDULER') != '1':
+    from services.product_sync_scheduler import init_scheduler
+    init_scheduler(app)
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_ROOT = BASE_DIR / 'uploads'
