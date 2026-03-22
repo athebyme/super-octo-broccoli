@@ -4448,6 +4448,9 @@ class CompetitorMonitorSettings(db.Model):
     # Непрерывный цикл
     pause_between_cycles_seconds = db.Column(db.Integer, default=0)  # пауза между циклами (0 = без паузы)
 
+    # Прокси для обхода блокировки WB (формат: http://user:pass@host:port)
+    proxy_url = db.Column(db.String(500), nullable=True)
+
     # Статистика
     last_sync_at = db.Column(db.DateTime, nullable=True)
     last_sync_status = db.Column(db.String(50), default='never')  # never/running/success/failed
@@ -4471,6 +4474,7 @@ class CompetitorMonitorSettings(db.Model):
             'requests_per_minute': self.requests_per_minute,
             'max_products': self.max_products,
             'pause_between_cycles_seconds': self.pause_between_cycles_seconds,
+            'proxy_url': self.proxy_url,
             'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
             'last_sync_status': self.last_sync_status,
             'last_sync_error': self.last_sync_error,

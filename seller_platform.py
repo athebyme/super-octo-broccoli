@@ -6088,6 +6088,8 @@ def _run_startup_migrations():
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
         # Content factory AI model selection
         ('content_factories', 'ai_model', 'VARCHAR(100)'),
+        # Competitor monitor proxy
+        ('competitor_monitor_settings', 'proxy_url', 'VARCHAR(500)'),
     ]
 
     for table, column, col_type in migrations:

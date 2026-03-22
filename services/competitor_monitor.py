@@ -95,11 +95,12 @@ class CompetitorMonitorService:
         'lang': 'ru',
     }
 
-    def __init__(self, requests_per_minute=60):
+    def __init__(self, requests_per_minute=60, proxy_url=None):
         self._rate_limiter = RateLimiter(
             max_requests=requests_per_minute,
             time_window=60
         )
+        self._proxy_url = proxy_url
         self._session = self._create_session()
 
     def _create_session(self):
@@ -126,6 +127,12 @@ class CompetitorMonitorService:
             'Accept': 'application/json',
             'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
         })
+        if self._proxy_url:
+            session.proxies = {
+                'http': self._proxy_url,
+                'https': self._proxy_url,
+            }
+            logger.info(f"Используется прокси: {self._proxy_url.split('@')[-1] if '@' in self._proxy_url else self._proxy_url}")
         return session
 
     def fetch_products_batch(self, nm_ids):
@@ -729,7 +736,10 @@ class CompetitorMonitorService:
                 return
 
             # Создаём сервис с настройками rate limit
-            service = cls(requests_per_minute=settings.requests_per_minute)
+            service = cls(
+                requests_per_minute=settings.requests_per_minute,
+                proxy_url=getattr(settings, 'proxy_url', None),
+            )
 
             # Получаем все активные товары, отсортированные по приоритету
             products = CompetitorProduct.query.filter_by(

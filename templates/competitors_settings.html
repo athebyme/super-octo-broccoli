@@ -105,6 +105,14 @@
                 class="w-40 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
         </div>
 
+        <!-- Proxy -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700">HTTP-прокси</label>
+            <p class="text-xs text-gray-500 mb-2">WB блокирует серверные IP. Укажите прокси для получения цен. Формат: http://user:pass@host:port</p>
+            <input type="text" x-model="form.proxy_url" placeholder="http://user:pass@host:port"
+                class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
+        </div>
+
         <hr class="border-gray-100">
 
         <!-- Save -->
