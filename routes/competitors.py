@@ -325,7 +325,21 @@ def register_competitor_routes(app):
                 seller_id=seller.id, nm_id=nm_id, group_id=group_id
             ).first()
             if existing:
-                skipped += 1
+                if not existing.is_active:
+                    # Реактивируем ранее удалённый товар
+                    existing.is_active = True
+                    existing.title = pd.get('title') or existing.title
+                    existing.brand = pd.get('brand') or existing.brand
+                    existing.supplier_name = pd.get('supplier_name') or existing.supplier_name
+                    existing.image_url = pd.get('image_url') or existing.image_url
+                    existing.current_price = pd.get('price') or existing.current_price
+                    existing.current_sale_price = pd.get('sale_price') or existing.current_sale_price
+                    existing.current_rating = pd.get('rating') or existing.current_rating
+                    existing.current_feedbacks_count = pd.get('feedbacks_count') or existing.current_feedbacks_count
+                    existing.current_total_stock = pd.get('total_stock') or existing.current_total_stock
+                    added += 1
+                else:
+                    skipped += 1
                 continue
 
             product = CompetitorProduct(

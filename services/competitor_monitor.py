@@ -39,8 +39,13 @@ class CompetitorMonitorService:
     """Сервис мониторинга конкурентов через публичные API WB"""
 
     DETAIL_URL = "https://card.wb.ru/cards/detail"
+    DETAIL_URL_V2 = "https://card.wb.ru/cards/v2/detail"
     SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v7/search"
     SELLER_CATALOG_URL = "https://catalog.wb.ru/sellers/catalog"
+    SELLER_CATALOG_URLS = [
+        "https://catalog.wb.ru/sellers/catalog",
+        "https://catalog.wb.ru/sellers/v2/catalog",
+    ]
     BATCH_SIZE = 100  # макс nm_id на один запрос
 
     # Дефолтные параметры запросов
@@ -269,6 +274,7 @@ class CompetitorMonitorService:
         """
         all_products = []
         page = 1
+        working_url = None
 
         while len(all_products) < limit:
             self._rate_limiter.wait_if_needed()
@@ -282,18 +288,39 @@ class CompetitorMonitorService:
             }
 
             try:
-                url = self.SELLER_CATALOG_URL
-                logger.info(
-                    f"Запрос каталога продавца {wb_supplier_id}, стр. {page}: "
-                    f"{url}?supplier={wb_supplier_id}"
-                )
-                response = self._session.get(
-                    url,
-                    params=params,
-                    timeout=30
-                )
-                response.raise_for_status()
-                data = response.json()
+                data = None
+
+                if working_url:
+                    # Используем уже найденный рабочий URL
+                    urls_to_try = [working_url]
+                else:
+                    urls_to_try = self.SELLER_CATALOG_URLS
+
+                for url in urls_to_try:
+                    logger.info(
+                        f"Запрос каталога продавца {wb_supplier_id}, стр. {page}: "
+                        f"{url}?supplier={wb_supplier_id}"
+                    )
+                    response = self._session.get(
+                        url,
+                        params=params,
+                        timeout=30
+                    )
+                    if response.status_code == 404:
+                        logger.warning(
+                            f"URL {url} вернул 404, пробуем следующий"
+                        )
+                        continue
+                    response.raise_for_status()
+                    data = response.json()
+                    working_url = url
+                    break
+
+                if data is None:
+                    logger.error(
+                        f"Все URL каталога продавца вернули ошибку для {wb_supplier_id}"
+                    )
+                    break
 
                 products = data.get('data', {}).get('products', [])
                 if not products:
