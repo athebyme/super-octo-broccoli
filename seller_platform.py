@@ -6138,19 +6138,31 @@ def _run_startup_migrations():
         except Exception:
             db.session.rollback()
 
+    # Валидация SQL-идентификаторов (защита от инъекций в DDL)
+    import re as _re
+    _SQL_IDENT_RE = _re.compile(r'^[a-zA-Z_][a-zA-Z0-9_, ]*$')
+
+    def _safe_create_index(idx_name, table, columns):
+        """Создаёт индекс с валидацией идентификаторов."""
+        for val in (idx_name, table, columns):
+            if not _SQL_IDENT_RE.match(val):
+                logger.error(f"[Startup] Invalid SQL identifier in index creation: {val!r}")
+                return
+        try:
+            db.session.execute(db.text(
+                f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'
+            ))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     # Create indexes for brand registry columns
     indexes = [
         ('idx_ip_resolved_brand', 'imported_products', 'resolved_brand_id'),
         ('idx_sp_resolved_brand', 'supplier_products', 'resolved_brand_id'),
     ]
     for idx_name, table, column in indexes:
-        try:
-            db.session.execute(db.text(
-                f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})'
-            ))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
+        _safe_create_index(idx_name, table, column)
 
     # Создаём таблицу prohibited_words если её нет
     if 'prohibited_words' not in insp.get_table_names():
@@ -6349,11 +6361,7 @@ def _run_startup_migrations():
     ]
     for idx_name, table, columns in agent_indexes:
         if table in insp.get_table_names():
-            try:
-                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            _safe_create_index(idx_name, table, columns)
 
     # Индексы для таблиц аналитики и финансов
     analytics_indexes = [
@@ -6363,11 +6371,7 @@ def _run_startup_migrations():
     ]
     for idx_name, table, columns in analytics_indexes:
         if table in insp.get_table_names():
-            try:
-                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            _safe_create_index(idx_name, table, columns)
 
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============

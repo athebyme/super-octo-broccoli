@@ -27,14 +27,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def _sign_photo_token(secret_key: str, sp_id: int, photo_idx: int) -> str:
     """Подписывает параметры фото HMAC-токеном."""
     msg = f'{sp_id}:{photo_idx}'
-    sig = hmac.new(secret_key.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(secret_key.encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
     return sig
 
 
 def _sign_imported_photo_token(secret_key: str, ip_id: int, photo_idx: int) -> str:
     """Подписывает параметры фото ImportedProduct HMAC-токеном."""
     msg = f'ip:{ip_id}:{photo_idx}'
-    sig = hmac.new(secret_key.encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(secret_key.encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
     return sig
 
 
@@ -420,10 +420,12 @@ def register_photo_routes(app):
         from PIL import Image as _Image
         from services.photo_cache import get_photo_cache
 
-        # Проверяем подпись
+        # Проверяем подпись (принимаем и старые 16-char, и новые 32-char)
         sig = _req.args.get('sig', '')
         expected = _sign_photo_token(app.config['SECRET_KEY'], sp, idx)
-        if not hmac.compare_digest(sig, expected):
+        msg = f'{sp}:{idx}'
+        legacy = hmac.new(app.config['SECRET_KEY'].encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
+        if not (hmac.compare_digest(sig, expected) or hmac.compare_digest(sig, legacy)):
             abort(403)
 
         from models import SupplierProduct
@@ -531,7 +533,9 @@ def register_photo_routes(app):
 
         sig = _req.args.get('sig', '')
         expected = _sign_imported_photo_token(app.config['SECRET_KEY'], ip, idx)
-        if not hmac.compare_digest(sig, expected):
+        msg = f'ip:{ip}:{idx}'
+        legacy = hmac.new(app.config['SECRET_KEY'].encode(), msg.encode(), hashlib.sha256).hexdigest()[:16]
+        if not (hmac.compare_digest(sig, expected) or hmac.compare_digest(sig, legacy)):
             abort(403)
 
         from models import ImportedProduct as _IP
@@ -690,8 +694,10 @@ def register_content_photo_routes(app):
         # Проверка HMAC-подписи (предотвращает перебор nm_id)
         sig = request.args.get('sig', '')
         secret = app.config.get('SECRET_KEY', '').encode()
-        expected_sig = hmac.new(secret, f'{nm_id}:{index}'.encode(), hashlib.sha256).hexdigest()[:16]
-        if not sig or not hmac.compare_digest(sig, expected_sig):
+        full_sig = hmac.new(secret, f'{nm_id}:{index}'.encode(), hashlib.sha256).hexdigest()
+        expected_sig = full_sig[:32]
+        legacy_sig = full_sig[:16]
+        if not sig or not (hmac.compare_digest(sig, expected_sig) or hmac.compare_digest(sig, legacy_sig)):
             # Разрешаем доступ авторизованным пользователям без подписи
             if not (hasattr(current_user, 'is_authenticated') and current_user.is_authenticated):
                 abort(403)

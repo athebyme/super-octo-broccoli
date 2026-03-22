@@ -49,7 +49,7 @@ def _content_photo_sig(nm_id: int, index: int) -> str:
     import hashlib
     from flask import current_app
     secret = current_app.config.get('SECRET_KEY', '').encode()
-    return hmac.new(secret, f'{nm_id}:{index}'.encode(), hashlib.sha256).hexdigest()[:16]
+    return hmac.new(secret, f'{nm_id}:{index}'.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def get_content_photo_url(nm_id: int, index: int) -> str:
