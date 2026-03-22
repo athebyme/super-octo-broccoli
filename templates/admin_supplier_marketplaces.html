@@ -117,7 +117,7 @@
                 "{{ mp.id }}": {
                     is_active: {{ 'true' if conn and conn.is_active else 'false' }},
                     auto_map_categories: {{ 'true' if conn and conn.auto_map_categories else 'false' }},
-                    default_category_id: '{{ conn.default_category_id or "" if conn else "" }}',
+                    default_category_id: {{ (conn.default_category_id or "" if conn else "") | tojson }},
                 },
                 {% endfor %}
             },

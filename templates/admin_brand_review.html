@@ -80,7 +80,7 @@
                 <!-- Поиск через API -->
                 <div class="mt-4">
                     <div class="flex items-center gap-2 mb-2">
-                        <button onclick="searchWB({{ item.brand.id }}, '{{ item.brand.name|e }}')"
+                        <button onclick="searchWB({{ item.brand.id }}, {{ item.brand.name | tojson }})"
                             class="text-sm text-indigo-600 hover:text-indigo-800 underline font-medium" id="searchBtn-{{ item.brand.id }}">
                             Найти на маркетплейсе
                         </button>

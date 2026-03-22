@@ -29,9 +29,11 @@ def init_test_platform():
             is_admin=True,
             is_active=True
         )
-        admin.set_password("admin123")
+        import secrets as _s
+        test_password = _s.token_urlsafe(12)
+        admin.set_password(test_password)
         db.session.add(admin)
-        print("✓ Создан администратор (admin / admin123)")
+        print(f"✓ Создан администратор (admin / {test_password})")
 
         # Создаем тестового продавца
         seller_user = User(
@@ -40,7 +42,8 @@ def init_test_platform():
             is_admin=False,
             is_active=True
         )
-        seller_user.set_password("seller123")
+        seller_pass = _s.token_urlsafe(12)
+        seller_user.set_password(seller_pass)
         db.session.add(seller_user)
         db.session.flush()
 
@@ -61,7 +64,8 @@ def init_test_platform():
             is_admin=False,
             is_active=True
         )
-        seller_user2.set_password("seller123")
+        seller2_password = _s.token_urlsafe(12)
+        seller_user2.set_password(seller2_password)
         db.session.add(seller_user2)
         db.session.flush()
 
@@ -73,7 +77,7 @@ def init_test_platform():
             notes="Второй тестовый продавец"
         )
         db.session.add(seller2)
-        print("✓ Создан второй тестовый продавец (seller2 / seller123)")
+        print(f"✓ Создан второй тестовый продавец (seller2 / {seller2_password})")
 
         db.session.commit()
 
@@ -82,14 +86,14 @@ def init_test_platform():
     print("\nУчетные данные для входа:")
     print("\nАдминистратор:")
     print("  Username: admin")
-    print("  Password: admin123")
+    print(f"  Password: {test_password}")
     print("\nПродавец 1:")
     print("  Username: seller1")
-    print("  Password: seller123")
+    print(f"  Password: {seller_pass}")
     print("  Компания: ООО 'Тестовая компания'")
     print("\nПродавец 2:")
     print("  Username: seller2")
-    print("  Password: seller123")
+    print(f"  Password: {seller2_password}")
     print("  Компания: ИП Иванов И.И.")
     print("\nДля запуска приложения:")
     print("  python seller_platform.py")

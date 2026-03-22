@@ -38,6 +38,7 @@ from models import (
     PriceChangeBatch, PriceChangeItem, PriceHistory
 )
 from services.wb_api_client import WildberriesAPIClient, WBAPIException
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -560,7 +561,7 @@ def create_batch():
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error creating price batch: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @prices_bp.route('/batch/<int:batch_id>')
@@ -773,16 +774,16 @@ def batch_apply(batch_id: int):
 
     except WBAPIException as e:
         batch.status = 'failed'
-        batch.apply_errors = [{'error': str(e)}]
+        batch.apply_errors = [{'error': safe_error_message(e)}]
         db.session.commit()
         logger.error(f"WB API error applying batch {batch_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
     except Exception as e:
         batch.status = 'failed'
         db.session.commit()
         logger.error(f"Error applying batch {batch_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @prices_bp.route('/batch/<int:batch_id>/revert', methods=['POST'])
@@ -884,7 +885,7 @@ def batch_revert(batch_id: int):
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error reverting batch {batch_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': safe_error_message(e)}), 500
 
 
 @prices_bp.route('/batch/<int:batch_id>/cancel', methods=['POST'])

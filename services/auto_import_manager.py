@@ -529,7 +529,7 @@ class SexoptovikAuth:
             logger.info(f"📄 Загрузка главной страницы для инициализации сессии...")
             main_response = session.get('https://sexoptovik.ru/', headers=base_headers, timeout=30)
             main_response.raise_for_status()
-            logger.info(f"🍪 Cookies после главной страницы: {session.cookies.get_dict()}")
+            logger.debug(f"🍪 Cookies после главной страницы: {len(session.cookies)} шт.")
 
             # Загружаем страницу логина
             login_page_url = 'https://sexoptovik.ru/login_page.php'
@@ -540,7 +540,7 @@ class SexoptovikAuth:
             get_response = session.get(login_page_url, headers=base_headers, timeout=30)
             get_response.raise_for_status()
             logger.info(f"✅ Страница логина загружена, статус: {get_response.status_code}")
-            logger.info(f"🍪 Cookies после GET: {session.cookies.get_dict()}")
+            logger.debug(f"🍪 Cookies после GET: {len(session.cookies)} шт.")
 
             # Извлекаем скрытые поля формы (CSRF токен и т.д.)
             hidden_fields = {}
@@ -588,7 +588,7 @@ class SexoptovikAuth:
             response = session.post(login_page_url, data=auth_data, headers=post_headers, timeout=30, allow_redirects=True)
             logger.info(f"📥 Ответ получен, статус: {response.status_code}")
             logger.info(f"🔗 Final URL: {response.url}")
-            logger.info(f"🍪 Cookies после POST: {session.cookies.get_dict()}")
+            logger.debug(f"🍪 Cookies после POST: {len(session.cookies)} шт.")
 
             response.raise_for_status()
 
@@ -1118,26 +1118,19 @@ class AutoImportManager:
             external_id = product_data['external_id']
 
             # Формируем артикул по шаблону из настроек
-            from services.pricing_engine import extract_product_id_for_vendor_code
+            from services.pricing_engine import generate_vendor_code
             from models import Supplier as _Supplier
 
-            vendor_code_pattern = self.settings.vendor_code_pattern or 'id-{product_id}-{supplier_code}'
-
-            # Находим поставщика для использования его external_id_pattern
             _supplier_obj = None
             if self.settings.csv_source_type:
                 _supplier_obj = _Supplier.query.filter_by(code=self.settings.csv_source_type).first()
 
-            product_id = extract_product_id_for_vendor_code(external_id, _supplier_obj)
-
-            # Артикул поставщика из CSV (колонка vendor_code / article)
-            external_vendor_code = product_data.get('external_vendor_code', '')
-
-            generated_vendor_code = vendor_code_pattern.format(
-                product_id=product_id,
-                supplier_code=self.settings.supplier_code or '',
-                external_vendor_code=external_vendor_code,
-                external_id=external_id
+            generated_vendor_code = generate_vendor_code(
+                pattern=self.settings.vendor_code_pattern,
+                supplier_code=self.settings.supplier_code,
+                external_id=external_id,
+                external_vendor_code=product_data.get('external_vendor_code', ''),
+                supplier=_supplier_obj,
             )
 
             # ПРОВЕРКА ДУБЛИКАТОВ: проверяем, есть ли уже товар с таким артикулом в WB

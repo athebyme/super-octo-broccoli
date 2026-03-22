@@ -35,6 +35,7 @@ instance/
 
 # Environment
 .env
+.env.autodeploy
 .flaskenv
 
 # IDE
@@ -55,3 +56,4 @@ processed/*
 Thumbs.db
 *.log
 seller_platform.log
+*.log.*

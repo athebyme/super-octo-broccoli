@@ -4,19 +4,19 @@ openpyxl==3.1.5
 python-dateutil==2.9.0.post0
 tzdata==2024.1
 requests==2.32.3
-gunicorn==21.2.0
+gunicorn==23.0.0
 Flask-Login==0.6.3
 Flask-SQLAlchemy==3.1.1
 Werkzeug==3.0.3
-cryptography==41.0.7
+cryptography==44.0.0
 APScheduler==3.10.4
-Pillow==10.4.0
+Pillow==11.1.0
 Flask-WTF==1.2.1
 # Infographic rendering
 playwright>=1.40.0,<1.53.0
 # AI Agent Runtime (LLM providers)
-anthropic>=0.40.0
-google-genai>=1.0.0
-openai>=1.30.0
+anthropic>=0.40.0,<1.0.0
+google-genai>=1.0.0,<2.0.0
+openai>=1.30.0,<2.0.0
 # Social media publishers (Content Factory)
-vk_api>=11.9.9
+vk_api>=11.9.9,<12.0.0

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 from models import db, Product, ProductStock
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ def register_warehouse_routes(app):
 
         except Exception as e:
             logger.error(f"Error in warehouse analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/warehouse/refresh', methods=['POST'])
     @login_required
@@ -241,6 +242,31 @@ def register_warehouse_routes(app):
 
             db.session.commit()
 
+            # Обновляем Product.quantity из суммы складских остатков
+            # чтобы контент-фабрика и другие модули видели актуальные остатки
+            product_ids_updated = set()
+            for item in wb_stocks:
+                nm_id = item.get('nmId')
+                if nm_id and nm_id in nm_to_product:
+                    product_ids_updated.add(nm_to_product[nm_id].id)
+
+            if product_ids_updated:
+                stock_totals = (
+                    db.session.query(
+                        ProductStock.product_id,
+                        db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                    )
+                    .filter(ProductStock.product_id.in_(product_ids_updated))
+                    .group_by(ProductStock.product_id)
+                    .all()
+                )
+                qty_map = {pid: int(total) for pid, total in stock_totals}
+                for pid in product_ids_updated:
+                    product = Product.query.get(pid)
+                    if product:
+                        product.quantity = qty_map.get(pid, 0)
+                db.session.commit()
+
             logger.info(f"Warehouse refresh for seller {seller_id}: {len(wb_stocks)} items from API, {created} created, {updated} updated")
 
             return jsonify({
@@ -253,11 +279,11 @@ def register_warehouse_routes(app):
 
         except requests.exceptions.RequestException as e:
             logger.error(f"WB API error in warehouse refresh: {e}")
-            return jsonify({'error': f'Ошибка WB API: {str(e)}'}), 502
+            return jsonify({'error': safe_error_message(e)}), 502
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error in warehouse refresh: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/analytics/sync', methods=['POST'])
     @login_required
@@ -333,7 +359,7 @@ def register_warehouse_routes(app):
         except Exception as e:
             db.session.rollback()
             logger.error(f"Error saving stock refresh interval: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/settings/stock-refresh', methods=['GET'])
     @login_required

@@ -9,6 +9,7 @@ from flask_login import login_required, current_user
 
 from models import db
 from services.analytics_service import AnalyticsService
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger('analytics_routes')
 
@@ -52,7 +53,7 @@ def register_analytics_routes(app):
             return jsonify({'success': True, 'data': data})
         except Exception as e:
             logger.exception(f"Error fetching analytics summary: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/analytics/daily')
     @login_required
@@ -78,7 +79,7 @@ def register_analytics_routes(app):
             return jsonify({'success': True, 'data': daily or []})
         except Exception as e:
             logger.exception(f"Error fetching daily analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/analytics/products')
     @login_required
@@ -126,7 +127,7 @@ def register_analytics_routes(app):
             return jsonify({'success': True, 'data': data})
         except Exception as e:
             logger.exception(f"Error fetching product analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/analytics/refresh', methods=['POST'])
     @login_required
@@ -154,4 +155,4 @@ def register_analytics_routes(app):
             return jsonify({'success': True, 'data': data})
         except Exception as e:
             logger.exception(f"Error refreshing analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500

@@ -13,7 +13,7 @@ from flask_login import login_required, current_user
 
 from models import (
     db, ContentFactory, ContentItem, ContentTemplate,
-    ContentPlan, SocialAccount, Product,
+    ContentPlan, SocialAccount, Product, ProductStock,
     CONTENT_PLATFORMS, CONTENT_TYPES, CONTENT_TONES,
     CONTENT_STATUSES, PRODUCT_SELECTION_MODES,
 )
@@ -21,6 +21,7 @@ from services.content_factory_service import (
     ContentFactoryService,
     PLATFORM_LABELS, CONTENT_TYPE_LABELS, STATUS_LABELS,
 )
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ def register_content_factory_routes(app):
                 tone=request.form.get('tone', 'casual'),
                 style_guidelines=request.form.get('style_guidelines', '').strip(),
                 ai_provider=request.form.get('ai_provider', 'openai'),
+                ai_model=request.form.get('ai_model', '').strip() or None,
                 product_selection_mode=request.form.get('product_selection_mode', 'manual'),
                 auto_approve=bool(request.form.get('auto_approve')),
                 auto_generate=bool(request.form.get('auto_generate')),
@@ -180,6 +182,7 @@ def register_content_factory_routes(app):
             factory.tone = request.form.get('tone', factory.tone)
             factory.style_guidelines = request.form.get('style_guidelines', '').strip()
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
+            factory.ai_model = request.form.get('ai_model', '').strip() or None
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
             factory.auto_approve = bool(request.form.get('auto_approve'))
             factory.auto_generate = bool(request.form.get('auto_generate'))
@@ -331,7 +334,7 @@ def register_content_factory_routes(app):
     @app.route('/api/content-factory/<int:factory_id>/select-products', methods=['POST'])
     @login_required
     def api_content_factory_select_products(factory_id):
-        """Подбирает товары для массовой генерации."""
+        """Подбирает товары для массовой генерации с ротацией."""
         if not current_user.seller:
             return jsonify({'error': 'Продавец не найден'}), 403
 
@@ -344,19 +347,43 @@ def register_content_factory_routes(app):
         data = request.get_json() or {}
         count = min(data.get('count', 5), 20)
 
-        # Собираем ID товаров, уже использованных в фабрике
-        used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
-        used_product_ids = set()
-        for ci in used_items:
-            used_product_ids.update(ci.get_product_ids())
+        from datetime import datetime, timedelta
 
-        products = service.select_products(factory, limit=count, exclude_product_ids=used_product_ids)
+        # Исключаем только товары, использованные за последние 3 дня (кулдаун)
+        now = datetime.utcnow()
+        cooldown = now - timedelta(days=3)
+        recent_items = ContentItem.query.filter(
+            ContentItem.factory_id == factory.id,
+            ContentItem.created_at >= cooldown,
+        ).all()
+        recent_product_ids = set()
+        for ci in recent_items:
+            recent_product_ids.update(ci.get_product_ids())
 
-        # Если после исключения не хватило — добираем из всех (повторы допустимы)
+        # select_products уже содержит логику ротации (приоритет давно не использованным)
+        products = service.select_products(factory, limit=count, exclude_product_ids=recent_product_ids)
+
         if len(products) < count:
-            all_products = service.select_products(factory, limit=count)
+            # Смягчаем кулдаун до 1 дня
+            soft_cooldown = now - timedelta(days=1)
+            soft_exclude = set()
+            for ci in recent_items:
+                if ci.created_at >= soft_cooldown:
+                    soft_exclude.update(ci.get_product_ids())
+            more = service.select_products(factory, limit=count, exclude_product_ids=soft_exclude)
             existing_ids = {p['id'] for p in products}
-            for p in all_products:
+            for p in more:
+                if p['id'] not in existing_ids:
+                    products.append(p)
+                    existing_ids.add(p['id'])
+                if len(products) >= count:
+                    break
+
+        if len(products) < count:
+            # Крайний случай: без кулдауна (ротация всё равно сработает)
+            more = service.select_products(factory, limit=count)
+            existing_ids = {p['id'] for p in products}
+            for p in more:
                 if p['id'] not in existing_ids:
                     products.append(p)
                     existing_ids.add(p['id'])
@@ -370,7 +397,7 @@ def register_content_factory_routes(app):
     @app.route('/api/content-factory/<int:factory_id>/random-product', methods=['POST'])
     @login_required
     def api_content_factory_random_product(factory_id):
-        """Выбирает случайный товар, исключая уже использованные в фабрике."""
+        """Выбирает случайный товар с ротацией (приоритет давно не использованным)."""
         if not current_user.seller:
             return jsonify({'error': 'Продавец не найден'}), 403
 
@@ -383,48 +410,65 @@ def register_content_factory_routes(app):
         data = request.get_json() or {}
         exclude_ids = data.get('exclude_ids', [])
 
-        # Собираем ID товаров, которые уже использовались в фабрике
+        from datetime import datetime
+        import random as _random
+
+        # Собираем историю использования для ротации
         used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
-        used_product_ids = set()
+        product_last_used = {}
         for ci in used_items:
-            used_product_ids.update(ci.get_product_ids())
-        # Также исключаем переданные ID
+            for pid in ci.get_product_ids():
+                prev = product_last_used.get(pid)
+                if prev is None or ci.created_at > prev:
+                    product_last_used[pid] = ci.created_at
+
+        # Жёсткое исключение: только переданные exclude_ids (текущий выбор в UI)
+        hard_exclude = set()
         for eid in exclude_ids:
-            used_product_ids.add(int(eid))
+            hard_exclude.add(int(eid))
 
-        # Берём товары продавца с фильтрами (наличие, цена, активность)
-        from sqlalchemy import func as sa_func
-        query = Product.query.filter(
-            Product.seller_id == factory.seller_id,
-            Product.is_active == True,
-            Product.quantity > 0,
-            db.or_(
-                db.and_(
-                    Product.discount_price.isnot(None),
-                    Product.discount_price > 0,
-                    Product.discount_price <= 50000,
-                ),
-                db.and_(
-                    db.or_(Product.discount_price.is_(None), Product.discount_price == 0),
-                    Product.price.isnot(None),
-                    Product.price > 0,
-                    Product.price <= 50000,
-                ),
-            ),
+        # Базовый фильтр: в наличии + активный
+        # Используем ProductStock для проверки наличия,
+        # т.к. Product.quantity может быть не синхронизирован (Content API не возвращает остатки)
+        stock_subquery = (
+            db.session.query(
+                ProductStock.product_id,
+                db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+            )
+            .group_by(ProductStock.product_id)
+            .subquery()
         )
-        if used_product_ids:
-            query = query.filter(~Product.id.in_(used_product_ids))
-        product = query.order_by(sa_func.random()).first()
-
-        if not product:
-            # Fallback: без исключений (все уже использованы)
-            product = Product.query.filter(
+        query = (
+            Product.query
+            .outerjoin(stock_subquery, Product.id == stock_subquery.c.product_id)
+            .filter(
                 Product.seller_id == factory.seller_id,
                 Product.is_active == True,
-                Product.quantity > 0,
-            ).order_by(sa_func.random()).first()
-            if not product:
-                return jsonify({'error': 'Нет доступных товаров'}), 404
+                db.or_(
+                    stock_subquery.c.total_qty > 0,
+                    Product.quantity > 0,
+                ),
+            )
+        )
+        if hard_exclude:
+            query = query.filter(~Product.id.in_(hard_exclude))
+
+        # Берём все подходящие товары и сортируем по давности использования
+        candidates = query.all()
+        if not candidates:
+            return jsonify({'error': 'Нет доступных товаров (в наличии)'}), 404
+
+        # Сортируем: неиспользованные первые, затем давно использованные
+        def _sort_key(p):
+            last = product_last_used.get(p.id)
+            if last is None:
+                return datetime.min
+            return last
+        candidates.sort(key=_sort_key)
+
+        # Из топ-5 наименее использованных берём рандомный
+        top = candidates[:min(5, len(candidates))]
+        product = _random.choice(top)
 
         pd = service._product_to_dict(product)
         return jsonify({'product': pd})
@@ -684,13 +728,13 @@ def register_content_factory_routes(app):
             item.status = 'failed'
             item.error_message = str(e)
             db.session.commit()
-            return jsonify({'error': str(e)}), 400
+            return jsonify({'error': safe_error_message(e)}), 400
         except Exception as e:
             logger.error(f"Publish error: {e}", exc_info=True)
             item.status = 'failed'
             item.error_message = str(e)
             db.session.commit()
-            return jsonify({'error': f'Ошибка публикации: {e}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/content-factory/items/<int:item_id>/edit', methods=['POST'])
     @login_required
@@ -920,9 +964,9 @@ def register_content_factory_routes(app):
                         'jpeg_bytes': jpeg_size,
                     })
                 except Exception as e:
-                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': str(e)})
+                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': safe_error_message(e)})
         except Exception as e:
-            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': str(e)})
+            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': safe_error_message(e)})
 
         # Шаг 4: Проверяем VK аккаунт
         data = request.get_json(silent=True) or {}
@@ -965,7 +1009,7 @@ def register_content_factory_routes(app):
                             'upload_url_prefix': upload_url[:80] + '...' if upload_url else 'EMPTY',
                         })
                 except Exception as e:
-                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': str(e)})
+                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': safe_error_message(e)})
             else:
                 result['steps'].append({'step': 'vk_account', 'status': 'FAIL', 'error': f'Account {social_account_id} not found'})
         else:
@@ -1084,7 +1128,7 @@ def register_content_factory_routes(app):
         except Exception as e:
             db.session.rollback()
             logger.error(f"Factory delete error: {e}", exc_info=True)
-            return jsonify({'error': f'Ошибка удаления: {e}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # ================================================================
     # API: Контент-календарь

@@ -48,9 +48,18 @@ def auto_generate_content(flask_app):
                     _auto_generate_for_factory(factory, now, db)
                 except Exception as e:
                     logger.error(f"Auto-generate error for factory {factory.id}: {e}", exc_info=True)
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
         except Exception as e:
             logger.error(f"Auto-generate global error: {e}", exc_info=True)
+            try:
+                from models import db
+                db.session.remove()
+            except Exception:
+                pass
 
 
 def _auto_generate_for_factory(factory, now, db):
@@ -82,33 +91,66 @@ def _auto_generate_for_factory(factory, now, db):
 
     service = ContentFactoryService()
 
-    # Подбираем товар
-    # Собираем ID товаров, для которых уже есть недавние посты (за последние 7 дней)
-    recent_cutoff = now - timedelta(days=7)
-    recent_items = ContentItem.query.filter(
+    # Подбираем товар с ротацией — приоритет товарам, которые давно не использовались
+    # Собираем все использованные товары с датой последнего использования
+    all_factory_items = ContentItem.query.filter(
         ContentItem.factory_id == factory.id,
-        ContentItem.created_at >= recent_cutoff,
     ).all()
 
-    exclude_ids = set()
-    for item in recent_items:
-        exclude_ids.update(item.get_product_ids())
+    # product_id -> дата последнего поста с этим товаром
+    product_last_used = {}
+    for item in all_factory_items:
+        for pid in item.get_product_ids():
+            prev = product_last_used.get(pid)
+            if prev is None or item.created_at > prev:
+                product_last_used[pid] = item.created_at
 
-    products = service.select_products(factory, limit=5, exclude_product_ids=exclude_ids)
+    # Исключаем товары, использованные за последние 3 дня (жёсткий кулдаун)
+    hard_cooldown = now - timedelta(days=3)
+    exclude_ids = {pid for pid, dt in product_last_used.items() if dt >= hard_cooldown}
+
+    products = service.select_products(factory, limit=20, exclude_product_ids=exclude_ids)
     if not products:
-        # Если все товары использованы за 7 дней — берём без исключений
-        products = service.select_products(factory, limit=5)
+        # Смягчаем: исключаем только за последние сутки
+        soft_cooldown = now - timedelta(days=1)
+        exclude_ids = {pid for pid, dt in product_last_used.items() if dt >= soft_cooldown}
+        products = service.select_products(factory, limit=20, exclude_product_ids=exclude_ids)
+    if not products:
+        # Крайний случай: берём всё, но сортируем по давности использования
+        products = service.select_products(factory, limit=20)
 
     if not products:
         logger.warning(f"Auto-generate: no products for factory {factory.id}")
         return
 
-    # Рандомный товар
-    product = _random.choice(products)
+    # Фильтруем: выбираем только товары с фотографиями
+    products_with_photos = [p for p in products if p.get('photos')]
+    if not products_with_photos:
+        logger.warning(
+            f"Auto-generate: {len(products)} products found but none have photos "
+            f"for factory {factory.id}"
+        )
+        products_with_photos = products
+
+    # Сортируем по давности использования (давно не использованные — первые)
+    def _last_used_sort(p):
+        last = product_last_used.get(p['id'])
+        if last is None:
+            return datetime.min  # Никогда не использовался — максимальный приоритет
+        return last
+
+    products_with_photos.sort(key=_last_used_sort)
+
+    # Берём из топ-5 наименее использованных, чтобы добавить немного рандома
+    top_candidates = products_with_photos[:5]
+    product = _random.choice(top_candidates)
     product_id = product.get('id')
     if not product_id:
         logger.warning(f"Auto-generate: product without id for factory {factory.id}")
         return
+
+    photo_count = len(product.get('photos', []))
+    logger.info(f"Auto-generate: selected product {product_id} with {photo_count} photos")
 
     # Рандомный тип контента из настроек фабрики
     content_types = factory.get_content_types()
@@ -174,9 +216,18 @@ def auto_publish_content(flask_app):
                     _auto_publish_for_factory(factory, now, db)
                 except Exception as e:
                     logger.error(f"Auto-publish error for factory {factory.id}: {e}", exc_info=True)
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
         except Exception as e:
             logger.error(f"Auto-publish global error: {e}", exc_info=True)
+            try:
+                from models import db
+                db.session.remove()
+            except Exception:
+                pass
 
 
 def _auto_publish_for_factory(factory, now, db):
@@ -258,12 +309,24 @@ def _auto_publish_for_factory(factory, now, db):
         db.session.commit()
 
     except ValueError as e:
-        item.status = 'failed'
-        item.error_message = str(e)
-        db.session.commit()
+        try:
+            item.status = 'failed'
+            item.error_message = str(e)
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
         logger.error(f"Auto-publish ValueError for item {item.id}: {e}")
     except Exception as e:
-        item.status = 'failed'
-        item.error_message = str(e)
-        db.session.commit()
+        try:
+            item.status = 'failed'
+            item.error_message = str(e)
+            db.session.commit()
+        except Exception:
+            try:
+                db.session.rollback()
+            except Exception:
+                db.session.remove()
         logger.error(f"Auto-publish error for item {item.id}: {e}", exc_info=True)

@@ -55,8 +55,15 @@ with app.app_context():
     if not password:
         import secrets as _s
         password = _s.token_urlsafe(16)
-        print(f"⚠️  ADMIN_PASSWORD не задан! Сгенерирован случайный пароль: {password}")
-        print(f"   ОБЯЗАТЕЛЬНО сохраните его и задайте ADMIN_PASSWORD в .env!")
+        # Записываем пароль в защищённый файл вместо stdout
+        _pwd_file = '/app/data/.generated_admin_password'
+        with open(_pwd_file, 'w') as _f:
+            _f.write(password)
+        import os as _os
+        _os.chmod(_pwd_file, 0o600)
+        print(f"⚠️  ADMIN_PASSWORD не задан! Сгенерирован случайный пароль.")
+        print(f"   Пароль записан в: {_pwd_file}")
+        print(f"   ОБЯЗАТЕЛЬНО задайте ADMIN_PASSWORD в .env!")
 
     # Ищем по username, по email или первого админа
     admin_user = (
@@ -120,6 +127,7 @@ python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards mig
 python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
 python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
 python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
+python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
 python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"

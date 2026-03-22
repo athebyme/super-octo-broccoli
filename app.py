@@ -505,10 +505,45 @@ if not _app_secret:
 app.secret_key = _app_secret
 app.jinja_env.filters["basename"] = lambda value: Path(value).name if value else ""
 
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB
+app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 час
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600
+
+# CSRF-защита
+from flask_wtf.csrf import CSRFProtect
+csrf = CSRFProtect(app)
+
+# Простая аутентификация через shared secret (если задан)
+_CALCULATOR_AUTH_TOKEN = os.environ.get("CALCULATOR_AUTH_TOKEN", "")
+
 
 @app.before_request
 def _ensure_setup() -> None:
     ensure_directories()
+
+
+@app.before_request
+def _check_auth() -> None:
+    """Базовая аутентификация калькулятора через токен (если задан)."""
+    if not _CALCULATOR_AUTH_TOKEN:
+        return  # Если токен не задан, доступ открыт (для dev/local)
+    # Пропускаем для статики
+    if request.path.startswith('/static/'):
+        return
+    # Проверяем сессию
+    if request.cookies.get('calc_auth') == _CALCULATOR_AUTH_TOKEN:
+        return
+    # Проверяем query param (для первого доступа)
+    if request.args.get('token') == _CALCULATOR_AUTH_TOKEN:
+        from flask import make_response
+        resp = make_response(redirect(request.path))
+        resp.set_cookie('calc_auth', _CALCULATOR_AUTH_TOKEN, httponly=True, samesite='Lax', max_age=86400)
+        return resp
+    from flask import abort
+    abort(401, "Требуется авторизация. Добавьте ?token=<CALCULATOR_AUTH_TOKEN> к URL.")
 
 
 @app.after_request
@@ -521,6 +556,15 @@ def _set_security_headers(response):
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "font-src 'self' https://cdn.jsdelivr.net; "
+        "frame-ancestors 'none'"
+    )
     return response
 
 
@@ -681,8 +725,19 @@ def download_latest_price_catalog(url: str = SUPPLIER_URL) -> Path:
     return destination
 
 
+_last_refresh: Optional[datetime] = None
+_REFRESH_COOLDOWN_SECONDS = 60  # Минимальный интервал между обновлениями
+
+
 @app.route("/refresh-price", methods=["POST"])
 def refresh_price() -> str:
+    global _last_refresh
+    # Rate limiting: не чаще раза в минуту
+    if _last_refresh and (datetime.now() - _last_refresh).total_seconds() < _REFRESH_COOLDOWN_SECONDS:
+        flash("Слишком частые запросы. Подождите минуту.", "warning")
+        return redirect(url_for("index"))
+    _last_refresh = datetime.now()
+
     try:
         price_path = download_latest_price_catalog()
     except requests.HTTPError as exc:

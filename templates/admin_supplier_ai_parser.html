@@ -176,6 +176,7 @@
 
     <!-- Фильтры и быстрый выбор -->
     <form method="GET" class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-6">
+        <!-- Строка 1: основные фильтры -->
         <div class="flex gap-3 items-end flex-wrap">
             <div class="flex-1 min-w-[200px]">
                 <label class="block text-xs text-gray-500 mb-1">Поиск</label>
@@ -221,8 +222,61 @@
                     class="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-200">Найти и выбрать все</button>
             </div>
         </div>
+
+        <!-- Строка 2: расширенные фильтры -->
+        <div class="flex gap-3 items-end flex-wrap mt-3 pt-3 border-t border-gray-100">
+            <div class="min-w-[150px]">
+                <label class="block text-xs text-gray-500 mb-1">Категория</label>
+                <select name="category" class="rounded-lg border-gray-300 text-sm border px-3 py-2 max-w-[200px]">
+                    <option value="">Все категории</option>
+                    {% for cat in categories_list %}
+                    <option value="{{ cat }}" {{ 'selected' if category_filter==cat }}>{{ cat[:35] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="min-w-[130px]">
+                <label class="block text-xs text-gray-500 mb-1">Бренд</label>
+                <select name="brand" class="rounded-lg border-gray-300 text-sm border px-3 py-2 max-w-[180px]">
+                    <option value="">Все бренды</option>
+                    {% for br in brands_list %}
+                    <option value="{{ br }}" {{ 'selected' if brand_filter==br }}>{{ br[:25] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">AI модель</label>
+                <select name="ai_model" class="rounded-lg border-gray-300 text-sm border px-3 py-2 max-w-[180px]">
+                    <option value="">Все модели</option>
+                    {% for m in models_list %}
+                    <option value="{{ m }}" {{ 'selected' if model_filter==m }}>{{ m.split('/')[-1][:20] }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Описание</label>
+                <select name="has_description" class="rounded-lg border-gray-300 text-sm border px-3 py-2">
+                    <option value="">Все</option>
+                    <option value="yes" {{ 'selected' if has_description=='yes' }}>Есть</option>
+                    <option value="no" {{ 'selected' if has_description=='no' }}>Нет</option>
+                </select>
+            </div>
+            <div class="flex gap-1 items-end">
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Цена от</label>
+                    <input type="number" name="price_min" value="{{ price_min }}" placeholder="0" min="0" step="100"
+                        class="w-24 rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <span class="text-gray-400 pb-2">—</span>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">до</label>
+                    <input type="number" name="price_max" value="{{ price_max }}" placeholder="999999" min="0" step="100"
+                        class="w-24 rounded-lg border-gray-300 text-sm border px-3 py-2 focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+            </div>
+        </div>
+
         <!-- Быстрые пресеты -->
-        <div class="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+        <div class="flex gap-2 mt-3 pt-3 border-t border-gray-100 flex-wrap">
             <span class="text-xs text-gray-400 py-1">Пресеты:</span>
             <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, stock_status='in_stock', parse_status='not_parsed', per_page=50, auto_select=1) }}"
                 class="px-3 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100">
@@ -235,6 +289,10 @@
             <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, parse_status='not_parsed', per_page=100, auto_select=1) }}"
                 class="px-3 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100">
                 Все не спарсены (100)
+            </a>
+            <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id, stock_status='in_stock', has_description='no', per_page=100, auto_select=1) }}"
+                class="px-3 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100">
+                В наличии + без описания (100)
             </a>
             <a href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}"
                 class="px-3 py-1 text-xs rounded-full bg-gray-50 text-gray-500 border border-gray-200 hover:bg-gray-100">
@@ -347,12 +405,12 @@
                         </td>
                         <td class="px-4 py-3 text-center" id="parse-status-{{ product.id }}">
                             {% if product.ai_parsed_at %}
-                            {% set pdata = product.get_ai_parsed_data() %}
+                            {% set fill_val = product.ai_fill_pct or 0 %}
                             <div class="flex flex-col items-center gap-0.5">
                                 <span
-                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
+                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {% if fill_val >= 70 %}bg-green-100 text-green-700{% elif fill_val >= 40 %}bg-yellow-100 text-yellow-700{% else %}bg-red-100 text-red-600{% endif %}"
                                     title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
-                                    {{ '%.0f'|format(pdata.get('parsing_meta', {}).get('fill_percentage', 0)) }}%
+                                    {{ '%.0f'|format(fill_val) }}%
                                 </span>
                                 {% if product.ai_model_used %}
                                 <span class="text-[10px] text-gray-400 truncate max-w-[120px]"
@@ -595,12 +653,23 @@
             const stockStatus = params.get('stock_status') || '';
             const parseStatus = params.get('parse_status') || '';
             const fillMax = params.get('fill_max') || '';
+            const category = params.get('category') || '';
+            const brand = params.get('brand') || '';
+            const aiModel = params.get('ai_model') || '';
+            const hasDesc = params.get('has_description') || '';
+            const priceMin = params.get('price_min') || '';
+            const priceMax = params.get('price_max') || '';
 
             const filterParts = [];
             if (search) filterParts.push(`поиск: "${search}"`);
             if (stockStatus) filterParts.push(`наличие: ${stockStatus}`);
             if (parseStatus) filterParts.push(`AI: ${parseStatus}`);
             if (fillMax) filterParts.push(`заполнение < ${fillMax}%`);
+            if (category) filterParts.push(`категория: ${category}`);
+            if (brand) filterParts.push(`бренд: ${brand}`);
+            if (aiModel) filterParts.push(`модель: ${aiModel}`);
+            if (hasDesc) filterParts.push(`описание: ${hasDesc === 'yes' ? 'есть' : 'нет'}`);
+            if (priceMin || priceMax) filterParts.push(`цена: ${priceMin || '0'}-${priceMax || '...'}`);
             const filterDesc = filterParts.length > 0 ? filterParts.join(', ') : 'без фильтров (ВСЕ товары!)';
 
             const limitStr = prompt(
@@ -617,6 +686,12 @@
             form.append('stock_status', stockStatus);
             form.append('parse_status', parseStatus);
             form.append('fill_max', fillMax);
+            if (category) form.append('category', category);
+            if (brand) form.append('brand', brand);
+            if (aiModel) form.append('ai_model', aiModel);
+            if (hasDesc) form.append('has_description', hasDesc);
+            if (priceMin) form.append('price_min', priceMin);
+            if (priceMax) form.append('price_max', priceMax);
             if (limit > 0) form.append('limit', limit);
             form.append('max_workers', document.getElementById('maxWorkers').value);
             const modelVal = document.getElementById('modelOverride').value;

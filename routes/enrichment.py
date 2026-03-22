@@ -10,6 +10,7 @@ from flask_login import login_required, current_user
 
 from models import db, Product, ImportedProduct, EnrichmentJob, SupplierProduct
 from services.supplier_enrichment import get_enrichment_service
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ def register_enrichment_routes(app):
         try:
             wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
         except Exception as e:
-            return jsonify({'error': f'WB client error: {e}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
         try:
             # Если есть выборочные фото — используем selective стратегию
@@ -180,7 +181,7 @@ def register_enrichment_routes(app):
                 return jsonify(result)
         except Exception as e:
             logger.error(f"[Enrich] apply_enrichment error for product {product_id}: {e}", exc_info=True)
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
     @app.route('/api/products/<int:product_id>/supplier-photos', methods=['GET'])
     @login_required
@@ -489,7 +490,7 @@ def register_enrichment_routes(app):
         try:
             wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
         except Exception as e:
-            return jsonify({'error': f'WB client error: {e}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
         service = get_enrichment_service()
         job_id = service.start_bulk_enrichment(
@@ -730,7 +731,7 @@ def register_enrichment_routes(app):
             })
         except Exception as e:
             logger.error(f"[Enrich] Photo upload error: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 def _generate_placeholder_image():

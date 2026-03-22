@@ -160,7 +160,7 @@
                                 <span class="text-indigo-600 cursor-pointer hover:underline"
                                       title="Категория WB: {{ product.wb_category_name }} (ID: {{ product.wb_subject_id }}). Нажмите чтобы изменить"
                                       id="cat-label-{{ product.id }}"
-                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, '{{ product.wb_category_name|e }}', {{ product.wb_subject_id or 0 }})">{{ product.wb_category_name[:30] }}</span>
+                                      onclick="openCategoryModal({{ product.id }}, {{ supplier.id }}, {{ product.wb_category_name | tojson }}, {{ product.wb_subject_id or 0 }})">{{ product.wb_category_name[:30] }}</span>
                                 {% else %}
                                 <span class="text-gray-400 cursor-pointer hover:underline hover:text-indigo-500 italic"
                                       id="cat-label-{{ product.id }}"

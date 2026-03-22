@@ -173,7 +173,7 @@
                         <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM4.332 8.027a6.012 6.012 0 011.912-2.706C6.512 5.73 6.974 6 7.5 6A1.5 1.5 0 019 7.5V8a2 2 0 004 0 2 2 0 011.523-1.943A5.977 5.977 0 0116 10c0 .34-.028.675-.083 1H15a2 2 0 00-2 2v2.197A5.973 5.973 0 0110 16v-2a2 2 0 00-2-2 2 2 0 01-2-2 2 2 0 00-1.668-1.973z" clip-rule="evenodd"></path>
                         </svg>
-                        <strong>Бренд:</strong>&nbsp;{{ rec.brand }}
+                        <strong>Бренд:</strong>&nbsp;{{ rec.brand or rec.cards[0].brand or '—' }}
                     </span>
                     <span class="flex items-center">
                         <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
@@ -213,12 +213,12 @@
                 <div class="flex justify-end">
                     {% set nm_ids_list = rec.cards | map(attribute='nm_id') | list %}
                     {% set target_nm_id = rec.suggested_target.nm_id %}
-                    <a href="{{ url_for('products_merge', subject_id=rec.subject_id, brand=rec.brand, auto_select_nm_ids=nm_ids_list|join(','), auto_target_nm_id=target_nm_id) }}"
-                       class="inline-flex items-center px-6 py-3 bg-white text-[#1a1a1a] font-medium rounded-md hover:bg-gray-100 transition shadow-sm">
+                    <a href="{{ url_for('products_merge_confirm', target_nm_id=target_nm_id, nm_ids=nm_ids_list|join(','), reason=rec.reason, score=rec.score) }}"
+                       class="inline-flex items-center px-6 py-3 bg-[#0a0a0a] text-white font-medium rounded-md hover:bg-[#1a1a1a] transition shadow-sm">
                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                         </svg>
-                        Перейти к объединению
+                        Объединить {{ rec.cards|length }} карточек
                     </a>
                 </div>
             </div>

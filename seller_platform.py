@@ -84,6 +84,7 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 # Отключите только если HTTPS не используется (небезопасно для продакшена)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB макс. размер запроса (защита от DoS)
 
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
@@ -96,6 +97,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'timeout': 30,  # Увеличенный timeout до 30 секунд
         'check_same_thread': False,  # Разрешить использование из разных потоков
     },
+    'pool_size': 20,        # Базовый размер пула соединений (дефолт 5 — мало для фоновых потоков)
+    'max_overflow': 30,     # Доп. соединения сверх pool_size при пиковой нагрузке
+    'pool_timeout': 60,     # Ждать свободное соединение до 60 сек (дефолт 30)
     'pool_pre_ping': True,  # Проверка соединений перед использованием
     'pool_recycle': 3600,   # Переиспользование соединений каждый час
 }
@@ -253,6 +257,15 @@ def after_request(response):
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "img-src 'self' data: https://basket-*.wbbasket.ru https://*.wbbasket.ru; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'"
+    )
 
     # Запрещаем кэширование для аутентифицированных страниц
     if hasattr(response, 'cache_control'):
@@ -283,10 +296,11 @@ def load_user(user_id):
 
 
 def admin_required(f):
-    """Декоратор для проверки прав администратора"""
+    """Декоратор для проверки прав администратора (включает login_required)"""
     @wraps(f)
+    @login_required
     def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or not current_user.is_admin:
+        if not current_user.is_admin:
             flash('У вас нет прав для доступа к этой странице', 'danger')
             return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
@@ -295,7 +309,15 @@ def admin_required(f):
 
 # ============= ВАЛИДАЦИЯ ПАРОЛЕЙ =============
 
-_WEAK_PASSWORDS = {'admin123', 'password', '123456', 'qwerty', 'admin', 'letmein', '12345678', 'password1'}
+_WEAK_PASSWORDS = {
+    'admin123', 'password', '123456', 'qwerty', 'admin', 'letmein', '12345678', 'password1',
+    'password123', '123456789', '1234567890', 'welcome', 'welcome1', 'abc123', 'monkey',
+    'master', 'dragon', 'login', 'princess', 'football', 'shadow', 'sunshine', 'trustno1',
+    'iloveyou', 'batman', 'access', 'hello', 'charlie', 'donald', '123123', '654321',
+    'qwerty123', 'michael', 'hunter', 'test123', 'pass123', 'admin1', 'root', 'toor',
+    'pass', 'test', 'guest', 'master123', 'changeme', 'secret', '1q2w3e4r', '1qaz2wsx',
+    'zaq12wsx', 'qazwsx', 'passw0rd', 'p@ssw0rd', 'p@ssword', 'administrator',
+}
 
 
 def validate_password(password: str) -> Optional[str]:
@@ -316,24 +338,37 @@ def validate_password(password: str) -> Optional[str]:
 _login_attempts: Dict[str, List[float]] = {}
 _LOGIN_MAX_ATTEMPTS = 5  # макс. попыток
 _LOGIN_WINDOW_SECONDS = 300  # за 5 минут
+_LOGIN_CLEANUP_THRESHOLD = 1000  # Очистка словаря при превышении кол-ва записей
+_login_lock = threading.Lock()
 
 
 def _check_login_rate_limit(ip: str) -> bool:
     """Проверка rate limit для логина. Возвращает True если лимит превышен."""
     now = time.time()
-    attempts = _login_attempts.get(ip, [])
-    # Убираем старые попытки
-    attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
-    _login_attempts[ip] = attempts
-    return len(attempts) >= _LOGIN_MAX_ATTEMPTS
+    with _login_lock:
+        # Периодическая очистка от устаревших записей (защита от утечки памяти)
+        if len(_login_attempts) > _LOGIN_CLEANUP_THRESHOLD:
+            stale_ips = [
+                k for k, v in _login_attempts.items()
+                if not v or (now - v[-1]) > _LOGIN_WINDOW_SECONDS
+            ]
+            for k in stale_ips:
+                del _login_attempts[k]
+
+        attempts = _login_attempts.get(ip, [])
+        # Убираем старые попытки
+        attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
+        _login_attempts[ip] = attempts
+        return len(attempts) >= _LOGIN_MAX_ATTEMPTS
 
 
 def _record_login_attempt(ip: str) -> None:
     """Записать попытку входа."""
     now = time.time()
-    if ip not in _login_attempts:
-        _login_attempts[ip] = []
-    _login_attempts[ip].append(now)
+    with _login_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = []
+        _login_attempts[ip].append(now)
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -1636,11 +1671,18 @@ def db_commit_with_retry(session, max_retries=3, initial_delay=0.5):
             if 'database is locked' in str(e).lower():
                 if attempt < max_retries - 1:
                     delay = initial_delay * (2 ** attempt)  # Экспоненциальная задержка
-                    app.logger.warning(f"⚠️ Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
+                    app.logger.warning(f"Database locked, retry {attempt + 1}/{max_retries} after {delay}s")
                     time.sleep(delay)
-                    session.rollback()
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                 else:
-                    app.logger.error(f"❌ Database locked after {max_retries} retries")
+                    app.logger.error(f"Database locked after {max_retries} retries")
+                    try:
+                        session.rollback()
+                    except Exception:
+                        session.remove()
                     raise
             else:
                 # Другая ошибка - пробрасываем сразу
@@ -1724,8 +1766,11 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                         db_commit_with_retry(db.session)
                         app.logger.info(f"✅ Deduplication complete, removed duplicates for {len(dupes)} nm_ids")
                 except Exception as dedup_err:
-                    app.logger.warning(f"⚠️ Deduplication failed (non-critical): {dedup_err}")
-                    db.session.rollback()
+                    app.logger.warning(f"Deduplication failed (non-critical): {dedup_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
                 # Статистика
                 created_count = 0
@@ -1858,18 +1903,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                             app.logger.info(f"💾 Batch saved: {processed_in_batch} products ({created_count} new, {updated_count} updated so far)")
                             processed_in_batch = 0
                         except Exception as commit_error:
-                            app.logger.warning(f"⚠️ Batch commit failed, rolling back: {commit_error}")
-                            db.session.rollback()
+                            app.logger.warning(f"Batch commit failed, rolling back: {commit_error}")
+                            try:
+                                db.session.rollback()
+                            except Exception:
+                                db.session.remove()
                             # Продолжаем со следующей batch
 
                 # Сохраняем оставшиеся изменения
                 try:
                     db_commit_with_retry(db.session)
                     if processed_in_batch > 0:
-                        app.logger.info(f"💾 Final batch saved: {processed_in_batch} products")
+                        app.logger.info(f"Final batch saved: {processed_in_batch} products")
                 except Exception as commit_error:
-                    app.logger.warning(f"⚠️ Final commit failed: {commit_error}")
-                    db.session.rollback()
+                    app.logger.warning(f"Final commit failed: {commit_error}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 
@@ -1967,6 +2018,28 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                     db_commit_with_retry(db.session)
                     app.logger.info(f"💾 Stocks saved: {stocks_created} new, {stocks_updated} updated")
+
+                    # Обновляем Product.quantity из суммы складских остатков
+                    try:
+                        seller_products = Product.query.filter_by(seller_id=seller.id).all()
+                        product_ids = [p.id for p in seller_products]
+                        if product_ids:
+                            stock_totals = (
+                                db.session.query(
+                                    ProductStock.product_id,
+                                    db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                                )
+                                .filter(ProductStock.product_id.in_(product_ids))
+                                .group_by(ProductStock.product_id)
+                                .all()
+                            )
+                            qty_map = {pid: int(total) for pid, total in stock_totals}
+                            for p in seller_products:
+                                p.quantity = qty_map.get(p.id, 0)
+                            db_commit_with_retry(db.session)
+                            app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
+                    except Exception as qty_error:
+                        app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
 
                 except Exception as stock_error:
                     app.logger.warning(f"⚠️ Failed to fetch stocks from Statistics API: {stock_error}")
@@ -2279,6 +2352,28 @@ def sync_warehouse_stocks():
 
             # Сохраняем все изменения
             db.session.commit()
+
+            # Обновляем Product.quantity из суммы складских остатков
+            try:
+                seller_products = Product.query.filter_by(seller_id=current_user.seller.id).all()
+                product_ids = [p.id for p in seller_products]
+                if product_ids:
+                    stock_totals = (
+                        db.session.query(
+                            ProductStock.product_id,
+                            db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+                        )
+                        .filter(ProductStock.product_id.in_(product_ids))
+                        .group_by(ProductStock.product_id)
+                        .all()
+                    )
+                    qty_map = {pid: int(total) for pid, total in stock_totals}
+                    for p in seller_products:
+                        p.quantity = qty_map.get(p.id, 0)
+                    db.session.commit()
+                    app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
+            except Exception as qty_error:
+                app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
 
             app.logger.info(f"💾 Сохранено остатков в БД: {created_count} новых, {updated_count} обновлено")
 
@@ -2910,18 +3005,12 @@ def products_bulk_edit():
 
         app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
 
-        # Логируем все данные формы для отладки
-        app.logger.info(f"📋 Form data: operation={operation}")
-        app.logger.info(f"📋 Form value field: '{operation_value}'")
-        app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
-        app.logger.info(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
-        app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
-
-        # Показываем ВСЕ поля (кроме product_ids) для отладки
-        app.logger.info("📋 All form fields:")
-        for key, value in request.form.items():
-            if key != 'product_ids':
-                app.logger.info(f"   {key} = '{value}'")
+        # Логируем данные формы для отладки (только в debug)
+        app.logger.debug(f"📋 Form data: operation={operation}")
+        app.logger.debug(f"📋 Form value field: '{operation_value}'")
+        app.logger.debug(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
+        app.logger.debug(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
+        app.logger.debug(f"📋 All form keys: {list(request.form.keys())}")
 
         try:
             with WildberriesAPIClient(
@@ -5995,6 +6084,7 @@ def _run_startup_migrations():
     migrations = [
         # (таблица, колонка, тип)
         ('ai_parse_jobs', 'model_used', 'VARCHAR(100)'),
+        ('ai_parse_jobs', 'heartbeat_at', 'DATETIME'),
         # Brand registry columns
         ('imported_products', 'resolved_brand_id', 'INTEGER REFERENCES brands(id)'),
         ('imported_products', 'brand_status', 'VARCHAR(20)'),
@@ -6013,6 +6103,8 @@ def _run_startup_migrations():
         ('suppliers', 'ai_proxy_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
+        # Content factory AI model selection
+        ('content_factories', 'ai_model', 'VARCHAR(100)'),
     ]
 
     for table, column, col_type in migrations:
@@ -6028,19 +6120,49 @@ def _run_startup_migrations():
             except Exception:
                 db.session.rollback()
 
+    # Помечаем зависшие AI parse задачи как failed при старте
+    # (daemon-потоки не выживают при рестарте процесса)
+    if 'ai_parse_jobs' in insp.get_table_names():
+        try:
+            result = db.session.execute(db.text(
+                "UPDATE ai_parse_jobs SET status = 'failed', "
+                "error_message = 'Задача зависла при перезапуске сервера. "
+                "Воркер-поток был убит. Токены за необработанные товары могли быть списаны.' "
+                "WHERE status IN ('pending', 'running')"
+            ))
+            if result.rowcount > 0:
+                db.session.commit()
+                logger.warning(f"[Startup] Marked {result.rowcount} stale AI parse jobs as failed")
+            else:
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    # Валидация SQL-идентификаторов (защита от инъекций в DDL)
+    import re as _re
+    _SQL_IDENT_RE = _re.compile(r'^[a-zA-Z_][a-zA-Z0-9_, ]*$')
+
+    def _safe_create_index(idx_name, table, columns):
+        """Создаёт индекс с валидацией идентификаторов."""
+        for val in (idx_name, table, columns):
+            if not _SQL_IDENT_RE.match(val):
+                logger.error(f"[Startup] Invalid SQL identifier in index creation: {val!r}")
+                return
+        try:
+            db.session.execute(db.text(
+                f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'
+            ))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     # Create indexes for brand registry columns
     indexes = [
         ('idx_ip_resolved_brand', 'imported_products', 'resolved_brand_id'),
         ('idx_sp_resolved_brand', 'supplier_products', 'resolved_brand_id'),
     ]
     for idx_name, table, column in indexes:
-        try:
-            db.session.execute(db.text(
-                f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})'
-            ))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
+        _safe_create_index(idx_name, table, column)
 
     # Создаём таблицу prohibited_words если её нет
     if 'prohibited_words' not in insp.get_table_names():
@@ -6239,11 +6361,7 @@ def _run_startup_migrations():
     ]
     for idx_name, table, columns in agent_indexes:
         if table in insp.get_table_names():
-            try:
-                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            _safe_create_index(idx_name, table, columns)
 
     # Индексы для таблиц аналитики и финансов
     analytics_indexes = [
@@ -6253,11 +6371,7 @@ def _run_startup_migrations():
     ]
     for idx_name, table, columns in analytics_indexes:
         if table in insp.get_table_names():
-            try:
-                db.session.execute(db.text(f'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})'))
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+            _safe_create_index(idx_name, table, columns)
 
 
 # ============= НОВЫЕ СТРАНИЦЫ: АНАЛИТИКА, ФИНАНСЫ, ПРОФИЛЬ, УВЕДОМЛЕНИЯ =============
@@ -6334,7 +6448,7 @@ def api_profile_ai_settings_save():
         return jsonify({'success': True})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
 
 
 @app.route('/api/profile/ai-test', methods=['POST'])
@@ -6387,7 +6501,7 @@ def api_profile_ai_test():
                 'error': client.last_error or 'Пустой ответ от AI',
             })
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Внутренняя ошибка сервера'}), 500
 
 
 @app.route('/api/ai/models')
@@ -6494,7 +6608,7 @@ def api_notifications_list():
     except Exception as e:
         logger.error(f"[Notifications] Error loading notifications for seller {seller_id}: {e}")
         db.session.rollback()
-        return jsonify({'items': [], 'total': 0, 'unread_count': 0, 'error': str(e)}), 200
+        return jsonify({'items': [], 'total': 0, 'unread_count': 0, 'error': 'Ошибка загрузки уведомлений'}), 200
 
 
 @app.route('/api/notifications/unread-count')

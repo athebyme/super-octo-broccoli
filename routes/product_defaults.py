@@ -12,6 +12,7 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
 from models import db, ProductDefaults
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ def register_product_defaults_routes(app):
         except Exception as e:
             logger.error(f"Ошибка сохранения характеристик: {e}")
             db.session.rollback()
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
     @app.route('/settings/product-defaults/save-category-characteristics', methods=['POST'])
     @login_required
@@ -261,7 +262,7 @@ def register_product_defaults_routes(app):
         except Exception as e:
             logger.error(f"Ошибка сохранения характеристик категории: {e}")
             db.session.rollback()
-            return jsonify({'success': False, 'error': str(e)}), 500
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
     # ==================== ГЛОБАЛЬНОЕ МЕДИА ====================
 

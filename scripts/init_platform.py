@@ -53,7 +53,11 @@ def create_admin(non_interactive=False):
         # Неинтерактивный режим - используем значения по умолчанию или из окружения
         username = username or 'admin'
         email = email or 'admin@example.com'
-        password = password or 'admin123'
+        if not password:
+            import secrets as _s
+            password = _s.token_urlsafe(16)
+            print(f"  ⚠️  ADMIN_PASSWORD не задан! Сгенерирован: {password}")
+            print(f"     Сохраните пароль и задайте ADMIN_PASSWORD в окружении!")
         print(f"  Используется пользователь: {username}")
         print(f"  Email: {email}")
     else:

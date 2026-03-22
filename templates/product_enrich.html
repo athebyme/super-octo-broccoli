@@ -9,7 +9,7 @@
    ============================================================ #}
 {% if not imported_product %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-<div x-data="supplierSearchApp({{ suggested_ext_id or 'null' }}, {{ product.id }})" class="max-w-2xl mx-auto">
+<div x-data="supplierSearchApp({{ (suggested_ext_id or None) | tojson }}, {{ product.id | tojson }})" class="max-w-2xl mx-auto">
   <!-- Hero Banner -->
   <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
     <div class="relative flex items-center gap-3">

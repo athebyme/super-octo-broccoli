@@ -260,9 +260,9 @@
 <script>
 function settingsForm() {
     return {
-        mode: '{{ settings.mode }}',
-        safeThreshold: {{ settings.safe_threshold_percent }},
-        warningThreshold: {{ settings.warning_threshold_percent }},
+        mode: {{ settings.mode | tojson }},
+        safeThreshold: {{ settings.safe_threshold_percent | tojson }},
+        warningThreshold: {{ settings.warning_threshold_percent | tojson }},
 
         init() {
             this.$watch('safeThreshold', (value) => {

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 from models import db, WBRealizationRow
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +219,7 @@ def register_finance_detail_routes(app):
 
         except Exception as e:
             logger.error(f"Error in finance detail analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/finance-detail/status')
     @login_required

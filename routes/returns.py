@@ -6,6 +6,7 @@ from collections import defaultdict
 from sqlalchemy import func, case, and_
 
 from models import db, WBSale, WBOrder
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ def register_returns_routes(app):
 
         except Exception as e:
             logger.error(f"Error in returns analytics: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/returns/status')
     @login_required

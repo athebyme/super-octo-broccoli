@@ -7,6 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Создаём непривилегированного пользователя
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -23,7 +26,11 @@ RUN pip install 'playwright==1.52.0' \
 
 COPY . .
 
-RUN chmod +x /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh && \
+    mkdir -p /app/uploads /app/processed /app/data && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('https://localhost:${PORT:-5001}/login', context=__import__('ssl')._create_unverified_context())" || exit 1

@@ -209,6 +209,7 @@ def migrate(db_path):
                 ("ai_parsed_at", "DATETIME"),
                 ("ai_model_used", "VARCHAR(100)"),
                 ("ai_marketplace_json", "TEXT"),
+                ("ai_fill_pct", "FLOAT"),
                 ("description_source", "VARCHAR(50)"),
                 # Marketplace columns
                 ("marketplace_fields_json", "TEXT"),
@@ -222,6 +223,30 @@ def migrate(db_path):
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_sp_resolved_brand ON supplier_products(resolved_brand_id)')
             except sqlite3.OperationalError:
                 pass
+
+        # Backfill ai_fill_pct из ai_parsed_data_json для ранее спарсенных товаров
+        try:
+            cursor.execute("""
+                SELECT id, ai_parsed_data_json FROM supplier_products
+                WHERE ai_parsed_data_json IS NOT NULL AND ai_fill_pct IS NULL
+            """)
+            rows = cursor.fetchall()
+            if rows:
+                import json as _json
+                backfilled = 0
+                for row_id, json_text in rows:
+                    try:
+                        data = _json.loads(json_text)
+                        pct = data.get('parsing_meta', {}).get('fill_percentage', 0)
+                        cursor.execute("UPDATE supplier_products SET ai_fill_pct = ? WHERE id = ?", (pct, row_id))
+                        backfilled += 1
+                    except Exception:
+                        pass
+                if backfilled:
+                    conn.commit()
+                    print(f"  ✅ Backfill ai_fill_pct: {backfilled} товаров обновлено")
+        except Exception as e:
+            print(f"  ⚠️ Backfill ai_fill_pct пропущен: {e}")
 
         # ============================================================
         # Миграция suppliers (AI parser + description columns)
@@ -307,6 +332,7 @@ def migrate(db_path):
                     model_used VARCHAR(100),
                     results TEXT,
                     error_message TEXT,
+                    heartbeat_at DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -321,6 +347,19 @@ def migrate(db_path):
             existing_ajc = get_existing_columns(cursor, 'ai_parse_jobs')
             if add_column_if_missing(cursor, 'ai_parse_jobs', 'model_used', 'VARCHAR(100)', existing_ajc):
                 total_added += 1
+            if add_column_if_missing(cursor, 'ai_parse_jobs', 'heartbeat_at', 'DATETIME', existing_ajc):
+                total_added += 1
+
+            # Помечаем старые running/pending задачи как failed (stale jobs)
+            cursor.execute("""
+                UPDATE ai_parse_jobs
+                SET status = 'failed',
+                    error_message = 'Задача зависла (обнаружено при миграции). Воркер-поток был убит до завершения.'
+                WHERE status IN ('pending', 'running')
+            """)
+            stale_fixed = cursor.rowcount
+            if stale_fixed > 0:
+                print(f"  ✅ Помечено {stale_fixed} зависших задач как failed")
 
         # ============================================================
         # Создание таблицы enrichment_jobs (если не существует)

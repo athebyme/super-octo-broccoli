@@ -3,6 +3,7 @@ from flask_login import login_required, current_user
 import json
 import logging
 import traceback
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ def register_reviews_routes(app):
             return jsonify(stats)
         except Exception as e:
             logger.error(f"Error fetching review stats: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/feedbacks')
     @login_required
@@ -161,7 +162,7 @@ def register_reviews_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.error(f"Error fetching feedbacks: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/questions')
     @login_required
@@ -187,7 +188,7 @@ def register_reviews_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.error(f"Error fetching questions: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/generate-reply', methods=['POST'])
     @login_required
@@ -227,7 +228,7 @@ def register_reviews_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.error(f"Error generating reply: {e}\n{traceback.format_exc()}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/settings', methods=['GET'])
     @login_required
@@ -270,7 +271,7 @@ def register_reviews_routes(app):
             return jsonify({'success': True})
         except Exception as e:
             logger.error(f"Error saving review settings: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/send-reply', methods=['POST'])
     @login_required
@@ -303,7 +304,7 @@ def register_reviews_routes(app):
             return jsonify({'success': True, 'result': result})
         except Exception as e:
             logger.error(f"Error sending reply: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/check-new', methods=['POST'])
     @login_required
@@ -433,7 +434,7 @@ def register_reviews_routes(app):
             })
         except Exception as e:
             logger.error(f"Error checking new reviews: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/products')
     @login_required
@@ -473,7 +474,7 @@ def register_reviews_routes(app):
             })
         except Exception as e:
             logger.error(f"Error fetching products for reviews: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/api/reviews/rating-distribution')
     @login_required
@@ -488,7 +489,7 @@ def register_reviews_routes(app):
             return jsonify(dist)
         except Exception as e:
             logger.error(f"Error fetching rating distribution: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
 
 def _get_review_settings(seller_id):

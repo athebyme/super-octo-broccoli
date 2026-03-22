@@ -20,6 +20,7 @@ from models import (
     BackgroundJob, Notification, AgentChangeSnapshot,
 )
 from services.supplier_service import SupplierService
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +147,25 @@ def register_supplier_routes(app):
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
         sellers = SupplierService.get_supplier_sellers(supplier_id)
+
+        # Примеры external_id для превью артикулов
+        sample_products = db.session.query(
+            SupplierProduct.external_id, SupplierProduct.vendor_code
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.external_id.isnot(None),
+            SupplierProduct.external_id != ''
+        ).limit(3).all()
+        sample_external_ids = [
+            {'external_id': p.external_id, 'vendor_code': p.vendor_code or ''}
+            for p in sample_products
+        ]
+
         return render_template('admin_supplier_form.html',
                                supplier=supplier, mode='edit',
                                stats=stats, price_stock_stats=price_stock_stats,
-                               sellers=sellers)
+                               sellers=sellers,
+                               sample_external_ids=sample_external_ids)
 
     # -------------------------------------------------------------------
     # Удаление поставщика
@@ -817,6 +833,24 @@ def register_supplier_routes(app):
     @admin_required
     def admin_supplier_ai_parse_status(supplier_id, job_id):
         """API: статус фоновой задачи AI парсинга (поллинг)"""
+        from models import AIParseJob
+        # Проверяем stale job при каждом поллинге
+        job = AIParseJob.query.get(job_id)
+        if job and job.status in ('pending', 'running') and job.is_stale:
+            job.status = 'failed'
+            stale_sec = int((datetime.utcnow() - (job.heartbeat_at or job.created_at)).total_seconds())
+            job.error_message = (
+                f'Задача зависла (воркер не отвечает {stale_sec}с). '
+                f'Обработано {job.processed} из {job.total} товаров '
+                f'({job.succeeded} успешно, {job.failed} с ошибкой). '
+                f'Попробуйте повторить запуск.'
+            )
+            job.updated_at = datetime.utcnow()
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+
         data = SupplierService.get_ai_parse_job(job_id)
         if not data:
             return jsonify({'error': 'Задача не найдена'}), 404
@@ -848,6 +882,12 @@ def register_supplier_routes(app):
         max_workers = request.form.get('max_workers', 8, type=int)
         max_workers = max(1, min(max_workers, 16))
         model_override = request.form.get('model_override', '').strip() or None
+        category_filter = request.form.get('category', '').strip()
+        brand_filter = request.form.get('brand', '').strip()
+        model_filter_param = request.form.get('ai_model', '').strip()
+        has_description = request.form.get('has_description', '').strip()
+        price_min = request.form.get('price_min', '').strip()
+        price_max = request.form.get('price_max', '').strip()
 
         # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)
         query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
@@ -875,10 +915,37 @@ def register_supplier_routes(app):
                 fill_threshold = float(fill_max)
                 query = query.filter(
                     db.or_(
-                        SupplierProduct.marketplace_fill_pct.is_(None),
-                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                        SupplierProduct.ai_fill_pct.is_(None),
+                        SupplierProduct.ai_fill_pct < fill_threshold
                     )
                 )
+            except (ValueError, TypeError):
+                pass
+
+        if category_filter:
+            cat_term = f'%{category_filter}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.wb_category_name.ilike(cat_term),
+                    SupplierProduct.category.ilike(cat_term),
+                )
+            )
+        if brand_filter:
+            query = query.filter(SupplierProduct.brand.ilike(f'%{brand_filter}%'))
+        if model_filter_param:
+            query = query.filter(SupplierProduct.ai_model_used.ilike(f'%{model_filter_param}%'))
+        if has_description == 'yes':
+            query = query.filter(SupplierProduct.description.isnot(None), SupplierProduct.description != '')
+        elif has_description == 'no':
+            query = query.filter(db.or_(SupplierProduct.description.is_(None), SupplierProduct.description == ''))
+        if price_min:
+            try:
+                query = query.filter(SupplierProduct.supplier_price >= float(price_min))
+            except (ValueError, TypeError):
+                pass
+        if price_max:
+            try:
+                query = query.filter(SupplierProduct.supplier_price <= float(price_max))
             except (ValueError, TypeError):
                 pass
 
@@ -1091,6 +1158,30 @@ def register_supplier_routes(app):
             flash('Поставщик не найден', 'danger')
             return redirect(url_for('admin_suppliers'))
 
+        # Ленивый backfill ai_fill_pct для товаров спарсенных до добавления колонки
+        try:
+            stale = SupplierProduct.query.filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.ai_parsed_data_json.isnot(None),
+                SupplierProduct.ai_fill_pct.is_(None)
+            ).limit(500).all()
+            if stale:
+                import json as _json
+                for p in stale:
+                    try:
+                        data = _json.loads(p.ai_parsed_data_json)
+                        p.ai_fill_pct = data.get('parsing_meta', {}).get('fill_percentage', 0)
+                    except Exception:
+                        p.ai_fill_pct = 0
+                db.session.commit()
+                app.logger.info(f"Backfilled ai_fill_pct for {len(stale)} products (supplier {supplier_id})")
+        except Exception as e:
+            app.logger.debug(f"ai_fill_pct backfill skipped: {e}")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         stock_status = request.args.get('stock_status', '').strip()
@@ -1099,6 +1190,13 @@ def register_supplier_routes(app):
         per_page = request.args.get('per_page', 50, type=int)
         per_page = max(10, min(per_page, 500))
         auto_select = request.args.get('auto_select', '').strip()
+        # Новые фильтры
+        category_filter = request.args.get('category', '').strip()
+        brand_filter = request.args.get('brand', '').strip()
+        model_filter = request.args.get('ai_model', '').strip()
+        has_description = request.args.get('has_description', '').strip()
+        price_min = request.args.get('price_min', '', type=str).strip()
+        price_max = request.args.get('price_max', '', type=str).strip()
 
         query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         if search:
@@ -1123,13 +1221,56 @@ def register_supplier_routes(app):
         elif parse_status == 'fill_below' and fill_max:
             try:
                 fill_threshold = float(fill_max)
-                # Товары, которые не спарсены ИЛИ у которых fill_pct < threshold
                 query = query.filter(
                     db.or_(
-                        SupplierProduct.marketplace_fill_pct.is_(None),
-                        SupplierProduct.marketplace_fill_pct < fill_threshold
+                        SupplierProduct.ai_fill_pct.is_(None),
+                        SupplierProduct.ai_fill_pct < fill_threshold
                     )
                 )
+            except (ValueError, TypeError):
+                pass
+
+        # Фильтр по категории
+        if category_filter:
+            cat_term = f'%{category_filter}%'
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.wb_category_name.ilike(cat_term),
+                    SupplierProduct.category.ilike(cat_term),
+                )
+            )
+
+        # Фильтр по бренду
+        if brand_filter:
+            query = query.filter(SupplierProduct.brand.ilike(f'%{brand_filter}%'))
+
+        # Фильтр по AI модели
+        if model_filter:
+            query = query.filter(SupplierProduct.ai_model_used.ilike(f'%{model_filter}%'))
+
+        # Фильтр по наличию описания
+        if has_description == 'yes':
+            query = query.filter(
+                SupplierProduct.description.isnot(None),
+                SupplierProduct.description != ''
+            )
+        elif has_description == 'no':
+            query = query.filter(
+                db.or_(
+                    SupplierProduct.description.is_(None),
+                    SupplierProduct.description == ''
+                )
+            )
+
+        # Фильтр по цене
+        if price_min:
+            try:
+                query = query.filter(SupplierProduct.supplier_price >= float(price_min))
+            except (ValueError, TypeError):
+                pass
+        if price_max:
+            try:
+                query = query.filter(SupplierProduct.supplier_price <= float(price_max))
             except (ValueError, TypeError):
                 pass
 
@@ -1159,6 +1300,43 @@ def register_supplier_routes(app):
         from services.ai_service import get_available_models
         available_models = get_available_models(supplier.ai_provider or 'cloudru')
 
+        # Уникальные категории и бренды для выпадающих списков
+        try:
+            categories_list = [r[0] for r in db.session.query(
+                db.func.coalesce(SupplierProduct.wb_category_name, SupplierProduct.category)
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                db.or_(
+                    SupplierProduct.wb_category_name.isnot(None),
+                    SupplierProduct.category.isnot(None)
+                )
+            ).distinct().order_by(
+                db.func.coalesce(SupplierProduct.wb_category_name, SupplierProduct.category)
+            ).all() if r[0]]
+        except Exception:
+            categories_list = []
+
+        try:
+            brands_list = [r[0] for r in db.session.query(
+                SupplierProduct.brand
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.brand.isnot(None),
+                SupplierProduct.brand != ''
+            ).distinct().order_by(SupplierProduct.brand).all() if r[0]]
+        except Exception:
+            brands_list = []
+
+        try:
+            models_list = [r[0] for r in db.session.query(
+                SupplierProduct.ai_model_used
+            ).filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.ai_model_used.isnot(None)
+            ).distinct().order_by(SupplierProduct.ai_model_used).all() if r[0]]
+        except Exception:
+            models_list = []
+
         return render_template('admin_supplier_ai_parser.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
@@ -1170,7 +1348,16 @@ def register_supplier_routes(app):
                                parsed_count=parsed_count,
                                active_jobs=active_jobs,
                                recent_jobs=recent_jobs,
-                               available_models=available_models)
+                               available_models=available_models,
+                               category_filter=category_filter,
+                               brand_filter=brand_filter,
+                               model_filter=model_filter,
+                               has_description=has_description,
+                               price_min=price_min,
+                               price_max=price_max,
+                               categories_list=categories_list,
+                               brands_list=brands_list,
+                               models_list=models_list)
 
     # -------------------------------------------------------------------
     # Управление подключёнными продавцами
@@ -1189,10 +1376,24 @@ def register_supplier_routes(app):
         all_sellers = Seller.query.join(Seller.user).order_by(Seller.company_name).all()
         connected_seller_ids = {c.seller_id for c in connections if c.is_active}
 
+        # Примеры external_id для live-preview артикулов
+        sample_products = db.session.query(
+            SupplierProduct.external_id, SupplierProduct.vendor_code
+        ).filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.external_id.isnot(None),
+            SupplierProduct.external_id != ''
+        ).limit(3).all()
+        sample_external_ids = [
+            {'external_id': p.external_id, 'vendor_code': p.vendor_code or ''}
+            for p in sample_products
+        ]
+
         return render_template('admin_supplier_sellers.html',
                                supplier=supplier, connections=connections,
                                all_sellers=all_sellers,
-                               connected_seller_ids=connected_seller_ids)
+                               connected_seller_ids=connected_seller_ids,
+                               sample_external_ids=sample_external_ids)
 
     @app.route('/admin/suppliers/<int:supplier_id>/sellers/connect', methods=['POST'])
     @login_required
@@ -1243,6 +1444,86 @@ def register_supplier_routes(app):
 
         db.session.commit()
         flash('Настройки подключения обновлены', 'success')
+        return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
+
+    @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/regenerate-vendor-codes', methods=['POST'])
+    @login_required
+    @admin_required
+    def admin_supplier_regenerate_vendor_codes(supplier_id, seller_id):
+        """Пересобрать артикулы (vendorCode) для товаров продавца у поставщика"""
+        from services.pricing_engine import generate_vendor_code
+
+        conn = SellerSupplier.query.filter_by(
+            seller_id=seller_id, supplier_id=supplier_id, is_active=True
+        ).first_or_404()
+
+        supplier = SupplierService.get_supplier(supplier_id)
+
+        # Фильтр: только в наличии?
+        stock_only = request.form.get('stock_only') == '1'
+        limit = request.form.get('limit', 0, type=int)
+
+        # Находим ImportedProduct для этого продавца+поставщика
+        query = ImportedProduct.query.filter_by(
+            seller_id=seller_id,
+            supplier_id=supplier_id
+        )
+
+        if stock_only:
+            # Только товары, у которых SupplierProduct в наличии
+            query = query.join(
+                SupplierProduct,
+                ImportedProduct.supplier_product_id == SupplierProduct.id
+            ).filter(
+                SupplierProduct.supplier_status == 'in_stock',
+                SupplierProduct.supplier_quantity > 0
+            )
+
+        if limit > 0:
+            query = query.limit(limit)
+
+        imported_products = query.all()
+
+        pattern = conn.vendor_code_pattern or supplier.default_vendor_code_pattern or 'id-{product_id}-{supplier_code}'
+        sup_code = conn.supplier_code or ''
+
+        updated = 0
+        for ip in imported_products:
+            new_vc = generate_vendor_code(
+                pattern=pattern,
+                supplier_code=sup_code,
+                external_id=ip.external_id,
+                external_vendor_code=ip.external_vendor_code or '',
+                supplier=supplier,
+                fallback_id=ip.id,
+                fallback_seller_id=seller_id,
+            )
+
+            # Обновляем Product.vendor_code если есть связанный товар
+            if ip.product_id:
+                product = Product.query.get(ip.product_id)
+                if product and product.vendor_code != new_vc:
+                    product.vendor_code = new_vc
+                    updated += 1
+
+        db.session.commit()
+
+        log_admin_action(
+            admin_user_id=current_user.id,
+            action='regenerate_vendor_codes',
+            target_type='supplier',
+            target_id=supplier_id,
+            details={
+                'seller_id': seller_id,
+                'pattern': pattern,
+                'total_processed': len(imported_products),
+                'updated': updated,
+                'stock_only': stock_only,
+            },
+            request=request
+        )
+
+        flash(f'Артикулы пересобраны: {updated} обновлено из {len(imported_products)} обработанных', 'success')
         return redirect(url_for('admin_supplier_sellers', supplier_id=supplier_id))
 
     @app.route('/admin/suppliers/<int:supplier_id>/sellers/<int:seller_id>/disconnect', methods=['POST'])
@@ -1351,16 +1632,11 @@ def register_supplier_routes(app):
         )
 
         # Дополнительно: определяем товары на WB по совпадению артикула (vendor_code)
-        settings = seller.auto_import_settings
-        if settings and settings.vendor_code_pattern:
-            vc_pattern = settings.vendor_code_pattern
-            vc_supplier_code = settings.supplier_code or ''
-        elif conn.vendor_code_pattern:
-            vc_pattern = conn.vendor_code_pattern
-            vc_supplier_code = conn.supplier_code or ''
-        else:
-            vc_pattern = 'id-{product_id}-{supplier_code}'
-            vc_supplier_code = conn.supplier_code or ''
+        from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
+
+        vc_pattern, vc_supplier_code, _ = resolve_vendor_code_settings(
+            seller.id, supplier_id
+        )
 
         # Получаем все external_id и vendor_code поставщика и вычисляем артикулы WB
         all_sp_data = db.session.query(
@@ -1372,15 +1648,15 @@ def register_supplier_routes(app):
         all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
         all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
         if all_sp_external_ids:
-            from services.pricing_engine import extract_product_id_for_vendor_code
             vc_to_sp = {}
             for sp_id, ext_id in all_sp_external_ids.items():
-                ext_id_str = str(ext_id or '')
-                product_id_val = extract_product_id_for_vendor_code(ext_id_str, supplier)
-                vc = vc_pattern.replace('{product_id}', product_id_val)
-                vc = vc.replace('{supplier_code}', vc_supplier_code)
-                vc = vc.replace('{external_vendor_code}', str(all_sp_vendor_codes.get(sp_id) or ''))
-                vc = vc.replace('{external_id}', ext_id_str)
+                vc = generate_vendor_code(
+                    pattern=vc_pattern,
+                    supplier_code=vc_supplier_code,
+                    external_id=ext_id,
+                    external_vendor_code=str(all_sp_vendor_codes.get(sp_id) or ''),
+                    supplier=supplier,
+                )
                 if vc:
                     vc_to_sp[vc] = sp_id
 
@@ -1619,7 +1895,7 @@ def register_supplier_routes(app):
             preview = importer.build_wb_card_preview(product)
             return jsonify(preview)
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # Push to WB — единичный импорт товара на WB (AJAX)
@@ -2908,7 +3184,7 @@ def register_supplier_routes(app):
             return jsonify(result.to_dict())
         except Exception as e:
             logger.exception(f"Smart parse error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка парсинга: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/admin/suppliers/<int:supplier_id>/smart-parse/<int:product_id>', methods=['POST'])
     @login_required
@@ -2928,7 +3204,7 @@ def register_supplier_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.exception(f"Smart parse single error: product {product_id}")
-            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # API: Smart Parse — статус и отмена фоновой задачи
@@ -3001,7 +3277,7 @@ def register_supplier_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.exception(f"Characteristics validation error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка валидации: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     @app.route('/admin/suppliers/<int:supplier_id>/validate-characteristics/<int:product_id>')
     @login_required
@@ -3091,7 +3367,7 @@ def register_supplier_routes(app):
             })
         except Exception as e:
             logger.exception(f"Brand validation error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка валидации брендов: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # API: Применить результаты валидации брендов
@@ -3135,7 +3411,7 @@ def register_supplier_routes(app):
             return jsonify(result)
         except Exception as e:
             logger.exception(f"Apply brand validation error for supplier {supplier_id}")
-            return jsonify({'error': f'Ошибка: {str(e)}'}), 500
+            return jsonify({'error': safe_error_message(e)}), 500
 
     # -------------------------------------------------------------------
     # API: Smart Import к продавцу (обогащение + импорт)

@@ -200,7 +200,7 @@ class CloudRuApiKeyManager:
             # API-ключ - используется напрямую
             self.auth_type = 'api_key'
             self.api_key = api_key
-            logger.info(f"✅ Cloud.ru API-ключ: {api_key[:12]}...")
+            logger.info("✅ Cloud.ru API-ключ: ***настроен***")
 
     @classmethod
     def from_key_secret(cls, key_secret: str) -> 'CloudRuApiKeyManager':
@@ -1338,7 +1338,13 @@ Rich-контент на WB - это визуальные блоки (слайд
 3. СПИСКИ — массив строк: "materials_list": ["силикон", "ABS пластик"]
 4. БУЛЕВЫ — true/false: "waterproof": true
 5. Запятые → точки: 7,5 → 7.5
-6. НЕ придумывай данных — только из текста или логический вывод. Если не ясно — не включай
+6. Извлекай данные из текста. Если точного значения нет — ВЫВЕДИ ЛОГИЧЕСКИ из контекста.
+   Примеры логического вывода:
+   - Вес: по типу товара и материалу (силиконовая пробка ~80-150г, вибратор ~150-300г)
+   - Ширина: по диаметру или типу изделия
+   - Особенности: по материалу, форме, назначению (бархатистая поверхность, компактный размер и т.д.)
+   - Комплектация: обычно "1 шт." если не указано иное
+   Цель — заполнить МАКСИМУМ полей для полной карточки товара
 7. Вес ВСЕГДА в граммах, длины в см, объём в мл
 8a. ДОПОЛНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ: если в тексте есть данные, которые не вписываются
     ни в одну из 16 категорий выше — добавь их в секцию "extra" с понятными ключами.
@@ -1528,6 +1534,7 @@ class AIConfig:
 
     @classmethod
     def for_seller(cls, seller_id: int, provider_override: str = None,
+                   model_override: str = None,
                    temperature: float = None, max_tokens: int = None,
                    timeout: int = None) -> 'AIConfig':
         """Единая точка создания AI-конфига для любого seller_id.
@@ -1538,6 +1545,7 @@ class AIConfig:
         Args:
             seller_id: ID продавца
             provider_override: переопределить провайдера (иначе из настроек)
+            model_override: переопределить модель (иначе из настроек/дефолт)
             temperature: переопределить temperature
             max_tokens: переопределить max_tokens
             timeout: переопределить timeout
@@ -1584,7 +1592,7 @@ class AIConfig:
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
 
-        model = getattr(ai_settings, 'ai_model', '') or default_model
+        model = model_override or getattr(ai_settings, 'ai_model', '') or default_model
 
         return cls(
             provider=provider,
@@ -1705,7 +1713,7 @@ class AIClient:
             token = self._token_manager.get_access_token()
             if token:
                 auth_header = f'Bearer {token}'
-                logger.info(f"🔐 Auth header: Bearer {token[:20]}... (длина токена: {len(token)})")
+                logger.debug(f"🔐 Auth header: Bearer ***{len(token)} chars***")
                 return auth_header
             return None
         else:
@@ -1733,10 +1741,12 @@ class AIClient:
         """
         url = f"{self.config.api_base_url}/chat/completions"
 
-        # Ограничиваем max_tokens разумным потолком (16k достаточно для любого ответа).
-        # Слишком большое значение (100k+) вызывает 400 "exceeds model context length"
-        # т.к. API проверяет prompt_tokens + max_tokens ≤ context_window.
-        effective_max_tokens = min(max_tokens or self.config.max_tokens, 16384)
+        # max_tokens для ответа. Если пользователь задал огромное значение
+        # (70000 — весь контекст), ограничиваем разумным потолком для output.
+        # API проверяет prompt_tokens + max_tokens ≤ context_window,
+        # поэтому max_tokens=70000 при промпте в 10k вызовет ошибку.
+        raw_max = max_tokens or self.config.max_tokens
+        effective_max_tokens = min(raw_max, 16384)
 
         payload = {
             "model": self.config.model,
@@ -1821,7 +1831,9 @@ class AIClient:
                 response.raise_for_status()
 
                 data = response.json()
-                content = data.get('choices', [{}])[0].get('message', {}).get('content')
+                choice = data.get('choices', [{}])[0]
+                content = choice.get('message', {}).get('content')
+                finish_reason = choice.get('finish_reason', '')
 
                 if content is None:
                     self.last_error = (
@@ -1831,7 +1843,26 @@ class AIClient:
                     logger.error(f"❌ {self.last_error}: {data}")
                     return None
 
-                logger.info(f"✅ AI ответ получен ({len(content)} символов)")
+                # Если ответ обрезан по max_tokens — ретраим с увеличенным лимитом
+                if finish_reason == 'length' and attempt < max_retries:
+                    old_max = effective_max_tokens
+                    effective_max_tokens = min(effective_max_tokens * 2, 16384)
+                    if effective_max_tokens > old_max:
+                        payload['max_tokens'] = effective_max_tokens
+                        logger.warning(
+                            f"⚠️ AI ответ обрезан (finish_reason=length, {len(content)} симв.), "
+                            f"ретрай с max_tokens={effective_max_tokens}"
+                        )
+                        import time
+                        time.sleep(1)
+                        continue
+                    # Уже на максимуме — возвращаем что есть
+                    logger.warning(
+                        f"⚠️ AI ответ обрезан (finish_reason=length, {len(content)} симв.), "
+                        f"max_tokens уже {effective_max_tokens} — возвращаем как есть"
+                    )
+
+                logger.info(f"✅ AI ответ получен ({len(content)} символов, finish_reason={finish_reason})")
                 logger.debug(f"Response: {content[:500]}...")
 
                 return content
@@ -1932,9 +1963,12 @@ class AITask(ABC):
         """Парсит и валидирует ответ AI"""
         pass
 
+    # Максимальное число повторных попыток при некорректном формате ответа
+    PARSE_RETRIES = 2
+
     def execute(self, **kwargs) -> Tuple[bool, Any, Optional[str]]:
         """
-        Выполняет AI задачу
+        Выполняет AI задачу с retry при ошибке парсинга ответа.
 
         Returns:
             Tuple[success, result, error_message]
@@ -1955,24 +1989,35 @@ class AITask(ABC):
                 f"[{task_name}] Промпт: system={len(system_prompt)} + user={len(user_prompt)} "
                 f"= {prompt_len} символов (~{prompt_len // 3} токенов)"
             )
-            response = self.client.chat_completion(messages)
 
-            if not response:
-                detail = self.client.last_error or "пустой ответ"
-                task_name = getattr(self, 'task_name', self.__class__.__name__)
-                return False, None, f"[{task_name}] {detail} (промпт: {prompt_len} символов)"
+            last_error_msg = None
+            for parse_attempt in range(1, self.PARSE_RETRIES + 1):
+                response = self.client.chat_completion(messages)
 
-            result = self.parse_response(response)
-            if result is None:
-                task_name = getattr(self, 'task_name', self.__class__.__name__)
-                # Показываем начало ответа для диагностики
+                if not response:
+                    detail = self.client.last_error or "пустой ответ"
+                    return False, None, f"[{task_name}] {detail} (промпт: {prompt_len} символов)"
+
+                result = self.parse_response(response)
+                if result is not None:
+                    if parse_attempt > 1:
+                        logger.info(f"[{task_name}] Парсинг успешен с попытки {parse_attempt}")
+                    return True, result, None
+
+                # Ответ пришёл, но парсинг не удался — ретраим
                 snippet = response[:300].replace('\n', ' ')
-                return False, None, (
+                last_error_msg = (
                     f"[{task_name}] AI ответил, но формат некорректный. "
                     f"Ответ ({len(response)} симв.): «{snippet}»"
                 )
+                if parse_attempt < self.PARSE_RETRIES:
+                    logger.warning(
+                        f"⚠️ {last_error_msg} — ретрай {parse_attempt}/{self.PARSE_RETRIES}"
+                    )
+                    import time
+                    time.sleep(1)
 
-            return True, result, None
+            return False, None, last_error_msg
 
         except Exception as e:
             logger.error(f"❌ Ошибка выполнения AI задачи: {e}")
@@ -3160,7 +3205,9 @@ class FullProductParsingTask(AITask):
         parts.append(f"\nФОТОГРАФИЙ: {product_data.get('photos_count', 0)}")
 
         parts.append("\n" + "=" * 60)
-        parts.append("ЗАДАНИЕ: Извлеки ВСЕ характеристики из данных выше. Заполни максимум полей.")
+        parts.append("ЗАДАНИЕ: Извлеки ВСЕ характеристики из данных выше. Заполни МАКСИМУМ полей.")
+        parts.append("Если точного значения нет — ВЫВЕДИ ЛОГИЧЕСКИ: оцени вес по материалу и типу,")
+        parts.append("ширину по диаметру, особенности по описанию. Чем больше полей заполнено — тем лучше.")
         parts.append("Верни результат строго в JSON формате.")
         parts.append("=" * 60)
 

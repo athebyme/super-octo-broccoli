@@ -17,6 +17,7 @@ from flask import (
 from flask_login import login_required, current_user
 
 from models import db, Brand, BrandAlias, BrandCategoryLink, MarketplaceBrand, ImportedProduct, SupplierProduct, Marketplace
+from utils.safe_error import safe_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -412,7 +413,7 @@ def api_verify(brand_id):
 
     except Exception as e:
         logger.error(f"Brand verification error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @brands_bp.route('/api/<int:brand_id>/merge', methods=['POST'])
@@ -431,10 +432,10 @@ def api_merge(brand_id):
         stats = get_brand_engine().merge_brands(brand_id, target_id)
         return jsonify({'success': True, 'stats': stats})
     except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 400
     except Exception as e:
         logger.error(f"Brand merge error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': safe_error_message(e)}), 500
 
 
 @brands_bp.route('/api/review/<int:brand_id>/approve', methods=['POST'])
@@ -456,7 +457,7 @@ def api_review_approve(brand_id):
             get_brand_engine().merge_brands(brand_id, target_id)
             return jsonify({'success': True, 'action': 'merged', 'target_id': target_id})
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 400
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 400
 
     elif target_name:
         # Переименование и подтверждение
@@ -699,8 +700,9 @@ def api_test_wb_brands():
                 result['json'] = None
 
     except Exception as e:
-        result['error'] = f'{type(e).__name__}: {str(e)}'
-        result['traceback'] = traceback.format_exc()
+        import logging as _logging
+        _logging.getLogger(__name__).error(f"Brand search error: {e}", exc_info=True)
+        result['error'] = 'Внутренняя ошибка сервера'
 
     return jsonify(result)
 

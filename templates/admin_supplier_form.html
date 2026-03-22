@@ -27,8 +27,8 @@
                 action="{{ url_for('admin_supplier_edit', supplier_id=supplier.id) if mode == 'edit' else url_for('admin_supplier_add') }}"
                 x-data="{
                     tab: 'basic',
-                    aiProvider: '{{ supplier.ai_provider if supplier and supplier.ai_provider else 'openai' }}',
-                    aiModel: '{{ supplier.ai_model if supplier and supplier.ai_model else '' }}',
+                    aiProvider: {{ (supplier.ai_provider if supplier and supplier.ai_provider else 'openai') | tojson }},
+                    aiModel: {{ (supplier.ai_model if supplier and supplier.ai_model else '') | tojson }},
                     customModel: '',
                     models: {
                         cloudru: [
@@ -137,28 +137,69 @@
                     <!-- Артикулы -->
                     <div class="border-t border-gray-200 pt-4 mt-4">
                         <h3 class="text-sm font-semibold text-gray-900 mb-3">Настройки артикулов</h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Regex извлечения product_id</label>
-                                <input type="text" name="external_id_pattern"
-                                    value="{{ supplier.external_id_pattern if supplier and supplier.external_id_pattern else '' }}"
-                                    placeholder="[A-Za-z]+-(?P&lt;product_id&gt;\d+)"
-                                    class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2 font-mono">
-                                <p class="mt-1 text-xs text-gray-400">
-                                    Regex с группой <code>product_id</code> для извлечения ID из external_id поставщика.
-                                    Пример: <code>[A-Za-z]+-(?P&lt;product_id&gt;\d+)</code> для «0T-00003031» → «00003031»
-                                </p>
+                        <div class="space-y-4">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Regex извлечения product_id</label>
+                                    <input type="text" name="external_id_pattern" id="external_id_pattern"
+                                        value="{{ supplier.external_id_pattern if supplier and supplier.external_id_pattern else '' }}"
+                                        placeholder="[A-Za-z]+-(?P&lt;product_id&gt;\d+)"
+                                        class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2 font-mono"
+                                        oninput="updateSupplierPreview()">
+                                    <p class="mt-1 text-xs text-gray-400">
+                                        Regex с именованной группой <code>(?P&lt;product_id&gt;...)</code>.
+                                        Если не задан — автоопределение по стандартным форматам.
+                                    </p>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Шаблон артикула по умолчанию</label>
+                                    <input type="text" name="default_vendor_code_pattern" id="default_vendor_code_pattern"
+                                        value="{{ supplier.default_vendor_code_pattern if supplier and supplier.default_vendor_code_pattern else '' }}"
+                                        placeholder="id-{product_id}-{supplier_code}"
+                                        class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2 font-mono"
+                                        oninput="updateSupplierPreview()">
+                                    <p class="mt-1 text-xs text-gray-400">
+                                        Применяется при подключении новых продавцов.
+                                    </p>
+                                </div>
                             </div>
+
+                            <!-- Быстрые шаблоны -->
                             <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">Шаблон артикула по умолчанию</label>
-                                <input type="text" name="default_vendor_code_pattern"
-                                    value="{{ supplier.default_vendor_code_pattern if supplier and supplier.default_vendor_code_pattern else '' }}"
-                                    placeholder="id-{product_id}-{supplier_code}"
-                                    class="w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm border px-3 py-2 font-mono">
-                                <p class="mt-1 text-xs text-gray-400">
-                                    Переменные: <code>{product_id}</code>, <code>{supplier_code}</code>, <code>{external_id}</code>, <code>{external_vendor_code}</code>.
-                                    Используется при подключении новых продавцов.
-                                </p>
+                                <label class="block text-xs font-medium text-gray-500 mb-2">Быстрый выбор шаблона:</label>
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" onclick="document.getElementById('default_vendor_code_pattern').value='id-{product_id}-{supplier_code}';updateSupplierPreview()"
+                                            class="px-3 py-1 text-xs rounded-full border border-gray-300 hover:bg-gray-100 font-mono">
+                                        id-{product_id}-{supplier_code}
+                                    </button>
+                                    <button type="button" onclick="document.getElementById('default_vendor_code_pattern').value='{supplier_code}Z1C1A{external_id}';updateSupplierPreview()"
+                                            class="px-3 py-1 text-xs rounded-full border border-gray-300 hover:bg-gray-100 font-mono">
+                                        {supplier_code}Z1C1A{external_id}
+                                    </button>
+                                    <button type="button" onclick="document.getElementById('default_vendor_code_pattern').value='{external_id}';updateSupplierPreview()"
+                                            class="px-3 py-1 text-xs rounded-full border border-gray-300 hover:bg-gray-100 font-mono">
+                                        {external_id}
+                                    </button>
+                                    <button type="button" onclick="document.getElementById('default_vendor_code_pattern').value='{external_vendor_code}';updateSupplierPreview()"
+                                            class="px-3 py-1 text-xs rounded-full border border-gray-300 hover:bg-gray-100 font-mono">
+                                        {external_vendor_code}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Справка -->
+                            <div class="text-xs text-gray-400 bg-gray-50 rounded-lg px-4 py-3 border border-gray-100">
+                                <span class="font-medium text-gray-500">Переменные:</span>
+                                <code class="text-indigo-600">{product_id}</code> — ID извлечённый из external_id по regex,
+                                <code class="text-indigo-600">{supplier_code}</code> — код продавца (задаётся при подключении),
+                                <code class="text-indigo-600">{external_id}</code> — полный ID товара у поставщика,
+                                <code class="text-indigo-600">{external_vendor_code}</code> — артикул из CSV поставщика
+                            </div>
+
+                            <!-- Превью -->
+                            <div id="supplier-vc-preview" class="bg-gray-50 rounded-lg p-4 border border-gray-200" style="display:none">
+                                <div class="text-xs font-medium text-gray-500 mb-2">Превью (supplier_code = «TEST»):</div>
+                                <div id="supplier-vc-preview-list" class="space-y-1"></div>
                             </div>
                         </div>
                     </div>
@@ -584,6 +625,57 @@
 </div>
 
 <script>
+// --- Превью артикулов ---
+var SAMPLE_PRODUCTS = {{ sample_external_ids | default([], true) | tojson }};
+
+function extractProductIdSupplier(externalId, regexStr) {
+    if (!externalId) return '';
+    if (regexStr) {
+        try {
+            var jsPattern = regexStr.replace(/\(\?P</g, '(?<');
+            var m = new RegExp(jsPattern).exec(externalId);
+            if (m) return (m.groups && m.groups.product_id) ? m.groups.product_id : (m[1] || externalId);
+        } catch(e) {}
+    }
+    var m = externalId.match(/id-(\d+)/);
+    if (m) return m[1];
+    m = externalId.match(/[A-Za-z]+-(\d+)/);
+    if (m) return m[1];
+    m = externalId.match(/(\d+)/);
+    if (m) return m[1];
+    return externalId;
+}
+
+function updateSupplierPreview() {
+    var block = document.getElementById('supplier-vc-preview');
+    var list = document.getElementById('supplier-vc-preview-list');
+    if (!block || !list || !SAMPLE_PRODUCTS.length) return;
+
+    var regex = (document.getElementById('external_id_pattern') || {}).value || '';
+    var pattern = (document.getElementById('default_vendor_code_pattern') || {}).value || 'id-{product_id}-{supplier_code}';
+    var testCode = 'TEST';
+
+    var html = '';
+    SAMPLE_PRODUCTS.forEach(function(p) {
+        var pid = extractProductIdSupplier(p.external_id, regex);
+        var vc = pattern.replace(/\{product_id\}/g, pid)
+                        .replace(/\{supplier_code\}/g, testCode)
+                        .replace(/\{external_vendor_code\}/g, p.vendor_code || '')
+                        .replace(/\{external_id\}/g, p.external_id || '');
+        html += '<div class="flex items-center gap-2 text-xs">' +
+                    '<span class="text-gray-400 truncate max-w-[150px]" title="' + (p.external_id || '') + '">' + (p.external_id || '—') + '</span>' +
+                    '<span class="text-gray-300">→</span>' +
+                    '<code class="font-medium text-gray-900 bg-white px-2 py-0.5 rounded border border-gray-200">' + vc + '</code>' +
+                '</div>';
+    });
+    list.innerHTML = html;
+    block.style.display = '';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (SAMPLE_PRODUCTS.length) updateSupplierPreview();
+});
+
 function proxyStatus() {
     return {
         status: 'idle',

@@ -26,7 +26,7 @@ services:
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env file}
       # ЖЁСТКО ПРОПИСЫВАЕМ DATABASE_URL - НЕ полагаемся на .env
       - DATABASE_URL=sqlite:////app/data/seller_platform.db
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set - generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"}
       # Credentials для первого администратора (создается автоматически при первом запуске)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
