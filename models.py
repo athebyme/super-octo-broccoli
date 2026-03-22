@@ -4569,6 +4569,13 @@ class CompetitorProduct(db.Model):
     snapshots = db.relationship('CompetitorPriceSnapshot', backref='product', lazy='dynamic',
                                 cascade='all, delete-orphan', order_by='CompetitorPriceSnapshot.created_at.desc()')
 
+    @property
+    def current_discount_percent(self):
+        """Рассчитать текущий % скидки"""
+        if self.current_price and self.current_sale_price and self.current_price > 0:
+            return round((1 - self.current_sale_price / self.current_price) * 100, 1)
+        return None
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -4582,6 +4589,7 @@ class CompetitorProduct(db.Model):
             'image_url': self.image_url,
             'current_price': self.current_price,
             'current_sale_price': self.current_sale_price,
+            'current_discount_percent': self.current_discount_percent,
             'current_rating': self.current_rating,
             'current_feedbacks_count': self.current_feedbacks_count,
             'current_total_stock': self.current_total_stock,
@@ -4618,12 +4626,20 @@ class CompetitorPriceSnapshot(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
+    @property
+    def discount_percent(self):
+        """Рассчитать % скидки на момент снимка"""
+        if self.price and self.sale_price and self.price > 0:
+            return round((1 - self.sale_price / self.price) * 100, 1)
+        return None
+
     def to_dict(self):
         return {
             'id': self.id,
             'product_id': self.product_id,
             'price': self.price,
             'sale_price': self.sale_price,
+            'discount_percent': self.discount_percent,
             'rating': self.rating,
             'feedbacks_count': self.feedbacks_count,
             'total_stock': self.total_stock,

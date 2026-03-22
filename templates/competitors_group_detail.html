@@ -36,6 +36,7 @@
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
                         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Цена</th>
                         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Со скидкой</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Скидка</th>
                         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Рейтинг</th>
                         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Отзывы</th>
                         <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Остаток</th>
@@ -59,6 +60,16 @@
                             </td>
                             <td class="px-4 py-3 text-right text-sm text-gray-500" x-text="p.current_price ? (p.current_price + ' ₽') : '—'"></td>
                             <td class="px-4 py-3 text-right text-sm font-medium text-gray-900" x-text="p.current_sale_price ? (p.current_sale_price + ' ₽') : '—'"></td>
+                            <td class="px-4 py-3 text-right text-sm">
+                                <template x-if="p.current_discount_percent">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+                                        :class="p.current_discount_percent >= 30 ? 'bg-red-100 text-red-700' : p.current_discount_percent >= 15 ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'"
+                                        x-text="'-' + p.current_discount_percent + '%'"></span>
+                                </template>
+                                <template x-if="!p.current_discount_percent">
+                                    <span class="text-gray-400">—</span>
+                                </template>
+                            </td>
                             <td class="px-4 py-3 text-right text-sm">
                                 <span x-text="p.current_rating ? p.current_rating.toFixed(1) : '—'"></span>
                             </td>

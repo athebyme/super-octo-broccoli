@@ -763,6 +763,35 @@ class CompetitorMonitorService:
                         ),
                     ))
 
+        # Алерт на изменение скидки (>= 5 п.п.)
+        old_discount = None
+        new_discount = None
+        if product.current_price and product.current_sale_price and product.current_price > 0:
+            old_discount = round((1 - product.current_sale_price / product.current_price) * 100, 1)
+        if new_data.get('price') and new_data.get('sale_price') and new_data['price'] > 0:
+            new_discount = round((1 - new_data['sale_price'] / new_data['price']) * 100, 1)
+
+        if old_discount is not None and new_discount is not None:
+            discount_change = round(new_discount - old_discount, 1)
+            if abs(discount_change) >= 5:
+                alert_type = 'discount_increase' if discount_change > 0 else 'discount_decrease'
+                severity = 'warning' if abs(discount_change) >= 10 else 'info'
+                alerts.append(CompetitorAlert(
+                    seller_id=seller_id,
+                    product_id=product.id,
+                    group_id=product.group_id,
+                    alert_type=alert_type,
+                    severity=severity,
+                    old_value=old_discount,
+                    new_value=new_discount,
+                    change_percent=discount_change,
+                    message=(
+                        f"{product.title or product.nm_id}: "
+                        f"скидка {'увеличилась' if discount_change > 0 else 'уменьшилась'} "
+                        f"на {abs(discount_change):.0f} п.п. ({old_discount:.0f}% → {new_discount:.0f}%)"
+                    ),
+                ))
+
         # Алерт: товар закончился
         if product.current_total_stock and product.current_total_stock > 0:
             if new_data.get('total_stock', 0) == 0:
