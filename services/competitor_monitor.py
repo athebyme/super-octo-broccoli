@@ -167,7 +167,9 @@ class CompetitorMonitorService:
 
     def _fetch_single_product(self, nm_id):
         """
-        Получить полные данные одного товара из basket API.
+        Получить полные данные одного товара.
+        1. basket API для метаданных (название, бренд, продавец)
+        2. search API по бренду/названию для цен и остатков
         """
         self._rate_limiter.wait_if_needed()
 
@@ -200,18 +202,20 @@ class CompetitorMonitorService:
         except requests.exceptions.RequestException:
             pass
 
-        # 3. Цены и остатки через search API
-        price_data = self._fetch_price_via_search(nm_id)
-
-        # Собираем результат
         selling = card_data.get('selling', {})
+        brand = selling.get('brand_name', '')
+        title = card_data.get('imt_name', '')
+
+        # 3. Цены и остатки через search API (поиск по бренду + названию)
+        price_data = self._fetch_price_via_search(nm_id, brand, title)
+
         result = {
             'nm_id': nm_id,
-            'title': card_data.get('imt_name', ''),
-            'brand': selling.get('brand_name', ''),
+            'title': title,
+            'brand': brand,
             'supplier_name': (
                 seller_data.get('supplierName', '') if seller_data
-                else selling.get('brand_name', '')
+                else brand
             ),
             'wb_supplier_id': selling.get('supplier_id') or (
                 seller_data.get('supplierId') if seller_data else None
@@ -226,56 +230,68 @@ class CompetitorMonitorService:
 
         return result
 
-    def _fetch_price_via_search(self, nm_id):
+    def _fetch_price_via_search(self, nm_id, brand='', title=''):
         """
-        Получить цену, рейтинг, остатки товара через поиск по артикулу.
-        search.wb.ru при поиске по nm_id может вернуть product-redirect,
-        поэтому ищем по артикулу как тексту.
+        Получить цену, рейтинг, остатки товара через search API.
+
+        Стратегия поиска (по приоритету):
+        1. Поиск по бренду — находит товар среди результатов по id
+        2. Поиск по названию — fallback если по бренду не найден
         """
-        self._rate_limiter.wait_if_needed()
+        search_queries = []
+        if brand:
+            search_queries.append(brand)
+        if title and title != brand:
+            search_queries.append(f"{brand} {title}" if brand else title)
 
-        params = {
-            **self.DEFAULT_PARAMS,
-            'query': str(nm_id),
-            'resultset': 'catalog',
-            'sort': 'popular',
-            'spp': '30',
-        }
+        for query in search_queries:
+            self._rate_limiter.wait_if_needed()
 
-        try:
-            response = self._session.get(
-                self.SEARCH_URL,
-                params=params,
-                timeout=30
-            )
-            if response.status_code == 429:
-                logger.warning(f"Товар {nm_id}: search API rate limited (429)")
-                time.sleep(3)
-                return None
-            response.raise_for_status()
-            data = response.json()
+            params = {
+                **self.DEFAULT_PARAMS,
+                'query': query,
+                'resultset': 'catalog',
+                'sort': 'popular',
+                'spp': '30',
+            }
 
-            # Поиск по nm_id может вернуть product-redirect или products
-            products = data.get('products', [])
-            if not products:
-                products = data.get('data', {}).get('products', [])
+            try:
+                response = self._session.get(
+                    self.SEARCH_URL,
+                    params=params,
+                    timeout=30
+                )
+                if response.status_code == 429:
+                    logger.warning(f"Товар {nm_id}: search API rate limited (429)")
+                    time.sleep(5)
+                    continue
+                response.raise_for_status()
+                data = response.json()
 
-            # Ищем наш товар среди результатов
-            for p in products:
-                if p.get('id') == nm_id:
-                    return self._parse_search_product(p)
+                products = data.get('products', [])
+                if not products:
+                    products = data.get('data', {}).get('products', [])
 
-            # Если не нашли точное совпадение, но есть redirect — товар существует,
-            # но цены недоступны через этот endpoint
-            metadata = data.get('metadata', {})
-            if metadata.get('catalog_type') == 'product-redirect':
-                logger.info(f"Товар {nm_id}: search вернул product-redirect, цены недоступны")
+                # Ищем наш товар по id среди результатов
+                for p in products:
+                    if p.get('id') == nm_id:
+                        logger.info(
+                            f"Товар {nm_id}: найден через search (query=\"{query}\"), "
+                            f"цена={p.get('sizes', [{}])[0].get('price', {}).get('product', 0) // 100}"
+                        )
+                        return self._parse_search_product(p)
 
-            return None
+                logger.info(
+                    f"Товар {nm_id}: не найден в search (query=\"{query}\", "
+                    f"results={len(products)})"
+                )
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Товар {nm_id}: ошибка search API: {e}")
-            return None
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Товар {nm_id}: ошибка search API: {e}")
+                continue
+
+        logger.warning(f"Товар {nm_id}: цены не найдены через search API")
+        return None
 
     def _parse_search_product(self, raw):
         """Распарсить данные товара из ответа search API (v18 формат)"""
@@ -371,9 +387,11 @@ class CompetitorMonitorService:
 
     def fetch_seller_catalog(self, wb_supplier_id, limit=1000):
         """
-        Получить каталог продавца по его supplier_id через search API.
-        catalog.wb.ru/sellers/catalog больше не работает (403).
-        Используем поиск по имени продавца.
+        Получить каталог продавца по его supplier_id.
+
+        Стратегия:
+        1. catalog.wb.ru/sellers/catalog — основной endpoint
+        2. Если не работает — search API по имени продавца с фильтрацией
 
         Args:
             wb_supplier_id: ID продавца на WB
@@ -382,39 +400,129 @@ class CompetitorMonitorService:
         Returns:
             list: список product_data
         """
-        # Сначала пробуем найти имя продавца через basket API любого товара
-        # Если не можем — ищем напрямую по supplier_id
-        self._rate_limiter.wait_if_needed()
+        # Попытка 1: catalog.wb.ru (основной endpoint для каталога продавца)
+        result = self._fetch_seller_via_catalog_api(wb_supplier_id, limit)
+        if result:
+            return result
 
-        # Пробуем search с фильтром по supplier
-        params = {
-            **self.DEFAULT_PARAMS,
-            'supplier': str(wb_supplier_id),
-            'resultset': 'catalog',
-            'sort': 'popular',
-            'spp': '30',
-        }
+        # Попытка 2: search API по имени продавца
+        logger.info(
+            f"Каталог продавца {wb_supplier_id}: catalog API не сработал, "
+            f"пробуем search API"
+        )
+        return self._fetch_seller_via_search(wb_supplier_id, limit)
+
+    def _fetch_seller_via_catalog_api(self, wb_supplier_id, limit):
+        """Получить каталог через catalog.wb.ru/sellers/catalog"""
+        CATALOG_URLS = [
+            "https://catalog.wb.ru/sellers/catalog",
+            "https://catalog.wb.ru/sellers/v2/catalog",
+        ]
+
+        all_products = []
+        page = 1
+        working_url = None
+
+        while len(all_products) < limit:
+            self._rate_limiter.wait_if_needed()
+
+            params = {
+                'appType': '1',
+                'curr': 'rub',
+                'dest': '-1257786',
+                'supplier': str(wb_supplier_id),
+                'sort': 'popular',
+                'page': str(page),
+                'limit': '100',
+            }
+
+            try:
+                data = None
+                urls = [working_url] if working_url else CATALOG_URLS
+
+                for url in urls:
+                    logger.info(
+                        f"Каталог продавца {wb_supplier_id}, стр. {page}: {url}"
+                    )
+                    response = self._session.get(url, params=params, timeout=30)
+
+                    if response.status_code in (403, 404):
+                        logger.warning(f"URL {url} вернул {response.status_code}")
+                        continue
+                    if response.status_code == 429:
+                        logger.warning(f"URL {url} rate limited (429)")
+                        time.sleep(3)
+                        return None  # Попробуем fallback
+
+                    response.raise_for_status()
+                    data = response.json()
+                    working_url = url
+                    break
+
+                if data is None:
+                    return None
+
+                products = data.get('data', {}).get('products', [])
+                if not products:
+                    if page == 1:
+                        logger.info(
+                            f"Каталог продавца {wb_supplier_id}: 0 товаров. "
+                            f"Ответ: {str(data)[:300]}"
+                        )
+                        return None
+                    break
+
+                all_products.extend(
+                    self._parse_full_search_product(p) for p in products
+                )
+                logger.info(
+                    f"Каталог продавца {wb_supplier_id}: стр. {page}, "
+                    f"{len(products)} товаров (всего {len(all_products)})"
+                )
+                page += 1
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Ошибка catalog API для продавца {wb_supplier_id}: {e}")
+                return None
+
+        return all_products[:limit] if all_products else None
+
+    def _fetch_seller_via_search(self, wb_supplier_id, limit):
+        """
+        Fallback: найти товары продавца через search API.
+        Ищем по имени продавца и фильтруем по supplierId.
+        """
+        # Сначала узнаём имя продавца через любой его товар (если есть в базе)
+        seller_name = self._get_seller_name(wb_supplier_id)
+        if not seller_name:
+            logger.warning(
+                f"Продавец {wb_supplier_id}: не удалось определить имя для поиска"
+            )
+            return []
 
         all_products = []
         page = 1
 
-        while len(all_products) < limit:
+        while len(all_products) < limit and page <= 5:
             self._rate_limiter.wait_if_needed()
-            params['page'] = str(page)
+
+            params = {
+                **self.DEFAULT_PARAMS,
+                'query': seller_name,
+                'resultset': 'catalog',
+                'sort': 'popular',
+                'spp': '30',
+                'page': str(page),
+            }
 
             try:
-                logger.info(
-                    f"Каталог продавца {wb_supplier_id}, стр. {page}: "
-                    f"search API с фильтром supplier"
-                )
                 response = self._session.get(
                     self.SEARCH_URL,
                     params=params,
                     timeout=30
                 )
-
                 if response.status_code == 429:
-                    logger.warning("Search API rate limited, ожидание...")
+                    logger.warning("Search API rate limited")
                     time.sleep(5)
                     continue
 
@@ -424,27 +532,52 @@ class CompetitorMonitorService:
                 products = data.get('products', [])
                 if not products:
                     products = data.get('data', {}).get('products', [])
-
                 if not products:
-                    logger.info(
-                        f"Каталог продавца {wb_supplier_id}: 0 товаров на стр. {page}. "
-                        f"Ответ: {str(data)[:500]}"
-                    )
                     break
 
-                parsed = [self._parse_full_search_product(p) for p in products]
+                # Фильтруем по supplierId
+                seller_products = [
+                    p for p in products
+                    if p.get('supplierId') == wb_supplier_id
+                ]
+                parsed = [
+                    self._parse_full_search_product(p) for p in seller_products
+                ]
                 all_products.extend(parsed)
+
                 logger.info(
-                    f"Каталог продавца {wb_supplier_id}: стр. {page}, "
-                    f"получено {len(products)} (всего {len(all_products)})"
+                    f"Каталог продавца {wb_supplier_id} (search): стр. {page}, "
+                    f"найдено {len(seller_products)} из {len(products)} "
+                    f"(всего {len(all_products)})"
                 )
+
+                # Если на странице нет товаров этого продавца, дальше не ищем
+                if not seller_products:
+                    break
+
                 page += 1
 
             except requests.exceptions.RequestException as e:
-                logger.error(f"Ошибка каталога продавца {wb_supplier_id}: {e}")
+                logger.error(f"Ошибка search для продавца {wb_supplier_id}: {e}")
                 break
 
         return all_products[:limit]
+
+    def _get_seller_name(self, wb_supplier_id):
+        """Получить имя продавца. Ищем в базе или через API."""
+        # Пробуем из базы
+        try:
+            from models import CompetitorProduct
+            product = CompetitorProduct.query.filter_by(
+                wb_supplier_id=wb_supplier_id
+            ).first()
+            if product and product.supplier_name:
+                return product.supplier_name
+        except Exception:
+            pass
+
+        # Если нет — ничего не можем сделать без nm_id
+        return None
 
     @classmethod
     def sync_seller_competitors(cls, seller_id, flask_app):
