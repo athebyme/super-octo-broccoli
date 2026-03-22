@@ -1,12 +1,14 @@
 """
 Сервис мониторинга конкурентов через публичные API Wildberries.
 
-Использует бесплатные публичные эндпоинты WB (card.wb.ru, search.wb.ru)
-для отслеживания цен, скидок, рейтингов и остатков конкурентов.
+Использует рабочие публичные эндпоинты WB:
+- basket-XX.wb.ru — карточки товаров, информация о продавцах
+- search.wb.ru — поиск товаров с ценами и остатками
+- feedbacks2.wb.ru — рейтинги и отзывы
 
 Ключевые особенности:
 - Отдельный rate limiter (не влияет на seller API)
-- Batch-запросы (до 100 nm_id за раз)
+- Комбинированный fetch (basket + search)
 - Delta storage (снимки только при изменении)
 - Непрерывный цикл мониторинга
 - Кросс-селлер кэш (если несколько селлеров следят за одним nm_id)
@@ -34,18 +36,48 @@ _stop_events = {}
 _monitor_threads = {}
 _threads_lock = threading.Lock()
 
+# Маппинг vol -> basket номер
+_BASKET_RANGES = [
+    (143, '01'), (287, '02'), (431, '03'), (719, '04'),
+    (1007, '05'), (1061, '06'), (1115, '07'), (1169, '08'),
+    (1313, '09'), (1601, '10'), (1655, '11'), (1919, '12'),
+    (2045, '13'), (2189, '14'), (2405, '15'), (2621, '16'),
+    (2837, '17'),
+]
+
+
+def _get_basket(nm_id):
+    """Определить basket-номер для nm_id"""
+    vol = nm_id // 100000
+    for max_vol, basket in _BASKET_RANGES:
+        if vol <= max_vol:
+            return basket
+    return '18'
+
+
+def _get_basket_base_url(nm_id):
+    """Получить базовый URL для basket-эндпоинта"""
+    basket = _get_basket(nm_id)
+    vol = nm_id // 100000
+    part = nm_id // 1000
+    return f"https://basket-{basket}.wb.ru/vol{vol}/part{part}/{nm_id}"
+
+
+def _get_image_url(nm_id):
+    """Получить URL фото товара"""
+    basket = _get_basket(nm_id)
+    vol = nm_id // 100000
+    part = nm_id // 1000
+    return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/big/1.webp"
+
 
 class CompetitorMonitorService:
     """Сервис мониторинга конкурентов через публичные API WB"""
 
-    DETAIL_URL = "https://card.wb.ru/cards/detail"
-    DETAIL_URL_V2 = "https://card.wb.ru/cards/v2/detail"
-    SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v7/search"
-    SELLER_CATALOG_URL = "https://catalog.wb.ru/sellers/catalog"
-    SELLER_CATALOG_URLS = [
-        "https://catalog.wb.ru/sellers/catalog",
-        "https://catalog.wb.ru/sellers/v2/catalog",
-    ]
+    # Рабочие эндпоинты (март 2026)
+    SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v18/search"
+    FEEDBACKS_URL = "https://feedbacks2.wb.ru/feedbacks/v2"
+
     BATCH_SIZE = 100  # макс nm_id на один запрос
 
     # Дефолтные параметры запросов
@@ -53,14 +85,10 @@ class CompetitorMonitorService:
         'appType': '1',
         'curr': 'rub',
         'dest': '-1257786',
-        'spp': '30',
+        'lang': 'ru',
     }
 
     def __init__(self, requests_per_minute=60):
-        """
-        Args:
-            requests_per_minute: лимит запросов к публичному API
-        """
         self._rate_limiter = RateLimiter(
             max_requests=requests_per_minute,
             time_window=60
@@ -82,15 +110,20 @@ class CompetitorMonitorService:
         )
         session.mount('https://', adapter)
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/131.0.0.0 Safari/537.36'
+            ),
             'Accept': 'application/json',
-            'Accept-Language': 'ru-RU,ru;q=0.9',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
         })
         return session
 
     def fetch_products_batch(self, nm_ids):
         """
-        Получить данные о товарах по списку nm_id (до 100 штук).
+        Получить данные о товарах по списку nm_id.
+        Комбинирует basket API (метаданные) + search API (цены).
 
         Args:
             nm_ids: список nm_id товаров
@@ -117,125 +150,149 @@ class CompetitorMonitorService:
         if not uncached_ids:
             return results
 
-        # Запрос к API — пробуем v1, затем v2
-        nm_str = ';'.join(str(x) for x in uncached_ids)
-
-        detail_urls = [self.DETAIL_URL, self.DETAIL_URL_V2]
-
-        for url in detail_urls:
-            self._rate_limiter.wait_if_needed()
-            params = {**self.DEFAULT_PARAMS, 'nm': nm_str}
-
+        # Получаем данные по каждому товару из basket API + search API
+        for nm_id in uncached_ids:
             try:
-                logger.info(f"Запрос деталей товаров: {url}, nm_ids={uncached_ids[:5]}...")
-                response = self._session.get(url, params=params, timeout=30)
-
-                if response.status_code == 404:
-                    logger.warning(f"URL {url} вернул 404, пробуем следующий")
-                    continue
-
-                response.raise_for_status()
-                data = response.json()
-
-                products = data.get('data', {}).get('products', [])
-
-                if not products:
-                    logger.info(
-                        f"URL {url}: пустой список products. "
-                        f"Ответ: {str(data)[:300]}"
-                    )
-                    continue
-
-                with _cache_lock:
-                    for product in products:
-                        nm_id = product.get('id')
-                        if nm_id:
-                            parsed = self._parse_product_data(product)
-                            results[nm_id] = parsed
-                            _product_cache[nm_id] = (parsed, time.time())
-
-                # Нашли товары — выходим из цикла
-                break
-
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Ошибка при запросе {url}: {e}")
-                continue
-            except (ValueError, KeyError) as e:
-                logger.error(f"Ошибка парсинга ответа WB ({url}): {e}")
-                continue
-
-        # Логируем не найденные товары
-        not_found = [nm_id for nm_id in uncached_ids if nm_id not in results]
-        if not_found:
-            logger.warning(
-                f"Товары не найдены ни через v1, ни через v2 API: {not_found}"
-            )
+                product_data = self._fetch_single_product(nm_id)
+                if product_data:
+                    results[nm_id] = product_data
+                    with _cache_lock:
+                        _product_cache[nm_id] = (product_data, time.time())
+                else:
+                    logger.warning(f"Товар {nm_id}: не удалось получить данные")
+            except Exception as e:
+                logger.error(f"Ошибка получения данных товара {nm_id}: {e}")
 
         return results
 
-    def _parse_product_data(self, raw):
-        """Распарсить данные одного товара из ответа API"""
-        # Цены в API приходят в копейках
-        price_info = raw.get('sizes', [{}])
-        price = raw.get('priceU', 0) // 100 if raw.get('priceU') else None
-        sale_price = raw.get('salePriceU', 0) // 100 if raw.get('salePriceU') else None
+    def _fetch_single_product(self, nm_id):
+        """
+        Получить полные данные одного товара из basket API.
+        """
+        self._rate_limiter.wait_if_needed()
 
-        # Общий остаток по всем размерам/складам
-        total_stock = 0
-        for size in raw.get('sizes', []):
-            for stock in size.get('stocks', []):
-                total_stock += stock.get('qty', 0)
+        base_url = _get_basket_base_url(nm_id)
 
-        # URL фото
-        nm_id = raw.get('id', 0)
-        vol = nm_id // 100000
-        part = nm_id // 1000
-        # Определяем basket
-        if vol <= 143:
-            basket = '01'
-        elif vol <= 287:
-            basket = '02'
-        elif vol <= 431:
-            basket = '03'
-        elif vol <= 719:
-            basket = '04'
-        elif vol <= 1007:
-            basket = '05'
-        elif vol <= 1061:
-            basket = '06'
-        elif vol <= 1115:
-            basket = '07'
-        elif vol <= 1169:
-            basket = '08'
-        elif vol <= 1313:
-            basket = '09'
-        elif vol <= 1601:
-            basket = '10'
-        elif vol <= 1655:
-            basket = '11'
-        elif vol <= 1919:
-            basket = '12'
-        elif vol <= 2045:
-            basket = '13'
-        elif vol <= 2189:
-            basket = '14'
-        elif vol <= 2405:
-            basket = '15'
-        elif vol <= 2621:
-            basket = '16'
-        elif vol <= 2837:
-            basket = '17'
-        else:
-            basket = '18'
-        image_url = f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/big/1.webp"
+        # 1. Карточка товара (название, бренд, описание)
+        card_data = None
+        try:
+            card_url = f"{base_url}/info/ru/card.json"
+            response = self._session.get(card_url, timeout=15)
+            if response.status_code == 200:
+                card_data = response.json()
+                logger.info(f"Товар {nm_id}: карточка загружена из basket API")
+            else:
+                logger.warning(f"Товар {nm_id}: card.json вернул {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Товар {nm_id}: ошибка загрузки card.json: {e}")
+
+        if not card_data:
+            return None
+
+        # 2. Информация о продавце
+        seller_data = None
+        try:
+            self._rate_limiter.wait_if_needed()
+            seller_url = f"{base_url}/info/sellers.json"
+            response = self._session.get(seller_url, timeout=15)
+            if response.status_code == 200:
+                seller_data = response.json()
+        except requests.exceptions.RequestException:
+            pass
+
+        # 3. Цены и остатки через search API
+        price_data = self._fetch_price_via_search(nm_id)
+
+        # Собираем результат
+        selling = card_data.get('selling', {})
+        result = {
+            'nm_id': nm_id,
+            'title': card_data.get('imt_name', ''),
+            'brand': selling.get('brand_name', ''),
+            'supplier_name': (
+                seller_data.get('supplierName', '') if seller_data
+                else selling.get('brand_name', '')
+            ),
+            'wb_supplier_id': selling.get('supplier_id') or (
+                seller_data.get('supplierId') if seller_data else None
+            ),
+            'image_url': _get_image_url(nm_id),
+            'price': price_data.get('price') if price_data else None,
+            'sale_price': price_data.get('sale_price') if price_data else None,
+            'rating': price_data.get('rating') if price_data else None,
+            'feedbacks_count': price_data.get('feedbacks_count') if price_data else None,
+            'total_stock': price_data.get('total_stock') if price_data else None,
+        }
+
+        return result
+
+    def _fetch_price_via_search(self, nm_id):
+        """
+        Получить цену, рейтинг, остатки товара через поиск по артикулу.
+        search.wb.ru при поиске по nm_id может вернуть product-redirect,
+        поэтому ищем по артикулу как тексту.
+        """
+        self._rate_limiter.wait_if_needed()
+
+        params = {
+            **self.DEFAULT_PARAMS,
+            'query': str(nm_id),
+            'resultset': 'catalog',
+            'sort': 'popular',
+            'spp': '30',
+        }
+
+        try:
+            response = self._session.get(
+                self.SEARCH_URL,
+                params=params,
+                timeout=30
+            )
+            if response.status_code == 429:
+                logger.warning(f"Товар {nm_id}: search API rate limited (429)")
+                time.sleep(3)
+                return None
+            response.raise_for_status()
+            data = response.json()
+
+            # Поиск по nm_id может вернуть product-redirect или products
+            products = data.get('products', [])
+            if not products:
+                products = data.get('data', {}).get('products', [])
+
+            # Ищем наш товар среди результатов
+            for p in products:
+                if p.get('id') == nm_id:
+                    return self._parse_search_product(p)
+
+            # Если не нашли точное совпадение, но есть redirect — товар существует,
+            # но цены недоступны через этот endpoint
+            metadata = data.get('metadata', {})
+            if metadata.get('catalog_type') == 'product-redirect':
+                logger.info(f"Товар {nm_id}: search вернул product-redirect, цены недоступны")
+
+            return None
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Товар {nm_id}: ошибка search API: {e}")
+            return None
+
+    def _parse_search_product(self, raw):
+        """Распарсить данные товара из ответа search API (v18 формат)"""
+        # Цены в новом формате: sizes[0].price.basic/product (в копейках)
+        sizes = raw.get('sizes', [])
+        price = None
+        sale_price = None
+        total_stock = raw.get('totalQuantity', 0)
+
+        if sizes:
+            price_obj = sizes[0].get('price', {})
+            if price_obj.get('basic'):
+                price = price_obj['basic'] // 100
+            if price_obj.get('product'):
+                sale_price = price_obj['product'] // 100
 
         return {
-            'nm_id': nm_id,
-            'title': raw.get('name', ''),
-            'brand': raw.get('brand', ''),
-            'supplier_name': raw.get('supplier', ''),
-            'wb_supplier_id': raw.get('supplierId'),
-            'image_url': image_url,
             'price': price,
             'sale_price': sale_price,
             'rating': raw.get('reviewRating', 0),
@@ -260,8 +317,8 @@ class CompetitorMonitorService:
             **self.DEFAULT_PARAMS,
             'query': query,
             'resultset': 'catalog',
-            'limit': min(limit, 300),
             'sort': 'popular',
+            'spp': '30',
         }
 
         try:
@@ -273,16 +330,50 @@ class CompetitorMonitorService:
             response.raise_for_status()
             data = response.json()
 
-            products = data.get('data', {}).get('products', [])
-            return [self._parse_product_data(p) for p in products[:limit]]
+            products = data.get('products', [])
+            if not products:
+                products = data.get('data', {}).get('products', [])
+
+            return [self._parse_full_search_product(p) for p in products[:limit]]
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Ошибка поиска на WB: {e}")
             return []
 
+    def _parse_full_search_product(self, raw):
+        """Распарсить полные данные товара из search API"""
+        nm_id = raw.get('id', 0)
+        sizes = raw.get('sizes', [])
+        price = None
+        sale_price = None
+        total_stock = raw.get('totalQuantity', 0)
+
+        if sizes:
+            price_obj = sizes[0].get('price', {})
+            if price_obj.get('basic'):
+                price = price_obj['basic'] // 100
+            if price_obj.get('product'):
+                sale_price = price_obj['product'] // 100
+
+        return {
+            'nm_id': nm_id,
+            'title': raw.get('name', ''),
+            'brand': raw.get('brand', ''),
+            'supplier_name': raw.get('supplier', ''),
+            'wb_supplier_id': raw.get('supplierId'),
+            'image_url': _get_image_url(nm_id),
+            'price': price,
+            'sale_price': sale_price,
+            'rating': raw.get('reviewRating', 0),
+            'feedbacks_count': raw.get('feedbacks', 0),
+            'total_stock': total_stock,
+        }
+
     def fetch_seller_catalog(self, wb_supplier_id, limit=1000):
         """
-        Получить каталог продавца по его supplier_id на WB.
+        Получить каталог продавца по его supplier_id через search API.
+        catalog.wb.ru/sellers/catalog больше не работает (403).
+        Используем поиск по имени продавца.
 
         Args:
             wb_supplier_id: ID продавца на WB
@@ -291,73 +382,66 @@ class CompetitorMonitorService:
         Returns:
             list: список product_data
         """
+        # Сначала пробуем найти имя продавца через basket API любого товара
+        # Если не можем — ищем напрямую по supplier_id
+        self._rate_limiter.wait_if_needed()
+
+        # Пробуем search с фильтром по supplier
+        params = {
+            **self.DEFAULT_PARAMS,
+            'supplier': str(wb_supplier_id),
+            'resultset': 'catalog',
+            'sort': 'popular',
+            'spp': '30',
+        }
+
         all_products = []
         page = 1
-        working_url = None
 
         while len(all_products) < limit:
             self._rate_limiter.wait_if_needed()
-
-            params = {
-                **self.DEFAULT_PARAMS,
-                'supplier': str(wb_supplier_id),
-                'sort': 'popular',
-                'page': str(page),
-                'limit': '100',
-            }
+            params['page'] = str(page)
 
             try:
-                data = None
+                logger.info(
+                    f"Каталог продавца {wb_supplier_id}, стр. {page}: "
+                    f"search API с фильтром supplier"
+                )
+                response = self._session.get(
+                    self.SEARCH_URL,
+                    params=params,
+                    timeout=30
+                )
 
-                if working_url:
-                    # Используем уже найденный рабочий URL
-                    urls_to_try = [working_url]
-                else:
-                    urls_to_try = self.SELLER_CATALOG_URLS
+                if response.status_code == 429:
+                    logger.warning("Search API rate limited, ожидание...")
+                    time.sleep(5)
+                    continue
 
-                for url in urls_to_try:
-                    logger.info(
-                        f"Запрос каталога продавца {wb_supplier_id}, стр. {page}: "
-                        f"{url}?supplier={wb_supplier_id}"
-                    )
-                    response = self._session.get(
-                        url,
-                        params=params,
-                        timeout=30
-                    )
-                    if response.status_code == 404:
-                        logger.warning(
-                            f"URL {url} вернул 404, пробуем следующий"
-                        )
-                        continue
-                    response.raise_for_status()
-                    data = response.json()
-                    working_url = url
-                    break
+                response.raise_for_status()
+                data = response.json()
 
-                if data is None:
-                    logger.error(
-                        f"Все URL каталога продавца вернули ошибку для {wb_supplier_id}"
-                    )
-                    break
+                products = data.get('products', [])
+                if not products:
+                    products = data.get('data', {}).get('products', [])
 
-                products = data.get('data', {}).get('products', [])
                 if not products:
                     logger.info(
-                        f"Каталог продавца {wb_supplier_id}: получено 0 товаров на стр. {page}. "
+                        f"Каталог продавца {wb_supplier_id}: 0 товаров на стр. {page}. "
                         f"Ответ: {str(data)[:500]}"
                     )
                     break
 
-                all_products.extend(self._parse_product_data(p) for p in products)
+                parsed = [self._parse_full_search_product(p) for p in products]
+                all_products.extend(parsed)
                 logger.info(
                     f"Каталог продавца {wb_supplier_id}: стр. {page}, "
-                    f"получено {len(products)} товаров (всего {len(all_products)})"
+                    f"получено {len(products)} (всего {len(all_products)})"
                 )
                 page += 1
 
             except requests.exceptions.RequestException as e:
-                logger.error(f"Ошибка получения каталога продавца {wb_supplier_id}: {e}")
+                logger.error(f"Ошибка каталога продавца {wb_supplier_id}: {e}")
                 break
 
         return all_products[:limit]
@@ -403,101 +487,98 @@ class CompetitorMonitorService:
 
             logger.info(f"[Seller {seller_id}] Начинаем синк {len(products)} конкурентов")
 
-            # Разбиваем на batch по 100
             total_updated = 0
             total_alerts = 0
             errors = 0
 
-            for i in range(0, len(products), cls.BATCH_SIZE):
-                batch = products[i:i + cls.BATCH_SIZE]
-                nm_ids = [p.nm_id for p in batch]
-
+            # Обрабатываем товары по одному (basket API — по одному товару)
+            for product in products:
                 try:
-                    fetched_data = service.fetch_products_batch(nm_ids)
+                    fetched_data = service.fetch_products_batch([product.nm_id])
+                    data = fetched_data.get(product.nm_id)
 
-                    for product in batch:
-                        data = fetched_data.get(product.nm_id)
-                        if not data:
-                            product.fetch_error_count += 1
-                            logger.warning(
-                                f"[Seller {seller_id}] Товар {product.nm_id} не найден в API "
-                                f"(ошибка #{product.fetch_error_count})"
-                            )
-                            # Деактивируем после 20 ошибок подряд
-                            if product.fetch_error_count >= 20:
-                                product.is_active = False
-                                logger.warning(
-                                    f"Деактивирован товар {product.nm_id} после 20 ошибок подряд"
-                                )
-                            continue
-
-                        product.fetch_error_count = 0
-
-                        # Обновляем метаданные (всегда, чтобы заполнить заглушки)
-                        if data.get('title'):
-                            product.title = data['title']
-                        if data.get('brand'):
-                            product.brand = data['brand']
-                        if data.get('supplier_name'):
-                            product.supplier_name = data['supplier_name']
-                        if data.get('wb_supplier_id'):
-                            product.wb_supplier_id = data['wb_supplier_id']
-                        if data.get('image_url'):
-                            product.image_url = data['image_url']
-
-                        # Delta storage: создаём снимок только если что-то изменилось
-                        price_changed = (
-                            product.current_price != data.get('price') or
-                            product.current_sale_price != data.get('sale_price')
+                    if not data:
+                        product.fetch_error_count += 1
+                        logger.warning(
+                            f"[Seller {seller_id}] Товар {product.nm_id} не найден "
+                            f"(ошибка #{product.fetch_error_count})"
                         )
-                        stock_changed = product.current_total_stock != data.get('total_stock')
-                        rating_changed = product.current_rating != data.get('rating')
-
-                        if price_changed or stock_changed or rating_changed or product.current_price is None:
-                            # Вычисляем процент изменения цены
-                            price_change_pct = None
-                            if product.current_sale_price and data.get('sale_price'):
-                                old_p = product.current_sale_price
-                                new_p = data['sale_price']
-                                if old_p > 0:
-                                    price_change_pct = round((new_p - old_p) / old_p * 100, 2)
-
-                            snapshot = CompetitorPriceSnapshot(
-                                product_id=product.id,
-                                seller_id=seller_id,
-                                price=data.get('price'),
-                                sale_price=data.get('sale_price'),
-                                rating=data.get('rating'),
-                                feedbacks_count=data.get('feedbacks_count'),
-                                total_stock=data.get('total_stock'),
-                                price_change_percent=price_change_pct,
+                        if product.fetch_error_count >= 20:
+                            product.is_active = False
+                            logger.warning(
+                                f"Деактивирован товар {product.nm_id} после 20 ошибок"
                             )
-                            db.session.add(snapshot)
+                        db.session.commit()
+                        continue
 
-                            # Генерируем алерты
-                            alerts = cls._generate_alerts(
-                                seller_id, product, data,
-                                settings.price_change_alert_percent
-                            )
-                            for alert in alerts:
-                                db.session.add(alert)
-                                total_alerts += 1
+                    product.fetch_error_count = 0
 
-                        # Обновляем текущие значения
-                        product.current_price = data.get('price')
-                        product.current_sale_price = data.get('sale_price')
-                        product.current_rating = data.get('rating')
-                        product.current_feedbacks_count = data.get('feedbacks_count')
-                        product.current_total_stock = data.get('total_stock')
-                        product.last_fetched_at = datetime.utcnow()
+                    # Обновляем метаданные
+                    if data.get('title'):
+                        product.title = data['title']
+                    if data.get('brand'):
+                        product.brand = data['brand']
+                    if data.get('supplier_name'):
+                        product.supplier_name = data['supplier_name']
+                    if data.get('wb_supplier_id'):
+                        product.wb_supplier_id = data['wb_supplier_id']
+                    if data.get('image_url'):
+                        product.image_url = data['image_url']
 
-                        total_updated += 1
+                    # Delta storage: создаём снимок только если что-то изменилось
+                    price_changed = (
+                        product.current_price != data.get('price') or
+                        product.current_sale_price != data.get('sale_price')
+                    )
+                    stock_changed = product.current_total_stock != data.get('total_stock')
+                    rating_changed = product.current_rating != data.get('rating')
 
+                    if price_changed or stock_changed or rating_changed or product.current_price is None:
+                        price_change_pct = None
+                        if product.current_sale_price and data.get('sale_price'):
+                            old_p = product.current_sale_price
+                            new_p = data['sale_price']
+                            if old_p > 0:
+                                price_change_pct = round((new_p - old_p) / old_p * 100, 2)
+
+                        snapshot = CompetitorPriceSnapshot(
+                            product_id=product.id,
+                            seller_id=seller_id,
+                            price=data.get('price'),
+                            sale_price=data.get('sale_price'),
+                            rating=data.get('rating'),
+                            feedbacks_count=data.get('feedbacks_count'),
+                            total_stock=data.get('total_stock'),
+                            price_change_percent=price_change_pct,
+                        )
+                        db.session.add(snapshot)
+
+                        # Генерируем алерты
+                        alerts = cls._generate_alerts(
+                            seller_id, product, data,
+                            settings.price_change_alert_percent
+                        )
+                        for alert in alerts:
+                            db.session.add(alert)
+                            total_alerts += 1
+
+                    # Обновляем текущие значения
+                    product.current_price = data.get('price')
+                    product.current_sale_price = data.get('sale_price')
+                    product.current_rating = data.get('rating')
+                    product.current_feedbacks_count = data.get('feedbacks_count')
+                    product.current_total_stock = data.get('total_stock')
+                    product.last_fetched_at = datetime.utcnow()
+
+                    total_updated += 1
                     db.session.commit()
 
                 except Exception as e:
                     errors += 1
-                    logger.error(f"Ошибка batch синка (seller={seller_id}, batch {i//cls.BATCH_SIZE}): {e}")
+                    logger.error(
+                        f"Ошибка синка товара {product.nm_id} "
+                        f"(seller={seller_id}): {e}"
+                    )
                     db.session.rollback()
 
             # Обновляем статистику
@@ -506,7 +587,7 @@ class CompetitorMonitorService:
             settings.total_products_monitored = total_updated
 
             if errors > 0:
-                settings.last_sync_error = f"{errors} batch(es) failed"
+                settings.last_sync_error = f"{errors} product(s) failed"
             else:
                 settings.last_sync_error = None
 
@@ -519,12 +600,7 @@ class CompetitorMonitorService:
 
     @classmethod
     def _generate_alerts(cls, seller_id, product, new_data, alert_threshold):
-        """
-        Генерация алертов при значительных изменениях.
-
-        Returns:
-            list[CompetitorAlert]
-        """
+        """Генерация алертов при значительных изменениях."""
         from models import CompetitorAlert
 
         alerts = []
@@ -547,7 +623,11 @@ class CompetitorMonitorService:
                         old_value=old_p,
                         new_value=new_p,
                         change_percent=change_pct,
-                        message=f"{product.title or product.nm_id}: цена {'снизилась' if change_pct < 0 else 'выросла'} на {abs(change_pct):.1f}% ({old_p} -> {new_p})",
+                        message=(
+                            f"{product.title or product.nm_id}: "
+                            f"цена {'снизилась' if change_pct < 0 else 'выросла'} "
+                            f"на {abs(change_pct):.1f}% ({old_p} -> {new_p})"
+                        ),
                     ))
 
         # Алерт: товар закончился
@@ -561,7 +641,10 @@ class CompetitorMonitorService:
                     severity='info',
                     old_value=product.current_total_stock,
                     new_value=0,
-                    message=f"{product.title or product.nm_id}: товар закончился (было {product.current_total_stock} шт.)",
+                    message=(
+                        f"{product.title or product.nm_id}: "
+                        f"товар закончился (было {product.current_total_stock} шт.)"
+                    ),
                 ))
 
         # Алерт: товар снова в наличии
@@ -575,7 +658,10 @@ class CompetitorMonitorService:
                 severity='info',
                 old_value=0,
                 new_value=new_data['total_stock'],
-                message=f"{product.title or product.nm_id}: товар снова в наличии ({new_data['total_stock']} шт.)",
+                message=(
+                    f"{product.title or product.nm_id}: "
+                    f"товар снова в наличии ({new_data['total_stock']} шт.)"
+                ),
             ))
 
         return alerts
@@ -592,12 +678,9 @@ class CompetitorMonitorService:
         with flask_app.app_context():
             now = datetime.utcnow()
 
-            # Удаляем дубли старше days_hourly (оставляем 1 в час)
             hourly_cutoff = now - timedelta(days=days_hourly)
             daily_cutoff = now - timedelta(days=days_daily)
 
-            # Удаляем лишние снимки старше days_hourly но моложе days_daily
-            # Оставляем последний снимок в каждом часе
             deleted_hourly = db.session.execute(db.text("""
                 DELETE FROM competitor_price_snapshots
                 WHERE id NOT IN (
@@ -608,8 +691,6 @@ class CompetitorMonitorService:
                 AND created_at < :hourly_cutoff AND created_at >= :daily_cutoff
             """), {'hourly_cutoff': hourly_cutoff, 'daily_cutoff': daily_cutoff})
 
-            # Удаляем лишние снимки старше days_daily
-            # Оставляем последний снимок в каждом дне
             deleted_daily = db.session.execute(db.text("""
                 DELETE FROM competitor_price_snapshots
                 WHERE id NOT IN (
@@ -660,7 +741,6 @@ def start_competitor_monitor_loop(seller_id, flask_app):
     from models import db, CompetitorMonitorSettings
 
     with _threads_lock:
-        # Если уже работает — не запускаем дубль
         if seller_id in _monitor_threads and _monitor_threads[seller_id].is_alive():
             logger.info(f"[Seller {seller_id}] Мониторинг-тред уже работает")
             return
@@ -682,19 +762,19 @@ def start_competitor_monitor_loop(seller_id, flask_app):
                         if not settings or not settings.is_enabled:
                             settings.is_running = False
                             db.session.commit()
-                            logger.info(f"[Seller {seller_id}] Мониторинг выключен, выходим из цикла")
+                            logger.info(f"[Seller {seller_id}] Мониторинг выключен, выходим")
                             break
 
                         settings.is_running = True
                         settings.last_sync_status = 'running'
                         db.session.commit()
 
-                    # Полный цикл синка
                     start_time = time.time()
-                    result = CompetitorMonitorService.sync_seller_competitors(seller_id, flask_app)
+                    result = CompetitorMonitorService.sync_seller_competitors(
+                        seller_id, flask_app
+                    )
                     duration = time.time() - start_time
 
-                    # Если нет товаров — долгая пауза, не считаем цикл
                     if result == 'no_products':
                         logger.info(
                             f"[Seller {seller_id}] Нет товаров для мониторинга, пауза 5 мин"
@@ -717,22 +797,19 @@ def start_competitor_monitor_loop(seller_id, flask_app):
                         f"[Seller {seller_id}] Цикл #{cycle_count} завершён за {duration:.1f}с"
                     )
 
-                    # Пауза между циклами (минимум 60 секунд)
                     with flask_app.app_context():
                         settings = CompetitorMonitorSettings.query.filter_by(
                             seller_id=seller_id
                         ).first()
                         pause = settings.pause_between_cycles_seconds if settings else 60
 
-                    pause = max(pause, 60)  # минимум 60 секунд между циклами
+                    pause = max(pause, 60)
                     stop_event.wait(timeout=pause)
 
                 except Exception as e:
                     logger.error(f"[Seller {seller_id}] Ошибка в цикле мониторинга: {e}")
-                    # Ждём 30 секунд перед повтором после ошибки
                     stop_event.wait(timeout=30)
 
-            # Финализация
             with flask_app.app_context():
                 settings = CompetitorMonitorSettings.query.filter_by(
                     seller_id=seller_id
@@ -743,7 +820,9 @@ def start_competitor_monitor_loop(seller_id, flask_app):
 
             logger.info(f"[Seller {seller_id}] Мониторинг-тред завершён")
 
-        thread = threading.Thread(target=_loop, daemon=True, name=f"competitor-monitor-{seller_id}")
+        thread = threading.Thread(
+            target=_loop, daemon=True, name=f"competitor-monitor-{seller_id}"
+        )
         _monitor_threads[seller_id] = thread
         thread.start()
 
@@ -782,7 +861,9 @@ def stop_all_monitor_loops():
     with _threads_lock:
         for seller_id, stop_event in _stop_events.items():
             stop_event.set()
-        logger.info(f"Отправлен сигнал остановки всем мониторинг-тредам ({len(_stop_events)})")
+        logger.info(
+            f"Отправлен сигнал остановки всем мониторинг-тредам ({len(_stop_events)})"
+        )
 
 
 def clear_product_cache():
