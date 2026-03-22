@@ -60,12 +60,15 @@ def register_competitor_routes(app):
             seller_id=seller.id
         ).order_by(CompetitorAlert.created_at.desc()).limit(10).all()
 
+        recent_alerts_data = [a.to_dict() for a in recent_alerts]
+
         return render_template('competitors_dashboard.html',
                                settings=settings,
                                groups=groups,
                                total_products=total_products,
                                unread_alerts=unread_alerts,
-                               recent_alerts=recent_alerts)
+                               recent_alerts=recent_alerts,
+                               recent_alerts_data=recent_alerts_data)
 
     @app.route('/competitors/groups')
     @login_required
@@ -79,7 +82,9 @@ def register_competitor_routes(app):
             CompetitorGroup.created_at.desc()
         ).all()
 
-        return render_template('competitors_groups.html', groups=groups)
+        groups_data = [g.to_dict() for g in groups]
+
+        return render_template('competitors_groups.html', groups=groups, groups_data=groups_data)
 
     @app.route('/competitors/groups/<int:group_id>')
     @login_required

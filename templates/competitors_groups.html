@@ -99,7 +99,7 @@
 <script>
 function competitorGroups() {
     return {
-        groups: {{ groups|map(attribute='to_dict')|list|tojson }},
+        groups: {{ groups_data|tojson }},
         showCreateModal: false,
         editingGroup: null,
         form: { name: '', description: '', color: '#3B82F6' },

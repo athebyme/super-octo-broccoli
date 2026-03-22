@@ -170,7 +170,7 @@ function competitorsDashboard() {
         groups: [],
         totalProducts: {{ total_products }},
         unreadAlerts: {{ unread_alerts }},
-        recentAlerts: {{ recent_alerts|map(attribute='to_dict')|list|tojson }},
+        recentAlerts: {{ recent_alerts_data|tojson }},
         syncing: false,
 
         init() {
