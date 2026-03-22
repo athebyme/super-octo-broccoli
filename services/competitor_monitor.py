@@ -106,9 +106,10 @@ class CompetitorMonitorService:
         """Создать HTTP сессию с retry и пулом соединений"""
         session = requests.Session()
         retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[500, 502, 503, 504],
+            # НЕ ретраим 429 автоматически — обрабатываем вручную с паузой
         )
         adapter = HTTPAdapter(
             max_retries=retry,
@@ -288,30 +289,44 @@ class CompetitorMonitorService:
 
             for url in CATALOG_URLS:
                 try:
+                    logger.info(
+                        f"Каталог продавца {supplier_id}: "
+                        f"запрос {url} стр.{page}"
+                    )
                     response = self._session.get(url, params=params, timeout=30)
+                    logger.info(
+                        f"Каталог продавца {supplier_id}: "
+                        f"ответ {response.status_code}"
+                    )
                     if response.status_code in (403, 404):
                         continue
                     if response.status_code == 429:
                         logger.warning(
-                            f"Каталог продавца {supplier_id}: rate limited (429)"
+                            f"Каталог продавца {supplier_id}: "
+                            f"rate limited (429), пауза 30с"
                         )
-                        time.sleep(3)
+                        time.sleep(30)
                         return found
                     response.raise_for_status()
                     data = response.json()
 
                     products = data.get('data', {}).get('products', [])
                     if not products:
+                        logger.info(
+                            f"Каталог продавца {supplier_id}: "
+                            f"0 товаров на стр.{page}"
+                        )
                         return found
 
                     for p in products:
                         pid = p.get('id')
                         if pid in remaining:
-                            found[pid] = self._parse_search_product(p)
+                            prices = self._parse_search_product(p)
+                            found[pid] = prices
                             remaining.discard(pid)
                             logger.info(
-                                f"Товар {pid}: цена из каталога продавца "
-                                f"{supplier_id}"
+                                f"Товар {pid}: цена {prices.get('sale_price')} "
+                                f"из каталога продавца {supplier_id}"
                             )
 
                     page += 1
@@ -323,7 +338,10 @@ class CompetitorMonitorService:
                     )
                     continue
             else:
-                # Ни один URL не сработал
+                logger.warning(
+                    f"Каталог продавца {supplier_id}: "
+                    f"все URL вернули ошибку"
+                )
                 break
 
         return found
@@ -359,8 +377,8 @@ class CompetitorMonitorService:
                     self.SEARCH_URL, params=params, timeout=30
                 )
                 if response.status_code == 429:
-                    logger.warning(f"Search API rate limited при поиске '{brand}'")
-                    time.sleep(5)
+                    logger.warning(f"Search API rate limited при поиске '{brand}', пауза 60с")
+                    time.sleep(60)
                     break
                 response.raise_for_status()
                 data = response.json()
