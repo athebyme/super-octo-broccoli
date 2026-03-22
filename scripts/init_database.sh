@@ -1,68 +1,49 @@
 #!/bin/bash
-# Скрипт для инициализации базы данных в Docker volume
+# Скрипт для проверки инициализации PostgreSQL базы данных
 
 set -e
 
-echo "🔧 Инициализация базы данных..."
+echo "🔧 Проверка базы данных PostgreSQL..."
 
-# Проверяем что контейнер запущен
 if ! command -v docker &> /dev/null; then
     echo "❌ Docker команда не найдена"
     exit 1
 fi
 
-CONTAINER_NAME="seller-platform"
+PG_CONTAINER="seller-postgres"
+APP_CONTAINER="seller-platform"
 
-# Проверяем что контейнер существует
-if ! docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "❌ Контейнер ${CONTAINER_NAME} не найден"
-    echo "Запустите: docker-compose up -d"
+# Проверяем что PostgreSQL контейнер запущен
+if ! docker ps --format '{{.Names}}' | grep -q "^${PG_CONTAINER}$"; then
+    echo "❌ Контейнер ${PG_CONTAINER} не запущен"
+    echo "Запустите: docker compose up -d postgres"
     exit 1
 fi
 
-# Проверяем что контейнер запущен
-if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "⚠️  Контейнер ${CONTAINER_NAME} не запущен"
-    echo "Запускаю контейнер..."
-    docker-compose up -d seller-platform
-    sleep 5
-fi
-
-# Проверяем существует ли база в volume
-echo "📋 Проверка базы данных в volume..."
-DB_EXISTS=$(docker exec ${CONTAINER_NAME} test -f /app/data/seller_platform.db && echo "yes" || echo "no")
-
-if [ "$DB_EXISTS" = "yes" ]; then
-    DB_SIZE=$(docker exec ${CONTAINER_NAME} du -h /app/data/seller_platform.db 2>/dev/null | cut -f1 || echo "unknown")
-    echo "✅ База данных существует (размер: ${DB_SIZE})"
-
-    # Проверяем что это валидная SQLite база (проверяем заголовок файла)
-    HEADER=$(docker exec ${CONTAINER_NAME} head -c 16 /app/data/seller_platform.db 2>/dev/null || echo "")
-    if [[ "$HEADER" == *"SQLite"* ]]; then
-        echo "✅ База данных валидная (SQLite формат)"
-    else
-        echo "⚠️  Предупреждение: файл может быть повреждён"
-    fi
-
-    echo "✅ База данных инициализирована корректно"
+# Проверяем что PostgreSQL отвечает
+echo "📋 Проверка подключения к PostgreSQL..."
+if docker exec ${PG_CONTAINER} pg_isready -U "${POSTGRES_USER:-seller}" > /dev/null 2>&1; then
+    echo "✅ PostgreSQL доступен"
 else
-    echo "⚠️  База данных не найдена в /app/data/"
-    echo "🔍 Проверяю логи контейнера для диагностики..."
-    echo ""
-
-    docker-compose logs seller-platform | grep "Используется база данных" | tail -1
-
-    echo ""
-    echo "❌ База данных НЕ найдена в volume"
-    echo ""
-    echo "Возможные причины:"
-    echo "  1. Docker использовал старый кэшированный код"
-    echo "  2. База создаётся в неправильном месте"
-    echo ""
-    echo "Решение:"
-    echo "  ./rebuild.sh  # пересобрать БЕЗ кэша"
+    echo "❌ PostgreSQL не отвечает"
     exit 1
+fi
+
+# Проверяем что база существует
+POSTGRES_USER="${POSTGRES_USER:-seller}"
+POSTGRES_DB="${POSTGRES_DB:-seller_platform}"
+
+DB_EXISTS=$(docker exec ${PG_CONTAINER} psql -U "${POSTGRES_USER}" -lqt 2>/dev/null | grep -c "${POSTGRES_DB}" || echo "0")
+
+if [ "$DB_EXISTS" -gt "0" ]; then
+    # Считаем таблицы
+    TABLE_COUNT=$(docker exec ${PG_CONTAINER} psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -tAc \
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>/dev/null || echo "0")
+    echo "✅ База данных '${POSTGRES_DB}' существует (таблиц: ${TABLE_COUNT})"
+else
+    echo "⚠️  База данных '${POSTGRES_DB}' не найдена"
+    echo "   Она будет создана при запуске seller-platform (flask db upgrade)"
 fi
 
 echo ""
-echo "✅ Инициализация завершена успешно!"
+echo "✅ Проверка завершена!"

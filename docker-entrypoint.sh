@@ -14,39 +14,22 @@ mkdir -p uploads processed data
 if [ "$APP_MODULE" = "seller_platform:app" ]; then
 echo "🚀 Инициализация seller-platform..."
 
-# Сначала создаем базовую структуру БД через Flask/SQLAlchemy
-echo "📦 Создание базовой структуры базы данных..."
+# Применяем миграции Alembic (создаёт/обновляет схему БД)
+echo "📦 Применение миграций базы данных..."
+flask db upgrade
+echo "✅ Миграции применены"
+
+# Инициализация: пометка зависших задач + создание администратора
 python - <<'PYCODE'
 import os
-
-# DATABASE_URL уже установлен из docker-compose.yml
-# Проверяем что пришло
-db_url_from_env = os.environ.get('DATABASE_URL', 'NOT_SET')
-print(f"🔍 DATABASE_URL from environment: {db_url_from_env}")
-
-from seller_platform import app, db, ensure_storage_roots
+from seller_platform import app, db, ensure_storage_roots, _mark_stale_ai_jobs
 from models import User
 
 print(f"🗄️  Используется база данных: {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 ensure_storage_roots()
 with app.app_context():
-    # create_all() безопасно - создает только отсутствующие таблицы
-    db.create_all()
-    # Автоматическая миграция новых колонок
-    from seller_platform import _run_startup_migrations
-    _run_startup_migrations()
-    print("✅ Базовая структура БД создана")
-
-    # Включаем WAL mode для лучшей поддержки конкурентного доступа
-    try:
-        db.session.execute(db.text("PRAGMA journal_mode=WAL;"))
-        db.session.execute(db.text("PRAGMA synchronous=NORMAL;"))
-        db.session.execute(db.text("PRAGMA busy_timeout=30000;"))  # 30 секунд
-        db.session.commit()
-        print("✅ SQLite настроен: WAL mode включен, busy_timeout=30s")
-    except Exception as e:
-        print(f"⚠️  Не удалось настроить SQLite WAL mode: {e}")
+    _mark_stale_ai_jobs()
 
     # Проверяем, есть ли администратор
     username = os.environ.get('ADMIN_USERNAME', 'admin')
@@ -102,29 +85,6 @@ with app.app_context():
         else:
             print(f"✅ Администратор уже существует: {admin_user.username}")
 PYCODE
-
-# Теперь применяем миграции для добавления новых колонок
-echo "📦 Применение миграций базы данных..."
-python migrations/migrate_db.py --db-path /app/data/seller_platform.db
-python migrations/migrate_add_characteristics.py /app/data/seller_platform.db
-python migrations/migrate_add_history_and_logging.py --db-path /app/data/seller_platform.db
-python migrations/migrate_add_subject_id.py /app/data/seller_platform.db
-python migrations/migrate_add_price_monitoring.py || echo "⚠️ Price monitoring migration skipped (already applied or error)"
-python migrations/migrate_add_product_sync_settings.py || echo "⚠️ Product sync settings migration skipped (already applied or error)"
-python migrations/migrate_add_admin_features.py || echo "⚠️ Admin features migration skipped (already applied or error)"
-python migrations/migrate_add_card_merge_history.py --db-path /app/data/seller_platform.db || echo "⚠️ Card merge history migration skipped (already applied or error)"
-python migrations/migrate_add_supplier_price.py || echo "⚠️ Supplier price migration skipped (already applied or error)"
-python migrations/migrate_add_safe_price_change.py || echo "⚠️ Safe price change migration skipped (already applied or error)"
-python migrations/migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch migration skipped (already applied or error)"
-python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
-python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
-python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
-python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
-python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
-python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
-python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
-python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
-python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
 
 echo "✅ Инициализация seller-platform завершена"
 fi

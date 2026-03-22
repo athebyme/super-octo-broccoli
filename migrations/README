@@ -1,0 +1,10 @@
+Single-database configuration for Flask-Migrate (Alembic).
+
+To generate a new migration after changing models.py:
+    flask db migrate -m "Description of changes"
+
+To apply migrations:
+    flask db upgrade
+
+To rollback last migration:
+    flask db downgrade
