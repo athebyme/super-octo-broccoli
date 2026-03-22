@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Алерты конкурентов - Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="competitorAlerts()">
+
+    <!-- Header -->
+    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
+        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <div class="flex items-center gap-2 mb-1">
+                    <a href="{{ url_for('competitors_dashboard') }}" class="text-gray-400 hover:text-white text-sm">&larr; Конкуренты</a>
+                </div>
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Алерты</h1>
+                <p class="mt-1 text-sm text-gray-400">Уведомления об изменениях цен и остатков конкурентов</p>
+            </div>
+            <button @click="markAllRead()"
+                class="px-3 py-1.5 text-sm rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20 transition-all">
+                Прочитать все
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex flex-wrap gap-2 mb-6">
+        <a href="{{ url_for('competitors_alerts') }}"
+            class="px-3 py-1.5 text-sm rounded-full {{ 'bg-gray-900 text-white' if not current_type else 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
+            Все
+        </a>
+        <a href="{{ url_for('competitors_alerts', type='price_drop') }}"
+            class="px-3 py-1.5 text-sm rounded-full {{ 'bg-green-600 text-white' if current_type == 'price_drop' else 'bg-green-50 text-green-700 hover:bg-green-100' }}">
+            Снижение цены
+        </a>
+        <a href="{{ url_for('competitors_alerts', type='price_increase') }}"
+            class="px-3 py-1.5 text-sm rounded-full {{ 'bg-red-600 text-white' if current_type == 'price_increase' else 'bg-red-50 text-red-700 hover:bg-red-100' }}">
+            Рост цены
+        </a>
+        <a href="{{ url_for('competitors_alerts', type='out_of_stock') }}"
+            class="px-3 py-1.5 text-sm rounded-full {{ 'bg-yellow-600 text-white' if current_type == 'out_of_stock' else 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100' }}">
+            Нет в наличии
+        </a>
+        <a href="{{ url_for('competitors_alerts', type='back_in_stock') }}"
+            class="px-3 py-1.5 text-sm rounded-full {{ 'bg-blue-600 text-white' if current_type == 'back_in_stock' else 'bg-blue-50 text-blue-700 hover:bg-blue-100' }}">
+            Снова в наличии
+        </a>
+    </div>
+
+    <!-- Alerts list -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        {% for alert in alerts.items %}
+        <div class="flex items-center gap-4 px-6 py-4 border-b border-gray-50 last:border-0 {{ '' if alert.is_read else 'bg-indigo-50/50' }}">
+            <div class="flex-shrink-0">
+                {% if alert.alert_type == 'price_drop' %}
+                <span class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-green-100 text-green-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                </span>
+                {% elif alert.alert_type == 'price_increase' %}
+                <span class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-red-100 text-red-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                </span>
+                {% elif alert.alert_type == 'out_of_stock' %}
+                <span class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-yellow-100 text-yellow-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                </span>
+                {% else %}
+                <span class="inline-flex items-center justify-center w-10 h-10 rounded-full bg-blue-100 text-blue-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                </span>
+                {% endif %}
+            </div>
+            <div class="flex-1 min-w-0">
+                <p class="text-sm text-gray-900">{{ alert.message }}</p>
+                <div class="flex items-center gap-2 mt-1">
+                    <span class="text-xs text-gray-500">{{ alert.created_at.strftime('%d.%m.%Y %H:%M') if alert.created_at else '' }}</span>
+                    {% if alert.severity == 'critical' %}
+                    <span class="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded">критический</span>
+                    {% elif alert.severity == 'warning' %}
+                    <span class="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">внимание</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% if alert.change_percent %}
+            <span class="text-sm font-medium {{ 'text-green-600' if alert.change_percent < 0 else 'text-red-600' }}">
+                {{ '%+.1f' % alert.change_percent }}%
+            </span>
+            {% endif %}
+            {% if alert.old_value and alert.new_value %}
+            <span class="text-xs text-gray-400">
+                {{ alert.old_value|int }} &rarr; {{ alert.new_value|int }} ₽
+            </span>
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        {% if not alerts.items %}
+        <div class="p-12 text-center text-gray-500">Нет алертов</div>
+        {% endif %}
+    </div>
+
+    <!-- Pagination -->
+    {% if alerts.pages > 1 %}
+    <div class="flex justify-center gap-2 mt-6">
+        {% for page_num in alerts.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+            {% if page_num %}
+                <a href="{{ url_for('competitors_alerts', page=page_num, type=current_type, severity=current_severity) }}"
+                    class="px-3 py-1.5 text-sm rounded-md {{ 'bg-indigo-600 text-white' if page_num == alerts.page else 'bg-gray-100 text-gray-700 hover:bg-gray-200' }}">
+                    {{ page_num }}
+                </a>
+            {% else %}
+                <span class="px-2 py-1.5 text-gray-400">...</span>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function competitorAlerts() {
+    return {
+        async markAllRead() {
+            const csrf = document.querySelector('meta[name=csrf-token]')?.content;
+            await fetch('/api/competitors/alerts/mark-read', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
+                body: JSON.stringify({ mark_all: true })
+            });
+            location.reload();
+        }
+    }
+}
+</script>
+{% endblock %}

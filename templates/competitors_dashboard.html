@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Мониторинг конкурентов - Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="competitorsDashboard()">
+
+    <!-- Header -->
+    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
+        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Мониторинг конкурентов</h1>
+                <p class="mt-1 text-sm text-gray-400">
+                    <template x-if="settings.is_running">
+                        <span class="text-green-400">
+                            <span class="inline-block w-2 h-2 bg-green-400 rounded-full animate-pulse mr-1"></span>
+                            Мониторинг активен
+                            <template x-if="settings.last_full_cycle_duration">
+                                <span>&middot; цикл за <span x-text="Math.round(settings.last_full_cycle_duration)"></span>с</span>
+                            </template>
+                        </span>
+                    </template>
+                    <template x-if="!settings.is_running && settings.is_enabled">
+                        <span class="text-yellow-400">Запускается...</span>
+                    </template>
+                    <template x-if="!settings.is_enabled">
+                        <span class="text-gray-500">Мониторинг выключен</span>
+                    </template>
+                </p>
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="{{ url_for('competitors_settings') }}"
+                    class="px-3 py-1.5 text-sm rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20 transition-all">
+                    Настройки
+                </a>
+                <button @click="forceSync()" :disabled="syncing"
+                    class="px-4 py-1.5 text-sm rounded-md bg-white text-[#1a1a1a] font-semibold hover:bg-gray-100 transition-all disabled:opacity-50">
+                    <template x-if="syncing">
+                        <svg class="animate-spin h-4 w-4 inline-block mr-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    </template>
+                    Синхронизировать
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <p class="text-sm text-gray-500">Всего товаров</p>
+            <p class="text-3xl font-bold mt-1" x-text="totalProducts">{{ total_products }}</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <p class="text-sm text-gray-500">Групп</p>
+            <p class="text-3xl font-bold mt-1" x-text="groups.length">{{ groups|length }}</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <p class="text-sm text-gray-500">Непрочитанных алертов</p>
+            <p class="text-3xl font-bold mt-1" :class="unreadAlerts > 0 ? 'text-red-600' : ''" x-text="unreadAlerts">{{ unread_alerts }}</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <p class="text-sm text-gray-500">Циклов завершено</p>
+            <p class="text-3xl font-bold mt-1" x-text="settings.total_cycles_completed || 0">0</p>
+        </div>
+    </div>
+
+    <!-- Groups -->
+    <div class="mb-8">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">Группы конкурентов</h2>
+            <a href="{{ url_for('competitors_groups') }}" class="text-sm text-indigo-600 hover:text-indigo-800">Управление группами</a>
+        </div>
+
+        <template x-if="groups.length === 0">
+            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                <p class="mt-3 text-gray-500">Нет групп конкурентов</p>
+                <a href="{{ url_for('competitors_groups') }}" class="mt-4 inline-block px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
+                    Создать группу
+                </a>
+            </div>
+        </template>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <template x-for="g in groups" :key="g.id">
+                <a :href="'/competitors/groups/' + g.id"
+                    class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition-shadow group">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-3 h-3 rounded-full" :style="'background-color:' + g.color"></div>
+                                <h3 class="font-semibold text-gray-900 group-hover:text-indigo-600" x-text="g.name"></h3>
+                            </div>
+                            <p class="text-sm text-gray-500 mt-1" x-text="g.description || 'Без описания'"></p>
+                        </div>
+                        <span class="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full" x-text="g.products_count + ' тов.'"></span>
+                    </div>
+                    <div class="mt-4 grid grid-cols-3 gap-2 text-center" x-show="g.avg_price">
+                        <div>
+                            <p class="text-xs text-gray-400">Мин</p>
+                            <p class="text-sm font-medium" x-text="g.min_price ? (g.min_price + ' ₽') : '—'"></p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400">Сред</p>
+                            <p class="text-sm font-medium" x-text="g.avg_price ? (g.avg_price + ' ₽') : '—'"></p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400">Макс</p>
+                            <p class="text-sm font-medium" x-text="g.max_price ? (g.max_price + ' ₽') : '—'"></p>
+                        </div>
+                    </div>
+                </a>
+            </template>
+        </div>
+    </div>
+
+    <!-- Recent Alerts -->
+    <div>
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold text-gray-900">Последние алерты</h2>
+            <a href="{{ url_for('competitors_alerts') }}" class="text-sm text-indigo-600 hover:text-indigo-800">Все алерты</a>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <template x-if="recentAlerts.length === 0">
+                <div class="p-8 text-center text-gray-500">Нет алертов</div>
+            </template>
+            <template x-for="alert in recentAlerts" :key="alert.id">
+                <div class="flex items-center gap-4 px-6 py-4 border-b border-gray-50 last:border-0">
+                    <div class="flex-shrink-0">
+                        <template x-if="alert.alert_type === 'price_drop'">
+                            <span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-green-100 text-green-600">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                            </span>
+                        </template>
+                        <template x-if="alert.alert_type === 'price_increase'">
+                            <span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-100 text-red-600">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                            </span>
+                        </template>
+                        <template x-if="alert.alert_type === 'out_of_stock'">
+                            <span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-yellow-100 text-yellow-600">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                            </span>
+                        </template>
+                        <template x-if="alert.alert_type === 'back_in_stock'">
+                            <span class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-600">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                            </span>
+                        </template>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm text-gray-900 truncate" x-text="alert.message"></p>
+                        <p class="text-xs text-gray-500" x-text="new Date(alert.created_at).toLocaleString('ru-RU')"></p>
+                    </div>
+                    <template x-if="alert.change_percent">
+                        <span class="text-sm font-medium" :class="alert.change_percent < 0 ? 'text-green-600' : 'text-red-600'"
+                            x-text="(alert.change_percent > 0 ? '+' : '') + alert.change_percent.toFixed(1) + '%'"></span>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </div>
+</div>
+
+<script>
+function competitorsDashboard() {
+    return {
+        settings: {{ settings.to_dict()|tojson }},
+        groups: [],
+        totalProducts: {{ total_products }},
+        unreadAlerts: {{ unread_alerts }},
+        recentAlerts: {{ recent_alerts|map(attribute='to_dict')|list|tojson }},
+        syncing: false,
+
+        init() {
+            this.loadDashboardData();
+            // Автообновление каждые 30 сек
+            setInterval(() => this.loadDashboardData(), 30000);
+        },
+
+        async loadDashboardData() {
+            try {
+                const res = await fetch('/api/competitors/dashboard-data');
+                const data = await res.json();
+                this.settings = data.settings;
+                this.groups = data.groups;
+                this.totalProducts = data.total_products;
+                this.unreadAlerts = data.unread_alerts;
+            } catch(e) {
+                console.error('Dashboard load error:', e);
+            }
+        },
+
+        async forceSync() {
+            this.syncing = true;
+            try {
+                await fetch('/api/competitors/sync', { method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content}
+                });
+                setTimeout(() => this.loadDashboardData(), 3000);
+            } catch(e) {
+                console.error(e);
+            } finally {
+                setTimeout(() => this.syncing = false, 5000);
+            }
+        }
+    }
+}
+</script>
+{% endblock %}

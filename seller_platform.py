@@ -36,6 +36,8 @@ from models import (
     BackgroundJob, Notification,
     ServiceAgent, AgentTask, AgentTaskStep,
     ContentFactory, SocialAccount, ContentTemplate, ContentItem, ContentPlan,
+    CompetitorMonitorSettings, CompetitorGroup, CompetitorProduct,
+    CompetitorPriceSnapshot, CompetitorAlert,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -6040,6 +6042,10 @@ register_agents_routes(app)
 # ============= КОНТЕНТ-ФАБРИКА =============
 from routes.content_factory import register_content_factory_routes
 register_content_factory_routes(app)
+
+# ============= МОНИТОРИНГ КОНКУРЕНТОВ =============
+from routes.competitors import register_competitor_routes
+register_competitor_routes(app)
 
 # ============= INTERNAL API ДЛЯ АГЕНТОВ =============
 from routes.internal_api import internal_api_bp

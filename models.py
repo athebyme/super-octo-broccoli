@@ -4424,3 +4424,268 @@ class ContentPlan(db.Model):
 
     def __repr__(self):
         return f'<ContentPlan #{self.id} "{self.name}">'
+
+
+# ============= МОНИТОРИНГ КОНКУРЕНТОВ =============
+
+class CompetitorMonitorSettings(db.Model):
+    """Настройки мониторинга конкурентов для селлера"""
+    __tablename__ = 'competitor_monitor_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), unique=True, nullable=False, index=True)
+
+    is_enabled = db.Column(db.Boolean, default=False)
+    is_running = db.Column(db.Boolean, default=False)  # флаг что цикл мониторинга крутится
+
+    # Пороги алертов
+    price_change_alert_percent = db.Column(db.Float, default=5.0)  # порог изменения цены для алерта (%)
+
+    # Rate limiting
+    requests_per_minute = db.Column(db.Integer, default=60)  # запросов в минуту к публичному API
+    max_products = db.Column(db.Integer, default=100000)  # лимит отслеживаемых товаров
+
+    # Непрерывный цикл
+    pause_between_cycles_seconds = db.Column(db.Integer, default=0)  # пауза между циклами (0 = без паузы)
+
+    # Статистика
+    last_sync_at = db.Column(db.DateTime, nullable=True)
+    last_sync_status = db.Column(db.String(50), default='never')  # never/running/success/failed
+    last_sync_error = db.Column(db.Text, nullable=True)
+    last_full_cycle_duration = db.Column(db.Float, nullable=True)  # секунд на полный цикл
+    total_products_monitored = db.Column(db.Integer, default=0)
+    total_cycles_completed = db.Column(db.Integer, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('competitor_monitor_settings', uselist=False))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'is_running': self.is_running,
+            'price_change_alert_percent': self.price_change_alert_percent,
+            'requests_per_minute': self.requests_per_minute,
+            'max_products': self.max_products,
+            'pause_between_cycles_seconds': self.pause_between_cycles_seconds,
+            'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
+            'last_sync_status': self.last_sync_status,
+            'last_sync_error': self.last_sync_error,
+            'last_full_cycle_duration': self.last_full_cycle_duration,
+            'total_products_monitored': self.total_products_monitored,
+            'total_cycles_completed': self.total_cycles_completed,
+        }
+
+    def __repr__(self):
+        return f'<CompetitorMonitorSettings seller={self.seller_id} enabled={self.is_enabled}>'
+
+
+class CompetitorGroup(db.Model):
+    """Именованная группа конкурентов"""
+    __tablename__ = 'competitor_groups'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    color = db.Column(db.String(7), default='#3B82F6')  # hex color для UI
+
+    # Привязка к своему товару для сравнения
+    own_product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True)
+
+    # Источник наполнения группы
+    auto_source = db.Column(db.String(20), default='manual')  # manual/category/seller
+    auto_source_value = db.Column(db.String(200), nullable=True)  # wb_supplier_id или subject_id
+
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('competitor_groups', lazy='dynamic'))
+    own_product = db.relationship('Product', backref=db.backref('competitor_groups_as_own', lazy='dynamic'))
+    products = db.relationship('CompetitorProduct', backref='group', lazy='dynamic', cascade='all, delete-orphan')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'name': self.name,
+            'description': self.description,
+            'color': self.color,
+            'own_product_id': self.own_product_id,
+            'auto_source': self.auto_source,
+            'auto_source_value': self.auto_source_value,
+            'is_active': self.is_active,
+            'products_count': self.products.count() if self.products else 0,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f'<CompetitorGroup #{self.id} "{self.name}">'
+
+
+class CompetitorProduct(db.Model):
+    """Отслеживаемый товар конкурента"""
+    __tablename__ = 'competitor_products'
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'nm_id', 'group_id', name='uq_competitor_seller_nm_group'),
+        db.Index('idx_competitor_seller_active_priority', 'seller_id', 'is_active', 'priority'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('competitor_groups.id'), nullable=False, index=True)
+    nm_id = db.Column(db.BigInteger, nullable=False, index=True)
+
+    # Данные о товаре (обновляются при каждом fetch)
+    title = db.Column(db.String(500), nullable=True)
+    brand = db.Column(db.String(200), nullable=True)
+    supplier_name = db.Column(db.String(200), nullable=True)
+    wb_supplier_id = db.Column(db.BigInteger, nullable=True)
+    image_url = db.Column(db.String(500), nullable=True)
+
+    # Текущие значения (обновляются при каждом fetch)
+    current_price = db.Column(db.Integer, nullable=True)  # цена в копейках
+    current_sale_price = db.Column(db.Integer, nullable=True)  # цена со скидкой в копейках
+    current_rating = db.Column(db.Float, nullable=True)
+    current_feedbacks_count = db.Column(db.Integer, nullable=True)
+    current_total_stock = db.Column(db.Integer, nullable=True)
+
+    # Метаданные
+    priority = db.Column(db.Integer, default=2)  # 1=высокий, 2=средний, 3=низкий
+    is_active = db.Column(db.Boolean, default=True)
+    last_fetched_at = db.Column(db.DateTime, nullable=True)
+    fetch_error_count = db.Column(db.Integer, default=0)  # кол-во ошибок подряд
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('competitor_products', lazy='dynamic'))
+    snapshots = db.relationship('CompetitorPriceSnapshot', backref='product', lazy='dynamic',
+                                cascade='all, delete-orphan', order_by='CompetitorPriceSnapshot.created_at.desc()')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'group_id': self.group_id,
+            'nm_id': self.nm_id,
+            'title': self.title,
+            'brand': self.brand,
+            'supplier_name': self.supplier_name,
+            'wb_supplier_id': self.wb_supplier_id,
+            'image_url': self.image_url,
+            'current_price': self.current_price,
+            'current_sale_price': self.current_sale_price,
+            'current_rating': self.current_rating,
+            'current_feedbacks_count': self.current_feedbacks_count,
+            'current_total_stock': self.current_total_stock,
+            'priority': self.priority,
+            'is_active': self.is_active,
+            'last_fetched_at': self.last_fetched_at.isoformat() if self.last_fetched_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<CompetitorProduct nm_id={self.nm_id} group={self.group_id}>'
+
+
+class CompetitorPriceSnapshot(db.Model):
+    """Снимок цены конкурента (создаётся только при изменении — delta storage)"""
+    __tablename__ = 'competitor_price_snapshots'
+    __table_args__ = (
+        db.Index('idx_competitor_snapshot_product_created', 'product_id', 'created_at'),
+        db.Index('idx_competitor_snapshot_seller_created', 'seller_id', 'created_at'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('competitor_products.id', ondelete='CASCADE'), nullable=False)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
+
+    price = db.Column(db.Integer, nullable=True)  # цена в копейках
+    sale_price = db.Column(db.Integer, nullable=True)  # цена со скидкой в копейках
+    rating = db.Column(db.Float, nullable=True)
+    feedbacks_count = db.Column(db.Integer, nullable=True)
+    total_stock = db.Column(db.Integer, nullable=True)
+
+    # Изменение относительно предыдущего снимка
+    price_change_percent = db.Column(db.Float, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'product_id': self.product_id,
+            'price': self.price,
+            'sale_price': self.sale_price,
+            'rating': self.rating,
+            'feedbacks_count': self.feedbacks_count,
+            'total_stock': self.total_stock,
+            'price_change_percent': self.price_change_percent,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<CompetitorPriceSnapshot product={self.product_id} price={self.sale_price}>'
+
+
+class CompetitorAlert(db.Model):
+    """Уведомление об изменении у конкурента"""
+    __tablename__ = 'competitor_alerts'
+    __table_args__ = (
+        db.Index('idx_competitor_alert_seller_read', 'seller_id', 'is_read'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('competitor_products.id', ondelete='CASCADE'), nullable=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('competitor_groups.id', ondelete='SET NULL'), nullable=True)
+
+    alert_type = db.Column(db.String(30), nullable=False)  # price_drop/price_increase/out_of_stock/back_in_stock
+    severity = db.Column(db.String(10), default='info')  # info/warning/critical
+
+    old_value = db.Column(db.Float, nullable=True)
+    new_value = db.Column(db.Float, nullable=True)
+    change_percent = db.Column(db.Float, nullable=True)
+
+    message = db.Column(db.Text, nullable=True)
+    is_read = db.Column(db.Boolean, default=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    seller = db.relationship('Seller', backref=db.backref('competitor_alerts', lazy='dynamic'))
+    product = db.relationship('CompetitorProduct', backref=db.backref('alerts', lazy='dynamic'))
+    competitor_group = db.relationship('CompetitorGroup', backref=db.backref('alerts', lazy='dynamic'))
+
+    def to_dict(self):
+        product_data = None
+        if self.product:
+            product_data = {
+                'nm_id': self.product.nm_id,
+                'title': self.product.title,
+                'brand': self.product.brand,
+            }
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'product_id': self.product_id,
+            'group_id': self.group_id,
+            'alert_type': self.alert_type,
+            'severity': self.severity,
+            'old_value': self.old_value,
+            'new_value': self.new_value,
+            'change_percent': self.change_percent,
+            'message': self.message,
+            'is_read': self.is_read,
+            'product': product_data,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<CompetitorAlert #{self.id} {self.alert_type} {self.severity}>'
