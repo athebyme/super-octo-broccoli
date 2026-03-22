@@ -165,22 +165,38 @@ class CompetitorMonitorService:
             if meta:
                 basket_data[nm_id] = meta
 
-        # Шаг 2: сгруппировать по бренду и загрузить цены через search
+        # Шаг 2: загрузить цены через каталог продавца или search по бренду
+        # Группируем по supplier_id (один запрос каталога = все товары продавца)
+        suppliers = {}  # {supplier_id: [nm_id, ...]}
         brands = {}  # {brand: [nm_id, ...]}
         for nm_id, meta in basket_data.items():
+            sid = meta.get('wb_supplier_id')
+            if sid:
+                suppliers.setdefault(sid, []).append(nm_id)
             brand = meta.get('brand', '')
             if brand:
                 brands.setdefault(brand, []).append(nm_id)
-            else:
-                brands.setdefault('__no_brand__', []).append(nm_id)
 
-        # Один search-запрос на бренд (вместо одного на товар)
         price_data = {}  # {nm_id: {price, sale_price, ...}}
-        for brand, brand_nm_ids in brands.items():
-            if brand == '__no_brand__':
-                continue
-            found = self._search_products_by_brand(brand, set(brand_nm_ids))
+        remaining = set(basket_data.keys())
+
+        # Попытка 1: каталог продавца (catalog.wb.ru)
+        for supplier_id, supplier_nm_ids in suppliers.items():
+            found = self._fetch_prices_from_seller_catalog(
+                supplier_id, set(supplier_nm_ids)
+            )
             price_data.update(found)
+            remaining -= set(found.keys())
+
+        # Попытка 2: search по бренду (для оставшихся)
+        if remaining:
+            for brand, brand_nm_ids in brands.items():
+                brand_remaining = set(brand_nm_ids) & remaining
+                if not brand_remaining:
+                    continue
+                found = self._search_products_by_brand(brand, brand_remaining)
+                price_data.update(found)
+                remaining -= set(found.keys())
 
         # Шаг 3: собрать результаты
         for nm_id, meta in basket_data.items():
@@ -239,6 +255,78 @@ class CompetitorMonitorService:
             ),
             'image_url': _get_image_url(nm_id),
         }
+
+    def _fetch_prices_from_seller_catalog(self, supplier_id, target_nm_ids):
+        """
+        Получить цены товаров из каталога продавца (catalog.wb.ru).
+        Один запрос возвращает до 100 товаров продавца с ценами.
+
+        Returns:
+            dict: {nm_id: {price, sale_price, rating, feedbacks_count, total_stock}}
+        """
+        CATALOG_URLS = [
+            "https://catalog.wb.ru/sellers/catalog",
+            "https://catalog.wb.ru/sellers/v2/catalog",
+        ]
+
+        found = {}
+        remaining = set(target_nm_ids)
+        page = 1
+
+        while remaining and page <= 10:
+            self._rate_limiter.wait_if_needed()
+
+            params = {
+                'appType': '1',
+                'curr': 'rub',
+                'dest': '-1257786',
+                'supplier': str(supplier_id),
+                'sort': 'popular',
+                'page': str(page),
+                'limit': '100',
+            }
+
+            for url in CATALOG_URLS:
+                try:
+                    response = self._session.get(url, params=params, timeout=30)
+                    if response.status_code in (403, 404):
+                        continue
+                    if response.status_code == 429:
+                        logger.warning(
+                            f"Каталог продавца {supplier_id}: rate limited (429)"
+                        )
+                        time.sleep(3)
+                        return found
+                    response.raise_for_status()
+                    data = response.json()
+
+                    products = data.get('data', {}).get('products', [])
+                    if not products:
+                        return found
+
+                    for p in products:
+                        pid = p.get('id')
+                        if pid in remaining:
+                            found[pid] = self._parse_search_product(p)
+                            remaining.discard(pid)
+                            logger.info(
+                                f"Товар {pid}: цена из каталога продавца "
+                                f"{supplier_id}"
+                            )
+
+                    page += 1
+                    break  # URL сработал
+
+                except requests.exceptions.RequestException as e:
+                    logger.error(
+                        f"Каталог продавца {supplier_id} ({url}): {e}"
+                    )
+                    continue
+            else:
+                # Ни один URL не сработал
+                break
+
+        return found
 
     def _search_products_by_brand(self, brand, target_nm_ids):
         """
@@ -305,19 +393,31 @@ class CompetitorMonitorService:
         return found
 
     def _parse_search_product(self, raw):
-        """Распарсить данные товара из ответа search API (v18 формат)"""
-        # Цены в новом формате: sizes[0].price.basic/product (в копейках)
+        """Распарсить цены/рейтинг из ответа search или catalog API"""
         sizes = raw.get('sizes', [])
         price = None
         sale_price = None
         total_stock = raw.get('totalQuantity', 0)
 
+        # Новый формат (search v18): sizes[0].price.basic/product
         if sizes:
             price_obj = sizes[0].get('price', {})
             if price_obj.get('basic'):
                 price = price_obj['basic'] // 100
             if price_obj.get('product'):
                 sale_price = price_obj['product'] // 100
+
+        # Старый формат (catalog): priceU / salePriceU
+        if price is None and raw.get('priceU'):
+            price = raw['priceU'] // 100
+        if sale_price is None and raw.get('salePriceU'):
+            sale_price = raw['salePriceU'] // 100
+
+        # Старый формат stock: sizes[].stocks[].qty
+        if total_stock == 0 and sizes:
+            for s in sizes:
+                for stock in s.get('stocks', []):
+                    total_stock += stock.get('qty', 0)
 
         return {
             'price': price,

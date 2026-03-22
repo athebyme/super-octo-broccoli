@@ -603,10 +603,15 @@ def register_competitor_routes(app):
         import threading
         flask_app = current_app._get_current_object()
 
-        def _sync():
-            CompetitorMonitorService.sync_seller_competitors(seller.id, flask_app)
-
         from services.competitor_monitor import CompetitorMonitorService
+
+        def _sync():
+            try:
+                CompetitorMonitorService.sync_seller_competitors(seller.id, flask_app)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Ошибка force sync: {e}", exc_info=True)
+
         thread = threading.Thread(target=_sync, daemon=True)
         thread.start()
 
