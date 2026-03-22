@@ -123,7 +123,8 @@ class CompetitorMonitorService:
     def fetch_products_batch(self, nm_ids):
         """
         Получить данные о товарах по списку nm_id.
-        Комбинирует basket API (метаданные) + search API (цены).
+        1. basket API для метаданных (без rate limit, по одному)
+        2. search API по брендам для цен (группируем по бренду = меньше запросов)
 
         Args:
             nm_ids: список nm_id товаров
@@ -150,148 +151,151 @@ class CompetitorMonitorService:
         if not uncached_ids:
             return results
 
-        # Получаем данные по каждому товару из basket API + search API
+        # Шаг 1: загрузить метаданные из basket API (быстро, нет rate limit)
+        basket_data = {}  # {nm_id: {title, brand, supplier_name, ...}}
         for nm_id in uncached_ids:
-            try:
-                product_data = self._fetch_single_product(nm_id)
-                if product_data:
-                    results[nm_id] = product_data
-                    with _cache_lock:
-                        _product_cache[nm_id] = (product_data, time.time())
-                else:
-                    logger.warning(f"Товар {nm_id}: не удалось получить данные")
-            except Exception as e:
-                logger.error(f"Ошибка получения данных товара {nm_id}: {e}")
+            meta = self._fetch_basket_metadata(nm_id)
+            if meta:
+                basket_data[nm_id] = meta
+
+        # Шаг 2: сгруппировать по бренду и загрузить цены через search
+        brands = {}  # {brand: [nm_id, ...]}
+        for nm_id, meta in basket_data.items():
+            brand = meta.get('brand', '')
+            if brand:
+                brands.setdefault(brand, []).append(nm_id)
+            else:
+                brands.setdefault('__no_brand__', []).append(nm_id)
+
+        # Один search-запрос на бренд (вместо одного на товар)
+        price_data = {}  # {nm_id: {price, sale_price, ...}}
+        for brand, brand_nm_ids in brands.items():
+            if brand == '__no_brand__':
+                continue
+            found = self._search_products_by_brand(brand, set(brand_nm_ids))
+            price_data.update(found)
+
+        # Шаг 3: собрать результаты
+        for nm_id, meta in basket_data.items():
+            prices = price_data.get(nm_id, {})
+            product_data = {
+                **meta,
+                'price': prices.get('price'),
+                'sale_price': prices.get('sale_price'),
+                'rating': prices.get('rating'),
+                'feedbacks_count': prices.get('feedbacks_count'),
+                'total_stock': prices.get('total_stock'),
+            }
+            results[nm_id] = product_data
+            with _cache_lock:
+                _product_cache[nm_id] = (product_data, time.time())
 
         return results
 
-    def _fetch_single_product(self, nm_id):
-        """
-        Получить полные данные одного товара.
-        1. basket API для метаданных (название, бренд, продавец)
-        2. search API по бренду/названию для цен и остатков
-        """
-        self._rate_limiter.wait_if_needed()
-
+    def _fetch_basket_metadata(self, nm_id):
+        """Загрузить метаданные товара из basket API (name, brand, supplier)."""
         base_url = _get_basket_base_url(nm_id)
 
-        # 1. Карточка товара (название, бренд, описание)
+        # Карточка товара
         card_data = None
         try:
-            card_url = f"{base_url}/info/ru/card.json"
-            response = self._session.get(card_url, timeout=15)
+            response = self._session.get(f"{base_url}/info/ru/card.json", timeout=10)
             if response.status_code == 200:
                 card_data = response.json()
-                logger.info(f"Товар {nm_id}: карточка загружена из basket API")
             else:
-                logger.warning(f"Товар {nm_id}: card.json вернул {response.status_code}")
+                logger.warning(f"Товар {nm_id}: card.json -> {response.status_code}")
+                return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"Товар {nm_id}: ошибка загрузки card.json: {e}")
-
-        if not card_data:
+            logger.error(f"Товар {nm_id}: ошибка card.json: {e}")
             return None
 
-        # 2. Информация о продавце
+        # Информация о продавце
         seller_data = None
         try:
-            self._rate_limiter.wait_if_needed()
-            seller_url = f"{base_url}/info/sellers.json"
-            response = self._session.get(seller_url, timeout=15)
+            response = self._session.get(f"{base_url}/info/sellers.json", timeout=10)
             if response.status_code == 200:
                 seller_data = response.json()
         except requests.exceptions.RequestException:
             pass
 
         selling = card_data.get('selling', {})
-        brand = selling.get('brand_name', '')
-        title = card_data.get('imt_name', '')
-
-        # 3. Цены и остатки через search API (поиск по бренду + названию)
-        price_data = self._fetch_price_via_search(nm_id, brand, title)
-
-        result = {
+        return {
             'nm_id': nm_id,
-            'title': title,
-            'brand': brand,
+            'title': card_data.get('imt_name', ''),
+            'brand': selling.get('brand_name', ''),
             'supplier_name': (
                 seller_data.get('supplierName', '') if seller_data
-                else brand
+                else selling.get('brand_name', '')
             ),
             'wb_supplier_id': selling.get('supplier_id') or (
                 seller_data.get('supplierId') if seller_data else None
             ),
             'image_url': _get_image_url(nm_id),
-            'price': price_data.get('price') if price_data else None,
-            'sale_price': price_data.get('sale_price') if price_data else None,
-            'rating': price_data.get('rating') if price_data else None,
-            'feedbacks_count': price_data.get('feedbacks_count') if price_data else None,
-            'total_stock': price_data.get('total_stock') if price_data else None,
         }
 
-        return result
-
-    def _fetch_price_via_search(self, nm_id, brand='', title=''):
+    def _search_products_by_brand(self, brand, target_nm_ids):
         """
-        Получить цену, рейтинг, остатки товара через search API.
+        Один search-запрос по бренду, возвращает цены для всех target_nm_ids.
+        Пагинирует до 3 страниц, пока не найдёт все товары.
 
-        Стратегия поиска (по приоритету):
-        1. Поиск по бренду — находит товар среди результатов по id
-        2. Поиск по названию — fallback если по бренду не найден
+        Returns:
+            dict: {nm_id: {price, sale_price, rating, feedbacks_count, total_stock}}
         """
-        search_queries = []
-        if brand:
-            search_queries.append(brand)
-        if title and title != brand:
-            search_queries.append(f"{brand} {title}" if brand else title)
+        found = {}
+        remaining = set(target_nm_ids)
 
-        for query in search_queries:
+        for page in range(1, 4):  # макс 3 страницы
+            if not remaining:
+                break
+
             self._rate_limiter.wait_if_needed()
 
             params = {
                 **self.DEFAULT_PARAMS,
-                'query': query,
+                'query': brand,
                 'resultset': 'catalog',
                 'sort': 'popular',
                 'spp': '30',
+                'page': str(page),
             }
 
             try:
                 response = self._session.get(
-                    self.SEARCH_URL,
-                    params=params,
-                    timeout=30
+                    self.SEARCH_URL, params=params, timeout=30
                 )
                 if response.status_code == 429:
-                    logger.warning(f"Товар {nm_id}: search API rate limited (429)")
+                    logger.warning(f"Search API rate limited при поиске '{brand}'")
                     time.sleep(5)
-                    continue
+                    break
                 response.raise_for_status()
                 data = response.json()
 
                 products = data.get('products', [])
                 if not products:
                     products = data.get('data', {}).get('products', [])
+                if not products:
+                    break
 
-                # Ищем наш товар по id среди результатов
                 for p in products:
-                    if p.get('id') == nm_id:
+                    pid = p.get('id')
+                    if pid in remaining:
+                        found[pid] = self._parse_search_product(p)
+                        remaining.discard(pid)
                         logger.info(
-                            f"Товар {nm_id}: найден через search (query=\"{query}\"), "
-                            f"цена={p.get('sizes', [{}])[0].get('price', {}).get('product', 0) // 100}"
+                            f"Товар {pid}: цена найдена через search "
+                            f"(brand=\"{brand}\", стр.{page})"
                         )
-                        return self._parse_search_product(p)
-
-                logger.info(
-                    f"Товар {nm_id}: не найден в search (query=\"{query}\", "
-                    f"results={len(products)})"
-                )
 
             except requests.exceptions.RequestException as e:
-                logger.error(f"Товар {nm_id}: ошибка search API: {e}")
-                continue
+                logger.error(f"Ошибка search '{brand}': {e}")
+                break
 
-        logger.warning(f"Товар {nm_id}: цены не найдены через search API")
-        return None
+        if remaining:
+            logger.info(
+                f"Товары не найдены в search по бренду '{brand}': {remaining}"
+            )
+
+        return found
 
     def _parse_search_product(self, raw):
         """Распарсить данные товара из ответа search API (v18 формат)"""
@@ -624,10 +628,12 @@ class CompetitorMonitorService:
             total_alerts = 0
             errors = 0
 
-            # Обрабатываем товары по одному (basket API — по одному товару)
+            # Batch-загрузка всех товаров сразу
+            all_nm_ids = [p.nm_id for p in products]
+            fetched_data = service.fetch_products_batch(all_nm_ids)
+
             for product in products:
                 try:
-                    fetched_data = service.fetch_products_batch([product.nm_id])
                     data = fetched_data.get(product.nm_id)
 
                     if not data:
