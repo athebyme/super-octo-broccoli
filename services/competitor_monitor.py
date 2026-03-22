@@ -38,9 +38,9 @@ _threads_lock = threading.Lock()
 class CompetitorMonitorService:
     """Сервис мониторинга конкурентов через публичные API WB"""
 
-    DETAIL_URL = "https://card.wb.ru/cards/v2/detail"
+    DETAIL_URL = "https://card.wb.ru/cards/detail"
     SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v7/search"
-    SELLER_CATALOG_URL = "https://catalog.wb.ru/sellers/v2/catalog"
+    SELLER_CATALOG_URL = "https://catalog.wb.ru/sellers/catalog"
     BATCH_SIZE = 100  # макс nm_id на один запрос
 
     # Дефолтные параметры запросов
@@ -124,6 +124,11 @@ class CompetitorMonitorService:
                 params=params,
                 timeout=30
             )
+            if response.status_code == 404:
+                # Попробуем v2 endpoint как fallback
+                v2_url = self.DETAIL_URL.replace('/cards/detail', '/cards/v2/detail')
+                logger.info(f"Detail v1 вернул 404, пробуем v2: {v2_url}")
+                response = self._session.get(v2_url, params=params, timeout=30)
             response.raise_for_status()
             data = response.json()
 
@@ -277,8 +282,13 @@ class CompetitorMonitorService:
             }
 
             try:
+                url = self.SELLER_CATALOG_URL
+                logger.info(
+                    f"Запрос каталога продавца {wb_supplier_id}, стр. {page}: "
+                    f"{url}?supplier={wb_supplier_id}"
+                )
                 response = self._session.get(
-                    self.SELLER_CATALOG_URL,
+                    url,
                     params=params,
                     timeout=30
                 )
@@ -287,9 +297,17 @@ class CompetitorMonitorService:
 
                 products = data.get('data', {}).get('products', [])
                 if not products:
+                    logger.info(
+                        f"Каталог продавца {wb_supplier_id}: получено 0 товаров на стр. {page}. "
+                        f"Ответ: {str(data)[:500]}"
+                    )
                     break
 
                 all_products.extend(self._parse_product_data(p) for p in products)
+                logger.info(
+                    f"Каталог продавца {wb_supplier_id}: стр. {page}, "
+                    f"получено {len(products)} товаров (всего {len(all_products)})"
+                )
                 page += 1
 
             except requests.exceptions.RequestException as e:
@@ -332,10 +350,10 @@ class CompetitorMonitorService:
 
             if not products:
                 settings.last_sync_at = datetime.utcnow()
-                settings.last_sync_status = 'success'
+                settings.last_sync_status = 'idle'
                 settings.total_products_monitored = 0
                 db.session.commit()
-                return
+                return 'no_products'
 
             logger.info(f"[Seller {seller_id}] Начинаем синк {len(products)} конкурентов")
 
@@ -623,8 +641,16 @@ def start_competitor_monitor_loop(seller_id, flask_app):
 
                     # Полный цикл синка
                     start_time = time.time()
-                    CompetitorMonitorService.sync_seller_competitors(seller_id, flask_app)
+                    result = CompetitorMonitorService.sync_seller_competitors(seller_id, flask_app)
                     duration = time.time() - start_time
+
+                    # Если нет товаров — долгая пауза, не считаем цикл
+                    if result == 'no_products':
+                        logger.info(
+                            f"[Seller {seller_id}] Нет товаров для мониторинга, пауза 5 мин"
+                        )
+                        stop_event.wait(timeout=300)
+                        continue
 
                     cycle_count += 1
 
@@ -641,15 +667,15 @@ def start_competitor_monitor_loop(seller_id, flask_app):
                         f"[Seller {seller_id}] Цикл #{cycle_count} завершён за {duration:.1f}с"
                     )
 
-                    # Пауза между циклами
+                    # Пауза между циклами (минимум 60 секунд)
                     with flask_app.app_context():
                         settings = CompetitorMonitorSettings.query.filter_by(
                             seller_id=seller_id
                         ).first()
-                        pause = settings.pause_between_cycles_seconds if settings else 0
+                        pause = settings.pause_between_cycles_seconds if settings else 60
 
-                    if pause > 0:
-                        stop_event.wait(timeout=pause)
+                    pause = max(pause, 60)  # минимум 60 секунд между циклами
+                    stop_event.wait(timeout=pause)
 
                 except Exception as e:
                     logger.error(f"[Seller {seller_id}] Ошибка в цикле мониторинга: {e}")

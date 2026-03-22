@@ -94,8 +94,10 @@ def register_competitor_routes(app):
             group_id=group_id, is_active=True
         ).order_by(CompetitorProduct.current_sale_price.asc().nullslast()).all()
 
+        products_data = [p.to_dict() for p in products]
+
         return render_template('competitors_group_detail.html',
-                               group=group, products=products)
+                               group=group, products=products, products_data=products_data)
 
     @app.route('/competitors/alerts')
     @login_required

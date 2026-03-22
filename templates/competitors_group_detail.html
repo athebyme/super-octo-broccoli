@@ -171,7 +171,7 @@
 <script>
 function groupDetail() {
     return {
-        products: {{ products|map(attribute='to_dict')|list|tojson }},
+        products: {{ products_data|tojson }},
         groupId: {{ group.id }},
         showAddModal: false,
         addMode: 'nm_ids',
