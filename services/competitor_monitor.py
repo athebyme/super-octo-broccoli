@@ -36,13 +36,15 @@ _stop_events = {}
 _monitor_threads = {}
 _threads_lock = threading.Lock()
 
-# Маппинг vol -> basket номер
+# Маппинг vol -> basket номер (обновлено март 2026)
 _BASKET_RANGES = [
     (143, '01'), (287, '02'), (431, '03'), (719, '04'),
     (1007, '05'), (1061, '06'), (1115, '07'), (1169, '08'),
     (1313, '09'), (1601, '10'), (1655, '11'), (1919, '12'),
     (2045, '13'), (2189, '14'), (2405, '15'), (2621, '16'),
-    (2837, '17'),
+    (2837, '17'), (3053, '18'), (3269, '19'), (3485, '20'),
+    (3701, '21'), (3917, '22'), (4133, '23'), (4349, '24'),
+    (4565, '25'),
 ]
 
 
@@ -52,15 +54,20 @@ def _get_basket(nm_id):
     for max_vol, basket in _BASKET_RANGES:
         if vol <= max_vol:
             return basket
-    return '18'
+    # Для новых товаров с vol > последнего диапазона:
+    # каждые 216 vol — новый basket
+    last_vol = _BASKET_RANGES[-1][0]
+    last_num = int(_BASKET_RANGES[-1][1])
+    extra = (vol - last_vol - 1) // 216
+    return f'{last_num + 1 + extra:02d}'
 
 
 def _get_basket_base_url(nm_id):
-    """Получить базовый URL для basket-эндпоинта"""
+    """Получить базовый URL для basket-эндпоинта (wbbasket.ru)"""
     basket = _get_basket(nm_id)
     vol = nm_id // 100000
     part = nm_id // 1000
-    return f"https://basket-{basket}.wb.ru/vol{vol}/part{part}/{nm_id}"
+    return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}"
 
 
 def _get_image_url(nm_id):
