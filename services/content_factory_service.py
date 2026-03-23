@@ -458,7 +458,8 @@ class ContentFactoryService:
     ) -> Tuple[List[ContentItem], List[str]]:
         """Массовая генерация контента.
 
-        Автоматически подбирает товары и генерирует указанное количество постов.
+        Автоматически подбирает УНИКАЛЬНЫЕ товары и генерирует указанное количество постов.
+        Внутри батча товары не повторяются.
 
         Returns:
             Tuple[list of created items, list of errors]
@@ -466,15 +467,23 @@ class ContentFactoryService:
         items = []
         errors = []
 
-        # Подбираем товары
-        products = self.select_products(factory, limit=count)
+        # Подбираем уникальные товары — запрашиваем с запасом
+        products = self.select_products(factory, limit=count * 2)
         if not products:
             return [], ["Не найдены товары для генерации"]
 
-        for product_data in products[:count]:
+        # Трекаем использованные в этом батче чтобы гарантировать уникальность
+        used_in_batch = set()
+
+        for product_data in products:
+            if len(items) >= count:
+                break
+
             product_id = product_data.get('id')
-            if not product_id:
+            if not product_id or product_id in used_in_batch:
                 continue
+
+            used_in_batch.add(product_id)
 
             item, error = self.generate_and_save(
                 factory=factory,
@@ -608,15 +617,22 @@ class ContentFactoryService:
     ) -> List[Dict[str, Any]]:
         """Подбирает товары для контента на основе режима фабрики.
 
-        Приоритет отдаётся товарам, которые давно не использовались в этой фабрике.
+        Алгоритм ротации:
+        1. Загружаем ВСЕ доступные товары (в наличии)
+        2. Исключаем явно запрещённые (exclude_product_ids)
+        3. Считаем сколько раз каждый товар УЖЕ использовался в этой фабрике
+        4. Сортируем по количеству использований (ASC) — меньше всего использованные первые
+        5. Внутри одинакового кол-ва использований — рандомный порядок
+        6. Возвращаем top-N
+
+        Это гарантирует что ВСЕ товары будут использованы прежде чем начнутся повторы.
         """
         import random as _random
-        from datetime import datetime as _dt
 
         mode = factory.product_selection_mode or 'manual'
 
-        # Запрашиваем больше товаров чтобы после дедупликации и фильтрации хватило
-        fetch_limit = limit * 5
+        # Загружаем МНОГО товаров — нужен полный пул для честной ротации
+        fetch_limit = max(limit * 10, 200)
 
         if mode == 'bestsellers':
             raw = self._select_bestsellers(factory.seller_id, fetch_limit)
@@ -630,41 +646,43 @@ class ContentFactoryService:
 
         deduped = self._deduplicate_products(raw, fetch_limit)
 
-        # Исключаем уже использованные товары
+        # Исключаем явно запрещённые товары
         if exclude_product_ids:
             deduped = [p for p in deduped if p['id'] not in exclude_product_ids]
 
-        # Собираем историю использования товаров в фабрике для ротации
-        product_last_used = {}
+        if not deduped:
+            return []
+
+        # Считаем КОЛИЧЕСТВО использований каждого товара в этой фабрике
+        product_use_count = {}  # product_id -> int
         try:
             factory_items = ContentItem.query.filter(
                 ContentItem.factory_id == factory.id,
             ).all()
             for ci in factory_items:
                 for pid in ci.get_product_ids():
-                    prev = product_last_used.get(pid)
-                    if prev is None or ci.created_at > prev:
-                        product_last_used[pid] = ci.created_at
+                    product_use_count[pid] = product_use_count.get(pid, 0) + 1
         except Exception:
-            pass  # Если не удалось — просто рандомизируем
+            pass
 
-        if product_last_used:
-            # Сортируем: сначала неиспользованные, потом давно использованные
-            def _sort_key(p):
-                last = product_last_used.get(p['id'])
-                if last is None:
-                    return _dt.min
-                return last
-            deduped.sort(key=_sort_key)
-            # Добавляем немного рандома в топ-кандидатов чтобы не было 100% детерминизма
-            top_size = min(len(deduped), max(limit * 2, 10))
-            top = deduped[:top_size]
-            _random.shuffle(top)
-            deduped = top + deduped[top_size:]
-        else:
-            _random.shuffle(deduped)
+        # Группируем товары по количеству использований и шафлим внутри каждой группы
+        # Это даёт: все неиспользованные (рандомно) → все использованные 1 раз (рандомно) → и т.д.
+        use_tiers = {}  # use_count -> [products]
+        for p in deduped:
+            cnt = product_use_count.get(p['id'], 0)
+            if cnt not in use_tiers:
+                use_tiers[cnt] = []
+            use_tiers[cnt].append(p)
 
-        return deduped[:limit]
+        result = []
+        for cnt in sorted(use_tiers.keys()):
+            tier = use_tiers[cnt]
+            _random.shuffle(tier)
+            result.extend(tier)
+            if len(result) >= limit:
+                break
+
+        return result[:limit]
 
     def _base_product_query(self, seller_id: int) -> db.Query:
         """Базовый запрос товаров: в наличии + активный.
