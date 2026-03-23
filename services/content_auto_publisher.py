@@ -105,6 +105,13 @@ def _auto_generate_for_factory(factory, now, db):
             if prev is None or item.created_at > prev:
                 product_last_used[pid] = item.created_at
 
+    # Последний опубликованный/одобренный товар — жёсткий запрет на повтор подряд
+    last_item = ContentItem.query.filter(
+        ContentItem.factory_id == factory.id,
+        ContentItem.status.in_(['draft', 'approved', 'published']),
+    ).order_by(ContentItem.created_at.desc()).first()
+    last_product_ids = set(last_item.get_product_ids()) if last_item else set()
+
     # Исключаем товары, использованные за последние 3 дня (жёсткий кулдаун)
     hard_cooldown = now - timedelta(days=3)
     exclude_ids = {pid for pid, dt in product_last_used.items() if dt >= hard_cooldown}
@@ -116,8 +123,8 @@ def _auto_generate_for_factory(factory, now, db):
         exclude_ids = {pid for pid, dt in product_last_used.items() if dt >= soft_cooldown}
         products = service.select_products(factory, limit=20, exclude_product_ids=exclude_ids)
     if not products:
-        # Крайний случай: берём всё, но сортируем по давности использования
-        products = service.select_products(factory, limit=20)
+        # Крайний случай: берём всё, но исключаем хотя бы последний товар
+        products = service.select_products(factory, limit=20, exclude_product_ids=last_product_ids)
 
     if not products:
         logger.warning(f"Auto-generate: no products for factory {factory.id}")
@@ -131,6 +138,12 @@ def _auto_generate_for_factory(factory, now, db):
             f"for factory {factory.id}"
         )
         products_with_photos = products
+
+    # Исключаем последний использованный товар чтобы не было повторов подряд
+    if last_product_ids:
+        filtered = [p for p in products_with_photos if p['id'] not in last_product_ids]
+        if filtered:
+            products_with_photos = filtered
 
     # Сортируем по давности использования (давно не использованные — первые)
     def _last_used_sort(p):

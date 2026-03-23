@@ -313,6 +313,29 @@ class ContentFactoryService:
             # ========== ШАГ 3: Программная очистка ==========
             title, body, hashtags = self._parse_ai_response(response, content_type)
 
+            # ========== ШАГ 3.5: Валидация — отклоняем мусорный текст ==========
+            if self._is_garbage_text(body):
+                # Одна повторная попытка с более низкой температурой
+                logger.warning(f"Garbage text detected, retrying with lower temperature...")
+                retry_response = client.chat_completion(
+                    messages=messages,
+                    temperature=0.4,
+                    max_tokens=3000,
+                )
+                if retry_response:
+                    retry_reviewed = self._ai_review_step(client, retry_response, factory.platform, char_limit, wb_url, store_name)
+                    if retry_reviewed:
+                        retry_response = retry_reviewed
+                    title, body, hashtags = self._parse_ai_response(retry_response, content_type)
+
+                if self._is_garbage_text(body):
+                    return GenerationResult(
+                        success=False,
+                        error="AI сгенерировал некорректный текст (мусор/иероглифы). Попробуйте повторить.",
+                        ai_provider=provider_name,
+                        ai_model=model_name,
+                    )
+
             # ========== ШАГ 4: Гарантированная вставка ссылки ==========
             body = self._ensure_product_url(body, wb_url)
 
@@ -1102,6 +1125,61 @@ class ContentFactoryService:
         except Exception as e:
             logger.warning(f"AI review step failed (using original): {e}")
             return None
+
+    def _is_garbage_text(self, text: str) -> bool:
+        """Проверяет, является ли текст мусором (иероглифы, бессмыслица и т.п.).
+
+        Возвращает True если текст непригоден для публикации.
+        """
+        if not text or len(text.strip()) < 30:
+            return True
+
+        # Считаем долю кириллических символов (должно быть >30% для русского текста)
+        alpha_chars = [c for c in text if c.isalpha()]
+        if not alpha_chars:
+            return True
+
+        cyrillic_count = sum(1 for c in alpha_chars if '\u0400' <= c <= '\u04FF')
+        cyrillic_ratio = cyrillic_count / len(alpha_chars)
+
+        # Проверяем наличие CJK иероглифов (китайские/японские/корейские)
+        cjk_count = sum(1 for c in text if '\u4E00' <= c <= '\u9FFF' or '\u3400' <= c <= '\u4DBF')
+
+        # Если есть CJK символы — мусор
+        if cjk_count > 3:
+            logger.warning(f"Garbage detection: CJK characters found ({cjk_count})")
+            return True
+
+        # Если кириллицы меньше 30% — текст не на русском
+        if cyrillic_ratio < 0.3:
+            logger.warning(f"Garbage detection: low Cyrillic ratio ({cyrillic_ratio:.1%})")
+            return True
+
+        # Проверяем повторяющиеся паттерны (признак зацикленного AI)
+        # Разбиваем на слова и ищем повторы подряд
+        words = text.split()
+        if len(words) > 10:
+            repeat_count = 0
+            for i in range(1, len(words)):
+                if words[i] == words[i - 1]:
+                    repeat_count += 1
+            repeat_ratio = repeat_count / len(words)
+            if repeat_ratio > 0.3:
+                logger.warning(f"Garbage detection: high word repeat ratio ({repeat_ratio:.1%})")
+                return True
+
+        # Проверяем повторяющиеся n-граммы (3 слова подряд повторяются 4+ раз)
+        if len(words) > 15:
+            trigrams = {}
+            for i in range(len(words) - 2):
+                tri = ' '.join(words[i:i + 3])
+                trigrams[tri] = trigrams.get(tri, 0) + 1
+            max_trigram_count = max(trigrams.values()) if trigrams else 0
+            if max_trigram_count >= 4:
+                logger.warning(f"Garbage detection: repeated trigram ({max_trigram_count}x)")
+                return True
+
+        return False
 
     def _strip_markdown(self, text: str) -> str:
         """Убирает markdown-артефакты из текста."""
