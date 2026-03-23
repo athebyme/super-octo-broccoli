@@ -458,8 +458,9 @@ class ContentFactoryService:
     ) -> Tuple[List[ContentItem], List[str]]:
         """Массовая генерация контента.
 
-        Автоматически подбирает УНИКАЛЬНЫЕ товары и генерирует указанное количество постов.
-        Внутри батча товары не повторяются.
+        Для каждого поста заново вызывает select_products с исключением
+        всех уже использованных в этом батче товаров. Это гарантирует
+        что каждый пост — уникальный товар.
 
         Returns:
             Tuple[list of created items, list of errors]
@@ -467,20 +468,20 @@ class ContentFactoryService:
         items = []
         errors = []
 
-        # Подбираем уникальные товары — запрашиваем с запасом
-        products = self.select_products(factory, limit=count * 2)
-        if not products:
-            return [], ["Не найдены товары для генерации"]
-
-        # Трекаем использованные в этом батче чтобы гарантировать уникальность
+        # Трекаем использованные в этом батче
         used_in_batch = set()
 
-        for product_data in products:
-            if len(items) >= count:
-                break
+        for i in range(count):
+            # Каждый раз заново подбираем товар, исключая уже взятые в этом батче
+            products = self.select_products(factory, limit=3, exclude_product_ids=used_in_batch)
+            if not products:
+                if i == 0:
+                    return [], ["Не найдены товары для генерации"]
+                break  # Кончились уникальные товары
 
+            product_data = products[0]
             product_id = product_data.get('id')
-            if not product_id or product_id in used_in_batch:
+            if not product_id:
                 continue
 
             used_in_batch.add(product_id)
@@ -614,25 +615,34 @@ class ContentFactoryService:
         factory: ContentFactory,
         limit: int = 10,
         exclude_product_ids: set = None,
+        force_product_ids: list = None,
     ) -> List[Dict[str, Any]]:
         """Подбирает товары для контента на основе режима фабрики.
 
-        Алгоритм ротации:
-        1. Загружаем ВСЕ доступные товары (в наличии)
-        2. Исключаем явно запрещённые (exclude_product_ids)
-        3. Считаем сколько раз каждый товар УЖЕ использовался в этой фабрике
-        4. Сортируем по количеству использований (ASC) — меньше всего использованные первые
-        5. Внутри одинакового кол-ва использований — рандомный порядок
-        6. Возвращаем top-N
+        Args:
+            factory: Контент-фабрика
+            limit: Максимум товаров
+            exclude_product_ids: ID товаров которые НЕЛЬЗЯ брать (уже в батче и т.п.)
+            force_product_ids: Если задан — вернуть ИМЕННО эти товары (для генерации
+                               по конкретному триггеру: новый отзыв, акция и т.д.)
 
-        Это гарантирует что ВСЕ товары будут использованы прежде чем начнутся повторы.
+        Алгоритм авто-подбора:
+        1. Все товары в наличии
+        2. Минус уже сгенерированные = fresh pool
+        3. Если fresh pool не пуст — рандомно из него
+        4. Если пуст — берём товары с МИНИМАЛЬНЫМ кол-вом использований (round-robin)
         """
         import random as _random
 
+        # Принудительный выбор конкретных товаров (для будущих триггеров: отзыв, акция)
+        if force_product_ids:
+            forced = self._collect_products_data(force_product_ids, factory.seller_id)
+            return forced[:limit]
+
         mode = factory.product_selection_mode or 'manual'
 
-        # Загружаем МНОГО товаров — нужен полный пул для честной ротации
-        fetch_limit = max(limit * 10, 200)
+        # Загружаем ВСЕ товары — нужен полный каталог для честной ротации
+        fetch_limit = 500
 
         if mode == 'bestsellers':
             raw = self._select_bestsellers(factory.seller_id, fetch_limit)
@@ -641,7 +651,6 @@ class ContentFactoryService:
         elif mode == 'rules':
             raw = self._select_by_rules(factory, fetch_limit)
         else:
-            # manual — возвращаем все товары для ручного выбора (без дедупликации)
             return self._select_all_products(factory.seller_id, limit)
 
         deduped = self._deduplicate_products(raw, fetch_limit)
@@ -653,7 +662,7 @@ class ContentFactoryService:
         if not deduped:
             return []
 
-        # Считаем КОЛИЧЕСТВО использований каждого товара в этой фабрике
+        # Собираем ВСЕ product_id которые уже использовались в этой фабрике + кол-во раз
         product_use_count = {}  # product_id -> int
         try:
             factory_items = ContentItem.query.filter(
@@ -665,24 +674,28 @@ class ContentFactoryService:
         except Exception:
             pass
 
-        # Группируем товары по количеству использований и шафлим внутри каждой группы
-        # Это даёт: все неиспользованные (рандомно) → все использованные 1 раз (рандомно) → и т.д.
-        use_tiers = {}  # use_count -> [products]
-        for p in deduped:
-            cnt = product_use_count.get(p['id'], 0)
-            if cnt not in use_tiers:
-                use_tiers[cnt] = []
-            use_tiers[cnt].append(p)
+        already_used_ids = set(product_use_count.keys())
 
-        result = []
-        for cnt in sorted(use_tiers.keys()):
-            tier = use_tiers[cnt]
-            _random.shuffle(tier)
-            result.extend(tier)
-            if len(result) >= limit:
-                break
+        # ШАГ 1: Свежие товары — ни разу не использованы
+        fresh = [p for p in deduped if p['id'] not in already_used_ids]
+        if fresh:
+            _random.shuffle(fresh)
+            logger.info(
+                f"select_products: factory {factory.id} — {len(fresh)} fresh "
+                f"(never used) out of {len(deduped)} total"
+            )
+            return fresh[:limit]
 
-        return result[:limit]
+        # ШАГ 2: Все товары использованы — берём с МИНИМАЛЬНЫМ use_count (round-robin)
+        min_use = min(product_use_count.get(p['id'], 0) for p in deduped)
+        least_used = [p for p in deduped if product_use_count.get(p['id'], 0) == min_use]
+        _random.shuffle(least_used)
+
+        logger.info(
+            f"select_products: factory {factory.id} — all products used, "
+            f"picking from {len(least_used)} with min use_count={min_use}"
+        )
+        return least_used[:limit]
 
     def _base_product_query(self, seller_id: int) -> db.Query:
         """Базовый запрос товаров: в наличии + активный.
