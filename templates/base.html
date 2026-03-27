@@ -955,6 +955,12 @@
             border-color: var(--accent);
         }
         .sh-btn--accent:hover { background: var(--accent-dark, #a34a2f); }
+        .sh-btn--danger {
+            background: #dc2626;
+            color: #fff;
+            border-color: #dc2626;
+        }
+        .sh-btn--danger:hover { background: #b91c1c; }
         /* On dark backgrounds */
         .sh-btn--white {
             background: #fff;
@@ -1236,6 +1242,536 @@
         @media (min-width: 1024px) {
             .sh-page { padding: 32px; }
         }
+
+        /* =========================================
+           OVERLAY COMPONENTS (sh-*)
+           ========================================= */
+
+        /* ── Shared backdrop ── */
+        .sh-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            background: rgba(10, 10, 10, 0.55);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* ── Modal ── */
+        .sh-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 101;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .sh-modal-panel {
+            position: relative;
+            width: 100%;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .sh-modal--sm .sh-modal-panel { max-width: 400px; }
+        .sh-modal--md .sh-modal-panel { max-width: 520px; }
+        .sh-modal--lg .sh-modal-panel { max-width: 680px; }
+        .sh-modal--xl .sh-modal-panel { max-width: 860px; }
+        .sh-modal-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 24px 24px 0;
+        }
+        .sh-modal-title {
+            font-family: var(--font-display);
+            font-size: 20px;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text);
+            margin: 0;
+            line-height: 1.3;
+        }
+        .sh-modal-close {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            border: none;
+            background: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+        .sh-modal-close:hover {
+            background: var(--bg);
+            color: var(--text);
+        }
+        .sh-modal-body {
+            padding: 16px 24px 24px;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+        .sh-modal-footer {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 16px 24px;
+            border-top: 1px solid var(--border-light);
+            background: var(--bg);
+        }
+        /* Danger modal accent */
+        .sh-modal--danger .sh-modal-header {
+            border-left: 3px solid #dc2626;
+            margin-left: -1px;
+        }
+        .sh-modal--danger .sh-modal-title { color: #dc2626; }
+
+        /* Modal animations */
+        .sh-modal-enter { animation: sh-modal-in 0.2s ease-out; }
+        .sh-modal-leave { animation: sh-modal-out 0.15s ease-in forwards; }
+        .sh-backdrop-enter { animation: sh-fade-in 0.2s ease-out; }
+        .sh-backdrop-leave { animation: sh-fade-out 0.15s ease-in forwards; }
+        @keyframes sh-modal-in {
+            from { opacity: 0; transform: scale(0.95) translateY(8px); }
+            to   { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes sh-modal-out {
+            from { opacity: 1; transform: scale(1) translateY(0); }
+            to   { opacity: 0; transform: scale(0.95) translateY(8px); }
+        }
+        @keyframes sh-fade-in  { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes sh-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+        /* ── Toast Notifications ── */
+        .sh-toast-container {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-width: 400px;
+            pointer-events: none;
+        }
+        @media (max-width: 639px) {
+            .sh-toast-container { left: 16px; right: 16px; max-width: none; }
+        }
+        .sh-toast {
+            pointer-events: auto;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 16px;
+            background: var(--bg-sidebar);
+            border: 1px solid #2a2a2a;
+            border-radius: 10px;
+            color: #e8e8e8;
+            font-size: 13px;
+            line-height: 1.5;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            animation: sh-toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .sh-toast.leaving { animation: sh-toast-out 0.2s ease-in forwards; }
+        .sh-toast-icon {
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+        .sh-toast--success .sh-toast-icon { color: #4ade80; }
+        .sh-toast--error .sh-toast-icon   { color: #f87171; }
+        .sh-toast--warning .sh-toast-icon { color: #fbbf24; }
+        .sh-toast--info .sh-toast-icon    { color: #60a5fa; }
+        .sh-toast-content { flex: 1; }
+        .sh-toast-title {
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 2px;
+        }
+        .sh-toast-message { color: #a1a1a1; }
+        .sh-toast-close {
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            padding: 2px;
+            transition: color 0.15s;
+            flex-shrink: 0;
+        }
+        .sh-toast-close:hover { color: #ccc; }
+        .sh-toast-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 2px;
+            border-radius: 0 0 10px 10px;
+            transition: width linear;
+        }
+        .sh-toast--success .sh-toast-progress { background: #4ade80; }
+        .sh-toast--error .sh-toast-progress   { background: #f87171; }
+        .sh-toast--warning .sh-toast-progress { background: #fbbf24; }
+        .sh-toast--info .sh-toast-progress    { background: #60a5fa; }
+        @keyframes sh-toast-in {
+            from { opacity: 0; transform: translateX(40px) scale(0.96); }
+            to   { opacity: 1; transform: translateX(0) scale(1); }
+        }
+        @keyframes sh-toast-out {
+            from { opacity: 1; transform: translateX(0) scale(1); max-height: 200px; margin-bottom: 8px; }
+            to   { opacity: 0; transform: translateX(40px) scale(0.96); max-height: 0; margin-bottom: 0; padding: 0; overflow: hidden; }
+        }
+
+        /* ── Tooltip ── */
+        .sh-tooltip-wrap {
+            position: relative;
+            display: inline-flex;
+        }
+        .sh-tooltip {
+            position: absolute;
+            z-index: 150;
+            padding: 6px 10px;
+            background: var(--bg-sidebar);
+            color: #e0e0e0;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.4;
+            border-radius: 6px;
+            white-space: nowrap;
+            pointer-events: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+        }
+        .sh-tooltip::after {
+            content: '';
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background: var(--bg-sidebar);
+            transform: rotate(45deg);
+        }
+        .sh-tooltip--top    { bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+        .sh-tooltip--top::after    { bottom: -3px; left: 50%; margin-left: -3px; }
+        .sh-tooltip--bottom { top: calc(100% + 8px); left: 50%; transform: translateX(-50%); }
+        .sh-tooltip--bottom::after { top: -3px; left: 50%; margin-left: -3px; }
+        .sh-tooltip--left   { right: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+        .sh-tooltip--left::after   { right: -3px; top: 50%; margin-top: -3px; }
+        .sh-tooltip--right  { left: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+        .sh-tooltip--right::after  { left: -3px; top: 50%; margin-top: -3px; }
+
+        /* ── Dropdown ── */
+        .sh-dropdown {
+            position: relative;
+            display: inline-flex;
+        }
+        .sh-dropdown-menu {
+            position: absolute;
+            z-index: 110;
+            min-width: 180px;
+            padding: 4px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        }
+        .sh-dropdown-menu--right { right: 0; }
+        .sh-dropdown-menu--left  { left: 0; }
+        .sh-dropdown-menu--top   { bottom: calc(100% + 4px); }
+        .sh-dropdown-menu--bottom { top: calc(100% + 4px); }
+        .sh-dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            color: var(--text);
+            text-decoration: none;
+            border-radius: 5px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            transition: background 0.1s;
+        }
+        .sh-dropdown-item:hover { background: var(--bg); }
+        .sh-dropdown-item--danger { color: #dc2626; }
+        .sh-dropdown-item--danger:hover { background: #fef2f2; }
+        .sh-dropdown-item svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+            color: var(--text-muted);
+        }
+        .sh-dropdown-item--danger svg { color: #dc2626; }
+        .sh-dropdown-divider {
+            height: 1px;
+            background: var(--border-light);
+            margin: 4px 0;
+        }
+        .sh-dropdown-label {
+            padding: 6px 12px 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+        }
+
+        /* ── Slide-over ── */
+        .sh-slideover {
+            position: fixed;
+            inset: 0;
+            z-index: 101;
+            display: flex;
+            justify-content: flex-end;
+        }
+        .sh-slideover-panel {
+            position: relative;
+            width: 100%;
+            max-width: 480px;
+            height: 100%;
+            background: var(--bg-card);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sh-slideover--lg .sh-slideover-panel { max-width: 640px; }
+        .sh-slideover--xl .sh-slideover-panel { max-width: 800px; }
+        .sh-slideover-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .sh-slideover-title {
+            font-family: var(--font-display);
+            font-size: 18px;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text);
+            margin: 0;
+        }
+        .sh-slideover-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        .sh-slideover-footer {
+            padding: 16px 24px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-shrink: 0;
+            background: var(--bg);
+        }
+        /* Slide animations */
+        .sh-slide-enter { animation: sh-slide-in 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+        .sh-slide-leave { animation: sh-slide-out 0.2s ease-in forwards; }
+        @keyframes sh-slide-in  { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        @keyframes sh-slide-out { from { transform: translateX(0); } to { transform: translateX(100%); } }
+
+        /* ── Command Palette ── */
+        .sh-cmdpal {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 80px 24px 24px;
+        }
+        @media (max-width: 639px) { .sh-cmdpal { padding: 24px 16px; } }
+        .sh-cmdpal-panel {
+            width: 100%;
+            max-width: 560px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 16px 64px rgba(0,0,0,0.2);
+        }
+        .sh-cmdpal-input-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .sh-cmdpal-input-wrap svg {
+            width: 20px;
+            height: 20px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+        .sh-cmdpal-input {
+            flex: 1;
+            border: none !important;
+            outline: none !important;
+            padding: 0 !important;
+            font-size: 15px !important;
+            font-family: var(--font-body) !important;
+            background: transparent !important;
+            color: var(--text) !important;
+        }
+        .sh-cmdpal-input::placeholder { color: var(--text-muted); }
+        .sh-cmdpal-kbd {
+            font-size: 11px;
+            font-weight: 500;
+            padding: 2px 6px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+            font-family: var(--font-body);
+        }
+        .sh-cmdpal-list {
+            max-height: 360px;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .sh-cmdpal-group {
+            padding: 8px 12px 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+        }
+        .sh-cmdpal-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.1s;
+            text-decoration: none;
+            color: var(--text);
+            font-size: 14px;
+        }
+        .sh-cmdpal-item:hover,
+        .sh-cmdpal-item.active {
+            background: var(--bg);
+        }
+        .sh-cmdpal-item.active {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+        }
+        .sh-cmdpal-item svg {
+            width: 18px;
+            height: 18px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+        .sh-cmdpal-item-label { flex: 1; }
+        .sh-cmdpal-item-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .sh-cmdpal-footer {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 10px 16px;
+            border-top: 1px solid var(--border-light);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .sh-cmdpal-footer kbd {
+            font-size: 10px;
+            padding: 1px 5px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 3px;
+            font-family: var(--font-body);
+        }
+
+        /* ── Bottom Sheet (mobile) ── */
+        .sh-bottomsheet {
+            position: fixed;
+            inset: 0;
+            z-index: 101;
+            display: flex;
+            align-items: flex-end;
+        }
+        .sh-bottomsheet-panel {
+            width: 100%;
+            max-height: 85vh;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border);
+            border-radius: 16px 16px 0 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .sh-bottomsheet-handle {
+            display: flex;
+            justify-content: center;
+            padding: 12px 0 8px;
+            cursor: grab;
+            flex-shrink: 0;
+        }
+        .sh-bottomsheet-handle::after {
+            content: '';
+            width: 36px;
+            height: 4px;
+            border-radius: 2px;
+            background: var(--border);
+        }
+        .sh-bottomsheet-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 20px 12px;
+            flex-shrink: 0;
+        }
+        .sh-bottomsheet-title {
+            font-family: var(--font-display);
+            font-size: 18px;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text);
+            margin: 0;
+        }
+        .sh-bottomsheet-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 20px 20px;
+            -webkit-overflow-scrolling: touch;
+        }
+        /* Bottom sheet animations */
+        .sh-sheet-enter { animation: sh-sheet-up 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        .sh-sheet-leave { animation: sh-sheet-down 0.2s ease-in forwards; }
+        @keyframes sh-sheet-up   { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        @keyframes sh-sheet-down { from { transform: translateY(0); } to { transform: translateY(100%); } }
+
+        /* ── Confirm dialog inline styles ── */
+        .sh-confirm-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+        .sh-confirm-icon--danger { background: #fef2f2; color: #dc2626; }
+        .sh-confirm-icon--warning { background: #fffbeb; color: #d97706; }
+        .sh-confirm-icon--info { background: #eff6ff; color: #2563eb; }
+        .sh-confirm-icon--success { background: #f0fdf4; color: #16a34a; }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
@@ -1876,6 +2412,22 @@
         return originalSend.apply(this, arguments);
     };
 })();
+</script>
+
+<!-- Toast notification system -->
+{% from "macros/overlays.html" import toast_container, toast_store_init %}
+{{ toast_store_init() }}
+{{ toast_container() }}
+
+<!-- Command palette: Cmd+K / Ctrl+K -->
+<script>
+document.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const ev = new CustomEvent('toggle-cmdpalette');
+        document.dispatchEvent(ev);
+    }
+});
 </script>
 </body>
 
