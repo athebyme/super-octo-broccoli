@@ -189,7 +189,7 @@
 
         <div class="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
              data-item-id="{{ item.id }}"
-             x-data="{ expanded: false, showPreview: false, showGallery: false }">
+             x-data="{ expanded: false, showPreview: false, showGallery: false, showDebug: false }">
             <div class="p-5">
                 <div class="flex gap-4">
                     <!-- Left column: Product image gallery -->
@@ -361,8 +361,32 @@
                         </button>
 
                         <button @click="deleteItem({{ item.id }})" class="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition">Удалить</button>
+
+                        <!-- Debug button -->
+                        {% if ps.get('selection_debug') %}
+                        <button @click="showDebug = !showDebug" class="px-3 py-1.5 text-xs text-orange-500 hover:bg-orange-50 rounded-lg transition font-mono">Debug</button>
+                        {% endif %}
                     </div>
                 </div>
+
+                <!-- Debug panel -->
+                {% if ps.get('selection_debug') %}
+                {% set dbg = ps.get('selection_debug', {}) %}
+                <div x-show="showDebug" x-cloak class="mt-2 p-3 bg-gray-900 text-green-400 rounded-lg text-[11px] font-mono leading-relaxed overflow-x-auto">
+                    <div>mode: {{ dbg.get('mode', '?') }} | raw: {{ dbg.get('raw_count', '?') }} | dedup: {{ dbg.get('deduped_count', '?') }} | excluded: {{ dbg.get('excluded_count', 0) }}</div>
+                    <div>content_items_total: {{ dbg.get('total_content_items', '?') }} | min_use: {{ dbg.get('min_use_count', '?') }} | candidates: {{ dbg.get('candidates_at_min', '?') }}</div>
+                    <div class="mt-1 text-yellow-300">selected: {{ dbg.get('selected_ids', []) }}</div>
+                    <div class="text-yellow-300">names: {{ dbg.get('selected_names', []) }}</div>
+                    {% if dbg.get('all_products_use_counts') %}
+                    <div class="mt-1 text-gray-400">use_counts (id: count):</div>
+                    <div class="text-gray-500 break-all">{{ dbg.get('all_products_use_counts', {}) }}</div>
+                    {% endif %}
+                    {% if dbg.get('error') %}
+                    <div class="mt-1 text-red-400">ERROR: {{ dbg.get('error') }}</div>
+                    {% endif %}
+                    <button @click="navigator.clipboard.writeText(JSON.stringify({{ dbg|tojson }}, null, 2)).then(() => $el.textContent = 'Скопировано!')" class="mt-2 px-2 py-1 bg-gray-700 text-gray-300 rounded hover:bg-gray-600 text-[10px]">Копировать JSON</button>
+                </div>
+                {% endif %}
             </div>
 
             <!-- Image Gallery Modal -->

@@ -313,6 +313,29 @@ class ContentFactoryService:
             # ========== ШАГ 3: Программная очистка ==========
             title, body, hashtags = self._parse_ai_response(response, content_type)
 
+            # ========== ШАГ 3.5: Валидация — отклоняем мусорный текст ==========
+            if self._is_garbage_text(body):
+                # Одна повторная попытка с более низкой температурой
+                logger.warning(f"Garbage text detected, retrying with lower temperature...")
+                retry_response = client.chat_completion(
+                    messages=messages,
+                    temperature=0.4,
+                    max_tokens=3000,
+                )
+                if retry_response:
+                    retry_reviewed = self._ai_review_step(client, retry_response, factory.platform, char_limit, wb_url, store_name)
+                    if retry_reviewed:
+                        retry_response = retry_reviewed
+                    title, body, hashtags = self._parse_ai_response(retry_response, content_type)
+
+                if self._is_garbage_text(body):
+                    return GenerationResult(
+                        success=False,
+                        error="AI сгенерировал некорректный текст (мусор/иероглифы). Попробуйте повторить.",
+                        ai_provider=provider_name,
+                        ai_model=model_name,
+                    )
+
             # ========== ШАГ 4: Гарантированная вставка ссылки ==========
             body = self._ensure_product_url(body, wb_url)
 
@@ -418,6 +441,9 @@ class ContentFactoryService:
             'quality_score': result.quality_score,
             'char_count': len(result.body_text or ''),
         }
+        # Добавляем debug-информацию о выборе товара
+        if self._last_selection_debug:
+            platform_specific['selection_debug'] = self._last_selection_debug
         item.platform_specific_json = json.dumps(platform_specific, ensure_ascii=False)
 
         db.session.add(item)
@@ -435,7 +461,9 @@ class ContentFactoryService:
     ) -> Tuple[List[ContentItem], List[str]]:
         """Массовая генерация контента.
 
-        Автоматически подбирает товары и генерирует указанное количество постов.
+        Для каждого поста заново вызывает select_products с исключением
+        всех уже использованных в этом батче товаров. Это гарантирует
+        что каждый пост — уникальный товар.
 
         Returns:
             Tuple[list of created items, list of errors]
@@ -443,15 +471,23 @@ class ContentFactoryService:
         items = []
         errors = []
 
-        # Подбираем товары
-        products = self.select_products(factory, limit=count)
-        if not products:
-            return [], ["Не найдены товары для генерации"]
+        # Трекаем использованные в этом батче
+        used_in_batch = set()
 
-        for product_data in products[:count]:
+        for i in range(count):
+            # Каждый раз заново подбираем товар, исключая уже взятые в этом батче
+            products = self.select_products(factory, limit=3, exclude_product_ids=used_in_batch)
+            if not products:
+                if i == 0:
+                    return [], ["Не найдены товары для генерации"]
+                break  # Кончились уникальные товары
+
+            product_data = products[0]
             product_id = product_data.get('id')
             if not product_id:
                 continue
+
+            used_in_batch.add(product_id)
 
             item, error = self.generate_and_save(
                 factory=factory,
@@ -577,23 +613,38 @@ class ContentFactoryService:
 
         return result[:limit]
 
+    # Последняя debug-информация о выборе товаров (сохраняется с каждым постом)
+    _last_selection_debug = None
+
     def select_products(
         self,
         factory: ContentFactory,
         limit: int = 10,
         exclude_product_ids: set = None,
+        force_product_ids: list = None,
     ) -> List[Dict[str, Any]]:
         """Подбирает товары для контента на основе режима фабрики.
 
-        Приоритет отдаётся товарам, которые давно не использовались в этой фабрике.
+        Алгоритм:
+        1. Берём ВСЕ товары в наличии (без лимита в SQL)
+        2. Дедуплицируем по названию
+        3. Исключаем exclude_product_ids
+        4. Считаем use_count каждого товара
+        5. Берём товары с МИНИМАЛЬНЫМ use_count, рандомно
         """
         import random as _random
-        from datetime import datetime as _dt
+
+        self._last_selection_debug = None
+
+        # Принудительный выбор конкретных товаров
+        if force_product_ids:
+            forced = self._collect_products_data(force_product_ids, factory.seller_id)
+            return forced[:limit]
 
         mode = factory.product_selection_mode or 'manual'
 
-        # Запрашиваем больше товаров чтобы после дедупликации и фильтрации хватило
-        fetch_limit = limit * 5
+        # Загружаем ВСЕ товары — без лимита, нам нужен полный каталог
+        fetch_limit = 1000
 
         if mode == 'bestsellers':
             raw = self._select_bestsellers(factory.seller_id, fetch_limit)
@@ -601,47 +652,84 @@ class ContentFactoryService:
             raw = self._select_new_arrivals(factory.seller_id, fetch_limit)
         elif mode == 'rules':
             raw = self._select_by_rules(factory, fetch_limit)
+        elif mode == 'manual':
+            # Ручной режим тоже должен проходить через ротацию при bulk/auto генерации
+            raw = self._select_all_products_raw(factory.seller_id, fetch_limit)
         else:
-            # manual — возвращаем все товары для ручного выбора (без дедупликации)
-            return self._select_all_products(factory.seller_id, limit)
+            raw = self._select_all_products_raw(factory.seller_id, fetch_limit)
 
+        # Дедупликация ПЕРЕД всякой логикой
         deduped = self._deduplicate_products(raw, fetch_limit)
 
-        # Исключаем уже использованные товары
-        if exclude_product_ids:
-            deduped = [p for p in deduped if p['id'] not in exclude_product_ids]
+        # Убираем дубликаты по ID (JOIN с ProductAnalytics может дать повторы)
+        seen_ids = set()
+        unique = []
+        for p in deduped:
+            if p['id'] not in seen_ids:
+                seen_ids.add(p['id'])
+                unique.append(p)
+        deduped = unique
 
-        # Собираем историю использования товаров в фабрике для ротации
-        product_last_used = {}
+        # Исключаем явно запрещённые товары
+        excluded_count = 0
+        if exclude_product_ids:
+            before = len(deduped)
+            deduped = [p for p in deduped if p['id'] not in exclude_product_ids]
+            excluded_count = before - len(deduped)
+
+        if not deduped:
+            self._last_selection_debug = {
+                'mode': mode,
+                'raw_count': len(raw),
+                'deduped_count': 0,
+                'excluded_count': excluded_count,
+                'error': 'No products after filtering',
+            }
+            return []
+
+        # Считаем кол-во использований каждого товара в этой фабрике
+        product_use_count = {}  # product_id -> int
         try:
             factory_items = ContentItem.query.filter(
                 ContentItem.factory_id == factory.id,
             ).all()
             for ci in factory_items:
                 for pid in ci.get_product_ids():
-                    prev = product_last_used.get(pid)
-                    if prev is None or ci.created_at > prev:
-                        product_last_used[pid] = ci.created_at
-        except Exception:
-            pass  # Если не удалось — просто рандомизируем
+                    product_use_count[pid] = product_use_count.get(pid, 0) + 1
+        except Exception as e:
+            logger.error(f"select_products: failed to load use counts: {e}")
 
-        if product_last_used:
-            # Сортируем: сначала неиспользованные, потом давно использованные
-            def _sort_key(p):
-                last = product_last_used.get(p['id'])
-                if last is None:
-                    return _dt.min
-                return last
-            deduped.sort(key=_sort_key)
-            # Добавляем немного рандома в топ-кандидатов чтобы не было 100% детерминизма
-            top_size = min(len(deduped), max(limit * 2, 10))
-            top = deduped[:top_size]
-            _random.shuffle(top)
-            deduped = top + deduped[top_size:]
-        else:
-            _random.shuffle(deduped)
+        # Находим минимальный use_count среди доступных товаров
+        min_use = min(product_use_count.get(p['id'], 0) for p in deduped)
 
-        return deduped[:limit]
+        # Берём ТОЛЬКО товары с минимальным use_count
+        candidates = [p for p in deduped if product_use_count.get(p['id'], 0) == min_use]
+        _random.shuffle(candidates)
+        result = candidates[:limit]
+
+        # Сохраняем debug
+        all_use_counts = {p['id']: product_use_count.get(p['id'], 0) for p in deduped}
+        self._last_selection_debug = {
+            'mode': mode,
+            'raw_count': len(raw),
+            'deduped_count': len(deduped),
+            'excluded_count': excluded_count,
+            'total_content_items': len(product_use_count),
+            'min_use_count': min_use,
+            'candidates_at_min': len(candidates),
+            'selected_ids': [p['id'] for p in result],
+            'selected_names': [p.get('name', '')[:50] for p in result],
+            'all_products_use_counts': {str(k): v for k, v in sorted(all_use_counts.items(), key=lambda x: x[1])},
+        }
+
+        logger.info(
+            f"select_products: factory={factory.id} mode={mode} | "
+            f"raw={len(raw)} dedup={len(deduped)} excluded={excluded_count} | "
+            f"min_use={min_use} candidates={len(candidates)} | "
+            f"selected: {[p['id'] for p in result]}"
+        )
+
+        return result
 
     def _base_product_query(self, seller_id: int) -> db.Query:
         """Базовый запрос товаров: в наличии + активный.
@@ -672,14 +760,15 @@ class ContentFactoryService:
         )
 
     def _select_bestsellers(self, seller_id: int, limit: int) -> List[Dict]:
-        """Выбирает товары с лучшими продажами (по orders_count из аналитики)."""
+        """Выбирает товары с лучшими продажами (по orders_count из аналитики).
+
+        NOTE: outerjoin с ProductAnalytics может давать дублирующие Product строки
+        (если несколько записей аналитики на один товар). Дедуплицируем по Product.id.
+        """
+        # Загружаем ВСЕ товары в наличии — без JOIN, чтобы избежать дублей
         products = (
             self._base_product_query(seller_id)
-            .outerjoin(ProductAnalytics, db.and_(
-                ProductAnalytics.nm_id == Product.nm_id,
-                ProductAnalytics.seller_id == Product.seller_id,
-            ))
-            .order_by(db.func.coalesce(ProductAnalytics.orders_count, 0).desc())
+            .order_by(Product.id.asc())
             .limit(limit)
             .all()
         )
@@ -722,11 +811,17 @@ class ContentFactoryService:
         return [self._product_to_dict(p) for p in products]
 
     def _select_all_products(self, seller_id: int, limit: int) -> List[Dict]:
-        """Все товары продавца (в наличии, адекватная цена)."""
+        """Все товары продавца (в наличии) — для ручного выбора в UI."""
         products = self._base_product_query(seller_id).order_by(
             Product.updated_at.desc()
         ).limit(limit).all()
-        # Фильтр наличия остаётся — товары без остатков не подбираем
+        return [self._product_to_dict(p) for p in products]
+
+    def _select_all_products_raw(self, seller_id: int, limit: int) -> List[Dict]:
+        """Все товары продавца (в наличии) — для автоматического подбора."""
+        products = self._base_product_query(seller_id).order_by(
+            Product.id.asc()
+        ).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
     def _collect_products_data(self, product_ids: List[int], seller_id: int) -> List[Dict]:
@@ -1102,6 +1197,61 @@ class ContentFactoryService:
         except Exception as e:
             logger.warning(f"AI review step failed (using original): {e}")
             return None
+
+    def _is_garbage_text(self, text: str) -> bool:
+        """Проверяет, является ли текст мусором (иероглифы, бессмыслица и т.п.).
+
+        Возвращает True если текст непригоден для публикации.
+        """
+        if not text or len(text.strip()) < 30:
+            return True
+
+        # Считаем долю кириллических символов (должно быть >30% для русского текста)
+        alpha_chars = [c for c in text if c.isalpha()]
+        if not alpha_chars:
+            return True
+
+        cyrillic_count = sum(1 for c in alpha_chars if '\u0400' <= c <= '\u04FF')
+        cyrillic_ratio = cyrillic_count / len(alpha_chars)
+
+        # Проверяем наличие CJK иероглифов (китайские/японские/корейские)
+        cjk_count = sum(1 for c in text if '\u4E00' <= c <= '\u9FFF' or '\u3400' <= c <= '\u4DBF')
+
+        # Если есть CJK символы — мусор
+        if cjk_count > 3:
+            logger.warning(f"Garbage detection: CJK characters found ({cjk_count})")
+            return True
+
+        # Если кириллицы меньше 30% — текст не на русском
+        if cyrillic_ratio < 0.3:
+            logger.warning(f"Garbage detection: low Cyrillic ratio ({cyrillic_ratio:.1%})")
+            return True
+
+        # Проверяем повторяющиеся паттерны (признак зацикленного AI)
+        # Разбиваем на слова и ищем повторы подряд
+        words = text.split()
+        if len(words) > 10:
+            repeat_count = 0
+            for i in range(1, len(words)):
+                if words[i] == words[i - 1]:
+                    repeat_count += 1
+            repeat_ratio = repeat_count / len(words)
+            if repeat_ratio > 0.3:
+                logger.warning(f"Garbage detection: high word repeat ratio ({repeat_ratio:.1%})")
+                return True
+
+        # Проверяем повторяющиеся n-граммы (3 слова подряд повторяются 4+ раз)
+        if len(words) > 15:
+            trigrams = {}
+            for i in range(len(words) - 2):
+                tri = ' '.join(words[i:i + 3])
+                trigrams[tri] = trigrams.get(tri, 0) + 1
+            max_trigram_count = max(trigrams.values()) if trigrams else 0
+            if max_trigram_count >= 4:
+                logger.warning(f"Garbage detection: repeated trigram ({max_trigram_count}x)")
+                return True
+
+        return False
 
     def _strip_markdown(self, text: str) -> str:
         """Убирает markdown-артефакты из текста."""

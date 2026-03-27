@@ -143,8 +143,30 @@ def init_scheduler(flask_app):
         replace_existing=True
     )
 
+    # Проверка и перезапуск циклов мониторинга конкурентов (каждые 5 мин)
+    scheduler.add_job(
+        func=lambda: _check_competitor_monitor_loops(flask_app),
+        trigger=IntervalTrigger(minutes=5),
+        id='check_competitor_monitor_loops',
+        name='Check and restart competitor monitor loops',
+        replace_existing=True
+    )
+
+    # Компакция старых снимков конкурентов (раз в сутки)
+    scheduler.add_job(
+        func=lambda: _compact_competitor_snapshots(flask_app),
+        trigger=IntervalTrigger(hours=24),
+        id='competitor_snapshot_compaction',
+        name='Compact old competitor price snapshots',
+        replace_existing=True
+    )
+
     # Запускаем планировщик
     scheduler.start()
+
+    # Запускаем начальный цикл мониторинга конкурентов (через 15 сек после старта)
+    import threading
+    threading.Timer(15.0, lambda: _check_competitor_monitor_loops(flask_app)).start()
 
     logger.info("✅ Product sync scheduler started")
 
@@ -658,3 +680,21 @@ def auto_resolve_pending_brands(flask_app):
 
         except Exception as e:
             logger.error(f"Brand auto-resolve background task failed: {e}")
+
+
+def _check_competitor_monitor_loops(flask_app):
+    """Проверка и перезапуск циклов мониторинга конкурентов"""
+    try:
+        from services.competitor_monitor import check_and_restart_monitor_loops
+        check_and_restart_monitor_loops(flask_app)
+    except Exception as e:
+        logger.error(f"Competitor monitor loop check failed: {e}")
+
+
+def _compact_competitor_snapshots(flask_app):
+    """Компакция старых снимков конкурентов"""
+    try:
+        from services.competitor_monitor import CompetitorMonitorService
+        CompetitorMonitorService.compact_old_snapshots(flask_app)
+    except Exception as e:
+        logger.error(f"Competitor snapshot compaction failed: {e}")

@@ -852,6 +852,25 @@
                 </div>
             </div>
 
+            <!-- Конкуренты -->
+            {% set competitors_active = request.endpoint in ['competitors_dashboard', 'competitors_groups', 'competitors_group_detail', 'competitors_alerts', 'competitors_settings'] %}
+            <div class="sidebar-section" x-data="{ open: {{ 'true' if competitors_active else 'false' }} }">
+                <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if competitors_active else 'false' }} }" :aria-expanded="open" aria-label="Конкуренты">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                    <span x-show="sidebarOpen" x-cloak>Конкуренты</span>
+                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="open && 'rotate-90'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </button>
+                <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
+                    <a href="{{ url_for('competitors_dashboard') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_dashboard' %}active{% endif %}">Обзор</a>
+                    <a href="{{ url_for('competitors_groups') }}" class="sidebar-sublink {% if request.endpoint in ['competitors_groups', 'competitors_group_detail'] %}active{% endif %}">Группы</a>
+                    <a href="{{ url_for('competitors_alerts') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_alerts' %}active{% endif %}">Алерты</a>
+                    <a href="{{ url_for('competitors_settings') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_settings' %}active{% endif %}">Настройки</a>
+                </div>
+            </div>
+
             <!-- Агенты -->
             <a href="{{ url_for('agents_dashboard') }}" class="sidebar-link {% if request.endpoint in ['agents_dashboard', 'agent_task_detail'] %}active{% endif %}" style="position:relative">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">

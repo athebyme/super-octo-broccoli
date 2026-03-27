@@ -16,7 +16,7 @@ echo "🚀 Инициализация seller-platform..."
 
 # Сначала создаем базовую структуру БД через Flask/SQLAlchemy
 echo "📦 Создание базовой структуры базы данных..."
-python - <<'PYCODE'
+SKIP_SCHEDULER=1 python - <<'PYCODE'
 import os
 
 # DATABASE_URL уже установлен из docker-compose.yml
@@ -104,7 +104,9 @@ with app.app_context():
 PYCODE
 
 # Теперь применяем миграции для добавления новых колонок
+# SKIP_SCHEDULER=1 чтобы APScheduler не запускался и не зависал
 echo "📦 Применение миграций базы данных..."
+export SKIP_SCHEDULER=1
 python migrations/migrate_db.py --db-path /app/data/seller_platform.db
 python migrations/migrate_add_characteristics.py /app/data/seller_platform.db
 python migrations/migrate_add_history_and_logging.py --db-path /app/data/seller_platform.db
@@ -125,6 +127,8 @@ python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality 
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
 python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
 python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
+DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
+unset SKIP_SCHEDULER
 
 echo "✅ Инициализация seller-platform завершена"
 fi

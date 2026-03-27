@@ -36,6 +36,8 @@ from models import (
     BackgroundJob, Notification,
     ServiceAgent, AgentTask, AgentTaskStep,
     ContentFactory, SocialAccount, ContentTemplate, ContentItem, ContentPlan,
+    CompetitorMonitorSettings, CompetitorGroup, CompetitorProduct,
+    CompetitorPriceSnapshot, CompetitorAlert,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -230,8 +232,11 @@ app.config['WTF_CSRF_TIME_LIMIT'] = 3600  # 1 час
 app.config['WTF_CSRF_SSL_STRICT'] = False
 
 # Инициализация планировщика автоматической синхронизации
-from services.product_sync_scheduler import init_scheduler
-init_scheduler(app)
+# Не запускаем при импорте из миграций/инит-скриптов
+import os as _os
+if _os.environ.get('SKIP_SCHEDULER') != '1':
+    from services.product_sync_scheduler import init_scheduler
+    init_scheduler(app)
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_ROOT = BASE_DIR / 'uploads'
@@ -6041,6 +6046,10 @@ register_agents_routes(app)
 from routes.content_factory import register_content_factory_routes
 register_content_factory_routes(app)
 
+# ============= МОНИТОРИНГ КОНКУРЕНТОВ =============
+from routes.competitors import register_competitor_routes
+register_competitor_routes(app)
+
 # ============= INTERNAL API ДЛЯ АГЕНТОВ =============
 from routes.internal_api import internal_api_bp
 app.register_blueprint(internal_api_bp)
@@ -6079,6 +6088,8 @@ def _run_startup_migrations():
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
         # Content factory AI model selection
         ('content_factories', 'ai_model', 'VARCHAR(100)'),
+        # Competitor monitor proxy
+        ('competitor_monitor_settings', 'proxy_url', 'VARCHAR(500)'),
     ]
 
     for table, column, col_type in migrations:
