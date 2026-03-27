@@ -711,6 +711,531 @@
             background: rgba(0,0,0,0.5) !important;
             backdrop-filter: blur(2px) !important;
         }
+
+        /* =========================================
+           DESIGN SYSTEM COMPONENTS (sh-*)
+           ========================================= */
+
+        /* ── Page Header ── */
+        .sh-page-header {
+            background: var(--bg-sidebar);
+            border-radius: 8px;
+            padding: 32px 32px 28px;
+            margin-bottom: 24px;
+        }
+        .sh-page-header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .sh-page-title {
+            font-family: var(--font-display) !important;
+            font-weight: 400 !important;
+            font-style: italic;
+            font-size: 28px;
+            line-height: 1.2;
+            color: #fff;
+            margin: 0;
+        }
+        .sh-page-subtitle {
+            color: #999;
+            font-size: 14px;
+            margin: 6px 0 0;
+        }
+        .sh-page-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        /* ── Stat Grid ── */
+        .sh-stat-grid {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .sh-stat-grid--2 { grid-template-columns: repeat(2, 1fr); }
+        .sh-stat-grid--3 { grid-template-columns: repeat(3, 1fr); }
+        .sh-stat-grid--4 { grid-template-columns: repeat(4, 1fr); }
+        .sh-stat-grid--5 { grid-template-columns: repeat(5, 1fr); }
+        @media (max-width: 1023px) {
+            .sh-stat-grid--4, .sh-stat-grid--5 { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 639px) {
+            .sh-stat-grid--2, .sh-stat-grid--3,
+            .sh-stat-grid--4, .sh-stat-grid--5 { grid-template-columns: 1fr; }
+        }
+
+        /* ── Stat Card ── */
+        .sh-stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: border-color 0.15s;
+        }
+        .sh-stat-card--link {
+            text-decoration: none;
+            color: inherit;
+            cursor: pointer;
+        }
+        .sh-stat-card--link:hover {
+            border-color: var(--text-muted);
+        }
+        .sh-stat-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sh-stat-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .sh-stat-icon svg { width: 18px; height: 18px; color: var(--text-secondary); }
+        .sh-stat-label {
+            font-size: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            flex: 1;
+        }
+        .sh-stat-trend {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 12px;
+        }
+        .sh-stat-trend--up { color: #16a34a; background: #f0fdf4; }
+        .sh-stat-trend--down { color: #dc2626; background: #fef2f2; }
+        .sh-stat-trend--flat { color: var(--text-muted); background: var(--bg); }
+        .sh-stat-value {
+            font-size: 28px;
+            font-weight: 600;
+            color: var(--text);
+            line-height: 1.1;
+            font-variant-numeric: tabular-nums;
+        }
+        .sh-stat-footnote {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* ── Card ── */
+        .sh-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 16px;
+        }
+        .sh-card--flush { padding: 0; }
+        .sh-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .sh-card--flush .sh-card-header {
+            padding: 16px 24px;
+            margin-bottom: 0;
+            border-bottom: 1px solid var(--border-light);
+        }
+        .sh-card-title {
+            font-family: var(--font-display);
+            font-weight: 400;
+            font-size: 18px;
+            color: var(--text);
+            margin: 0;
+        }
+        .sh-card-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        /* ── Section Title ── */
+        .sh-section-title {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin: 32px 0 16px;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .sh-section-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border);
+        }
+
+        /* ── Badge ── */
+        .sh-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 500;
+            border-radius: 12px;
+            white-space: nowrap;
+        }
+        .sh-badge--sm { font-size: 11px; padding: 2px 8px; }
+        .sh-badge--md { font-size: 12px; padding: 3px 10px; }
+        .sh-badge-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+        .sh-badge--gray  { background: var(--bg); color: var(--text-secondary); }
+        .sh-badge--green { background: #f0fdf4; color: #15803d; }
+        .sh-badge--red   { background: #fef2f2; color: #b91c1c; }
+        .sh-badge--yellow { background: #fefce8; color: #a16207; }
+        .sh-badge--blue  { background: #eff6ff; color: #1d4ed8; }
+        .sh-badge--purple { background: #faf5ff; color: #7e22ce; }
+        .sh-badge--orange { background: #fff7ed; color: #c2410c; }
+
+        /* ── Button ── */
+        .sh-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: var(--font-body);
+            font-weight: 500;
+            border-radius: 6px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .sh-btn--sm { font-size: 13px; padding: 6px 12px; }
+        .sh-btn--md { font-size: 13px; padding: 8px 16px; }
+        .sh-btn--lg { font-size: 14px; padding: 10px 20px; }
+        .sh-btn-icon { display: flex; align-items: center; }
+        .sh-btn-icon svg { width: 16px; height: 16px; }
+
+        .sh-btn--primary {
+            background: var(--text);
+            color: #fff;
+            border-color: var(--text);
+        }
+        .sh-btn--primary:hover { background: #333; }
+        .sh-btn--secondary {
+            background: var(--bg-card);
+            color: var(--text);
+            border-color: var(--border);
+        }
+        .sh-btn--secondary:hover { background: var(--bg); }
+        .sh-btn--ghost {
+            background: transparent;
+            color: var(--text-secondary);
+        }
+        .sh-btn--ghost:hover { background: var(--bg); color: var(--text); }
+        .sh-btn--accent {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .sh-btn--accent:hover { background: var(--accent-dark, #a34a2f); }
+        /* On dark backgrounds */
+        .sh-btn--white {
+            background: #fff;
+            color: var(--text);
+            border-color: #fff;
+        }
+        .sh-btn--white:hover { background: #f5f5f5; }
+        .sh-btn--white-outline {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border-color: rgba(255,255,255,0.2);
+        }
+        .sh-btn--white-outline:hover { background: rgba(255,255,255,0.2); }
+        .sh-btn--disabled, .sh-btn:disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* ── Empty State ── */
+        .sh-empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 64px 24px;
+            text-align: center;
+        }
+        .sh-empty-icon {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            opacity: 0.4;
+        }
+        .sh-empty-title {
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text);
+            margin: 0 0 4px;
+        }
+        .sh-empty-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            max-width: 360px;
+            margin: 0;
+        }
+
+        /* ── Alert Box ── */
+        .sh-alert {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 16px;
+            border: 1px solid;
+        }
+        .sh-alert--info { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+        .sh-alert--success { background: #f0faf0; color: #166534; border-color: #bbf7d0; }
+        .sh-alert--warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+        .sh-alert--error { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+        .sh-alert-icon { flex-shrink: 0; padding-top: 1px; }
+        .sh-alert-icon svg { width: 18px; height: 18px; }
+        .sh-alert-content { flex: 1; line-height: 1.5; }
+        .sh-alert-close {
+            background: none; border: none;
+            cursor: pointer; color: inherit;
+            opacity: 0.5; padding: 2px;
+        }
+        .sh-alert-close:hover { opacity: 1; }
+
+        /* ── Data Table ── */
+        .sh-table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-card);
+            margin-bottom: 16px;
+        }
+        .sh-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .sh-table thead {
+            background: var(--bg);
+        }
+        .sh-table th {
+            padding: 10px 16px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        .sh-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+            vertical-align: middle;
+        }
+        .sh-table tbody tr:last-child td { border-bottom: none; }
+        .sh-table tbody tr {
+            transition: background 0.1s;
+        }
+        .sh-table tbody tr:hover {
+            background: var(--bg);
+        }
+        .sh-table th.text-right, .sh-table td.text-right { text-align: right; }
+        .sh-table th.text-center, .sh-table td.text-center { text-align: center; }
+
+        /* ── Key-Value ── */
+        .sh-kv {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-light);
+            font-size: 13px;
+        }
+        .sh-kv:last-child { border-bottom: none; }
+        .sh-kv-label { color: var(--text-muted); }
+        .sh-kv-value { color: var(--text); font-weight: 500; }
+
+        /* ── Tabs ── */
+        .sh-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        .sh-tab {
+            padding: 10px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .sh-tab:hover { color: var(--text); }
+        .sh-tab--active {
+            color: var(--text);
+            border-bottom-color: var(--text);
+        }
+        .sh-tab-count {
+            font-size: 11px;
+            background: var(--bg);
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        .sh-tab--active .sh-tab-count {
+            background: var(--text);
+            color: #fff;
+        }
+
+        /* ── Filter Bar ── */
+        .sh-filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .sh-filter-bar input[type="text"],
+        .sh-filter-bar input[type="search"],
+        .sh-filter-bar select {
+            font-size: 13px;
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+        }
+
+        /* ── Pagination ── */
+        .sh-pagination {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            font-size: 13px;
+        }
+        .sh-pagination-info { color: var(--text-muted); }
+        .sh-pagination-buttons {
+            display: flex;
+            gap: 2px;
+            align-items: center;
+        }
+        .sh-pagination-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            height: 32px;
+            padding: 0 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-card);
+            color: var(--text);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.15s;
+        }
+        .sh-pagination-btn:hover { background: var(--bg); }
+        .sh-pagination-btn--active {
+            background: var(--text);
+            color: #fff;
+            border-color: var(--text);
+        }
+        .sh-pagination-ellipsis {
+            min-width: 32px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        /* ── Quick access cards grid ── */
+        .sh-quick-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .sh-quick-card {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 16px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            text-decoration: none;
+            color: inherit;
+            transition: border-color 0.15s;
+        }
+        .sh-quick-card:hover { border-color: var(--text-muted); }
+        .sh-quick-card-icon {
+            width: 40px; height: 40px;
+            border-radius: 8px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .sh-quick-card-icon svg { width: 20px; height: 20px; color: var(--text-secondary); }
+        .sh-quick-card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .sh-quick-card-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .sh-quick-card-meta {
+            font-size: 12px;
+            color: var(--accent);
+            margin-top: 4px;
+            font-weight: 500;
+        }
+
+        /* ── Page layout ── */
+        .sh-page {
+            padding: 24px;
+        }
+        @media (min-width: 1024px) {
+            .sh-page { padding: 32px; }
+        }
     </style>
     {% block extra_head %}{% endblock %}
 </head>

@@ -3,41 +3,35 @@
 {% block title %}Агенты — Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="agentsDashboard()">
+<div class="sh-page" x-data="agentsDashboard()">
 
     <!-- Заголовок -->
-    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative flex flex-col lg:flex-row lg:justify-between lg:items-start gap-4">
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
             <div>
-                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Сервисные агенты</h1>
-                <p class="mt-2 text-sm text-gray-400">AI-агенты автоматизируют рутинные задачи: категоризация, размеры, SEO, модерация</p>
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-emerald-500/20 text-emerald-400">
-                        <span class="w-1.5 h-1.5 bg-emerald-400 rounded-full mr-1.5 animate-pulse"></span>
-                        Online: <span x-text="onlineCount" class="ml-1">0</span>
+                <h1 class="sh-page-title">Сервисные агенты</h1>
+                <p class="sh-page-subtitle">AI-агенты автоматизируют рутинные задачи: категоризация, размеры, SEO, модерация</p>
+                <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">
+                    <span class="sh-badge sh-badge--sm" style="background:rgba(16,185,129,.15);color:#34d399">
+                        <span class="sh-badge-dot" style="color:#34d399"></span>
+                        Online: <span x-text="onlineCount" style="margin-left:4px">0</span>
                     </span>
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
+                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
                         Задач в работе: {{ active_tasks|length }}
                     </span>
-                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium bg-white/10 text-white/80">
+                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
                         Успешность (7д): {{ stats.success_rate }}%
                     </span>
                 </div>
             </div>
             {% if current_user.is_admin %}
-            <div class="flex flex-wrap gap-3">
-                <button @click="showCreateTask = true"
-                        class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md hover:bg-gray-100 transition-colors flex items-center gap-2 font-medium text-sm shadow-sm">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                    </svg>
+            <div class="sh-page-actions">
+                <button @click="showCreateTask = true" class="sh-btn sh-btn--white sh-btn--md">
+                    <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></span>
                     Создать задачу
                 </button>
-                <button @click="showRegister = true"
-                        class="px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors flex items-center gap-2 font-medium text-sm">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
-                    </svg>
+                <button @click="showRegister = true" class="sh-btn sh-btn--white-outline sh-btn--md">
+                    <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg></span>
                     Свой агент
                 </button>
             </div>
@@ -46,26 +40,26 @@
     </div>
 
     <!-- Статистика -->
-    <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Всего задач (7д)</div>
-            <div class="text-2xl font-semibold text-gray-900">{{ stats.total }}</div>
+    <div class="sh-stat-grid sh-stat-grid--5">
+        <div class="sh-stat-card">
+            <span class="sh-stat-label">Всего задач (7д)</span>
+            <div class="sh-stat-value">{{ stats.total }}</div>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Выполнено</div>
-            <div class="text-2xl font-semibold text-emerald-600">{{ stats.completed }}</div>
+        <div class="sh-stat-card">
+            <span class="sh-stat-label">Выполнено</span>
+            <div class="sh-stat-value" style="color:#16a34a">{{ stats.completed }}</div>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Ошибки</div>
-            <div class="text-2xl font-semibold text-red-600">{{ stats.failed }}</div>
+        <div class="sh-stat-card">
+            <span class="sh-stat-label">Ошибки</span>
+            <div class="sh-stat-value" style="color:#dc2626">{{ stats.failed }}</div>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">В очереди</div>
-            <div class="text-2xl font-semibold text-amber-600">{{ stats.queued }}</div>
+        <div class="sh-stat-card">
+            <span class="sh-stat-label">В очереди</span>
+            <div class="sh-stat-value" style="color:#d97706">{{ stats.queued }}</div>
         </div>
-        <div class="bg-white rounded-lg border border-gray-200 p-4">
-            <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Ср. время</div>
-            <div class="text-2xl font-semibold text-gray-900">{{ stats.avg_duration_seconds }}с</div>
+        <div class="sh-stat-card">
+            <span class="sh-stat-label">Ср. время</span>
+            <div class="sh-stat-value">{{ stats.avg_duration_seconds }}с</div>
         </div>
     </div>
 

@@ -1,484 +1,689 @@
-{% extends "base.html" %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Вход - Seller Hub</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-{% block title %}Вход - Seller Hub{% endblock %}
+        :root {
+            --bg: #faf9f7;
+            --bg-card: #ffffff;
+            --bg-sidebar: #0a0a0a;
+            --text: #1a1a1a;
+            --text-secondary: #6b6b6b;
+            --text-muted: #9a9a9a;
+            --accent: #c45d3e;
+            --accent-light: #f0e0da;
+            --border: #e8e5e1;
+            --border-light: #f0eeeb;
+            --font-display: 'Instrument Serif', Georgia, serif;
+            --font-body: 'Inter', -apple-system, sans-serif;
+        }
 
-{% block extra_head %}
-<style>
-    .login-page {
-        flex: 1;
-        display: flex;
-        background: var(--bg);
-    }
+        body {
+            font-family: var(--font-body);
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            font-size: 14px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            display: flex;
+        }
 
-    /* Left panel */
-    .login-brand {
-        display: none;
-        width: 50%;
-        background: var(--bg-sidebar);
-        position: relative;
-        overflow: hidden;
-        padding: 60px;
-        flex-direction: column;
-        justify-content: space-between;
-    }
-    @media (min-width: 1024px) { .login-brand { display: flex; } }
+        /* ── Flash messages (floating toast) ── */
+        .flash-overlay {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            max-width: 420px;
+            width: calc(100% - 32px);
+            pointer-events: none;
+        }
+        .flash-toast {
+            pointer-events: auto;
+            background: rgba(10,10,10,0.92);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 14px 20px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .flash-icon {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .flash-text {
+            font-size: 13px;
+            font-weight: 500;
+            color: #e8e8e8;
+            font-family: var(--font-body);
+        }
 
-    .login-brand-top {
-        position: relative;
-        z-index: 2;
-    }
-    .login-brand-logo {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        margin-bottom: 80px;
-    }
-    .login-brand-logo-mark {
-        width: 36px;
-        height: 36px;
-        background: var(--accent);
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-family: var(--font-display);
-        font-style: italic;
-        font-size: 20px;
-        color: white;
-    }
-    .login-brand-logo-text {
-        font-family: var(--font-display);
-        font-style: italic;
-        font-size: 22px;
-        color: #fff;
-    }
+        /* ── Layout ── */
+        .login-layout {
+            display: flex;
+            width: 100%;
+            min-height: 100vh;
+        }
 
-    .login-brand h1 {
-        font-family: var(--font-display);
-        font-size: 52px;
-        line-height: 1.1;
-        color: #fff;
-        font-weight: 400;
-        margin-bottom: 24px;
-    }
-    .login-brand h1 em {
-        color: var(--accent);
-        font-style: italic;
-    }
-    .login-brand p {
-        font-size: 15px;
-        color: #737373;
-        line-height: 1.7;
-        max-width: 400px;
-    }
+        /* ── Left brand panel ── */
+        .login-brand {
+            display: none;
+            width: 440px;
+            flex-shrink: 0;
+            background: var(--bg-sidebar);
+            position: relative;
+            overflow: hidden;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 48px 48px 40px;
+        }
+        @media (min-width: 1024px) {
+            .login-brand { display: flex; }
+        }
 
-    .login-brand-bottom {
-        position: relative;
-        z-index: 2;
-        display: flex;
-        gap: 24px;
-    }
-    .login-brand-stat {
-        border-left: 1px solid #2a2a2a;
-        padding-left: 16px;
-    }
-    .login-brand-stat-value {
-        font-family: var(--font-display);
-        font-size: 32px;
-        color: #fff;
-    }
-    .login-brand-stat-label {
-        font-size: 12px;
-        color: #555;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-top: 2px;
-    }
+        /* Subtle grid texture */
+        .brand-grid {
+            position: absolute;
+            inset: 0;
+            opacity: 0.025;
+            background-image:
+                linear-gradient(#fff 1px, transparent 1px),
+                linear-gradient(90deg, #fff 1px, transparent 1px);
+            background-size: 48px 48px;
+        }
 
-    /* Decorative grid */
-    .login-brand-grid {
-        position: absolute;
-        inset: 0;
-        opacity: 0.03;
-        background-image:
-            linear-gradient(#fff 1px, transparent 1px),
-            linear-gradient(90deg, #fff 1px, transparent 1px);
-        background-size: 60px 60px;
-    }
-    .login-brand-glow {
-        position: absolute;
-        width: 400px;
-        height: 400px;
-        border-radius: 50%;
-        background: var(--accent);
-        opacity: 0.06;
-        filter: blur(120px);
-        bottom: -100px;
-        right: -100px;
-    }
+        /* Accent glow */
+        .brand-glow {
+            position: absolute;
+            width: 320px;
+            height: 320px;
+            border-radius: 50%;
+            background: var(--accent);
+            opacity: 0.07;
+            filter: blur(100px);
+            bottom: -80px;
+            right: -60px;
+            animation: glowPulse 8s ease-in-out infinite;
+        }
+        @keyframes glowPulse {
+            0%, 100% { opacity: 0.07; transform: scale(1); }
+            50%      { opacity: 0.11; transform: scale(1.08); }
+        }
 
-    /* Floating particles */
-    .login-particles {
-        position: absolute;
-        inset: 0;
-        z-index: 1;
-        overflow: hidden;
-        pointer-events: none;
-    }
-    .login-particle {
-        position: absolute;
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-        background: rgba(196, 93, 62, 0.4);
-        animation: particleFloat linear infinite;
-    }
-    .login-particle:nth-child(1) { left: 15%; animation-duration: 14s; animation-delay: 0s; width: 3px; height: 3px; }
-    .login-particle:nth-child(2) { left: 35%; animation-duration: 18s; animation-delay: -3s; width: 5px; height: 5px; opacity: 0.3; }
-    .login-particle:nth-child(3) { left: 55%; animation-duration: 12s; animation-delay: -6s; }
-    .login-particle:nth-child(4) { left: 75%; animation-duration: 16s; animation-delay: -2s; width: 3px; height: 3px; }
-    .login-particle:nth-child(5) { left: 90%; animation-duration: 20s; animation-delay: -8s; width: 6px; height: 6px; opacity: 0.2; }
-    .login-particle:nth-child(6) { left: 25%; animation-duration: 15s; animation-delay: -5s; width: 2px; height: 2px; background: rgba(255,255,255,0.1); }
-    .login-particle:nth-child(7) { left: 65%; animation-duration: 17s; animation-delay: -10s; width: 3px; height: 3px; background: rgba(255,255,255,0.08); }
-    .login-particle:nth-child(8) { left: 45%; animation-duration: 22s; animation-delay: -4s; width: 2px; height: 2px; }
-    @keyframes particleFloat {
-        0%   { transform: translateY(110vh) rotate(0deg); opacity: 0; }
-        10%  { opacity: 1; }
-        90%  { opacity: 1; }
-        100% { transform: translateY(-10vh) rotate(360deg); opacity: 0; }
-    }
+        /* Accent line at bottom */
+        .brand-line {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(196,93,62,0.25), transparent);
+            z-index: 2;
+        }
+        .brand-line::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, transparent, rgba(196,93,62,0.5), transparent);
+            animation: lineSweep 5s ease-in-out infinite;
+        }
+        @keyframes lineSweep {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
 
-    /* Animated glow that follows mouse on left panel */
-    .login-brand-cursor-glow {
-        position: absolute;
-        width: 300px;
-        height: 300px;
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(196,93,62,0.12) 0%, transparent 70%);
-        pointer-events: none;
-        z-index: 1;
-        transform: translate(-50%, -50%);
-        transition: left 0.3s ease-out, top 0.3s ease-out;
-    }
+        /* Floating particles */
+        .brand-particles {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .brand-particle {
+            position: absolute;
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: rgba(196, 93, 62, 0.35);
+            animation: particleFloat linear infinite;
+        }
+        .brand-particle:nth-child(1) { left: 18%; animation-duration: 16s; animation-delay: 0s; }
+        .brand-particle:nth-child(2) { left: 40%; animation-duration: 20s; animation-delay: -4s; width: 4px; height: 4px; opacity: 0.25; }
+        .brand-particle:nth-child(3) { left: 60%; animation-duration: 14s; animation-delay: -7s; width: 2px; height: 2px; }
+        .brand-particle:nth-child(4) { left: 80%; animation-duration: 18s; animation-delay: -2s; }
+        .brand-particle:nth-child(5) { left: 30%; animation-duration: 22s; animation-delay: -10s; width: 2px; height: 2px; background: rgba(255,255,255,0.06); }
+        .brand-particle:nth-child(6) { left: 70%; animation-duration: 17s; animation-delay: -6s; width: 2px; height: 2px; background: rgba(255,255,255,0.05); }
+        @keyframes particleFloat {
+            0%   { transform: translateY(110vh) rotate(0deg); opacity: 0; }
+            10%  { opacity: 1; }
+            90%  { opacity: 1; }
+            100% { transform: translateY(-10vh) rotate(360deg); opacity: 0; }
+        }
 
-    /* Right panel */
-    .login-form-panel {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 40px 24px;
-    }
-    @media (min-width: 1024px) { .login-form-panel { width: 50%; } }
+        /* Cursor glow */
+        .brand-cursor-glow {
+            position: absolute;
+            width: 260px;
+            height: 260px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(196,93,62,0.1) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 1;
+            transform: translate(-50%, -50%);
+            transition: left 0.4s ease-out, top 0.4s ease-out;
+        }
 
-    .login-form-wrapper {
-        width: 100%;
-        max-width: 380px;
-    }
+        /* Brand content */
+        .brand-top {
+            position: relative;
+            z-index: 2;
+        }
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 64px;
+        }
+        .brand-logo-mark {
+            width: 36px;
+            height: 36px;
+            background: var(--accent);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-display);
+            font-style: italic;
+            font-size: 20px;
+            color: white;
+        }
+        .brand-logo-text {
+            font-family: var(--font-display);
+            font-style: italic;
+            font-size: 22px;
+            color: #fff;
+        }
 
-    .login-form-mobile-logo {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 48px;
-    }
-    @media (min-width: 1024px) { .login-form-mobile-logo { display: none; } }
+        .brand-top h1 {
+            font-family: var(--font-display);
+            font-size: 46px;
+            line-height: 1.12;
+            color: #fff;
+            font-weight: 400;
+            margin-bottom: 20px;
+        }
+        .brand-top h1 em {
+            color: var(--accent);
+            font-style: italic;
+        }
+        .brand-top p {
+            font-size: 14px;
+            color: #737373;
+            line-height: 1.75;
+            max-width: 340px;
+        }
 
-    .login-form-title {
-        font-family: var(--font-display);
-        font-size: 36px;
-        color: var(--text);
-        margin-bottom: 8px;
-        font-weight: 400;
-    }
-    .login-form-subtitle {
-        font-size: 14px;
-        color: var(--text-secondary);
-        margin-bottom: 40px;
-    }
+        .brand-bottom {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            gap: 24px;
+        }
+        .brand-stat {
+            border-left: 1px solid #2a2a2a;
+            padding-left: 14px;
+        }
+        .brand-stat-value {
+            font-family: var(--font-display);
+            font-size: 28px;
+            color: #fff;
+        }
+        .brand-stat-label {
+            font-size: 11px;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-top: 2px;
+        }
 
-    .login-field {
-        margin-bottom: 20px;
-    }
-    .login-label {
-        display: block;
-        font-size: 12px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--text-secondary);
-        margin-bottom: 8px;
-    }
-    .login-input {
-        width: 100%;
-        padding: 12px 16px;
-        font-size: 14px;
-        font-family: var(--font-body);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--bg-card);
-        color: var(--text);
-        outline: none;
-        transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .login-input::placeholder { color: var(--text-muted); }
-    .login-input:focus {
-        border-color: var(--accent);
-        box-shadow: 0 0 0 3px rgba(196, 93, 62, 0.1);
-    }
+        /* Rotating word */
+        .word-rotator {
+            display: inline-flex;
+            color: var(--accent);
+            font-style: italic;
+            min-width: 2ch;
+        }
+        .word-rotator .word-char {
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(0.3em);
+            filter: blur(6px);
+            animation: charReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .word-rotator .word-char.is-space {
+            width: 0.3em;
+        }
+        .word-rotator .word-char.fade-out {
+            animation: charFade 0.4s cubic-bezier(0.4, 0, 1, 1) forwards;
+        }
+        @keyframes charReveal {
+            0%   { opacity: 0; transform: translateY(0.3em); filter: blur(6px); }
+            50%  { opacity: 0.7; filter: blur(2px); }
+            100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+        }
+        @keyframes charFade {
+            0%   { opacity: 1; transform: translateY(0); filter: blur(0); }
+            100% { opacity: 0; transform: translateY(-0.2em); filter: blur(4px); }
+        }
 
-    .login-remember {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 32px;
-    }
-    .login-remember input[type=checkbox] {
-        width: 16px;
-        height: 16px;
-        accent-color: var(--accent);
-        cursor: pointer;
-    }
-    .login-remember label {
-        font-size: 13px;
-        color: var(--text-secondary);
-        cursor: pointer;
-    }
+        /* ── Right form panel ── */
+        .login-form-panel {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 24px;
+            position: relative;
+        }
 
-    .login-button {
-        width: 100%;
-        padding: 14px;
-        font-size: 14px;
-        font-weight: 600;
-        font-family: var(--font-body);
-        letter-spacing: 0.02em;
-        background: var(--text);
-        color: #fff;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        transition: all 0.25s ease;
-        position: relative;
-        overflow: hidden;
-    }
-    .login-button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    }
-    .login-button:active {
-        transform: translateY(0);
-        box-shadow: none;
-    }
+        /* Subtle top accent strip on mobile */
+        .mobile-accent-strip {
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-light), var(--accent));
+            z-index: 10;
+        }
+        @media (min-width: 1024px) {
+            .mobile-accent-strip { display: none; }
+        }
 
-    .login-copyright {
-        margin-top: 24px;
-        font-size: 11px;
-        color: var(--text-muted);
-        letter-spacing: 0.02em;
-    }
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+        }
 
-    /* Entrance animations */
-    @keyframes fadeSlideUp {
-        from { opacity: 0; transform: translateY(24px); }
-        to   { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes fadeSlideRight {
-        from { opacity: 0; transform: translateX(-32px); }
-        to   { opacity: 1; transform: translateX(0); }
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; }
-        to   { opacity: 1; }
-    }
-    @keyframes scaleIn {
-        from { opacity: 0; transform: scale(0.8); }
-        to   { opacity: 1; transform: scale(1); }
-    }
-    @keyframes glowPulse {
-        0%, 100% { opacity: 0.06; transform: scale(1); }
-        50%      { opacity: 0.1; transform: scale(1.1); }
-    }
+        /* Mobile logo */
+        .login-mobile-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 48px;
+        }
+        @media (min-width: 1024px) {
+            .login-mobile-logo { display: none; }
+        }
+        .login-mobile-logo-text {
+            font-family: var(--font-display);
+            font-style: italic;
+            font-size: 20px;
+            color: var(--text);
+        }
 
-    .anim-fade-up {
-        opacity: 0;
-        animation: fadeSlideUp 0.7s ease-out forwards;
-    }
-    .anim-fade-right {
-        opacity: 0;
-        animation: fadeSlideRight 0.7s ease-out forwards;
-    }
-    .anim-fade-in {
-        opacity: 0;
-        animation: fadeIn 0.8s ease-out forwards;
-    }
-    .anim-scale-in {
-        opacity: 0;
-        animation: scaleIn 0.5s ease-out forwards;
-    }
-    .anim-delay-1 { animation-delay: 0.1s; }
-    .anim-delay-2 { animation-delay: 0.2s; }
-    .anim-delay-3 { animation-delay: 0.35s; }
-    .anim-delay-4 { animation-delay: 0.5s; }
-    .anim-delay-5 { animation-delay: 0.65s; }
-    .anim-delay-6 { animation-delay: 0.8s; }
-    .anim-delay-7 { animation-delay: 0.95s; }
-    .anim-delay-8 { animation-delay: 1.1s; }
+        /* Section header */
+        .login-eyebrow {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--accent);
+            margin-bottom: 12px;
+        }
+        .login-title {
+            font-family: var(--font-display);
+            font-size: 38px;
+            color: var(--text);
+            margin-bottom: 6px;
+            font-weight: 400;
+            line-height: 1.15;
+        }
+        .login-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 36px;
+            line-height: 1.5;
+        }
 
-    .login-brand-glow {
-        animation: glowPulse 6s ease-in-out infinite;
-    }
+        /* Divider line */
+        .login-divider {
+            height: 1px;
+            background: var(--border);
+            margin-bottom: 32px;
+        }
 
-    /* Stagger stats */
-    .login-brand-stat {
-        opacity: 0;
-        animation: fadeSlideUp 0.6s ease-out forwards;
-    }
-    .login-brand-stat:nth-child(1) { animation-delay: 0.7s; }
-    .login-brand-stat:nth-child(2) { animation-delay: 0.85s; }
-    .login-brand-stat:nth-child(3) { animation-delay: 1.0s; }
+        /* Form fields */
+        .login-field {
+            margin-bottom: 22px;
+        }
+        .login-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .login-input {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 14px;
+            font-family: var(--font-body);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-card);
+            color: var(--text);
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .login-input::placeholder {
+            color: var(--text-muted);
+        }
+        .login-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(196, 93, 62, 0.08);
+        }
 
-    /* Subtle line across brand panel */
-    .login-brand-line {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        width: 100%;
-        height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(196,93,62,0.3), transparent);
-        z-index: 2;
-    }
-    @keyframes lineSweep {
-        0%   { transform: translateX(-100%); }
-        100% { transform: translateX(100%); }
-    }
-    .login-brand-line::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(90deg, transparent, rgba(196,93,62,0.6), transparent);
-        animation: lineSweep 4s ease-in-out infinite;
-    }
+        /* Remember me */
+        .login-remember {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 28px;
+        }
+        .login-remember input[type=checkbox] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .login-remember label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
 
-    /* Rotating word — character reveal */
-    .login-word-rotator {
-        display: inline-flex;
-        color: var(--accent);
-        font-style: italic;
-        min-width: 2ch;
-    }
-    .login-word-rotator .word-char {
-        display: inline-block;
-        opacity: 0;
-        transform: translateY(0.3em);
-        filter: blur(6px);
-        animation: charReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
-    .login-word-rotator .word-char.is-space {
-        width: 0.3em;
-    }
-    .login-word-rotator .word-char.fade-out {
-        animation: charFade 0.4s cubic-bezier(0.4, 0, 1, 1) forwards;
-    }
-    @keyframes charReveal {
-        0%   { opacity: 0; transform: translateY(0.3em); filter: blur(6px); }
-        50%  { opacity: 0.7; filter: blur(2px); }
-        100% { opacity: 1; transform: translateY(0); filter: blur(0); }
-    }
-    @keyframes charFade {
-        0%   { opacity: 1; transform: translateY(0); filter: blur(0); }
-        100% { opacity: 0; transform: translateY(-0.2em); filter: blur(4px); }
-    }
-</style>
-{% endblock %}
+        /* Submit button */
+        .login-button {
+            width: 100%;
+            padding: 13px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: var(--font-body);
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            background: var(--bg-sidebar);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .login-button:hover {
+            background: #1a1a1a;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+        }
+        .login-button:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+        /* Accent underline on button */
+        .login-button::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 40px;
+            height: 2px;
+            background: var(--accent);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+        .login-button:hover::after {
+            width: 80px;
+        }
 
-{% block login_content %}
-<div class="login-page">
+        /* Footer */
+        .login-footer {
+            margin-top: 32px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .login-copyright {
+            font-size: 11px;
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+        }
+        .login-footer-mark {
+            width: 20px;
+            height: 20px;
+            background: var(--accent);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-display);
+            font-style: italic;
+            font-size: 11px;
+            color: white;
+            opacity: 0.5;
+        }
 
-    <!-- Left: Brand -->
+        /* ── Entrance animations ── */
+        @keyframes fadeSlideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeSlideRight {
+            from { opacity: 0; transform: translateX(-24px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        @keyframes scaleIn {
+            from { opacity: 0; transform: scale(0.85); }
+            to   { opacity: 1; transform: scale(1); }
+        }
+
+        .anim-up    { opacity: 0; animation: fadeSlideUp 0.6s ease-out forwards; }
+        .anim-right { opacity: 0; animation: fadeSlideRight 0.6s ease-out forwards; }
+        .anim-fade  { opacity: 0; animation: fadeIn 0.7s ease-out forwards; }
+        .anim-scale { opacity: 0; animation: scaleIn 0.5s ease-out forwards; }
+
+        .d1 { animation-delay: 0.1s; }
+        .d2 { animation-delay: 0.2s; }
+        .d3 { animation-delay: 0.3s; }
+        .d4 { animation-delay: 0.4s; }
+        .d5 { animation-delay: 0.5s; }
+        .d6 { animation-delay: 0.6s; }
+        .d7 { animation-delay: 0.7s; }
+        .d8 { animation-delay: 0.85s; }
+        .d9 { animation-delay: 1.0s; }
+
+        /* Stagger stats */
+        .brand-stat {
+            opacity: 0;
+            animation: fadeSlideUp 0.5s ease-out forwards;
+        }
+        .brand-stat:nth-child(1) { animation-delay: 0.8s; }
+        .brand-stat:nth-child(2) { animation-delay: 0.95s; }
+        .brand-stat:nth-child(3) { animation-delay: 1.1s; }
+
+        /* ── Responsive tweaks ── */
+        @media (max-width: 480px) {
+            .login-title { font-size: 32px; }
+            .login-card  { max-width: 100%; }
+        }
+        @media (min-width: 1280px) {
+            .login-brand { width: 480px; padding: 56px; }
+            .brand-top h1 { font-size: 50px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Flash messages -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+<div class="flash-overlay" role="status" aria-live="polite">
+    {% for category, message in messages %}
+    <div x-data="{ show: false }" x-show="show"
+        x-init="setTimeout(() => show = true, 100); setTimeout(() => show = false, 4000)"
+        x-transition:enter="transition ease-out duration-500"
+        x-transition:enter-start="opacity-0 -translate-y-4 scale-95"
+        x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+        x-transition:leave="transition ease-in duration-300"
+        x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+        x-transition:leave-end="opacity-0 -translate-y-4 scale-95"
+        class="flash-toast" role="alert">
+        <div class="flash-icon" style="{% if category == 'info' %}background:rgba(96,165,250,0.15){% elif category == 'success' %}background:rgba(74,222,128,0.15){% elif category == 'danger' %}background:rgba(248,113,113,0.15){% elif category == 'warning' %}background:rgba(251,191,36,0.15){% endif %}">
+            <svg width="16" height="16" fill="none" stroke="{% if category == 'info' %}#60a5fa{% elif category == 'success' %}#4ade80{% elif category == 'danger' %}#f87171{% elif category == 'warning' %}#fbbf24{% else %}#60a5fa{% endif %}" stroke-width="2" viewBox="0 0 24 24">
+                {% if category == 'success' %}<path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                {% elif category == 'danger' %}<path stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                {% elif category == 'warning' %}<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+                {% else %}<path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                {% endif %}
+            </svg>
+        </div>
+        <span class="flash-text">{{ message }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endwith %}
+
+<!-- Mobile accent strip -->
+<div class="mobile-accent-strip"></div>
+
+<div class="login-layout">
+
+    <!-- Left: Brand panel -->
     <div class="login-brand" x-data="{ mx: 0, my: 0 }" @mousemove.throttle.100ms="mx = $event.clientX; my = $event.clientY">
-        <div class="login-brand-grid"></div>
-        <div class="login-brand-glow"></div>
-        <div class="login-brand-cursor-glow" :style="`left:${mx}px;top:${my}px`"></div>
-        <div class="login-brand-line"></div>
+        <div class="brand-grid"></div>
+        <div class="brand-glow"></div>
+        <div class="brand-cursor-glow" :style="`left:${mx}px;top:${my}px`"></div>
+        <div class="brand-line"></div>
 
-        <!-- Floating particles -->
-        <div class="login-particles">
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
-            <div class="login-particle"></div>
+        <div class="brand-particles">
+            <div class="brand-particle"></div>
+            <div class="brand-particle"></div>
+            <div class="brand-particle"></div>
+            <div class="brand-particle"></div>
+            <div class="brand-particle"></div>
+            <div class="brand-particle"></div>
         </div>
 
-        <div class="login-brand-top">
-            <div class="login-brand-logo anim-fade-right anim-delay-1">
-                <div class="login-brand-logo-mark">S</div>
-                <span class="login-brand-logo-text">Seller Hub</span>
+        <div class="brand-top">
+            <div class="brand-logo anim-right d1">
+                <div class="brand-logo-mark">S</div>
+                <span class="brand-logo-text">Seller Hub</span>
             </div>
 
-            <h1 class="anim-fade-right anim-delay-2">
+            <h1 class="anim-right d2">
                 Управляйте<br>
                 продажами<br>
-                <span class="login-word-rotator" id="word-rotator"></span>
+                <span class="word-rotator" id="word-rotator"></span>
             </h1>
-            <p class="anim-fade-right anim-delay-3">
-                Единая платформа для аналитики, ценообразования и управления товарами на маркетплейсах. Wildberries, Ozon, Яндекс Маркет.
+            <p class="anim-right d3">
+                Единая платформа для аналитики, ценообразования и управления товарами на маркетплейсах.
             </p>
         </div>
 
-        <div class="login-brand-bottom">
-            <div class="login-brand-stat">
-                <div class="login-brand-stat-value">3</div>
-                <div class="login-brand-stat-label">Маркетплейса</div>
+        <div class="brand-bottom">
+            <div class="brand-stat">
+                <div class="brand-stat-value">3</div>
+                <div class="brand-stat-label">Маркетплейса</div>
             </div>
-            <div class="login-brand-stat">
-                <div class="login-brand-stat-value">24/7</div>
-                <div class="login-brand-stat-label">Мониторинг</div>
+            <div class="brand-stat">
+                <div class="brand-stat-value">24/7</div>
+                <div class="brand-stat-label">Мониторинг</div>
             </div>
-            <div class="login-brand-stat">
-                <div class="login-brand-stat-value">AI</div>
-                <div class="login-brand-stat-label">Обогащение</div>
+            <div class="brand-stat">
+                <div class="brand-stat-value">AI</div>
+                <div class="brand-stat-label">Обогащение</div>
             </div>
         </div>
     </div>
 
-    <!-- Right: Form -->
+    <!-- Right: Login form -->
     <div class="login-form-panel">
-        <div class="login-form-wrapper">
+        <div class="login-card">
 
-            <div class="login-form-mobile-logo anim-scale-in anim-delay-1">
-                <div class="login-brand-logo-mark">S</div>
-                <span style="font-family:var(--font-display);font-style:italic;font-size:20px;color:var(--text)">Seller Hub</span>
+            <!-- Mobile logo -->
+            <div class="login-mobile-logo anim-scale d1">
+                <div class="brand-logo-mark">S</div>
+                <span class="login-mobile-logo-text">Seller Hub</span>
             </div>
 
-            <h2 class="login-form-title anim-fade-up anim-delay-2">Войти</h2>
-            <p class="login-form-subtitle anim-fade-up anim-delay-3">Введите данные для входа в систему</p>
+            <div class="login-eyebrow anim-up d2">Вход в систему</div>
+            <h2 class="login-title anim-up d3">Добро<br>пожаловать</h2>
+            <p class="login-subtitle anim-up d4">Введите данные для доступа к платформе</p>
+
+            <div class="login-divider anim-fade d4"></div>
 
             <form method="POST" action="{{ url_for('login') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="login-field anim-fade-up anim-delay-4">
+
+                <div class="login-field anim-up d5">
                     <label for="username" class="login-label">Имя пользователя</label>
-                    <input id="username" name="username" type="text" required class="login-input" placeholder="username" autocomplete="username">
-                </div>
-                <div class="login-field anim-fade-up anim-delay-5">
-                    <label for="password" class="login-label">Пароль</label>
-                    <input id="password" name="password" type="password" required class="login-input" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" autocomplete="current-password">
+                    <input id="username" name="username" type="text" required class="login-input" placeholder="username" autocomplete="username" autofocus>
                 </div>
 
-                <div class="login-remember anim-fade-up anim-delay-6">
+                <div class="login-field anim-up d6">
+                    <label for="password" class="login-label">Пароль</label>
+                    <input id="password" name="password" type="password" required class="login-input" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="current-password">
+                </div>
+
+                <div class="login-remember anim-up d7">
                     <input id="remember" name="remember" type="checkbox">
                     <label for="remember">Запомнить меня</label>
                 </div>
 
-                <button type="submit" class="login-button anim-fade-up anim-delay-7">Войти</button>
+                <button type="submit" class="login-button anim-up d8">Войти</button>
             </form>
 
-            <p class="login-copyright anim-fade-in anim-delay-8">&copy; 2026 Seller Hub</p>
+            <div class="login-footer anim-fade d9">
+                <span class="login-copyright">&copy; 2026 Seller Hub</span>
+                <div class="login-footer-mark">S</div>
+            </div>
         </div>
     </div>
+
 </div>
 
 <script>
@@ -501,7 +706,7 @@
         'с умом', 'креативно', 'технологично', 'амбициозно',
         'с первого дня', 'в плюс', 'на 100%', 'без границ',
     ];
-    // Fisher-Yates shuffle — перемешиваем массив на месте
+
     function shuffle(arr) {
         for (let i = arr.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
@@ -510,8 +715,6 @@
         return arr;
     }
 
-    // Очередь: показываем все слова из перемешанного массива,
-    // потом перемешиваем заново (гарантируя что последнее != первое)
     let queue = shuffle(words.slice());
     let queueIdx = 0;
 
@@ -519,7 +722,6 @@
         if (queueIdx >= queue.length) {
             const lastShown = queue[queue.length - 1];
             queue = shuffle(words.slice());
-            // Если первое слово новой очереди совпало с последним — меняем местами с рандомным
             if (queue[0] === lastShown && queue.length > 1) {
                 const swap = 1 + Math.floor(Math.random() * (queue.length - 1));
                 [queue[0], queue[swap]] = [queue[swap], queue[0]];
@@ -566,4 +768,5 @@
     setInterval(next, 3500);
 })();
 </script>
-{% endblock %}
+</body>
+</html>

@@ -591,10 +591,11 @@ class WBProductImporter:
                 product.is_active = True
                 product.last_sync = datetime.utcnow()
                 logger.info(f"Обновлена существующая запись Product ID={product.id} для nmID={nm_id} (без дублирования)")
-            else:
+            elif nm_id:
+                # Создаём Product только если получен валидный nmID
                 product = Product(
                     seller_id=self.seller.id,
-                    nm_id=nm_id or 0,
+                    nm_id=nm_id,
                     vendor_code=vendor_code,
                     title=imported_product.title,
                     brand=imported_product.brand,
@@ -611,6 +612,22 @@ class WBProductImporter:
                     last_sync=datetime.utcnow()
                 )
                 db.session.add(product)
+            else:
+                # nmID не получен — НЕ создаём Product-болванку с nm_id=0.
+                # Карточка создана на WB, но nmID ещё не доступен.
+                # Product будет создан автоматически при следующей синхронизации.
+                logger.warning(
+                    f"nmID не получен для {imported_product.external_id} (vendor_code={vendor_code}). "
+                    f"Product не создан — будет подхвачен при синхронизации."
+                )
+                imported_product.import_status = 'imported_pending_sync'
+                imported_product.imported_at = datetime.utcnow()
+                imported_product.import_error = (
+                    'Карточка создана на WB, но nmID не получен. '
+                    'Product будет создан при следующей синхронизации.'
+                )
+                db.session.commit()
+                return True, None, None
 
             db.session.flush()  # Получить ID
 

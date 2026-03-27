@@ -1,66 +1,55 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="sh-page">
     <!-- Заголовок -->
-    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative flex flex-col lg:flex-row lg:justify-between lg:items-start gap-4">
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
             <div>
-                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Карточки товаров</h1>
-                <p class="mt-2 text-sm text-gray-400">Управление каталогом товаров на маркетплейсах</p>
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 text-white/80 text-xs">
-                        <span class="w-1.5 h-1.5 rounded-full bg-white/60"></span>
+                <h1 class="sh-page-title">Карточки товаров</h1>
+                <p class="sh-page-subtitle">Управление каталогом товаров на маркетплейсах</p>
+                <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">
+                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
+                        <span class="sh-badge-dot" style="color:rgba(255,255,255,.5)"></span>
                         Всего: {{ total_products }}
                     </span>
-                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 text-white/80 text-xs">
-                        <span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
+                        <span class="sh-badge-dot" style="color:#4ade80"></span>
                         Активных: {{ active_products }}
                     </span>
+                    {% if disabled_products is defined and disabled_products > 0 %}
+                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
+                        <span class="sh-badge-dot" style="color:#facc15"></span>
+                        Отключено: {{ disabled_products }}
+                    </span>
+                    {% endif %}
                 </div>
             </div>
-            <div class="flex flex-wrap gap-3">
+            <div class="sh-page-actions">
                 {% if seller.has_valid_api_key() %}
-                <a href="{{ url_for('product_create') }}"
-                   class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md hover:bg-gray-100 transition-colors flex items-center gap-2 font-medium shadow-sm">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                    </svg>
+                <a href="{{ url_for('product_create') }}" class="sh-btn sh-btn--white sh-btn--md">
+                    <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg></span>
                     <span class="hidden sm:inline">Создать карточку</span>
                 </a>
                 <form action="{{ url_for('sync_products') }}" method="POST">
-                    <button type="submit"
-                            class="px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors flex items-center gap-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                            {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
+                    <button type="submit" class="sh-btn sh-btn--white-outline sh-btn--md" {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
                         {% if seller.api_sync_status == 'syncing' %}
-                            <svg class="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
+                            <span class="sh-btn-icon"><svg class="animate-spin" width="16" height="16" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></span>
                             <span class="hidden sm:inline">Синхронизация...</span>
                         {% else %}
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                            </svg>
+                            <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></span>
                             <span class="hidden sm:inline">Синхронизировать</span>
                         {% endif %}
                     </button>
                 </form>
                 <form action="{{ url_for('sync_warehouse_stocks') }}" method="POST">
-                    <button type="submit"
-                            class="px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors flex items-center gap-2 font-medium">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
-                        </svg>
+                    <button type="submit" class="sh-btn sh-btn--white-outline sh-btn--md">
+                        <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg></span>
                         <span class="hidden sm:inline">Остатки</span>
                     </button>
                 </form>
-                <!-- История операций -->
-                <a href="{{ url_for('bulk_edit_history') }}"
-                   class="px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition-colors flex items-center gap-2 font-medium">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
+                <a href="{{ url_for('bulk_edit_history') }}" class="sh-btn sh-btn--white-outline sh-btn--md">
+                    <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span>
                     <span class="hidden sm:inline">История</span>
                 </a>
                 <!-- Экспорт -->
@@ -80,6 +69,7 @@
                             {% if search %}<input type="hidden" name="search" value="{{ search }}">{% endif %}
                             {% if filter_brand %}<input type="hidden" name="brand" value="{{ filter_brand }}">{% endif %}
                             {% if active_only %}<input type="hidden" name="active_only" value="1">{% endif %}
+                            {% if disabled_only is defined and disabled_only %}<input type="hidden" name="disabled_only" value="1">{% endif %}
                             <div class="mb-3">
                                 <label class="block text-xs font-medium text-gray-600 mb-1.5">Формат</label>
                                 <div class="flex gap-2">
@@ -163,34 +153,23 @@
     {% endif %}
 
     <!-- Поиск и расширенные фильтры -->
-    <div class="mb-6 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <form method="GET" action="{{ url_for('products_list') }}" class="p-6 space-y-4">
+    <div class="sh-card" style="margin-bottom:24px">
+        <form method="GET" action="{{ url_for('products_list') }}" style="display:flex;flex-direction:column;gap:16px">
             <!-- Поиск -->
-            <div class="flex gap-3">
-                <div class="flex-1 relative">
-                    <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                        </svg>
+            <div style="display:flex;gap:8px">
+                <div style="flex:1;position:relative">
+                    <div style="position:absolute;top:0;bottom:0;left:12px;display:flex;align-items:center;pointer-events:none">
+                        <svg width="18" height="18" fill="none" stroke="var(--text-muted)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                     </div>
-                    <input type="text"
-                           name="search"
-                           value="{{ search }}"
-                           placeholder="Поиск по артикулу, названию, бренду..."
-                           class="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
+                    <input type="text" name="search" value="{{ search }}" placeholder="Поиск по артикулу, названию, бренду..."
+                           style="width:100%;padding:8px 12px 8px 38px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font-body)">
                 </div>
-                <button type="submit"
-                        class="px-5 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
-                    </svg>
+                <button type="submit" class="sh-btn sh-btn--primary sh-btn--md">
+                    <span class="sh-btn-icon"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg></span>
                     Применить
                 </button>
-                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or active_only %}
-                <a href="{{ url_for('products_list') }}"
-                   class="px-5 py-2.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors font-medium">
-                    Сбросить
-                </a>
+                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or active_only or (disabled_only is defined and disabled_only) %}
+                <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--secondary sh-btn--md">Сбросить</a>
                 {% endif %}
             </div>
 
@@ -306,17 +285,32 @@
                         </div>
                     </div>
 
-                    <!-- Активные товары -->
-                    <div class="flex items-center gap-2 pt-6">
-                        <input type="checkbox"
-                               name="active_only"
-                               id="active_only"
-                               value="1"
-                               {% if active_only %}checked{% endif %}
-                               class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
-                        <label for="active_only" class="text-sm text-gray-700">
-                            Только активные
-                        </label>
+                    <!-- Фильтры по статусу -->
+                    <div class="flex items-center gap-4 pt-6">
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox"
+                                   name="active_only"
+                                   id="active_only"
+                                   value="1"
+                                   {% if active_only %}checked{% endif %}
+                                   onchange="if(this.checked) document.getElementById('disabled_only').checked=false"
+                                   class="w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                            <label for="active_only" class="text-sm text-gray-700">
+                                Только активные
+                            </label>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox"
+                                   name="disabled_only"
+                                   id="disabled_only"
+                                   value="1"
+                                   {% if disabled_only is defined and disabled_only %}checked{% endif %}
+                                   onchange="if(this.checked) document.getElementById('active_only').checked=false"
+                                   class="w-4 h-4 text-yellow-600 rounded focus:ring-yellow-500">
+                            <label for="disabled_only" class="text-sm text-gray-700">
+                                Только отключённые
+                            </label>
+                        </div>
                     </div>
                 </div>
             </details>
@@ -409,50 +403,28 @@
 
     <!-- Таблица товаров -->
     {% if products %}
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
+    <div class="sh-table-wrap">
+            <table class="sh-table">
+                <thead>
                     <tr>
-                        <th class="px-4 py-4 text-left">
-                            <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)"
-                                   class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300">
+                        <th style="width:40px">
+                            <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)">
                         </th>
-                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Фото
-                        </th>
-                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Артикул / NM ID
-                        </th>
-                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Название
-                        </th>
-                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Бренд
-                        </th>
-                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Тип
-                        </th>
-                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Цена WB
-                        </th>
-                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Цена пост.
-                        </th>
-                        <th class="px-4 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Рейтинг
-                        </th>
-                        <th class="px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Обновлено
-                        </th>
-                        <th class="px-4 py-4 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                            Действия
-                        </th>
+                        <th style="width:64px">Фото</th>
+                        <th>Артикул / NM ID</th>
+                        <th>Название</th>
+                        <th>Бренд</th>
+                        <th>Тип</th>
+                        <th class="text-right">Цена WB</th>
+                        <th class="text-right">Цена пост.</th>
+                        <th class="text-center">Рейтинг</th>
+                        <th>Обновлено</th>
+                        <th class="text-right">Действия</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100">
+                <tbody>
                     {% for product in products %}
-                    <tr class="hover:bg-indigo-50/50 transition-colors group">
+                    <tr class="hover:bg-indigo-50/50 transition-colors group {% if not product.is_active %}opacity-50{% endif %}">
                         <td class="px-4 py-3">
                             <input type="checkbox" class="product-checkbox" value="{{ product.id }}" onchange="updateSelection()"
                                    class="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300">
@@ -496,6 +468,12 @@
                             <span class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700" title="Карточка скрыта из каталога WB">
                                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
                                 Скрыта
+                            </span>
+                            {% endif %}
+                            {% if not product.is_active %}
+                            <span class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600" title="Карточка отключена — не найдена на WB при синхронизации">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                Отключена
                             </span>
                             {% endif %}
                             {% if enrichment_map and enrichment_map.get(product.id, {}).get('available') %}
@@ -587,102 +565,68 @@
                     {% endfor %}
                 </tbody>
             </table>
-        </div>
 
         <!-- Пагинация -->
         {% if pagination.pages > 1 %}
-        <div class="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
-            <div class="flex items-center justify-between">
-                <div class="flex-1 flex justify-between sm:hidden">
-                    {% if pagination.has_prev %}
-                    <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
-                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-                        Назад
-                    </a>
-                    {% endif %}
-                    {% if pagination.has_next %}
-                    <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
-                       class="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
-                        Вперед
-                    </a>
-                    {% endif %}
+        <div style="padding:12px 16px;border-top:1px solid var(--border-light)">
+            <nav class="sh-pagination" aria-label="Навигация по страницам">
+                <div class="sh-pagination-info">
+                    Показано {{ (pagination.page - 1) * pagination.per_page + 1 }}–{{ [pagination.page * pagination.per_page, pagination.total] | min }} из {{ pagination.total }}
                 </div>
-                <div class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                    <div>
-                        <p class="text-sm text-gray-700">
-                            Показано с
-                            <span class="font-medium">{{ (pagination.page - 1) * pagination.per_page + 1 }}</span>
-                            по
-                            <span class="font-medium">{{ min(pagination.page * pagination.per_page, pagination.total) }}</span>
-                            из
-                            <span class="font-medium">{{ pagination.total }}</span>
-                            результатов
-                        </p>
-                    </div>
-                    <div>
-                        <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+                <div class="sh-pagination-buttons">
                             {% if pagination.has_prev %}
-                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
-                               class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
-                                ‹
+                            <a href="{{ url_for('products_list', page=pagination.prev_num, search=search, active_only=active_only, disabled_only=disabled_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
+                               class="sh-pagination-btn" aria-label="Предыдущая">
+                                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                             </a>
                             {% endif %}
 
                             {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                                 {% if page_num %}
                                     {% if page_num == pagination.page %}
-                                    <span class="relative inline-flex items-center px-4 py-2 border border-blue-500 bg-blue-50 text-sm font-medium text-blue-600">
-                                        {{ page_num }}
-                                    </span>
+                                    <span class="sh-pagination-btn sh-pagination-btn--active">{{ page_num }}</span>
                                     {% else %}
-                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
-                                       class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
-                                        {{ page_num }}
-                                    </a>
+                                    <a href="{{ url_for('products_list', page=page_num, search=search, active_only=active_only, disabled_only=disabled_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
+                                       class="sh-pagination-btn">{{ page_num }}</a>
                                     {% endif %}
                                 {% else %}
-                                <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">
-                                    ...
-                                </span>
+                                <span class="sh-pagination-ellipsis">&hellip;</span>
                                 {% endif %}
                             {% endfor %}
 
                             {% if pagination.has_next %}
-                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
-                               class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
-                                ›
+                            <a href="{{ url_for('products_list', page=pagination.next_num, search=search, active_only=active_only, disabled_only=disabled_only, brand=filter_brand, category=filter_category, has_stock=filter_has_stock, block_status=filter_block_status, rating_min=filter_rating_min, rating_max=filter_rating_max, sort=sort_by, order=sort_order) }}"
+                               class="sh-pagination-btn" aria-label="Следующая">
+                                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </a>
                             {% endif %}
-                        </nav>
-                    </div>
-                </div>
-            </div>
+                        </div>
+            </nav>
         </div>
         {% endif %}
     </div>
     {% else %}
-    <div class="bg-white rounded-lg shadow p-12 text-center">
-        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
-        </svg>
-        <h3 class="mt-2 text-sm font-medium text-gray-900">Нет товаров</h3>
-        <p class="mt-1 text-sm text-gray-500">
-            {% if search %}
-                По вашему запросу ничего не найдено. Попробуйте изменить параметры поиска.
-            {% else %}
-                Синхронизируйте карточки товаров через API Wildberries.
-            {% endif %}
-        </p>
-        {% if not search and seller.has_valid_api_key() %}
-        <div class="mt-6">
-            <form action="{{ url_for('sync_products') }}" method="POST">
-                <button type="submit"
-                        class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
-                    Синхронизировать товары
-                </button>
+    <div class="sh-card">
+        <div class="sh-empty">
+            <div class="sh-empty-icon">
+                <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+                </svg>
+            </div>
+            <p class="sh-empty-title">Нет товаров</p>
+            <p class="sh-empty-desc">
+                {% if search %}
+                    По вашему запросу ничего не найдено. Попробуйте изменить параметры поиска.
+                {% else %}
+                    Синхронизируйте карточки товаров через API Wildberries.
+                {% endif %}
+            </p>
+            {% if not search and seller.has_valid_api_key() %}
+            <form action="{{ url_for('sync_products') }}" method="POST" style="margin-top:16px">
+                <button type="submit" class="sh-btn sh-btn--primary sh-btn--md">Синхронизировать товары</button>
             </form>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
     {% endif %}
 </div>

@@ -1,0 +1,272 @@
+{#
+    Seller Hub — Design System Components
+    ======================================
+    Reusable Jinja macros for consistent UI across all pages.
+
+    Usage:
+        {% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, alert_box, data_table %}
+#}
+
+
+{# ─── Page Header ─── #}
+{# Dark hero section at the top of every page #}
+{% macro page_header(title, subtitle=None, actions=None) %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
+        <div>
+            <h1 class="sh-page-title">{{ title }}</h1>
+            {% if subtitle %}
+            <p class="sh-page-subtitle">{{ subtitle }}</p>
+            {% endif %}
+        </div>
+        {% if actions %}
+        <div class="sh-page-actions">
+            {{ caller() if caller is defined else '' }}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ─── Page Header with slot (call block) ─── #}
+{% macro page_header_with_actions(title, subtitle=None) %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
+        <div>
+            <h1 class="sh-page-title">{{ title }}</h1>
+            {% if subtitle %}
+            <p class="sh-page-subtitle">{{ subtitle }}</p>
+            {% endif %}
+        </div>
+        <div class="sh-page-actions">
+            {{ caller() }}
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ─── Stat Grid ─── #}
+{# Wrapper for stat cards, responsive columns #}
+{% macro stat_grid(cols=4) %}
+<div class="sh-stat-grid sh-stat-grid--{{ cols }}">
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+
+{# ─── Stat Card ─── #}
+{# Single metric card with optional trend and sparkline area #}
+{% macro stat_card(label, value, trend=None, trend_label=None, href=None, icon=None, color='default') %}
+{% if href %}<a href="{{ href }}" class="sh-stat-card sh-stat-card--{{ color }} sh-stat-card--link">{% else %}<div class="sh-stat-card sh-stat-card--{{ color }}">{% endif %}
+    <div class="sh-stat-header">
+        {% if icon %}
+        <div class="sh-stat-icon">{{ icon }}</div>
+        {% endif %}
+        <span class="sh-stat-label">{{ label }}</span>
+        {% if trend is not none %}
+        <span class="sh-stat-trend {% if trend > 0 %}sh-stat-trend--up{% elif trend < 0 %}sh-stat-trend--down{% else %}sh-stat-trend--flat{% endif %}">
+            {% if trend > 0 %}+{% endif %}{{ trend }}%
+        </span>
+        {% endif %}
+    </div>
+    <div class="sh-stat-value">{{ value }}</div>
+    {% if trend_label %}
+    <div class="sh-stat-footnote">{{ trend_label }}</div>
+    {% endif %}
+{% if href %}</a>{% else %}</div>{% endif %}
+{% endmacro %}
+
+
+{# ─── Card ─── #}
+{# Generic content card with optional title and actions #}
+{% macro card(title=None, class='', padding=True) %}
+<div class="sh-card {% if not padding %}sh-card--flush{% endif %} {{ class }}">
+    {% if title %}
+    <div class="sh-card-header">
+        <h3 class="sh-card-title">{{ title }}</h3>
+        {% if caller is defined %}{% endif %}
+    </div>
+    {% endif %}
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+
+{# ─── Card with header actions ─── #}
+{% macro card_with_actions(title) %}
+<div class="sh-card">
+    <div class="sh-card-header">
+        <h3 class="sh-card-title">{{ title }}</h3>
+        <div class="sh-card-actions">
+            {{ caller() }}
+        </div>
+    </div>
+</div>
+{% endmacro %}
+
+
+{# ─── Section Title ─── #}
+{% macro section_title(title) %}
+<div class="sh-section-title">
+    <span>{{ title }}</span>
+</div>
+{% endmacro %}
+
+
+{# ─── Badge ─── #}
+{# Small colored pill for status, category, etc. #}
+{% macro badge(text, color='gray', size='sm', dot=False) %}
+<span class="sh-badge sh-badge--{{ color }} sh-badge--{{ size }}">
+    {% if dot %}<span class="sh-badge-dot"></span>{% endif %}
+    {{ text }}
+</span>
+{% endmacro %}
+
+
+{# ─── Button ─── #}
+{% macro btn(text, href=None, variant='primary', size='md', icon=None, type='button', disabled=False, class='') %}
+{% if href %}
+<a href="{{ href }}" class="sh-btn sh-btn--{{ variant }} sh-btn--{{ size }} {{ class }} {% if disabled %}sh-btn--disabled{% endif %}">
+    {% if icon %}<span class="sh-btn-icon">{{ icon }}</span>{% endif %}
+    {{ text }}
+</a>
+{% else %}
+<button type="{{ type }}" class="sh-btn sh-btn--{{ variant }} sh-btn--{{ size }} {{ class }}" {% if disabled %}disabled{% endif %}>
+    {% if icon %}<span class="sh-btn-icon">{{ icon }}</span>{% endif %}
+    {{ text }}
+</button>
+{% endif %}
+{% endmacro %}
+
+
+{# ─── Empty State ─── #}
+{# Shown when a list or section has no data #}
+{% macro empty_state(title, description=None, icon=None, action_text=None, action_href=None) %}
+<div class="sh-empty">
+    {% if icon %}
+    <div class="sh-empty-icon">{{ icon }}</div>
+    {% else %}
+    <div class="sh-empty-icon">
+        <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+        </svg>
+    </div>
+    {% endif %}
+    <p class="sh-empty-title">{{ title }}</p>
+    {% if description %}
+    <p class="sh-empty-desc">{{ description }}</p>
+    {% endif %}
+    {% if action_text and action_href %}
+    <a href="{{ action_href }}" class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px">{{ action_text }}</a>
+    {% endif %}
+</div>
+{% endmacro %}
+
+
+{# ─── Alert Box ─── #}
+{% macro alert_box(message, type='info', icon=None, dismissible=False) %}
+<div class="sh-alert sh-alert--{{ type }}" {% if dismissible %}x-data="{ show: true }" x-show="show"{% endif %}>
+    {% if icon %}
+    <div class="sh-alert-icon">{{ icon }}</div>
+    {% endif %}
+    <div class="sh-alert-content">{{ message }}</div>
+    {% if dismissible %}
+    <button @click="show = false" class="sh-alert-close" aria-label="Закрыть">
+        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+    {% endif %}
+</div>
+{% endmacro %}
+
+
+{# ─── Data Table ─── #}
+{# Wrapper for consistent table styling. Content via caller(). #}
+{% macro data_table(headers, id=None, class='') %}
+<div class="sh-table-wrap {{ class }}" {% if id %}id="{{ id }}"{% endif %}>
+    <table class="sh-table">
+        <thead>
+            <tr>
+                {% for h in headers %}
+                <th{% if h.class is defined %} class="{{ h.class }}"{% endif %}{% if h.width is defined %} style="width:{{ h.width }}"{% endif %}>
+                    {{ h.label if h is mapping else h }}
+                </th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {{ caller() }}
+        </tbody>
+    </table>
+</div>
+{% endmacro %}
+
+
+{# ─── Key-Value Row ─── #}
+{# For info panels: label on left, value on right #}
+{% macro kv_row(label, value) %}
+<div class="sh-kv">
+    <dt class="sh-kv-label">{{ label }}</dt>
+    <dd class="sh-kv-value">{{ value }}</dd>
+</div>
+{% endmacro %}
+
+
+{# ─── Tabs ─── #}
+{% macro tabs(items, active=None) %}
+<div class="sh-tabs">
+    {% for item in items %}
+    <a href="{{ item.href }}"
+       class="sh-tab {% if (active and item.id == active) or (not active and loop.first) %}sh-tab--active{% endif %}">
+        {{ item.label }}
+        {% if item.count is defined %}
+        <span class="sh-tab-count">{{ item.count }}</span>
+        {% endif %}
+    </a>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+
+{# ─── Filter Bar ─── #}
+{% macro filter_bar() %}
+<div class="sh-filter-bar">
+    {{ caller() }}
+</div>
+{% endmacro %}
+
+
+{# ─── Pagination ─── #}
+{% macro pagination(p, url_func, url_params={}) %}
+{% if p.pages > 1 %}
+<nav class="sh-pagination" aria-label="Навигация по страницам">
+    <div class="sh-pagination-info">
+        Показано {{ (p.page - 1) * p.per_page + 1 }}–{{ [p.page * p.per_page, p.total] | min }} из {{ p.total }}
+    </div>
+    <div class="sh-pagination-buttons">
+        {% if p.has_prev %}
+        <a href="{{ url_func(page=p.prev_num, **url_params) }}" class="sh-pagination-btn" aria-label="Предыдущая">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </a>
+        {% endif %}
+        {% for page_num in p.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+            {% if page_num %}
+                {% if page_num == p.page %}
+                <span class="sh-pagination-btn sh-pagination-btn--active">{{ page_num }}</span>
+                {% else %}
+                <a href="{{ url_func(page=page_num, **url_params) }}" class="sh-pagination-btn">{{ page_num }}</a>
+                {% endif %}
+            {% else %}
+            <span class="sh-pagination-ellipsis">&hellip;</span>
+            {% endif %}
+        {% endfor %}
+        {% if p.has_next %}
+        <a href="{{ url_func(page=p.next_num, **url_params) }}" class="sh-pagination-btn" aria-label="Следующая">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        {% endif %}
+    </div>
+</nav>
+{% endif %}
+{% endmacro %}

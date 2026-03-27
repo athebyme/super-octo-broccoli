@@ -1299,6 +1299,7 @@ def products_list():
         search = request.args.get('search', '').strip()
         # Исправлено: чекбокс отправляет '1', нужна правильная обработка
         active_only = request.args.get('active_only', '').strip() in ['1', 'true', 'True', 'on']
+        disabled_only = request.args.get('disabled_only', '').strip() in ['1', 'true', 'True', 'on']
 
         # Расширенные фильтры
         filter_brand = request.args.get('brand', '').strip()
@@ -1317,6 +1318,8 @@ def products_list():
 
         if active_only:
             query = query.filter_by(is_active=True)
+        elif disabled_only:
+            query = query.filter_by(is_active=False)
 
         if search:
             # Поиск по артикулу, названию или бренду
@@ -1433,6 +1436,7 @@ def products_list():
 
         # Для активных товаров - всегда показываем общее количество активных (без фильтров)
         active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
+        disabled_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=False).count()
 
         # Получаем уникальные бренды и категории для фильтров
         brands = db.session.query(Product.brand).filter(
@@ -1484,6 +1488,7 @@ def products_list():
             active_products=active_products,
             search=search,
             active_only=active_only,
+            disabled_only=disabled_only,
             filter_brand=filter_brand,
             filter_category=filter_category,
             filter_has_stock=filter_has_stock,
@@ -1498,6 +1503,7 @@ def products_list():
             filter_rating_min=filter_rating_min,
             filter_rating_max=filter_rating_max,
             enrichment_map=enrichment_map,
+            disabled_products=disabled_products,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -1745,6 +1751,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     except Exception:
                         db.session.remove()
 
+                # Удаляем мусорные Product с nm_id=0 (болванки от неудачного импорта)
+                try:
+                    zero_nm_products = Product.query.filter(
+                        Product.seller_id == seller.id,
+                        Product.nm_id == 0
+                    ).all()
+                    if zero_nm_products:
+                        for zp in zero_nm_products:
+                            db.session.delete(zp)
+                        db_commit_with_retry(db.session)
+                        app.logger.info(f"🧹 Removed {len(zero_nm_products)} products with nm_id=0 (stale imports)")
+                except Exception as cleanup_err:
+                    app.logger.warning(f"nm_id=0 cleanup failed (non-critical): {cleanup_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
+
                 # Статистика
                 created_count = 0
                 updated_count = 0
@@ -1897,6 +1921,36 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 
+                # ============ ОТКЛЮЧЕНИЕ КАРТОЧЕК, ПРОПАВШИХ С WB ============
+                # Если карточка была у нас активной, но WB API её не вернул —
+                # значит она удалена/скрыта на WB. Отключаем в нашей системе.
+                disabled_count = 0
+                try:
+                    if seen_nm_ids:  # Только если синк вернул хотя бы одну карточку
+                        local_active = Product.query.filter(
+                            Product.seller_id == seller.id,
+                            Product.is_active == True,
+                            Product.nm_id > 0
+                        ).all()
+
+                        for product in local_active:
+                            if product.nm_id not in seen_nm_ids:
+                                product.is_active = False
+                                disabled_count += 1
+
+                        if disabled_count > 0:
+                            db_commit_with_retry(db.session)
+                            app.logger.info(
+                                f"🔒 Disabled {disabled_count} products not found on WB "
+                                f"(out of {len(local_active)} active, WB returned {len(seen_nm_ids)})"
+                            )
+                except Exception as disable_err:
+                    app.logger.warning(f"⚠️ Failed to disable missing products: {disable_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
+
                 # ============ СИНХРОНИЗАЦИЯ ОСТАТКОВ ============
                 # Загружаем остатки из Statistics API
                 app.logger.info(f"📦 Background sync: fetching stocks from Statistics API...")
@@ -2047,9 +2101,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     success=True
                 )
 
-                app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
+                app.logger.info(
+                    f"✅ Background sync completed in {elapsed:.1f}s: "
+                    f"{created_count} new, {updated_count} updated, {disabled_count} disabled"
+                )
 
-                # Уведомляем только если появились НОВЫЕ товары (не рутинное обновление)
+                # Уведомляем о новых товарах и отключённых карточках
+                if disabled_count > 0:
+                    create_notification(
+                        seller_id=seller.id,
+                        category='info',
+                        title=f'Синхронизация: {disabled_count} карточек отключено',
+                        message=(
+                            f'{disabled_count} карточек не найдено на WB и были отключены в системе. '
+                            f'Вы можете включить их вручную в списке товаров.'
+                        ),
+                        link='/products',
+                    )
+
                 if created_count > 0:
                     create_notification(
                         seller_id=seller.id,
