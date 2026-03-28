@@ -2419,16 +2419,67 @@
 {{ toast_store_init() }}
 {{ toast_container() }}
 
-<!-- Command palette: Cmd+K / Ctrl+K -->
-<script>
-document.addEventListener('keydown', function(e) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        const ev = new CustomEvent('toggle-cmdpalette');
-        document.dispatchEvent(ev);
-    }
-});
-</script>
+<!-- Global Command Palette (Cmd+K / Ctrl+K) -->
+{% if current_user.is_authenticated %}
+<div x-data="{ cmdOpen: false }" @toggle-cmdpalette.window="cmdOpen = !cmdOpen" @keydown.meta.k.window.prevent="cmdOpen = !cmdOpen" @keydown.ctrl.k.window.prevent="cmdOpen = !cmdOpen">
+    {% from "macros/overlays.html" import command_palette %}
+    {% call command_palette('cmdOpen', 'Куда перейти...') %}
+    {% if current_user.seller %}
+    <div class="sh-cmdpal-group">Основное</div>
+    <a href="{{ url_for('dashboard') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+        <span class="sh-cmdpal-item-label">Главная</span>
+    </a>
+    <a href="{{ url_for('products_list') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+        <span class="sh-cmdpal-item-label">Карточки товаров</span>
+        <span class="sh-cmdpal-item-hint">Товары</span>
+    </a>
+    <a href="{{ url_for('prices.prices_dashboard') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span class="sh-cmdpal-item-label">Управление ценами</span>
+        <span class="sh-cmdpal-item-hint">Цены</span>
+    </a>
+    <a href="{{ url_for('analytics_page') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/></svg>
+        <span class="sh-cmdpal-item-label">Аналитика продаж</span>
+        <span class="sh-cmdpal-item-hint">Аналитика</span>
+    </a>
+    <div class="sh-cmdpal-group">Инструменты</div>
+    <a href="{{ url_for('supplier_catalog') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+        <span class="sh-cmdpal-item-label">Каталог поставщиков</span>
+    </a>
+    <a href="{{ url_for('content_factory_dashboard') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>
+        <span class="sh-cmdpal-item-label">Контент-фабрика</span>
+    </a>
+    <a href="{{ url_for('agents_dashboard') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+        <span class="sh-cmdpal-item-label">Агенты</span>
+    </a>
+    <a href="{{ url_for('products_merge') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+        <span class="sh-cmdpal-item-label">Объединение карточек</span>
+    </a>
+    <a href="{{ url_for('reviews_page') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+        <span class="sh-cmdpal-item-label">Отзывы</span>
+    </a>
+    <div class="sh-cmdpal-group">Настройки</div>
+    <a href="{{ url_for('api_settings') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+        <span class="sh-cmdpal-item-label">API настройки</span>
+    </a>
+    <a href="{{ url_for('notifications_page') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+        <span class="sh-cmdpal-item-label">Уведомления</span>
+    </a>
+    {% endif %}
+    {% endcall %}
+</div>
+{% endif %}
+
 </body>
 
 </html>

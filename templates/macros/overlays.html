@@ -167,15 +167,21 @@ document.addEventListener('alpine:init', () => {
         add(type, message, title, duration) {
             duration = duration || 5000;
             const id = ++this._counter;
-            this.items.push({ id, type, message, title, leaving: false, paused: false });
+            const toast = { id, type, message, title: title || null, leaving: false, paused: false };
+            this.items = [...this.items, toast];
             if (duration > 0) {
-                setTimeout(() => { if (!this.items.find(t => t.id === id)?.paused) this.dismiss(id); }, duration);
+                const self = this;
+                setTimeout(() => {
+                    const found = self.items.find(t => t.id === id);
+                    if (found && !found.paused) self.dismiss(id);
+                }, duration);
             }
             return id;
         },
         dismiss(id) {
-            const t = this.items.find(t => t.id === id);
-            if (t) { t.leaving = true; setTimeout(() => { this.items = this.items.filter(t => t.id !== id); }, 200); }
+            this.items = this.items.map(t => t.id === id ? { ...t, leaving: true } : t);
+            const self = this;
+            setTimeout(() => { self.items = self.items.filter(t => t.id !== id); }, 200);
         },
         success(msg, title) { return this.add('success', msg, title); },
         error(msg, title)   { return this.add('error', msg, title, 8000); },
