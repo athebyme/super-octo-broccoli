@@ -11,7 +11,9 @@
   AGENT_ID            — ID агента в БД платформы
   AGENT_API_KEY       — API-ключ агента
 
-  LLM_PROVIDER        — "cloudru" | "claude" | "gemini" | "openai_compat" (default: cloudru)
+  LLM_PROVIDER        — "cloudru" | "claude" | "gemini" | "openrouter" | "openai_compat" (default: cloudru)
+  OPENROUTER_API_KEY   — ключ OpenRouter (для DeepSeek, Claude, Gemini и др.)
+  OPENROUTER_MODEL     — модель OpenRouter (default: deepseek/deepseek-v3.2)
   CLOUDRU_API_KEY      — ключ Cloud.ru Foundation Models
   CLOUDRU_MODEL        — модель Cloud.ru (default: openai/gpt-oss-120b)
   CLOUDRU_BASE_URL     — base URL Cloud.ru API
@@ -55,6 +57,10 @@ _FIELD_DEFS = {
     # Google Gemini
     'GEMINI_API_KEY':     ('GEMINI_API_KEY', '', str),
     'GEMINI_MODEL':       ('GEMINI_MODEL', 'gemini-2.0-flash', str),
+
+    # OpenRouter — единый API для 300+ моделей
+    'OPENROUTER_API_KEY':  ('OPENROUTER_API_KEY', '', str),
+    'OPENROUTER_MODEL':    ('OPENROUTER_MODEL', 'deepseek/deepseek-v3.2', str),
 
     # Универсальный OpenAI-совместимый провайдер (vLLM, Ollama, LM Studio, etc.)
     'OPENAI_COMPAT_API_KEY':  ('OPENAI_COMPAT_API_KEY', '', str),
