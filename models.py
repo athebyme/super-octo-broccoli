@@ -193,6 +193,12 @@ class Product(db.Model):
     supplier_price = db.Column(db.Float, nullable=True)
     supplier_price_updated_at = db.Column(db.DateTime, nullable=True)
 
+    # Цены с маркетплейса WB (синхронизированные через API)
+    wb_price = db.Column(db.Numeric(10, 2), nullable=True)  # Базовая цена на WB (до скидки)
+    wb_discount = db.Column(db.Integer, nullable=True)  # Скидка на WB (%)
+    wb_discounted_price = db.Column(db.Numeric(10, 2), nullable=True)  # Цена после скидки на WB
+    wb_price_synced_at = db.Column(db.DateTime, nullable=True)  # Последняя синхронизация цен с WB
+
     # Медиа
     photos_json = db.Column(db.Text)  # JSON с URL фотографий
     video_url = db.Column(db.String(500))  # URL видео

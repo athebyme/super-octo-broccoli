@@ -22,11 +22,12 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
 from .config import AgentConfig
-from .llm import BaseLLM, create_llm, create_fallback_llm
+from .llm import BaseLLM, create_llm, create_fallback_llm, create_step_namer_llm
 from .platform_client import PlatformClient
 from .tools import ToolRegistry, create_platform_tools
 
@@ -48,6 +49,46 @@ MAX_ERROR_LENGTH = 500
 
 # Интервал проверки отмены задачи (каждые N итераций ReAct)
 CANCEL_CHECK_INTERVAL = 3
+
+
+# ── Креативные названия шагов ──────────────────────────────────────
+
+# Статический маппинг tool_name → пара (action_label, result_label)
+TOOL_LABELS = {
+    'get_products': ('Загружаю каталог товаров', 'Каталог получен'),
+    'get_product': ('Открываю карточку товара', 'Карточка загружена'),
+    'update_product': ('Обновляю карточку товара', 'Карточка обновлена'),
+    'get_imported_products': ('Ищу товары поставщика', 'Товары найдены'),
+    'get_imported_product': ('Изучаю товар поставщика', 'Товар загружен'),
+    'update_imported_product': ('Сохраняю изменения', 'Изменения сохранены'),
+    'batch_update_imported_products': ('Пакетное сохранение', 'Пакет сохранён'),
+    'search_wb_categories': ('Подбираю категорию WB', 'Категории найдены'),
+    'get_category_characteristics': ('Загружаю характеристики категории', 'Характеристики получены'),
+    'get_directory': ('Обращаюсь к справочнику WB', 'Справочник получен'),
+    'get_prohibited_words': ('Проверяю стоп-слова', 'Стоп-слова загружены'),
+    'check_text_prohibited': ('Сканирую текст на запреты', 'Текст проверен'),
+    'validate_brand': ('Валидирую бренд в WB', 'Бренд проверен'),
+    'get_seller_info': ('Загружаю данные продавца', 'Данные продавца получены'),
+    'get_pricing_settings': ('Читаю настройки цен', 'Настройки цен получены'),
+    'create_subtask': ('Создаю подзадачу для агента', 'Подзадача создана'),
+    'get_subtask_status': ('Проверяю статус подзадачи', 'Статус получен'),
+    'get_subtask_result': ('Забираю результат подзадачи', 'Результат получен'),
+}
+
+# Промпт для генерации креативного названия thinking-шага
+_STEP_NAMER_PROMPT = (
+    'Ты генератор коротких названий шагов AI-агента для красивого UI. '
+    'Тебе дан фрагмент мыслей агента. Придумай ОДНО короткое (3-6 слов) '
+    'креативное и понятное название этого шага на русском. '
+    'Без кавычек, без точки. Примеры хороших названий:\n'
+    '- Анализирую структуру каталога\n'
+    '- Формирую SEO-заголовок\n'
+    '- Сверяю бренд с реестром WB\n'
+    '- Составляю план оптимизации\n'
+    '- Оцениваю качество описания\n'
+    '- Подбираю ключевые слова\n'
+    '- Финальная проверка карточки\n'
+)
 
 
 # ── Bounded failure tracker ────────────────────────────────────────
@@ -237,6 +278,15 @@ class BaseAgent(ABC):
         else:
             self.llm: BaseLLM = create_llm(self.config)
 
+        # Step namer LLM (быстрая модель для генерации названий шагов)
+        self._step_namer: Optional[BaseLLM] = None
+        try:
+            self._step_namer = create_step_namer_llm(self.config)
+            if self._step_namer:
+                logger.info(f"Agent [{self.agent_name}] step namer LLM configured")
+        except Exception as e:
+            logger.debug(f"Step namer LLM not available: {e}")
+
         # Инструменты
         self._tools = create_platform_tools(self.platform)
         extra = self.get_tools()
@@ -337,6 +387,507 @@ class BaseAgent(ABC):
                 'react_iterations': len(chunks),
             },
         }
+
+    # ── Structured Batch Mode ─────────────────────────────────────
+
+    def _execute_structured_batch(
+        self,
+        task: dict,
+        product_ids: list[int],
+        chunk_size: int = 25,
+        max_workers: int = 3,
+    ) -> dict:
+        """Пакетная обработка через structured_output (без tool calling).
+
+        Идеально для генеративных агентов (SEO, бренды): Python предзагружает
+        все данные, LLM возвращает JSON-массив результатов, Python сохраняет.
+        1 LLM-вызов на чанк вместо десятков ReAct-итераций.
+        """
+        task_id = task['id']
+        total = len(product_ids)
+
+        self.platform.log_thinking(
+            task_id, 'Structured Batch Mode',
+            f'Обработка {total} товаров чанками по {chunk_size}. '
+            f'Параллельность: {max_workers}.',
+        )
+        self.platform.update_progress(task_id, 0, 'Загрузка данных товаров', total)
+
+        # 1. Предзагрузка всех товаров
+        all_products = self._prefetch_for_structured_batch(product_ids)
+        if not all_products:
+            return {
+                'processed': 0, 'saved': 0, 'failed': total,
+                'message': 'Не удалось загрузить данные товаров',
+            }
+
+        # Индекс для быстрого поиска
+        products_by_id = {p['id']: p for p in all_products}
+
+        # 2. Разбиваем на чанки
+        chunks = [product_ids[i:i + chunk_size]
+                  for i in range(0, total, chunk_size)]
+
+        # 3. Обработка чанков (параллельно или последовательно)
+        progress_lock = threading.Lock()
+        processed_count = 0
+        saved_count = 0
+        failed_count = 0
+        all_results = []
+        all_errors = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        def _process_chunk(chunk_idx: int, chunk_ids: list[int]) -> dict:
+            """Обрабатывает один чанк: LLM structured_output → batch save."""
+            nonlocal processed_count, saved_count, failed_count
+            nonlocal total_input_tokens, total_output_tokens
+
+            chunk_products = [products_by_id[pid] for pid in chunk_ids
+                              if pid in products_by_id]
+            if not chunk_products:
+                return {'processed': 0, 'saved': 0, 'errors': []}
+
+            self.platform.log_thinking(
+                task_id,
+                f'Чанк {chunk_idx + 1}/{len(chunks)}',
+                f'LLM обрабатывает {len(chunk_products)} товаров',
+            )
+
+            # LLM structured_output
+            try:
+                prompt = self.build_structured_prompt(chunk_products)
+                schema = self.batch_result_schema()
+                t0 = time.time()
+                llm_result = self.llm.structured_output(
+                    system=self.system_prompt,
+                    prompt=prompt,
+                    schema=schema,
+                )
+                duration_ms = int((time.time() - t0) * 1000)
+
+                self.platform.log_action(
+                    task_id,
+                    f'LLM ответ (чанк {chunk_idx + 1})',
+                    f'Получен за {duration_ms}мс',
+                    duration_ms=duration_ms,
+                )
+            except Exception as e:
+                err_msg = f'Чанк {chunk_idx + 1}: LLM ошибка — {str(e)[:200]}'
+                logger.warning(f"Structured batch chunk {chunk_idx} failed: {e}")
+                self.platform.log_error(task_id, f'Ошибка чанка {chunk_idx + 1}', err_msg)
+
+                # Fallback: пробуем ReAct для этого чанка
+                try:
+                    self.platform.log_thinking(
+                        task_id, f'Fallback на ReAct (чанк {chunk_idx + 1})',
+                        'Structured output не удался, переключаюсь на ReAct',
+                    )
+                    chunk_task = {
+                        **task,
+                        'input_data': json.dumps({
+                            'product_ids': chunk_ids,
+                            'imported_product_ids': chunk_ids,
+                            'seller_id': task.get('seller_id'),
+                        }),
+                    }
+                    react_result = self._execute_react(chunk_task)
+                    chunk_saved = react_result.get('saved', react_result.get('processed', 0))
+                    with progress_lock:
+                        processed_count += len(chunk_ids)
+                        saved_count += chunk_saved
+                    return react_result
+                except Exception as e2:
+                    logger.error(f"ReAct fallback also failed for chunk {chunk_idx}: {e2}")
+                    with progress_lock:
+                        failed_count += len(chunk_ids)
+                    return {'processed': 0, 'saved': 0,
+                            'errors': [{'chunk': chunk_idx, 'error': str(e)[:200]}]}
+
+            # Извлекаем результаты
+            results = llm_result.get('results', [])
+            if isinstance(llm_result, list):
+                results = llm_result
+
+            # Пост-обработка (проверка стоп-слов и т.п.)
+            try:
+                results = self._postprocess_structured_results(results)
+            except Exception as e:
+                logger.warning(f"Post-processing error in chunk {chunk_idx}: {e}")
+
+            # Маппинг в формат batch update
+            try:
+                updates = self._map_structured_result_to_updates(results)
+            except Exception as e:
+                logger.warning(f"Mapping error in chunk {chunk_idx}: {e}")
+                updates = []
+
+            # Batch save
+            chunk_saved = 0
+            chunk_errors = []
+            if updates:
+                try:
+                    save_resp = self.platform.batch_update_imported_products(updates)
+                    chunk_saved = save_resp.get('updated', 0)
+                    for r in save_resp.get('results', []):
+                        if r.get('status') == 'error':
+                            chunk_errors.append(r)
+                except Exception as e:
+                    logger.error(f"Batch save error for chunk {chunk_idx}: {e}")
+                    chunk_errors.append({'error': str(e)[:200]})
+
+            # Обновляем прогресс
+            with progress_lock:
+                processed_count += len(chunk_products)
+                saved_count += chunk_saved
+                failed_count += len(chunk_errors)
+                all_results.extend(results)
+                all_errors.extend(chunk_errors)
+                self.platform.update_progress(
+                    task_id,
+                    completed_steps=processed_count,
+                    current_step_label=(
+                        f'Чанк {chunk_idx + 1}/{len(chunks)}: '
+                        f'обработано {processed_count}/{total}'
+                    ),
+                )
+
+            return {
+                'processed': len(chunk_products),
+                'saved': chunk_saved,
+                'errors': chunk_errors,
+            }
+
+        # Запускаем обработку
+        if max_workers <= 1 or len(chunks) <= 1:
+            # Последовательная обработка
+            for idx, chunk_ids in enumerate(chunks):
+                _process_chunk(idx, chunk_ids)
+        else:
+            # Параллельная обработка
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
+                futures = {
+                    executor.submit(_process_chunk, idx, chunk_ids): idx
+                    for idx, chunk_ids in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Chunk future error: {e}")
+
+        self.platform.log_result(
+            task_id, 'Batch завершён',
+            f'Обработано: {processed_count}, сохранено: {saved_count}, '
+            f'ошибок: {failed_count}',
+        )
+
+        return {
+            'processed': processed_count,
+            'saved': saved_count,
+            'failed': failed_count,
+            'results': all_results,
+            'errors': all_errors if all_errors else None,
+            'chunks': len(chunks),
+            'message': (
+                f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
+                f'Сохранено: {saved_count}.'
+            ),
+            '_usage': {
+                'input_tokens': total_input_tokens,
+                'output_tokens': total_output_tokens,
+                'total_tokens': total_input_tokens + total_output_tokens,
+                'mode': 'structured_batch',
+                'chunks': len(chunks),
+            },
+        }
+
+    # ── Overridable hooks для Structured Batch ────────────────────
+
+    def _prefetch_for_structured_batch(self, product_ids: list[int]) -> list[dict]:
+        """Предзагрузка данных товаров для structured batch.
+
+        По умолчанию: brief API пачками по 50.
+        Агенты могут переопределить для загрузки полных данных.
+        """
+        all_products = []
+        for i in range(0, len(product_ids), 50):
+            batch = product_ids[i:i + 50]
+            try:
+                products = self.platform.get_imported_products_brief(batch)
+                all_products.extend(products)
+            except Exception as e:
+                logger.warning(f"Failed to prefetch batch {i//50}: {e}")
+        return all_products
+
+    def build_structured_prompt(self, products_data: list[dict]) -> str:
+        """Строит промпт для structured batch output.
+
+        Переопределить в агенте. Должен включать данные товаров
+        и инструкцию вернуть JSON-массив результатов.
+        """
+        raise NotImplementedError(
+            f'{self.__class__.__name__} must implement build_structured_prompt() '
+            f'to use _execute_structured_batch()'
+        )
+
+    def batch_result_schema(self) -> dict:
+        """JSON-схема для structured batch output.
+
+        Переопределить в агенте. Формат: {results: [{product_id, ...fields}]}.
+        """
+        raise NotImplementedError(
+            f'{self.__class__.__name__} must implement batch_result_schema() '
+            f'to use _execute_structured_batch()'
+        )
+
+    def _map_structured_result_to_updates(self, results: list[dict]) -> list[dict]:
+        """Маппит результаты LLM в payload для batch_update API.
+
+        Переопределить в агенте. Каждый элемент: {product_id: int, ...fields}.
+        """
+        raise NotImplementedError(
+            f'{self.__class__.__name__} must implement _map_structured_result_to_updates() '
+            f'to use _execute_structured_batch()'
+        )
+
+    def _postprocess_structured_results(self, results: list[dict]) -> list[dict]:
+        """Пост-обработка результатов LLM (проверка стоп-слов, валидация и т.п.).
+
+        По умолчанию: возвращает как есть. Переопределить при необходимости.
+        """
+        return results
+
+    # ── Tool-Assisted Batch Mode ──────────────────────────────────
+
+    def _execute_tool_batch(
+        self,
+        task: dict,
+        product_ids: list[int],
+        chunk_size: int = 15,
+        max_workers: int = 2,
+    ) -> dict:
+        """Пакетная обработка с tool calling и предзагрузкой данных.
+
+        Для агентов, которым нужны справочные запросы (категории, характеристики):
+        - Все данные товаров предзагружены и встроены в промпт
+        - Справочные данные кэшированы заранее
+        - Урезанный toolset (без fetch/save — они в Python)
+        - Результаты сохраняются пакетно через batch API
+        """
+        task_id = task['id']
+        total = len(product_ids)
+        seller_id = task.get('seller_id')
+        task_type = task.get('task_type', 'batch')
+
+        self.platform.log_thinking(
+            task_id, 'Tool-Assisted Batch Mode',
+            f'Обработка {total} товаров чанками по {chunk_size}. '
+            f'Предзагрузка данных и справочников.',
+        )
+        self.platform.update_progress(task_id, 0, 'Предзагрузка данных', total)
+
+        # 1. Предзагрузка данных товаров
+        all_products = self._prefetch_for_structured_batch(product_ids)
+        if not all_products:
+            return {
+                'processed': 0, 'saved': 0, 'failed': total,
+                'message': 'Не удалось загрузить данные товаров',
+            }
+
+        # 2. Кэширование справочных данных
+        self.platform.log_thinking(task_id, 'Кэширование справочников', '')
+        reference_data = self._prefetch_reference_data(all_products)
+
+        # 3. Разбиваем на чанки
+        products_by_id = {p['id']: p for p in all_products}
+        chunks = [product_ids[i:i + chunk_size]
+                  for i in range(0, total, chunk_size)]
+
+        # 4. Создаём урезанный toolset (без get_product/get_imported_product)
+        batch_tools = ToolRegistry()
+        batch_tools.merge(self._tools)
+        # Убираем fetch-инструменты — данные уже в промпте
+        for tool_name in ('get_imported_product', 'get_imported_products',
+                          'get_product', 'get_products',
+                          'get_imported_products_brief'):
+            batch_tools.remove(tool_name)
+        # Убираем single update — будем сохранять пакетно
+        batch_tools.remove('update_imported_product')
+
+        # 5. Обработка чанков
+        progress_lock = threading.Lock()
+        processed_count = 0
+        saved_count = 0
+        failed_count = 0
+        all_results = []
+        all_errors = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        def _process_tool_chunk(chunk_idx: int, chunk_ids: list[int]) -> dict:
+            nonlocal processed_count, saved_count, failed_count
+            nonlocal total_input_tokens, total_output_tokens
+
+            chunk_products = [products_by_id[pid] for pid in chunk_ids
+                              if pid in products_by_id]
+            if not chunk_products:
+                return {'processed': 0, 'saved': 0}
+
+            self.platform.log_thinking(
+                task_id,
+                f'Чанк {chunk_idx + 1}/{len(chunks)}',
+                f'ReAct для {len(chunk_products)} товаров (данные предзагружены)',
+            )
+
+            # Строим промпт с предзагруженными данными
+            prompt = self._build_tool_batch_prompt(chunk_products, reference_data)
+
+            # Создаём виртуальную задачу для чанка
+            chunk_task = {
+                **task,
+                'input_data': json.dumps({
+                    'product_ids': chunk_ids,
+                    'imported_product_ids': chunk_ids,
+                    'seller_id': seller_id,
+                }),
+                'task_type': task_type,
+                '_prefetched_prompt': prompt,
+            }
+
+            # Динамический max_iterations: ~3 итерации на товар
+            dynamic_max_iter = max(len(chunk_products) * 3, 10)
+
+            chunk_result = self._execute_react(
+                chunk_task,
+                tools_override=batch_tools,
+                max_iterations_override=dynamic_max_iter,
+            )
+
+            usage = chunk_result.pop('_usage', {})
+
+            with progress_lock:
+                total_input_tokens += usage.get('input_tokens', 0)
+                total_output_tokens += usage.get('output_tokens', 0)
+                chunk_processed = chunk_result.get('processed',
+                                                   chunk_result.get('saved', len(chunk_products)))
+                chunk_saved = chunk_result.get('saved', chunk_result.get('processed', 0))
+                processed_count += chunk_processed
+                saved_count += chunk_saved
+
+                chunk_results = chunk_result.get('results', [])
+                if isinstance(chunk_results, list):
+                    all_results.extend(chunk_results)
+
+                self.platform.update_progress(
+                    task_id,
+                    completed_steps=processed_count,
+                    current_step_label=(
+                        f'Чанк {chunk_idx + 1}/{len(chunks)}: '
+                        f'обработано {processed_count}/{total}'
+                    ),
+                )
+
+            return chunk_result
+
+        # Запускаем обработку
+        if max_workers <= 1 or len(chunks) <= 1:
+            for idx, chunk_ids in enumerate(chunks):
+                _process_tool_chunk(idx, chunk_ids)
+        else:
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
+                futures = {
+                    executor.submit(_process_tool_chunk, idx, chunk_ids): idx
+                    for idx, chunk_ids in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.error(f"Tool batch chunk error: {e}")
+
+        return {
+            'processed': processed_count,
+            'saved': saved_count,
+            'failed': failed_count,
+            'results': all_results,
+            'errors': all_errors if all_errors else None,
+            'chunks': len(chunks),
+            'message': (
+                f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
+                f'Сохранено: {saved_count}.'
+            ),
+            '_usage': {
+                'input_tokens': total_input_tokens,
+                'output_tokens': total_output_tokens,
+                'total_tokens': total_input_tokens + total_output_tokens,
+                'mode': 'tool_batch',
+                'chunks': len(chunks),
+            },
+        }
+
+    # ── Overridable hooks для Tool-Assisted Batch ─────────────────
+
+    def _prefetch_reference_data(self, products_data: list[dict]) -> dict:
+        """Предзагрузка справочных данных для tool batch.
+
+        Переопределить в агенте. Например:
+        - CategoryMapper: поиск категорий по уникальным category поставщика
+        - CharacteristicsFiller: характеристики по уникальным wb_subject_id
+
+        Возвращает dict, который передаётся в _build_tool_batch_prompt().
+        """
+        return {}
+
+    def _build_tool_batch_prompt(
+        self, products_data: list[dict], reference_data: dict,
+    ) -> str:
+        """Строит промпт для tool batch чанка с предзагруженными данными.
+
+        По умолчанию: делегирует в build_task_prompt() стандартного агента.
+        Переопределить для включения reference_data в промпт.
+        """
+        # Fallback: используем стандартный build_task_prompt
+        # (будет вызван из _execute_react через build_task_prompt)
+        return ''
+
+    # ── Креативные названия шагов ──────────────────────────────────
+
+    def _get_tool_label(self, tool_name: str, is_result: bool = False) -> str:
+        """Возвращает креативное название для tool call/result."""
+        labels = TOOL_LABELS.get(tool_name)
+        if labels:
+            return labels[1] if is_result else labels[0]
+        # Fallback: человекочитаемый формат
+        return f'Результат: {tool_name}' if is_result else f'Вызов: {tool_name}'
+
+    def _generate_step_label(self, thinking_text: str, iteration: int) -> str:
+        """Генерирует креативное название для thinking-шага через быструю модель."""
+        default = f'Рассуждение (шаг {iteration + 1})'
+
+        if not self._step_namer or not thinking_text:
+            return default
+
+        # Обрезаем текст до 200 символов для быстрого ответа
+        snippet = thinking_text[:200].strip()
+        if not snippet:
+            return default
+
+        try:
+            label = self._step_namer.chat(
+                system=_STEP_NAMER_PROMPT,
+                messages=[{'role': 'user', 'content': snippet}],
+                temperature=0.7,
+                max_tokens=30,
+            )
+            label = label.strip().strip('"\'').strip('.')
+            # Валидация: 2-50 символов, не пустой
+            if label and 2 <= len(label) <= 50:
+                return label
+        except Exception as e:
+            logger.debug(f"Step namer failed: {e}")
+
+        return default
 
     # ── Утилиты ────────────────────────────────────────────────────
 
@@ -491,24 +1042,34 @@ class BaseAgent(ABC):
         except Exception:
             return False
 
-    def _execute_react(self, task: dict) -> dict:
+    def _execute_react(self, task: dict,
+                       tools_override: ToolRegistry = None,
+                       max_iterations_override: int = None) -> dict:
         """
         ReAct (Reason-Act) цикл:
         1. LLM получает задачу + инструменты
         2. LLM рассуждает (thinking) и вызывает инструменты (action)
         3. Результат инструмента возвращается LLM (observation)
         4. Повторяем до финального ответа
+
+        tools_override: заменяет self._tools (для batch mode с урезанным toolset)
+        max_iterations_override: заменяет self.max_iterations (для dynamic batch sizing)
         """
         task_id = task['id']
-        task_prompt = self.build_task_prompt(task)
+
+        # Поддержка предзагруженного промпта (от _execute_tool_batch)
+        task_prompt = task.get('_prefetched_prompt') or self.build_task_prompt(task)
 
         messages = [{'role': 'user', 'content': task_prompt}]
-        tool_schemas = self._tools.get_tool_schemas()
+
+        active_tools = tools_override or self._tools
+        tool_schemas = active_tools.get_tool_schemas()
+        effective_max_iterations = max_iterations_override or self.max_iterations
         total_steps = 0
         total_input_tokens = 0
         total_output_tokens = 0
 
-        for iteration in range(self.max_iterations):
+        for iteration in range(effective_max_iterations):
             # Cancel propagation: проверяем отмену каждые N итераций
             if iteration > 0 and iteration % CANCEL_CHECK_INTERVAL == 0:
                 if self._check_task_cancelled(task_id):
@@ -544,18 +1105,19 @@ class BaseAgent(ABC):
             total_input_tokens += usage.get('input_tokens', 0)
             total_output_tokens += usage.get('output_tokens', 0)
 
-            # Логируем рассуждения
+            # Логируем рассуждения с креативным названием
             if response['text']:
                 total_steps += 1
+                step_label = self._generate_step_label(response['text'], iteration)
                 self.platform.log_thinking(
                     task_id,
-                    f'Рассуждение (шаг {iteration + 1})',
+                    step_label,
                     response['text'][:1000],
                     duration_ms=duration_ms,
                 )
                 self.platform.update_progress(
                     task_id, completed_steps=total_steps,
-                    current_step_label=f'Рассуждение (шаг {iteration + 1})',
+                    current_step_label=step_label,
                 )
 
             # Если нет tool calls — финальный ответ
@@ -581,20 +1143,22 @@ class BaseAgent(ABC):
                 tool_args = call['arguments']
 
                 total_steps += 1
+                action_label = self._get_tool_label(tool_name, is_result=False)
                 self.platform.log_action(
                     task_id,
-                    f'Вызов: {tool_name}',
+                    action_label,
                     json.dumps(tool_args, ensure_ascii=False)[:500],
                 )
 
                 # Выполняем инструмент
                 t1 = time.time()
-                result_str = self._tools.execute(tool_name, tool_args)
+                result_str = active_tools.execute(tool_name, tool_args)
                 tool_duration = int((time.time() - t1) * 1000)
 
+                result_label = self._get_tool_label(tool_name, is_result=True)
                 self.platform.log_decision(
                     task_id,
-                    f'Результат: {tool_name}',
+                    result_label,
                     result_str[:500],
                     duration_ms=tool_duration,
                 )
@@ -607,7 +1171,7 @@ class BaseAgent(ABC):
 
                 self.platform.update_progress(
                     task_id, completed_steps=total_steps,
-                    current_step_label=f'{tool_name}',
+                    current_step_label=action_label,
                 )
 
             # Добавляем результаты инструментов в контекст
@@ -617,10 +1181,10 @@ class BaseAgent(ABC):
             })
 
         # Достигнут лимит итераций — пробуем извлечь частичный результат
-        logger.warning(f"Task {task_id[:8]}: max iterations reached ({self.max_iterations})")
+        logger.warning(f"Task {task_id[:8]}: max iterations reached ({effective_max_iterations})")
         self.platform.log_decision(
             task_id, 'Завершение по лимиту шагов',
-            f'Агент выполнил {self.max_iterations} шагов. '
+            f'Агент выполнил {effective_max_iterations} шагов. '
             f'Задача завершена с частичным результатом.',
         )
 
@@ -632,14 +1196,14 @@ class BaseAgent(ABC):
                     if partial and partial.get('message') != 'Задача выполнена':
                         partial['status'] = 'partial'
                         partial['_note'] = (
-                            f'Достигнут лимит шагов ({self.max_iterations}). '
+                            f'Достигнут лимит шагов ({effective_max_iterations}). '
                             f'Результат может быть неполным.'
                         )
                         partial['_usage'] = {
                             'input_tokens': total_input_tokens,
                             'output_tokens': total_output_tokens,
                             'total_tokens': total_input_tokens + total_output_tokens,
-                            'react_iterations': self.max_iterations,
+                            'react_iterations': effective_max_iterations,
                         }
                         return partial
                     break
@@ -647,14 +1211,14 @@ class BaseAgent(ABC):
         return {
             'status': 'partial',
             'message': (
-                f'Агент выполнил максимум шагов ({self.max_iterations}) '
+                f'Агент выполнил максимум шагов ({effective_max_iterations}) '
                 f'и не успел завершить задачу. Попробуйте выбрать меньше товаров.'
             ),
             '_usage': {
                 'input_tokens': total_input_tokens,
                 'output_tokens': total_output_tokens,
                 'total_tokens': total_input_tokens + total_output_tokens,
-                'react_iterations': self.max_iterations,
+                'react_iterations': effective_max_iterations,
             },
         }
 
@@ -685,12 +1249,23 @@ class BaseAgent(ABC):
 
     def _start_heartbeat(self):
         """Запускает фоновый heartbeat + обновляет liveness-файл."""
+        config_reload_counter = 0
+        config_reload_every = 10  # каждые N heartbeat-ов (~5 мин при 30с интервале)
+
         def _beat():
+            nonlocal config_reload_counter
             while self._running:
                 try:
                     self.platform.heartbeat('online')
                 except Exception as e:
                     logger.warning(f"Heartbeat failed: {e}")
+
+                # Периодически обновляем remote LLM config
+                config_reload_counter += 1
+                if config_reload_counter >= config_reload_every:
+                    config_reload_counter = 0
+                    self.config.reload_remote_config()
+
                 _touch_liveness()
                 time.sleep(self.config.HEARTBEAT_INTERVAL)
 

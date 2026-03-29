@@ -53,7 +53,7 @@ class WBRateLimitException(WBAPIException):
 
 
 class RateLimiter:
-    """Rate limiter для соблюдения лимитов API WB"""
+    """Thread-safe rate limiter для соблюдения лимитов API WB"""
 
     def __init__(self, max_requests: int = 100, time_window: int = 60):
         """
@@ -61,29 +61,29 @@ class RateLimiter:
             max_requests: Максимальное количество запросов
             time_window: Временное окно в секундах
         """
+        import threading
         self.max_requests = max_requests
         self.time_window = time_window
         self.requests_log: List[float] = []
+        self._lock = threading.Lock()
 
     def wait_if_needed(self):
-        """Ожидание если достигнут лимит запросов"""
-        now = time.time()
+        """Ожидание если достигнут лимит запросов (thread-safe)"""
+        while True:
+            with self._lock:
+                now = time.time()
+                self.requests_log = [
+                    req_time for req_time in self.requests_log
+                    if now - req_time < self.time_window
+                ]
+                if len(self.requests_log) < self.max_requests:
+                    self.requests_log.append(now)
+                    return
+                sleep_time = self.time_window - (now - self.requests_log[0])
 
-        # Очистка старых записей
-        self.requests_log = [
-            req_time for req_time in self.requests_log
-            if now - req_time < self.time_window
-        ]
-
-        # Проверка лимита
-        if len(self.requests_log) >= self.max_requests:
-            oldest_request = self.requests_log[0]
-            sleep_time = self.time_window - (now - oldest_request)
             if sleep_time > 0:
                 logger.warning(f"Rate limit reached. Sleeping for {sleep_time:.2f}s")
                 time.sleep(sleep_time)
-
-        self.requests_log.append(now)
 
 
 class WildberriesAPIClient:
@@ -2449,6 +2449,62 @@ class WildberriesAPIClient:
 
         except Exception as e:
             logger.error(f"❌ Failed to create product card: {str(e)}")
+            raise
+
+    def create_product_cards_batch(
+        self,
+        cards: List[Dict[str, Any]],
+        log_to_db: bool = True,
+        seller_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Batch-создание нескольких карточек за 1 API-вызов.
+
+        WB API: POST /content/v2/cards/upload
+        Лимит: 10 req/min, до 100 карточек (imtID) за запрос.
+
+        Args:
+            cards: Список [{subjectID: int, variants: [{...}]}]
+                   Каждый элемент — отдельная карточка (imtID).
+                   Разные subjectID в одном запросе — OK.
+            log_to_db: Логировать запрос
+            seller_id: ID продавца
+
+        Returns:
+            Ответ API WB (создание асинхронное, 200 = принято в очередь)
+        """
+        if len(cards) > 100:
+            raise WBAPIException(
+                f"Too many cards ({len(cards)}). Max 100 per request."
+            )
+
+        endpoint = "/content/v2/cards/upload"
+
+        logger.info(f"📤 Batch creating {len(cards)} product cards")
+
+        try:
+            start_time = time.time()
+            response = self._make_request(
+                'POST', 'content', endpoint,
+                json=cards,
+                log_to_db=log_to_db,
+                seller_id=seller_id
+            )
+            elapsed = time.time() - start_time
+            result = response.json()
+
+            if result.get('error'):
+                error_text = result.get('errorText', 'Unknown error')
+                logger.error(f"❌ Batch card creation failed: {error_text}")
+                raise WBAPIException(f"Batch create failed: {error_text}")
+
+            logger.info(f"✅ Batch card creation accepted in {elapsed:.2f}s")
+            return result
+
+        except WBAPIException:
+            raise
+        except Exception as e:
+            logger.error(f"❌ Batch card creation error: {e}")
             raise
 
     def get_cards_errors_list(

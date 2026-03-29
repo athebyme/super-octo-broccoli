@@ -1046,10 +1046,25 @@ class EnrichmentService:
         db.session.add(job)
         db.session.commit()
 
+        # Захватываем Flask app для фонового потока
+        # ВАЖНО: не делаем `from seller_platform import app` в потоке —
+        # это circular import, который молча роняет фоновый поток.
+        from flask import current_app
+        try:
+            flask_app = current_app._get_current_object()
+        except RuntimeError:
+            flask_app = None
+
+        if not flask_app:
+            logger.error("[Enrich] No Flask app context — bulk enrichment cannot start")
+            job.status = 'failed'
+            db.session.commit()
+            return job_id
+
         # Запускаем в фоне
         thread = threading.Thread(
             target=self._run_bulk_job,
-            args=(job_id, product_ids, fields, photo_strategy, seller.id, seller.wb_api_key),
+            args=(job_id, product_ids, fields, photo_strategy, seller.id, seller.wb_api_key, flask_app),
             daemon=True,
             name=f'EnrichJob-{job_id[:8]}'
         )
@@ -1065,14 +1080,16 @@ class EnrichmentService:
         fields: List[str],
         photo_strategy: str,
         seller_id: int,
-        wb_api_key_encrypted: str
+        wb_api_key_encrypted: str,
+        flask_app=None
     ):
         """Фоновая задача массового обогащения"""
         from models import db, EnrichmentJob, Product, Seller
         from services.wb_api_client import WildberriesAPIClient
 
-        # Нужно создать новый контекст приложения для фонового потока
-        from seller_platform import app as flask_app
+        if not flask_app:
+            logger.error(f"[Enrich] Job {job_id}: no Flask app provided")
+            return
 
         with flask_app.app_context():
             job = EnrichmentJob.query.get(job_id)

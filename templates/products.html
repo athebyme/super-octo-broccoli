@@ -385,7 +385,7 @@
                 Обогатить
             </button>
             <!-- AI-помощник (пакетный режим) -->
-            {% with ai_mode='batch', ai_product_id=0, ai_product_title='', ai_seller_id=0 %}
+            {% with ai_mode='batch', ai_product_id=0, ai_product_title='', ai_seller_id=current_user.seller.id %}
                 {% include "partials/ai_assistant.html" %}
             {% endwith %}
             <button type="button" onclick="bulkEdit()"

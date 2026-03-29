@@ -884,6 +884,18 @@ def admin_system_settings():
         # Обновляем простые настройки
         for setting_key, value in simple_updates.items():
             setting = SystemSettings.query.filter_by(key=setting_key).first()
+
+            # Для agent_* ключей: upsert (создаём если не существует)
+            if not setting and setting_key.startswith('agent_'):
+                if not value:  # Не создаём пустые записи
+                    continue
+                setting = SystemSettings(
+                    key=setting_key,
+                    value_type='string',
+                    description=f'LLM-конфигурация агентов: {setting_key}',
+                )
+                db.session.add(setting)
+
             if setting:
                 old_value = setting.get_value()
                 setting.set_value(value)
@@ -928,6 +940,11 @@ def admin_system_settings():
     # Получаем все настройки
     settings = SystemSettings.query.order_by(SystemSettings.key).all()
 
+    # LLM-конфигурация агентов (agent_* ключи)
+    llm_config = {}
+    for s in SystemSettings.query.filter(SystemSettings.key.like('agent_%')).all():
+        llm_config[s.key] = s.get_value() or ''
+
     # Сводка по агентам
     agents_summary = None
     try:
@@ -959,7 +976,7 @@ def admin_system_settings():
     except Exception:
         pass
 
-    return render_template('admin_system_settings.html', settings=settings, agents_summary=agents_summary)
+    return render_template('admin_system_settings.html', settings=settings, agents_summary=agents_summary, llm_config=llm_config)
 
 
 # ============= API DEBUG CONSOLE =============
@@ -6030,6 +6047,10 @@ register_merge_routes(app)
 from routes.safe_prices import register_routes as register_safe_prices_routes
 register_safe_prices_routes(app)
 
+# ============= ЦЕНООБРАЗОВАНИЕ =============
+from routes.pricing import register_pricing_routes
+register_pricing_routes(app)
+
 # ============= РОУТЫ ЗАБЛОКИРОВАННЫХ КАРТОЧЕК И ЭКСПОРТА =============
 from routes.blocked_cards import register_blocked_cards_routes
 register_blocked_cards_routes(app)
@@ -6159,6 +6180,11 @@ def _run_startup_migrations():
         ('content_factories', 'ai_model', 'VARCHAR(100)'),
         # Competitor monitor proxy
         ('competitor_monitor_settings', 'proxy_url', 'VARCHAR(500)'),
+        # WB marketplace prices sync
+        ('products', 'wb_price', 'NUMERIC(10, 2)'),
+        ('products', 'wb_discount', 'INTEGER'),
+        ('products', 'wb_discounted_price', 'NUMERIC(10, 2)'),
+        ('products', 'wb_price_synced_at', 'DATETIME'),
     ]
 
     for table, column, col_type in migrations:

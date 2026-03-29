@@ -47,7 +47,7 @@ class CategoryMapperAgent(BaseAgent):
 Результат: JSON с полями: subject_id, subject_name, parent_name, confidence, reasoning."""
 
     def execute_task(self, task: dict) -> dict:
-        """Автоматически разбивает большие батчи на чанки."""
+        """Batch: tool-assisted с предзагрузкой и кэшированием категорий. Single: ReAct."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'map_single')
         if task_type in ('map_batch',):
@@ -56,9 +56,67 @@ class CategoryMapperAgent(BaseAgent):
                 or input_data.get('imported_product_ids')
                 or []
             )
-            if len(product_ids) > self.max_batch_size:
-                return self._run_chunked_batch(task, product_ids)
+            if len(product_ids) > 1:
+                return self._execute_tool_batch(
+                    task, product_ids, chunk_size=15, max_workers=2,
+                )
         return self._execute_react(task)
+
+    def _prefetch_reference_data(self, products_data: list[dict]) -> dict:
+        """Предзагрузка: поиск категорий для уникальных category поставщика."""
+        # Группируем по supplier category
+        unique_categories = set()
+        for p in products_data:
+            cat = p.get('category', '')
+            if cat:
+                # Берём основную категорию до '>'
+                main_cat = cat.split('>')[0].strip()
+                if main_cat and len(main_cat) >= 2:
+                    unique_categories.add(main_cat)
+
+        # Предзагружаем результаты поиска
+        cached_searches = {}
+        for cat_query in unique_categories:
+            try:
+                results = self.platform.search_categories(cat_query, limit=10)
+                cached_searches[cat_query] = results
+            except Exception as e:
+                logger.warning(f"Failed to prefetch category search '{cat_query}': {e}")
+
+        return {'cached_category_searches': cached_searches}
+
+    def _build_tool_batch_prompt(
+        self, products_data: list[dict], reference_data: dict,
+    ) -> str:
+        """Промпт с данными товаров и кэшированными результатами поиска категорий."""
+        products_json = json.dumps(products_data, ensure_ascii=False, indent=2)
+
+        # Кэшированные результаты поиска
+        cached = reference_data.get('cached_category_searches', {})
+        cache_parts = []
+        for query, results in cached.items():
+            results_json = json.dumps(results, ensure_ascii=False, indent=2)
+            cache_parts.append(f'Запрос "{query}":\n{results_json}')
+
+        cache_text = '\n\n'.join(cache_parts) if cache_parts else 'Нет предзагруженных результатов.'
+
+        return (
+            f"Пакетный маппинг категорий для {len(products_data)} товаров.\n\n"
+            f"=== ДАННЫЕ ТОВАРОВ (уже загружены) ===\n{products_json}\n\n"
+            f"=== ПРЕДЗАГРУЖЕННЫЕ РЕЗУЛЬТАТЫ ПОИСКА КАТЕГОРИЙ ===\n{cache_text}\n\n"
+            f"НЕ вызывай get_imported_product — данные уже выше.\n\n"
+            f"Алгоритм:\n"
+            f"1. Для каждого товара посмотри предзагруженные результаты поиска выше\n"
+            f"2. Если подходящая категория найдена — используй её\n"
+            f"3. Если НЕ найдена — вызови search_wb_categories с уточнённым запросом\n"
+            f"4. Для каждого товара вызови update_imported_product(\n"
+            f"   product_id=ID, wb_subject_id=<subject_id>,\n"
+            f"   mapped_wb_category=<subject_name>,\n"
+            f"   category_confidence=<0.0-1.0>)\n\n"
+            f"mapped_wb_category = subject_name (конечная), НЕ parent_name (раздел).\n"
+            f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
+            f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
+        )
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

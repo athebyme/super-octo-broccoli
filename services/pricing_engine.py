@@ -67,6 +67,7 @@ def calculate_price(
     purchase_price: float,
     settings,
     product_id: int = 0,
+    force_random: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Рассчитать розничные цены из закупочной по формуле.
@@ -75,10 +76,14 @@ def calculate_price(
         purchase_price: закупочная цена (P)
         settings: объект PricingSettings или dict с параметрами
         product_id: ID товара (для детерминированного random)
+        force_random: True → использовать настоящий random (для калькулятора)
 
     Returns:
-        dict с полями: final_price, discount_price, price_before_discount, и промежуточные
+        dict с полями: final_price, discount_price, price_before_discount,
+        и все промежуточные шаги для прозрачности расчёта
     """
+    import random as _random
+
     if purchase_price <= 0:
         return None
 
@@ -128,9 +133,15 @@ def calculate_price(
     inflated_mult = _get('inflated_multiplier', 1.55)
 
     # Шаг 1: Q — желаемая чистая прибыль (руб.)
-    Q = P * D / 100
-    if use_random and product_id:
-        Q += _stable_random(product_id, random_min, random_max)
+    Q_base = P * D / 100
+    random_addon = 0
+    if use_random:
+        if force_random:
+            random_addon = _random.randint(random_min, random_max)
+        elif product_id:
+            random_addon = _stable_random(product_id, random_min, random_max)
+    Q = Q_base + random_addon
+    Q_before_clamp = Q
     if max_profit and Q > max_profit:
         Q = max_profit
     if Q < min_profit:
@@ -139,40 +150,78 @@ def calculate_price(
     # Шаг 2: R — цена товара без доставки
     if wb_commission >= 100:
         wb_commission = 99.0
-    R = (P + Q + logistics + storage + packaging) * 100 / (100 - wb_commission)
+    R_numerator = P + Q + logistics + storage + packaging
+    R = R_numerator * 100 / (100 - wb_commission)
 
     # Шаг 3: S — стоимость доставки
-    S = R / 100 * delivery_pct
-    S = max(delivery_min, min(delivery_max, S))
+    S_raw = R / 100 * delivery_pct
+    S = max(delivery_min, min(delivery_max, S_raw))
 
     # Шаг 4: Z — итоговая цена на маркетплейсе
-    Z = (P + Q + S + acquiring + extra) * 100 / (100 - wb_commission) * tax_rate
+    Z_numerator = P + Q + S + acquiring + extra
+    Z_before_tax = Z_numerator * 100 / (100 - wb_commission)
+    Z = Z_before_tax * tax_rate
 
     # Шаг 5: T — скидка SPP в рублях
-    T = Z * spp_pct / 100
-    T = max(spp_min, min(spp_max, T))
+    T_raw = Z * spp_pct / 100
+    T = max(spp_min, min(spp_max, T_raw))
 
     # Шаг 6: X — цена с учётом SPP (премиум-цена)
     X = Z - T - 1
+    spp_unprofitable = T > 0.5 * Q
 
     # Шаг 7: если скидка съедает больше половины прибыли — премиум-цена невыгодна
-    if T > 0.5 * Q:
+    if spp_unprofitable:
         X = 0
 
     # Шаг 8: Y — завышенная цена до скидки
     Y = Z * inflated_mult
 
     return {
+        # Итоговые цены
         'purchase_price': round(P, 2),
-        'profit_q': round(Q, 2),
-        'profit_pct_d': D,
-        'base_price_r': round(R, 2),
-        'delivery_s': round(S, 2),
         'final_price': round(Z),
-        'spp_discount_t': round(T, 2),
         'discount_price': round(X) if X > 0 else 0,
         'price_before_discount': round(Y),
+        # Промежуточные значения (для прозрачности)
+        'profit_pct_d': D,
+        'profit_q_base': round(Q_base, 2),
+        'random_addon': random_addon,
+        'profit_q_before_clamp': round(Q_before_clamp, 2),
+        'profit_q': round(Q, 2),
+        'profit_clamped': Q != Q_before_clamp,
+        'base_price_r': round(R, 2),
+        'r_components': f'{round(P,2)} + {round(Q,2)} + {round(logistics,2)} + {round(storage,2)} + {round(packaging,2)} = {round(R_numerator,2)}',
+        'delivery_s_raw': round(S_raw, 2),
+        'delivery_s': round(S, 2),
+        'delivery_clamped': S != S_raw,
+        'z_components': f'{round(P,2)} + {round(Q,2)} + {round(S,2)} + {round(acquiring,2)} + {round(extra,2)} = {round(Z_numerator,2)}',
+        'z_before_tax': round(Z_before_tax, 2),
+        'z_final': round(Z, 2),
+        'spp_t_raw': round(T_raw, 2),
+        'spp_discount_t': round(T, 2),
+        'spp_clamped': T != T_raw,
+        'spp_unprofitable': spp_unprofitable,
+        'inflated_multiplier': inflated_mult,
+        # Коэффициенты (для отображения)
         'wb_commission': wb_commission,
+        'tax_rate': tax_rate,
+        'logistics_cost': logistics,
+        'storage_cost': storage,
+        'packaging_cost': packaging,
+        'acquiring_cost': acquiring,
+        'extra_cost': extra,
+        'delivery_pct': delivery_pct,
+        'delivery_min': delivery_min,
+        'delivery_max': delivery_max,
+        'min_profit': min_profit,
+        'max_profit': max_profit,
+        'use_random': use_random,
+        'random_min': random_min,
+        'random_max': random_max,
+        'spp_pct': spp_pct,
+        'range_from': range_row.get('from'),
+        'range_to': range_row.get('to'),
     }
 
 

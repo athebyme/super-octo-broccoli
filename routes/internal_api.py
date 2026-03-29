@@ -20,7 +20,7 @@ from models import (
     MarketplaceCategory, MarketplaceCategoryCharacteristic,
     MarketplaceDirectory, PricingSettings, ProhibitedWord,
     Brand, BrandAlias, MarketplaceBrand, BrandCategoryLink,
-    AgentChangeSnapshot,
+    AgentChangeSnapshot, SystemSettings,
 )
 from services import agent_service
 
@@ -49,6 +49,41 @@ def _authenticate_agent(f):
         request._agent = agent
         return f(*args, **kwargs)
     return decorated
+
+
+# ── LLM Config ─────────────────────────────────────────────────
+
+# Ключи LLM-настроек в SystemSettings
+_LLM_CONFIG_KEYS = {
+    'llm_provider': 'LLM_PROVIDER',
+    'llm_model': 'CLOUDRU_MODEL',
+    'llm_api_key': 'CLOUDRU_API_KEY',
+    'llm_base_url': 'CLOUDRU_BASE_URL',
+    'fallback_provider': 'FALLBACK_LLM_PROVIDER',
+    'fallback_model': 'FALLBACK_LLM_MODEL',
+    'step_namer_provider': 'STEP_NAMER_PROVIDER',
+    'step_namer_model': 'STEP_NAMER_MODEL',
+    'openrouter_api_key': 'OPENROUTER_API_KEY',
+    'openrouter_model': 'OPENROUTER_MODEL',
+    'anthropic_api_key': 'ANTHROPIC_API_KEY',
+    'claude_model': 'CLAUDE_MODEL',
+    'gemini_api_key': 'GEMINI_API_KEY',
+    'gemini_model': 'GEMINI_MODEL',
+    'llm_temperature': 'LLM_TEMPERATURE',
+    'llm_max_tokens': 'LLM_MAX_TOKENS',
+}
+
+
+@internal_api_bp.route('/config/llm', methods=['GET'])
+@_authenticate_agent
+def internal_llm_config():
+    """Возвращает LLM-конфигурацию из SystemSettings для агентов."""
+    config = {}
+    for db_key, env_key in _LLM_CONFIG_KEYS.items():
+        setting = SystemSettings.query.filter_by(key=f'agent_{db_key}').first()
+        if setting and setting.value:
+            config[env_key] = setting.get_value()
+    return jsonify({'config': config})
 
 
 # ── Heartbeat ───────────────────────────────────────────────────
@@ -175,7 +210,11 @@ def internal_list_products(seller_id):
 
     q = Product.query.filter_by(seller_id=seller_id)
     if status:
-        q = q.filter_by(wb_status=status)
+        # Product не имеет wb_status — фильтруем по is_active
+        if status in ('active', 'enabled'):
+            q = q.filter_by(is_active=True)
+        elif status in ('inactive', 'disabled'):
+            q = q.filter_by(is_active=False)
 
     total = q.count()
     products = q.offset((page - 1) * per_page).limit(per_page).all()
@@ -307,20 +346,29 @@ def internal_get_imported_products_brief():
     })
 
 
-@internal_api_bp.route('/imported-products/<int:product_id>', methods=['PATCH'])
-@_authenticate_agent
-def internal_update_imported_product(product_id):
-    """Агент обновляет данные импортированного товара.
+_IMPORTED_PRODUCT_ALLOWED_FIELDS = [
+    'title', 'description', 'brand', 'mapped_wb_category',
+    'wb_subject_id', 'category_confidence',
+    'ai_seo_title', 'ai_keywords', 'ai_bullets',
+    'characteristics', 'sizes', 'gender', 'country',
+    'calculated_price', 'calculated_discount_price',
+    'calculated_price_before_discount',
+]
 
-    БЕЗОПАСНОСТЬ ЦЕН: Если агент устанавливает calculated_price,
-    проверяем что цена >= supplier_price * (1 + min_price_margin_pct/100).
-    По умолчанию min_price_margin_pct = 20% (настраивается в PricingSettings).
+
+def _validate_and_apply_imported_product_update(
+    product, data: dict, task_id: str = None, agent_id: str = None,
+) -> tuple:
+    """Валидирует и применяет обновление импортированного товара.
+
+    Возвращает (True, None) при успехе или (False, error_string) при ошибке.
+    НЕ вызывает db.session.commit() — вызывающий код решает когда коммитить.
     """
-    p = ImportedProduct.query.get(product_id)
-    if not p:
-        return jsonify({'error': 'Imported product not found'}), 404
-
-    data = request.get_json(silent=True) or {}
+    # ── Нормализация алиасов полей ──
+    if 'wb_category_id' in data:
+        data['wb_subject_id'] = data.pop('wb_category_id')
+    if 'wb_category_name' in data:
+        data['mapped_wb_category'] = data.pop('wb_category_name')
 
     # ── Защита цен: агент НЕ может установить цену ниже порога ──
     price_fields = ('calculated_price', 'calculated_discount_price',
@@ -330,73 +378,41 @@ def internal_update_imported_product(product_id):
             try:
                 new_price = float(data[pf])
             except (ValueError, TypeError):
-                return jsonify({'error': f'Invalid {pf} value'}), 400
+                return False, f'Invalid {pf} value'
 
-            if p.supplier_price and p.supplier_price > 0:
-                # Получаем минимальный порог из настроек продавца
-                min_margin_pct = 20.0  # fallback по умолчанию
-                ps = PricingSettings.query.filter_by(seller_id=p.seller_id).first()
+            if product.supplier_price and product.supplier_price > 0:
+                min_margin_pct = 20.0
+                ps = PricingSettings.query.filter_by(seller_id=product.seller_id).first()
                 if ps and ps.min_profit is not None:
                     min_margin_pct = ps.min_profit
 
-                min_allowed = p.supplier_price * (1 + min_margin_pct / 100)
+                min_allowed = product.supplier_price * (1 + min_margin_pct / 100)
 
-                if new_price < p.supplier_price:
-                    return jsonify({
-                        'error': f'ЗАПРЕЩЕНО: цена {new_price} ниже закупочной {p.supplier_price}',
-                        'min_allowed': round(min_allowed, 2),
-                        'supplier_price': p.supplier_price,
-                    }), 400
-
+                if new_price < product.supplier_price:
+                    return False, (
+                        f'ЗАПРЕЩЕНО: цена {new_price} ниже закупочной {product.supplier_price}'
+                    )
                 if new_price < min_allowed:
-                    return jsonify({
-                        'error': (
-                            f'ЗАПРЕЩЕНО: цена {new_price} ниже минимального порога '
-                            f'{round(min_allowed, 2)} (закупка {p.supplier_price} + {min_margin_pct}%)'
-                        ),
-                        'min_allowed': round(min_allowed, 2),
-                        'supplier_price': p.supplier_price,
-                        'min_margin_pct': min_margin_pct,
-                    }), 400
+                    return False, (
+                        f'ЗАПРЕЩЕНО: цена {new_price} ниже минимального порога '
+                        f'{round(min_allowed, 2)} (закупка {product.supplier_price} + {min_margin_pct}%)'
+                    )
 
-    allowed_fields = [
-        'title', 'description', 'brand', 'mapped_wb_category',
-        'wb_subject_id', 'category_confidence',
-        'ai_seo_title', 'ai_keywords', 'ai_bullets',
-        'characteristics', 'sizes', 'gender', 'country',
-        'calculated_price', 'calculated_discount_price',
-        'calculated_price_before_discount',
-    ]
-
-    # Также принимаем wb_category_id/wb_category_name от агентов
-    if 'wb_category_id' in data:
-        data['wb_subject_id'] = data.pop('wb_category_id')
-    if 'wb_category_name' in data:
-        data['mapped_wb_category'] = data.pop('wb_category_name')
-
-    # ── Валидация категории: проверяем что она существует и включена ──
+    # ── Валидация категории ──
     if 'wb_subject_id' in data and data['wb_subject_id'] is not None:
         subject_id = data['wb_subject_id']
         cat = MarketplaceCategory.query.filter_by(subject_id=subject_id).first()
         if not cat:
-            return jsonify({
-                'error': f'Категория WB с subject_id={subject_id} не найдена в справочнике',
-                'hint': 'Используйте search_wb_categories для поиска валидных категорий',
-            }), 400
+            return False, f'Категория WB с subject_id={subject_id} не найдена в справочнике'
         if not cat.is_leaf:
-            return jsonify({
-                'error': f'Категория "{cat.subject_name}" (id={subject_id}) не является конечной (leaf). WB API не примет её.',
-                'hint': 'Используйте search_wb_categories — он возвращает только leaf-категории',
-            }), 400
+            return False, (
+                f'Категория "{cat.subject_name}" (id={subject_id}) не является конечной (leaf)'
+            )
         if not cat.is_enabled:
-            return jsonify({
-                'error': f'Категория "{cat.subject_name}" (id={subject_id}) не включена в системе',
-                'hint': 'Включите категорию в разделе Маркетплейсы → Категории, затем повторите',
-                'category_name': cat.subject_name,
-                'parent_name': cat.parent_name,
-            }), 400
+            return False, (
+                f'Категория "{cat.subject_name}" (id={subject_id}) не включена в системе'
+            )
 
-        # Валидация confidence: слишком низкая → отклоняем
         confidence = data.get('category_confidence')
         if confidence is not None:
             try:
@@ -404,51 +420,139 @@ def internal_update_imported_product(product_id):
             except (ValueError, TypeError):
                 confidence = None
             if confidence is not None and confidence < 0.5:
-                return jsonify({
-                    'error': f'Уверенность в категории слишком низкая ({confidence}). '
-                             f'Минимум 0.5 для автоматического назначения.',
-                    'hint': 'Попробуйте другой поисковый запрос или передайте задачу на ручную модерацию',
-                }), 400
+                return False, (
+                    f'Уверенность в категории слишком низкая ({confidence}). Минимум 0.5.'
+                )
 
-        # Проверяем совпадение mapped_wb_category с реальным subject_name
         if 'mapped_wb_category' in data and data['mapped_wb_category']:
             if data['mapped_wb_category'] != cat.subject_name:
-                # Автокоррекция: агент мог передать неточное название — берём из БД
                 data['mapped_wb_category'] = cat.subject_name
 
-    # ── Сохраняем снимок предыдущих значений для отката ──
+    # ── Снимок предыдущих значений для отката ──
     previous_values = {}
     new_values = {}
-    for field in allowed_fields:
+    for field in _IMPORTED_PRODUCT_ALLOWED_FIELDS:
         if field in data:
-            old_val = getattr(p, field, None)
+            old_val = getattr(product, field, None)
             new_val = data[field]
-            # Записываем только реально изменённые поля
             if str(old_val) != str(new_val):
                 previous_values[field] = old_val
                 new_values[field] = new_val
 
-    # Применяем изменения
-    for field in allowed_fields:
+    # ── Применяем изменения ──
+    for field in _IMPORTED_PRODUCT_ALLOWED_FIELDS:
         if field in data:
-            setattr(p, field, data[field])
+            setattr(product, field, data[field])
 
-    p.updated_at = datetime.utcnow()
+    product.updated_at = datetime.utcnow()
 
-    # Сохраняем снимок если были реальные изменения
+    # Снимок если были реальные изменения
     if previous_values:
-        task_id = request.headers.get('X-Task-Id')
         snapshot = AgentChangeSnapshot(
             task_id=task_id,
-            imported_product_id=p.id,
-            agent_id=request._agent.id if hasattr(request, '_agent') else None,
+            imported_product_id=product.id,
+            agent_id=agent_id,
             previous_values=json.dumps(previous_values, ensure_ascii=False, default=str),
             new_values=json.dumps(new_values, ensure_ascii=False, default=str),
         )
         db.session.add(snapshot)
 
+    return True, None
+
+
+@internal_api_bp.route('/imported-products/<int:product_id>', methods=['PATCH'])
+@_authenticate_agent
+def internal_update_imported_product(product_id):
+    """Агент обновляет данные импортированного товара."""
+    p = ImportedProduct.query.get(product_id)
+    if not p:
+        return jsonify({'error': 'Imported product not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    task_id = request.headers.get('X-Task-Id')
+    agent_id = request._agent.id if hasattr(request, '_agent') else None
+
+    ok, error = _validate_and_apply_imported_product_update(p, data, task_id, agent_id)
+    if not ok:
+        return jsonify({'error': error}), 400
+
     db.session.commit()
     return jsonify({'ok': True, 'product': _imported_product_to_dict(p)})
+
+
+@internal_api_bp.route('/imported-products/batch', methods=['PATCH'])
+@_authenticate_agent
+def internal_batch_update_imported_products():
+    """Пакетное обновление импортированных товаров (до 50 за запрос).
+
+    Каждый товар обрабатывается независимо — ошибка одного не блокирует остальные.
+    Используется агентами для массового сохранения результатов batch-обработки.
+    """
+    data = request.get_json(silent=True) or {}
+    updates = data.get('updates', [])
+
+    if not updates:
+        return jsonify({'error': 'updates array is required'}), 400
+    if len(updates) > 50:
+        return jsonify({'error': 'Maximum 50 updates per request'}), 400
+
+    task_id = request.headers.get('X-Task-Id')
+    agent_id = request._agent.id if hasattr(request, '_agent') else None
+
+    # Предзагрузка всех товаров одним запросом
+    product_ids = [u.get('product_id') for u in updates if u.get('product_id')]
+    products_map = {
+        p.id: p
+        for p in ImportedProduct.query.filter(ImportedProduct.id.in_(product_ids)).all()
+    } if product_ids else {}
+
+    results = []
+    updated_count = 0
+    failed_count = 0
+
+    for item in updates:
+        pid = item.get('product_id')
+        if not pid:
+            results.append({'product_id': pid, 'status': 'error', 'error': 'product_id is required'})
+            failed_count += 1
+            continue
+
+        product = products_map.get(pid)
+        if not product:
+            results.append({'product_id': pid, 'status': 'error', 'error': 'Product not found'})
+            failed_count += 1
+            continue
+
+        # Копируем данные без product_id
+        update_data = {k: v for k, v in item.items() if k != 'product_id'}
+
+        # Savepoint для изоляции ошибок отдельных товаров
+        savepoint = db.session.begin_nested()
+        try:
+            ok, error = _validate_and_apply_imported_product_update(
+                product, update_data, task_id, agent_id,
+            )
+            if ok:
+                savepoint.commit()
+                results.append({'product_id': pid, 'status': 'updated'})
+                updated_count += 1
+            else:
+                savepoint.rollback()
+                results.append({'product_id': pid, 'status': 'error', 'error': error})
+                failed_count += 1
+        except Exception as e:
+            savepoint.rollback()
+            results.append({'product_id': pid, 'status': 'error', 'error': str(e)[:200]})
+            failed_count += 1
+
+    db.session.commit()
+
+    return jsonify({
+        'ok': True,
+        'updated': updated_count,
+        'failed': failed_count,
+        'results': results,
+    })
 
 
 # ── Задачи: создание подзадач (для оркестратора) ───────────────
@@ -486,11 +590,20 @@ def internal_create_task():
 @internal_api_bp.route('/tasks/<task_id>', methods=['GET'])
 @_authenticate_agent
 def internal_get_task(task_id):
-    """Получить статус задачи (для оркестратора)."""
+    """Получить статус задачи (для оркестратора).
+
+    Обрезает input_data чтобы не забивать контекст оркестратора
+    (может содержать 10k+ product_ids).
+    """
     task = agent_service.get_task(task_id)
     if not task:
         return jsonify({'error': 'Task not found'}), 404
-    return jsonify({'task': task.to_dict()})
+    d = task.to_dict()
+    # Обрезаем input_data — оркестратору нужен только status/result
+    raw = d.get('input_data', '{}')
+    if len(raw) > 500:
+        d['input_data'] = raw[:500] + '...(truncated)'
+    return jsonify({'task': d})
 
 
 # ── Данные: продавцы ────────────────────────────────────────────
@@ -1085,10 +1198,10 @@ def _product_to_dict(p):
         'title': p.title,
         'brand': p.brand,
         'vendor_code': p.vendor_code,
+        'object_name': p.object_name,
+        'subject_id': p.subject_id,
         'description': getattr(p, 'description', None),
-        'barcode': p.barcode,
-        'category': getattr(p, 'category', None),
-        'wb_status': getattr(p, 'wb_status', None),
+        'is_active': p.is_active,
     }
 
 

@@ -1214,62 +1214,40 @@ class WBProductImporter:
                             pass
 
         # ────────────────────────────────────────────────────
-        # Фаза 5: Параллельная загрузка фото (5 потоков)
+        # Фаза 5: Последовательная загрузка фото
         # ────────────────────────────────────────────────────
+        # ВАЖНО: Загрузка фото выполняется ПОСЛЕДОВАТЕЛЬНО, а не параллельно.
+        # Причина: SQLAlchemy/SQLite не поддерживает concurrent операции
+        # из нескольких потоков на одной сессии. ThreadPoolExecutor вызывал
+        # "This session is provisioning a new connection; concurrent operations"
+        # при параллельном доступе к db.session из фото-потоков.
         _cb('photos', {'current': 0, 'total': len(success_cards)})
         photo_results = {}  # nm_id → (success, error)
-        photo_lock = threading.Lock()
-        photo_done = [0]
 
-        # Захватываем app для фото-потоков (им нужен Flask app context)
-        from flask import current_app
-        try:
-            _flask_app = current_app._get_current_object()
-        except RuntimeError:
-            _flask_app = None
-
-        if not _flask_app:
-            logger.error("Нет Flask app context — фото не будут загружены! "
-                         "Это критическая ошибка: batch_import должен вызываться внутри app context.")
-
-        def _upload_one_photo(ip, nm_id, retry_count=2):
-            """Загрузка фото с ретраями. Каждый поток имеет свой app context."""
+        for photo_idx, (ip, cd, nm_id, _) in enumerate(success_cards):
+            retry_count = 2
             last_err = None
+            ok = False
+
             for attempt in range(retry_count + 1):
                 try:
-                    if _flask_app:
-                        with _flask_app.app_context():
-                            self._upload_photos_for_card(nm_id, ip)
-                    else:
-                        self._upload_photos_for_card(nm_id, ip)
-                    return nm_id, True, None
+                    self._upload_photos_for_card(nm_id, ip)
+                    ok = True
+                    break
                 except Exception as e:
                     last_err = str(e)[:200]
                     if attempt < retry_count:
                         _time.sleep(3 * (attempt + 1))
-                        logger.warning(f"Фото nmID={nm_id}: попытка {attempt+2}/{retry_count+1} после ошибки: {last_err}")
-            return nm_id, False, last_err
+                        logger.warning(
+                            f"Фото nmID={nm_id}: попытка {attempt+2}/{retry_count+1} "
+                            f"после ошибки: {last_err}"
+                        )
 
-        # Загружаем фото последовательно если <= 3 карточек, параллельно если больше
-        # Это снижает нагрузку на WB API и повышает надёжность
-        max_workers = min(3, len(success_cards)) if len(success_cards) > 3 else 1
-
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='WBPhoto') as pool:
-            futures = {}
-            for ip, cd, nm_id, _ in success_cards:
-                f = pool.submit(_upload_one_photo, ip, nm_id)
-                futures[f] = (ip, nm_id)
-
-            for f in as_completed(futures):
-                nm_id, ok, err = f.result()
-                photo_results[nm_id] = (ok, err)
-                with photo_lock:
-                    photo_done[0] += 1
-                # Обновляем прогресс БЕЗ db.session.commit в потоке (избегаем SQLite lock)
-                try:
-                    _cb('photos', {'current': photo_done[0], 'total': len(success_cards)})
-                except Exception:
-                    pass  # Не прерываем загрузку фото из-за ошибки callback
+            photo_results[nm_id] = (ok, last_err)
+            try:
+                _cb('photos', {'current': photo_idx + 1, 'total': len(success_cards)})
+            except Exception:
+                pass
 
         # ────────────────────────────────────────────────────
         # Фаза 6: Сохранение в БД

@@ -35,6 +35,60 @@
                 </button>
             </div>
 
+            <!-- Источник цен -->
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+                <h3 class="font-medium text-gray-900 mb-3">Источник цен</h3>
+
+                <!-- Toggle marketplace prices -->
+                <label class="flex items-center cursor-pointer mb-3">
+                    <div class="relative" @click.prevent="toggleMarketplacePrices()">
+                        <div class="w-11 h-6 rounded-full transition-colors"
+                             :class="useMarketplacePrices ? 'bg-purple-600' : 'bg-gray-300'">
+                            <div class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform"
+                                 :class="useMarketplacePrices ? 'translate-x-5' : ''"></div>
+                        </div>
+                    </div>
+                    <span class="ml-3 text-sm font-medium text-gray-900">Цены с маркетплейса</span>
+                </label>
+
+                <template x-if="useMarketplacePrices">
+                    <div>
+                        <p class="text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded-lg p-2.5 mb-3">
+                            Все действия будут выполняться с актуальными ценами с&nbsp;Wildberries.
+                            Сначала синхронизируйте цены.
+                        </p>
+
+                        <!-- Sync button -->
+                        <button @click="syncWbPrices()" :disabled="syncingWb"
+                                class="w-full px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 text-sm font-medium flex items-center justify-center transition">
+                            <template x-if="syncingWb">
+                                <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                            </template>
+                            <template x-if="!syncingWb">
+                                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                            </template>
+                            <span x-text="syncingWb ? 'Синхронизация...' : 'Синхронизировать с WB'"></span>
+                        </button>
+
+                        <!-- Sync result -->
+                        <div x-show="wbSyncResult" class="mt-2 text-xs rounded-lg p-2"
+                             :class="wbSyncResult?.success ? 'text-green-700 bg-green-50' : 'text-red-700 bg-red-50'">
+                            <template x-if="wbSyncResult?.success">
+                                <span>Синхронизировано <strong x-text="wbSyncResult.synced"></strong> товаров</span>
+                            </template>
+                            <template x-if="wbSyncResult && !wbSyncResult.success">
+                                <span x-text="wbSyncResult.error"></span>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
             <!-- Тип изменения -->
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                 <h2 class="text-lg font-medium text-gray-900 mb-4">Параметры изменения</h2>
@@ -55,6 +109,15 @@
                         Тип изменения
                     </label>
                     <div class="space-y-2">
+                        <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
+                               :class="changeType === 'supplier_pricing' ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200'">
+                            <input type="radio" value="supplier_pricing" x-model="changeType"
+                                   class="h-4 w-4 text-emerald-600 focus:ring-emerald-500 border-gray-300">
+                            <div class="ml-3">
+                                <span class="text-gray-900">Текущая цена поставщика</span>
+                                <p class="text-xs text-gray-500 mt-0.5">Рассчитать по формуле из раздела Ценообразование</p>
+                            </div>
+                        </label>
                         <label class="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 text-sm"
                                :class="changeType === 'percent' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200'">
                             <input type="radio" value="percent" x-model="changeType"
@@ -82,8 +145,17 @@
                     </div>
                 </div>
 
-                <!-- Значение изменения (не для формулы) -->
-                <div class="mb-4" x-show="changeType !== 'formula'">
+                <!-- Подсказка для supplier_pricing -->
+                <div class="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg" x-show="changeType === 'supplier_pricing'" x-cloak>
+                    <p class="text-xs text-emerald-800">
+                        Для каждого товара будет взята его закупочная цена от поставщика и рассчитана розничная цена по вашей формуле ценообразования.
+                        Товары без закупочной цены останутся без изменений.
+                    </p>
+                    <a href="{{ url_for('auto_import_pricing') }}" class="inline-block mt-2 text-xs text-emerald-700 underline hover:text-emerald-900">Настроить формулу</a>
+                </div>
+
+                <!-- Значение изменения (не для формулы и не для supplier_pricing) -->
+                <div class="mb-4" x-show="changeType !== 'formula' && changeType !== 'supplier_pricing'">
                     <label for="change_value" class="block text-sm font-medium text-gray-700 mb-1">
                         <span x-text="changeType === 'percent' ? 'Процент изменения' : (changeType === 'set' ? 'Новая цена' : 'Сумма изменения')"></span>
                     </label>
@@ -133,7 +205,7 @@
             </div>
 
             <!-- Предпросмотр -->
-            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6" x-show="selectedIds.length > 0 && (changeValue || formula)">
+            <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6" x-show="selectedIds.length > 0 && (changeValue || formula || changeType === 'supplier_pricing')">
                 <h2 class="text-lg font-medium text-gray-900 mb-4">Предпросмотр</h2>
 
                 <template x-if="preview">
@@ -182,7 +254,7 @@
             </div>
 
             <!-- Кнопка создания батча -->
-            <button @click="createBatch" :disabled="selectedIds.length === 0 || (!changeValue && !formula) || submitting"
+            <button @click="createBatch" :disabled="selectedIds.length === 0 || (changeType !== 'supplier_pricing' && !changeValue && !formula) || submitting"
                     class="w-full px-6 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium transition flex items-center justify-center">
                 <svg x-show="submitting" class="animate-spin h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -270,8 +342,15 @@
                                 <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                                     Товар
                                 </th>
+                                <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase" x-show="changeType === 'supplier_pricing'">
+                                    Закупочная
+                                </th>
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                                    Текущая цена
+                                    <span x-show="!useMarketplacePrices">Текущая цена</span>
+                                    <span x-show="useMarketplacePrices" class="inline-flex items-center">
+                                        Цена
+                                        <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded">WB</span>
+                                    </span>
                                 </th>
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
                                     Новая цена
@@ -296,16 +375,35 @@
                                         <div class="text-xs text-gray-500 truncate max-w-xs" x-text="product.title"></div>
                                         <div class="text-xs text-gray-400" x-text="product.brand"></div>
                                     </td>
-                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-900">
-                                        <span x-text="product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '—'"></span>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm" x-show="changeType === 'supplier_pricing'">
+                                        <span class="text-gray-900" x-show="product.supplier_price" x-text="product.supplier_price.toLocaleString('ru-RU') + ' ₽'"></span>
+                                        <span class="text-red-400 text-xs" x-show="!product.supplier_price">нет</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-right whitespace-nowrap text-sm">
+                                        <template x-if="useMarketplacePrices && product.wb_price">
+                                            <div>
+                                                <span class="text-purple-700 font-medium" x-text="product.wb_price.toLocaleString('ru-RU') + ' ₽'"></span>
+                                                <div class="text-[10px] text-gray-400" x-show="product.wb_discount">
+                                                    скидка <span x-text="product.wb_discount"></span>% &rarr;
+                                                    <span x-text="product.wb_discounted_price ? product.wb_discounted_price.toLocaleString('ru-RU') + ' ₽' : ''"></span>
+                                                </div>
+                                                <div class="text-[10px] text-gray-400" x-show="product.wb_price_synced_at" x-text="product.wb_price_synced_at"></div>
+                                            </div>
+                                        </template>
+                                        <template x-if="useMarketplacePrices && !product.wb_price">
+                                            <span class="text-gray-400 text-xs">не синхр.</span>
+                                        </template>
+                                        <template x-if="!useMarketplacePrices">
+                                            <span class="text-gray-900" x-text="product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '—'"></span>
+                                        </template>
                                     </td>
                                     <td class="px-4 py-3 text-right whitespace-nowrap text-sm font-medium"
-                                        :class="getNewPriceClass(product.price)">
-                                        <span x-text="formatNewPrice(product.price)"></span>
+                                        :class="getNewPriceClass(getEffectivePrice(product))">
+                                        <span x-text="formatNewPrice(getEffectivePrice(product))"></span>
                                     </td>
                                     <td class="px-4 py-3 text-right whitespace-nowrap text-sm"
-                                        :class="getChangeClass(product.price)">
-                                        <span x-text="formatChange(product.price)"></span>
+                                        :class="getChangeClass(getEffectivePrice(product))">
+                                        <span x-text="formatChange(getEffectivePrice(product))"></span>
                                     </td>
                                 </tr>
                             </template>
@@ -354,6 +452,11 @@
 <script>
 function priceChangeApp() {
     return {
+        // Источник цен (маркетплейс / локальная БД)
+        useMarketplacePrices: false,
+        syncingWb: false,
+        wbSyncResult: null,
+
         // Параметры изменения
         name: '',
         changeType: 'percent',
@@ -527,11 +630,55 @@ function priceChangeApp() {
             localStorage.setItem('price_change_selected', JSON.stringify(this.selectedIds));
         },
 
-        // Расчеты
-        calculateNewPrice(oldPrice) {
-            if (!oldPrice) return 0;
+        // Источник цен
+        toggleMarketplacePrices() {
+            this.useMarketplacePrices = !this.useMarketplacePrices;
+            this.preview = null;
+        },
 
-            if (this.changeType === 'percent' && this.changeValue) {
+        async syncWbPrices() {
+            if (this.syncingWb) return;
+            this.syncingWb = true;
+            this.wbSyncResult = null;
+
+            try {
+                const response = await fetch('{{ url_for("prices.api_sync_wb_prices") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    this.wbSyncResult = { success: true, synced: data.synced };
+                    // Перезагружаем товары чтобы обновить wb_price в таблице
+                    await this.loadProducts(this.currentPage);
+                } else {
+                    this.wbSyncResult = { success: false, error: data.error || 'Ошибка синхронизации' };
+                }
+            } catch (error) {
+                console.error('WB sync error:', error);
+                this.wbSyncResult = { success: false, error: 'Ошибка сети' };
+            } finally {
+                this.syncingWb = false;
+            }
+        },
+
+        getEffectivePrice(product) {
+            if (this.useMarketplacePrices && product.wb_price) {
+                return product.wb_price;
+            }
+            return product.price || 0;
+        },
+
+        // Расчеты
+        calculateNewPrice(oldPrice, product) {
+            if (!oldPrice && this.changeType !== 'supplier_pricing') return 0;
+
+            if (this.changeType === 'supplier_pricing') {
+                // Для supplier_pricing на клиенте не пересчитываем — нужен серверный расчёт.
+                // Показываем "..." чтобы пользователь нажал "Рассчитать изменения" для preview.
+                return null;
+            } else if (this.changeType === 'percent' && this.changeValue) {
                 return oldPrice * (1 + this.changeValue / 100);
             } else if (this.changeType === 'fixed' && this.changeValue) {
                 return oldPrice + this.changeValue;
@@ -540,7 +687,6 @@ function priceChangeApp() {
             } else if (this.changeType === 'formula' && this.formula) {
                 try {
                     const P = oldPrice;
-                    // Безопасное вычисление простых формул
                     const expr = this.formula.replace(/P/g, P);
                     return Math.max(0, eval(expr));
                 } catch (e) {
@@ -564,6 +710,7 @@ function priceChangeApp() {
         },
 
         getNewPriceClass(oldPrice) {
+            if (this.changeType === 'supplier_pricing') return 'text-emerald-600';
             if (!this.changeValue && !this.formula) return 'text-gray-400';
             const level = this.getSafetyLevel(oldPrice);
             return {
@@ -574,6 +721,7 @@ function priceChangeApp() {
         },
 
         getChangeClass(oldPrice) {
+            if (this.changeType === 'supplier_pricing') return 'text-gray-400';
             if (!this.changeValue && !this.formula) return 'text-gray-400';
             const level = this.getSafetyLevel(oldPrice);
             return {
@@ -584,12 +732,15 @@ function priceChangeApp() {
         },
 
         formatNewPrice(oldPrice) {
+            if (this.changeType === 'supplier_pricing') return 'по формуле';
             if (!this.changeValue && !this.formula) return '—';
-            const newPrice = Math.round(this.calculateNewPrice(oldPrice));
-            return newPrice.toLocaleString('ru-RU') + ' ₽';
+            const newPrice = this.calculateNewPrice(oldPrice);
+            if (newPrice === null) return '...';
+            return Math.round(newPrice).toLocaleString('ru-RU') + ' ₽';
         },
 
         formatChange(oldPrice) {
+            if (this.changeType === 'supplier_pricing') return '—';
             if (!this.changeValue && !this.formula) return '—';
             const change = this.calculateChangePercent(oldPrice);
             const sign = change >= 0 ? '+' : '';
@@ -620,7 +771,8 @@ function priceChangeApp() {
                         product_ids: this.selectedIds,
                         change_type: this.changeType,
                         change_value: this.changeValue,
-                        formula: this.formula
+                        formula: this.formula,
+                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local'
                     })
                 });
 
@@ -642,7 +794,7 @@ function priceChangeApp() {
                 return;
             }
 
-            if (!this.changeValue && !this.formula) {
+            if (this.changeType !== 'supplier_pricing' && !this.changeValue && !this.formula) {
                 alert('Укажите значение изменения');
                 return;
             }
@@ -658,7 +810,8 @@ function priceChangeApp() {
                         change_value: this.changeValue,
                         formula: this.formula,
                         name: this.name,
-                        description: this.description
+                        description: this.description,
+                        price_source: this.useMarketplacePrices ? 'marketplace' : 'local'
                     })
                 });
 

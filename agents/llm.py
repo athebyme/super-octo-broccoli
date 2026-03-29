@@ -595,3 +595,21 @@ def create_fallback_llm(config: AgentConfig = None) -> BaseLLM | None:
 
     logger.info(f"Creating fallback LLM: {fallback_provider} / {cfg.FALLBACK_LLM_MODEL}")
     return _create_by_provider(fallback_provider, cfg, cfg.FALLBACK_LLM_MODEL or None)
+
+
+def create_step_namer_llm(config: AgentConfig = None) -> BaseLLM | None:
+    """
+    Создаёт быструю модель для генерации креативных названий шагов.
+
+    Возвращает None если STEP_NAMER_PROVIDER не задан.
+    Использует самую дешёвую/быструю доступную модель.
+    """
+    cfg = config or AgentConfig
+    provider = cfg.STEP_NAMER_PROVIDER
+
+    if not provider:
+        return None
+
+    model = cfg.STEP_NAMER_MODEL
+    logger.info(f"Creating step namer LLM: {provider} / {model}")
+    return _create_by_provider(provider, cfg, model or None)
