@@ -168,115 +168,220 @@ class OrchestratorAgent(BaseAgent):
     max_iterations = 60  # Нужно больше итераций — ждём подзадачи
     use_fallback_llm = True  # Нужен точный LLM для координации
 
+    # Оркестратору не нужны product-level tools — он работает через подзадачи
+    excluded_tools = (
+        'get_product', 'update_product',
+        'get_imported_product', 'update_imported_product',
+        'batch_update_imported_products',
+    )
+
+    # Хранилище product_ids для текущей задачи (не пихаем в промпт)
+    _current_product_ids: list = []
+    _current_seller_id: int = None
+
     def get_tools(self):
-        """Возвращает инструменты оркестратора."""
-        return create_orchestrator_tools(self.platform)
+        """Возвращает инструменты оркестратора с авто-подстановкой product_ids."""
+        tools = create_orchestrator_tools(self.platform)
+
+        # Оборачиваем create_subtask — автоматически inject product_ids
+        original_handler = tools._handlers['create_subtask']
+
+        def _wrapped_create_subtask(**kwargs):
+            input_data = kwargs.get('input_data', '{}')
+            if isinstance(input_data, str):
+                try:
+                    parsed = json.loads(input_data)
+                except (json.JSONDecodeError, ValueError):
+                    parsed = {}
+            else:
+                parsed = input_data
+
+            # Если product_ids не переданы — подставляем из текущей задачи
+            if not parsed.get('product_ids') and self._current_product_ids:
+                parsed['product_ids'] = self._current_product_ids
+                parsed['imported_product_ids'] = self._current_product_ids
+            if not parsed.get('seller_id') and self._current_seller_id:
+                parsed['seller_id'] = self._current_seller_id
+
+            kwargs['input_data'] = json.dumps(parsed, ensure_ascii=False)
+            return original_handler(**kwargs)
+
+        tools._handlers['create_subtask'] = _wrapped_create_subtask
+        return tools
 
     system_prompt = """Ты — оркестратор задач для платформы WB-селлеров.
+Координируй работу агентов: создавай подзадачи и жди их завершения."""
 
-Твоя роль — координировать работу специализированных агентов.
-Ты НЕ выполняешь задачи сам — ты создаёшь подзадачи для других агентов
-и следишь за их выполнением.
-
-Доступные агенты:
-- category-mapper: определение категорий WB
-- characteristics-filler: заполнение характеристик
-- seo-writer: SEO-оптимизация заголовков и описаний
-- brand-resolver: нормализация брендов
-- size-normalizer: нормализация размеров
-- card-doctor: проверка на стоп-слова и модерацию
-- price-optimizer: оптимизация цен
-- review-analyst: анализ отзывов
-
-Порядок работы:
-1. Создай подзадачу через create_subtask (ОБЯЗАТЕЛЬНО передавай parent_task_id!)
-2. Проверь статус через get_subtask_status
-3. Когда подзадача завершена — получи результат через get_subtask_result
-4. Создай следующую подзадачу (если есть)
-5. Когда все шаги выполнены — верни итоговый JSON
-
-ВАЖНО: Выполняй шаги ПОСЛЕДОВАТЕЛЬНО. Жди завершения текущего шага
-перед запуском следующего.
-ВАЖНО: Всегда передавай parent_task_id при создании подзадач."""
-
-    def build_task_prompt(self, task: dict) -> str:
+    def execute_task(self, task: dict) -> dict:
+        """Перед запуском ReAct — загружаем product_ids если они пустые."""
         input_data = self.parse_input_data(task)
-
-        task_type = task.get('task_type', 'pipeline')
+        product_ids = input_data.get('product_ids') or input_data.get('imported_product_ids') or []
         seller_id = task.get('seller_id')
-        parent_task_id = task.get('id', '')
-        product_ids = input_data.get('product_ids', [])
-        is_batch = len(product_ids) > 1
 
-        # Определяем шаги pipeline
+        if not product_ids and seller_id:
+            logger.info(f"Orchestrator: product_ids empty, auto-fetching for seller {seller_id}")
+            all_ids = []
+            page = 1
+            while True:
+                try:
+                    resp = self.platform.list_imported_products(seller_id, page=page, per_page=200)
+                    products = resp.get('products', [])
+                    if not products:
+                        break
+                    all_ids.extend(p['id'] for p in products)
+                    total = resp.get('total', len(products))
+                    if len(all_ids) >= total:
+                        break
+                    page += 1
+                except Exception as e:
+                    logger.warning(f"Orchestrator: failed to fetch products page {page}: {e}")
+                    break
+
+            if all_ids:
+                logger.info(f"Orchestrator: auto-fetched {len(all_ids)} product IDs")
+                product_ids = all_ids
+            else:
+                logger.warning(f"Orchestrator: no products found for seller {seller_id}")
+
+        self._current_product_ids = product_ids
+        self._current_seller_id = seller_id
+
+        # Определяем pipeline
+        task_type = task.get('task_type', 'pipeline')
         if task_type == 'pipeline':
             pipeline_name = input_data.get('pipeline', 'full_prepare')
             pipeline = PIPELINES.get(pipeline_name)
-            if not pipeline:
-                return f"Ошибка: неизвестный pipeline '{pipeline_name}'.\n\nВерни JSON: {{error: 'unknown_pipeline'}}"
-            steps = pipeline['steps']
-            label = pipeline['label']
+            if pipeline:
+                return self._execute_pipeline(task, pipeline, product_ids, seller_id)
 
         elif task_type == 'smart':
             user_text = input_data.get('text', '')
-            steps = resolve_agents_from_text(user_text, is_batch)
-            label = f'Умный запрос: {user_text[:50]}'
+            steps = resolve_agents_from_text(user_text, len(product_ids) > 1)
+            pseudo_pipeline = {'label': f'Умный запрос: {user_text[:50]}', 'steps': steps}
+            return self._execute_pipeline(task, pseudo_pipeline, product_ids, seller_id)
 
         elif task_type == 'custom':
-            # Пользователь сам выбрал агентов
             steps = input_data.get('steps', [])
-            if not steps:
-                return "Ошибка: не указаны шаги.\n\nВерни JSON: {error: 'no_steps'}"
-            label = 'Пользовательский pipeline'
+            if steps:
+                pseudo_pipeline = {'label': 'Пользовательский pipeline', 'steps': steps}
+                return self._execute_pipeline(task, pseudo_pipeline, product_ids, seller_id)
 
-        else:
-            return (
-                f"Неизвестный тип задачи: {task_type}.\n\n"
-                f"Верни JSON: {{error: 'unknown_task_type'}}"
+        # Fallback: для нестандартных задач — ReAct
+        input_data['product_count'] = len(product_ids)
+        input_data.pop('product_ids', None)
+        input_data.pop('imported_product_ids', None)
+        task['input_data'] = json.dumps(input_data, ensure_ascii=False)
+        return self._execute_react(task)
+
+    def _execute_pipeline(self, task: dict, pipeline: dict,
+                          product_ids: list, seller_id: int) -> dict:
+        """Выполняет pipeline БЕЗ LLM — чистый Python.
+
+        Создаёт подзадачи последовательно, ждёт завершения каждой.
+        Экономит токены: 0 LLM-вызовов для оркестрации.
+        """
+        task_id = task['id']
+        steps = pipeline['steps']
+        label = pipeline['label']
+        total = len(steps)
+        results = []
+
+        self.platform.log_thinking(
+            task_id, f'Pipeline: {label}',
+            f'{total} шагов, {len(product_ids)} товаров',
+        )
+        self.platform.update_progress(task_id, 0, f'Запуск: {label}', total)
+
+        for idx, step in enumerate(steps):
+            agent_name = step['agent']
+            task_type = step['task_type']
+            step_label = step.get('label', agent_name)
+
+            self.platform.update_progress(
+                task_id, idx, f'Шаг {idx + 1}/{total}: {step_label}',
+            )
+            self.platform.log_action(
+                task_id, f'Запускаю: {step_label}',
+                f'Агент: {agent_name}, тип: {task_type}',
             )
 
-        # Формируем prompt с конкретными шагами
-        ids_str = ', '.join(str(i) for i in product_ids[:20]) if product_ids else 'все'
-        steps_description = '\n'.join(
-            f"  {i+1}. [{s['agent']}] {s.get('label', s['task_type'])}"
-            for i, s in enumerate(steps)
-        )
+            # Создаём подзадачу
+            try:
+                input_data = {
+                    'seller_id': seller_id,
+                    'product_ids': product_ids,
+                    'imported_product_ids': product_ids,
+                }
+                resp = self.platform.create_subtask(
+                    agent_name=agent_name,
+                    task_type=task_type,
+                    seller_id=seller_id,
+                    title=f'{step_label} ({len(product_ids)} товаров)',
+                    input_data=input_data,
+                    parent_task_id=task_id,
+                )
+                subtask_id = resp.get('task', {}).get('id')
+                if not subtask_id:
+                    raise ValueError(f"No task ID in response: {resp}")
+            except Exception as e:
+                logger.error(f"Orchestrator: failed to create subtask {agent_name}: {e}")
+                results.append({
+                    'step': step_label, 'agent': agent_name,
+                    'status': 'failed', 'summary': f'Ошибка создания: {str(e)[:200]}',
+                })
+                continue
 
-        input_json = json.dumps({
-            'product_ids': product_ids,
-            'seller_id': seller_id,
-        }, ensure_ascii=False)
+            # Ждём завершения (Python polling, без LLM)
+            subtask_result = self.wait_for_subtask(
+                subtask_id, timeout=1800, poll_interval=5,
+            )
+
+            # Анализируем результат
+            task_data = subtask_result.get('task', subtask_result)
+            status = task_data.get('status', 'unknown')
+            duration = task_data.get('duration_seconds', 0)
+            error = task_data.get('error_message', '')
+
+            if status == 'completed':
+                summary = f'Завершено за {duration}с'
+                self.platform.log_result(task_id, f'{step_label}: OK', summary)
+            else:
+                summary = f'Статус: {status}. {error[:200]}' if error else f'Статус: {status}'
+                self.platform.log_error(task_id, f'{step_label}: {status}', summary)
+
+            results.append({
+                'step': step_label,
+                'agent': agent_name,
+                'status': status,
+                'summary': summary,
+            })
+
+        completed = sum(1 for r in results if r['status'] == 'completed')
+        failed = total - completed
+
+        self.platform.update_progress(task_id, total, 'Pipeline завершён')
+
+        return {
+            'pipeline': label,
+            'total_steps': total,
+            'completed': completed,
+            'failed': failed,
+            'results': results,
+        }
+
+    def build_task_prompt(self, task: dict) -> str:
+        """Fallback prompt для нестандартных задач (используется только в ReAct mode)."""
+        input_data = self.parse_input_data(task)
+        seller_id = task.get('seller_id')
+        parent_task_id = task.get('id', '')
+        product_count = input_data.get('product_count', 0)
 
         return (
-            f"Pipeline: {label}\n"
             f"Seller ID: {seller_id}\n"
             f"Parent Task ID: {parent_task_id}\n"
-            f"Товары: {ids_str}\n"
-            f"Всего товаров: {len(product_ids) if product_ids else 'определить автоматически'}\n\n"
-            f"Шаги:\n{steps_description}\n\n"
-            f"Для КАЖДОГО шага по порядку:\n"
-            f"1. Создай подзадачу: create_subtask(\n"
-            f"     agent_name='...',\n"
-            f"     task_type='...',\n"
-            f"     seller_id={seller_id},\n"
-            f"     title='...',\n"
-            f"     input_data={input_json},\n"
-            f"     parent_task_id='{parent_task_id}'\n"
-            f"   )\n"
-            f"2. Дождись завершения: вызывай get_subtask_status(task_id=...) пока статус не станет 'completed' или 'failed'\n"
-            f"3. Получи результат: get_subtask_result(task_id=...)\n"
-            f"4. Переходи к следующему шагу\n\n"
-            f"ВАЖНО:\n"
-            f"- Выполняй шаги СТРОГО ПО ПОРЯДКУ\n"
-            f"- НЕ запускай следующий шаг пока текущий не завершён\n"
-            f"- Если шаг завершился с ошибкой — продолжай со следующим, но отметь ошибку\n"
-            f"- ОБЯЗАТЕЛЬНО передавай parent_task_id='{parent_task_id}' в каждую подзадачу\n\n"
-            f"Верни итоговый JSON:\n"
-            f"{{\n"
-            f"  pipeline: '{label}',\n"
-            f"  total_steps: {len(steps)},\n"
-            f"  completed: число,\n"
-            f"  failed: число,\n"
-            f"  results: [{{step: 'название', agent: 'имя', status: 'completed'|'failed', summary: '...'}}]\n"
-            f"}}"
+            f"Всего товаров: {product_count}\n\n"
+            f"Задача: {input_data.get('text', 'выполни задачу')}\n\n"
+            f"Создай подзадачи через create_subtask. "
+            f"product_ids подставляются автоматически — передавай только seller_id в input_data.\n"
+            f"Верни JSON с результатами."
         )

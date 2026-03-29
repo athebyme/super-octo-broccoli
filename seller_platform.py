@@ -884,6 +884,18 @@ def admin_system_settings():
         # Обновляем простые настройки
         for setting_key, value in simple_updates.items():
             setting = SystemSettings.query.filter_by(key=setting_key).first()
+
+            # Для agent_* ключей: upsert (создаём если не существует)
+            if not setting and setting_key.startswith('agent_'):
+                if not value:  # Не создаём пустые записи
+                    continue
+                setting = SystemSettings(
+                    key=setting_key,
+                    value_type='string',
+                    description=f'LLM-конфигурация агентов: {setting_key}',
+                )
+                db.session.add(setting)
+
             if setting:
                 old_value = setting.get_value()
                 setting.set_value(value)
@@ -928,6 +940,11 @@ def admin_system_settings():
     # Получаем все настройки
     settings = SystemSettings.query.order_by(SystemSettings.key).all()
 
+    # LLM-конфигурация агентов (agent_* ключи)
+    llm_config = {}
+    for s in SystemSettings.query.filter(SystemSettings.key.like('agent_%')).all():
+        llm_config[s.key] = s.get_value() or ''
+
     # Сводка по агентам
     agents_summary = None
     try:
@@ -959,7 +976,7 @@ def admin_system_settings():
     except Exception:
         pass
 
-    return render_template('admin_system_settings.html', settings=settings, agents_summary=agents_summary)
+    return render_template('admin_system_settings.html', settings=settings, agents_summary=agents_summary, llm_config=llm_config)
 
 
 # ============= API DEBUG CONSOLE =============
@@ -1299,6 +1316,7 @@ def products_list():
         search = request.args.get('search', '').strip()
         # Исправлено: чекбокс отправляет '1', нужна правильная обработка
         active_only = request.args.get('active_only', '').strip() in ['1', 'true', 'True', 'on']
+        disabled_only = request.args.get('disabled_only', '').strip() in ['1', 'true', 'True', 'on']
 
         # Расширенные фильтры
         filter_brand = request.args.get('brand', '').strip()
@@ -1317,6 +1335,8 @@ def products_list():
 
         if active_only:
             query = query.filter_by(is_active=True)
+        elif disabled_only:
+            query = query.filter_by(is_active=False)
 
         if search:
             # Поиск по артикулу, названию или бренду
@@ -1433,6 +1453,7 @@ def products_list():
 
         # Для активных товаров - всегда показываем общее количество активных (без фильтров)
         active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
+        disabled_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=False).count()
 
         # Получаем уникальные бренды и категории для фильтров
         brands = db.session.query(Product.brand).filter(
@@ -1484,6 +1505,7 @@ def products_list():
             active_products=active_products,
             search=search,
             active_only=active_only,
+            disabled_only=disabled_only,
             filter_brand=filter_brand,
             filter_category=filter_category,
             filter_has_stock=filter_has_stock,
@@ -1498,6 +1520,7 @@ def products_list():
             filter_rating_min=filter_rating_min,
             filter_rating_max=filter_rating_max,
             enrichment_map=enrichment_map,
+            disabled_products=disabled_products,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -1745,6 +1768,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     except Exception:
                         db.session.remove()
 
+                # Удаляем мусорные Product с nm_id=0 (болванки от неудачного импорта)
+                try:
+                    zero_nm_products = Product.query.filter(
+                        Product.seller_id == seller.id,
+                        Product.nm_id == 0
+                    ).all()
+                    if zero_nm_products:
+                        for zp in zero_nm_products:
+                            db.session.delete(zp)
+                        db_commit_with_retry(db.session)
+                        app.logger.info(f"🧹 Removed {len(zero_nm_products)} products with nm_id=0 (stale imports)")
+                except Exception as cleanup_err:
+                    app.logger.warning(f"nm_id=0 cleanup failed (non-critical): {cleanup_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
+
                 # Статистика
                 created_count = 0
                 updated_count = 0
@@ -1897,6 +1938,36 @@ def _perform_product_sync_task(seller_id: int, flask_app):
 
                 app.logger.info(f"💾 Background sync saved: {created_count} new, {updated_count} updated")
 
+                # ============ ОТКЛЮЧЕНИЕ КАРТОЧЕК, ПРОПАВШИХ С WB ============
+                # Если карточка была у нас активной, но WB API её не вернул —
+                # значит она удалена/скрыта на WB. Отключаем в нашей системе.
+                disabled_count = 0
+                try:
+                    if seen_nm_ids:  # Только если синк вернул хотя бы одну карточку
+                        local_active = Product.query.filter(
+                            Product.seller_id == seller.id,
+                            Product.is_active == True,
+                            Product.nm_id > 0
+                        ).all()
+
+                        for product in local_active:
+                            if product.nm_id not in seen_nm_ids:
+                                product.is_active = False
+                                disabled_count += 1
+
+                        if disabled_count > 0:
+                            db_commit_with_retry(db.session)
+                            app.logger.info(
+                                f"🔒 Disabled {disabled_count} products not found on WB "
+                                f"(out of {len(local_active)} active, WB returned {len(seen_nm_ids)})"
+                            )
+                except Exception as disable_err:
+                    app.logger.warning(f"⚠️ Failed to disable missing products: {disable_err}")
+                    try:
+                        db.session.rollback()
+                    except Exception:
+                        db.session.remove()
+
                 # ============ СИНХРОНИЗАЦИЯ ОСТАТКОВ ============
                 # Загружаем остатки из Statistics API
                 app.logger.info(f"📦 Background sync: fetching stocks from Statistics API...")
@@ -2047,9 +2118,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     success=True
                 )
 
-                app.logger.info(f"✅ Background sync completed in {elapsed:.1f}s: {created_count} new, {updated_count} updated")
+                app.logger.info(
+                    f"✅ Background sync completed in {elapsed:.1f}s: "
+                    f"{created_count} new, {updated_count} updated, {disabled_count} disabled"
+                )
 
-                # Уведомляем только если появились НОВЫЕ товары (не рутинное обновление)
+                # Уведомляем о новых товарах и отключённых карточках
+                if disabled_count > 0:
+                    create_notification(
+                        seller_id=seller.id,
+                        category='info',
+                        title=f'Синхронизация: {disabled_count} карточек отключено',
+                        message=(
+                            f'{disabled_count} карточек не найдено на WB и были отключены в системе. '
+                            f'Вы можете включить их вручную в списке товаров.'
+                        ),
+                        link='/products',
+                    )
+
                 if created_count > 0:
                     create_notification(
                         seller_id=seller.id,
@@ -5961,6 +6047,10 @@ register_merge_routes(app)
 from routes.safe_prices import register_routes as register_safe_prices_routes
 register_safe_prices_routes(app)
 
+# ============= ЦЕНООБРАЗОВАНИЕ =============
+from routes.pricing import register_pricing_routes
+register_pricing_routes(app)
+
 # ============= РОУТЫ ЗАБЛОКИРОВАННЫХ КАРТОЧЕК И ЭКСПОРТА =============
 from routes.blocked_cards import register_blocked_cards_routes
 register_blocked_cards_routes(app)
@@ -6090,6 +6180,11 @@ def _run_startup_migrations():
         ('content_factories', 'ai_model', 'VARCHAR(100)'),
         # Competitor monitor proxy
         ('competitor_monitor_settings', 'proxy_url', 'VARCHAR(500)'),
+        # WB marketplace prices sync
+        ('products', 'wb_price', 'NUMERIC(10, 2)'),
+        ('products', 'wb_discount', 'INTEGER'),
+        ('products', 'wb_discounted_price', 'NUMERIC(10, 2)'),
+        ('products', 'wb_price_synced_at', 'DATETIME'),
     ]
 
     for table, column, col_type in migrations:

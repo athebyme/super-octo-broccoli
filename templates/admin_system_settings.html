@@ -38,7 +38,7 @@
 
             <div class="px-6 py-4 space-y-6">
                 {% for setting in settings %}
-                {% if not setting.key.startswith('reviews_ai_settings_') %}
+                {% if not setting.key.startswith('reviews_ai_settings_') and not setting.key.startswith('agent_') %}
                 <div class="border-b border-gray-200 pb-4 last:border-0 last:pb-0">
                     <div class="flex items-start justify-between">
                         <div class="flex-1 mr-4">
@@ -76,6 +76,136 @@
                 </div>
                 {% endif %}
                 {% endfor %}
+            </div>
+        </div>
+
+        {# ═══ LLM-МОДЕЛИ АГЕНТОВ ═══ #}
+        <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-900">AI-модели агентов</h2>
+                <p class="text-xs text-gray-500 mt-1">Провайдеры и модели для сервисных AI-агентов. Приоритет: настройки здесь > переменные окружения.</p>
+            </div>
+
+            <div class="px-6 py-4 space-y-6">
+                {# --- Основная модель --- #}
+                <div class="border-b border-gray-200 pb-5">
+                    <h3 class="text-sm font-semibold text-gray-800 mb-3">Основная модель</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Провайдер</label>
+                            <select name="setting_agent_llm_provider"
+                                    class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="">По умолчанию (env)</option>
+                                {% set current_provider = llm_config.get('agent_llm_provider', '') %}
+                                {% for val, label in [('cloudru', 'Cloud.ru (DeepSeek/Qwen)'), ('openrouter', 'OpenRouter'), ('claude', 'Anthropic Claude'), ('gemini', 'Google Gemini'), ('openai_compat', 'OpenAI-совместимый')] %}
+                                <option value="{{ val }}" {% if current_provider == val %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Модель</label>
+                            <input type="text" name="setting_agent_llm_model"
+                                   value="{{ llm_config.get('agent_llm_model', '') }}"
+                                   placeholder="например: deepseek/deepseek-v3.2"
+                                   class="w-full px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                </div>
+
+                {# --- Fallback модель --- #}
+                <div class="border-b border-gray-200 pb-5">
+                    <h3 class="text-sm font-semibold text-gray-800 mb-3">Fallback-модель <span class="font-normal text-gray-500">(для сложных агентов)</span></h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Провайдер</label>
+                            <select name="setting_agent_fallback_provider"
+                                    class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="">Отключён</option>
+                                {% set current_fallback = llm_config.get('agent_fallback_provider', '') %}
+                                {% for val, label in [('claude', 'Anthropic Claude'), ('openrouter', 'OpenRouter'), ('gemini', 'Google Gemini'), ('cloudru', 'Cloud.ru')] %}
+                                <option value="{{ val }}" {% if current_fallback == val %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Модель</label>
+                            <input type="text" name="setting_agent_fallback_model"
+                                   value="{{ llm_config.get('agent_fallback_model', '') }}"
+                                   placeholder="например: claude-haiku-4-5-20251001"
+                                   class="w-full px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                </div>
+
+                {# --- Step Namer (названия шагов) --- #}
+                <div class="border-b border-gray-200 pb-5">
+                    <h3 class="text-sm font-semibold text-gray-800 mb-3">Генератор названий шагов <span class="font-normal text-gray-500">(быстрая модель для UI)</span></h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Провайдер</label>
+                            <select name="setting_agent_step_namer_provider"
+                                    class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                                <option value="">Отключён (статические названия)</option>
+                                {% set current_namer = llm_config.get('agent_step_namer_provider', '') %}
+                                {% for val, label in [('gemini', 'Google Gemini (рекомендуется)'), ('openrouter', 'OpenRouter'), ('cloudru', 'Cloud.ru'), ('claude', 'Anthropic Claude')] %}
+                                <option value="{{ val }}" {% if current_namer == val %}selected{% endif %}>{{ label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Модель</label>
+                            <input type="text" name="setting_agent_step_namer_model"
+                                   value="{{ llm_config.get('agent_step_namer_model', '') }}"
+                                   placeholder="например: gemini-2.0-flash"
+                                   class="w-full px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                </div>
+
+                {# --- API ключи --- #}
+                <div class="pb-2">
+                    <h3 class="text-sm font-semibold text-gray-800 mb-3">API-ключи провайдеров</h3>
+                    <div class="space-y-4">
+                        {% for key_name, key_label, key_placeholder in [
+                            ('agent_openrouter_api_key', 'OpenRouter', 'sk-or-...'),
+                            ('agent_anthropic_api_key', 'Anthropic', 'sk-ant-...'),
+                            ('agent_gemini_api_key', 'Google Gemini', 'AIza...'),
+                            ('agent_llm_api_key', 'Cloud.ru', 'ключ Cloud.ru'),
+                        ] %}
+                        <div class="flex items-center gap-4">
+                            <label class="block text-xs font-medium text-gray-600 w-28 flex-shrink-0">{{ key_label }}</label>
+                            <input type="password" name="setting_{{ key_name }}"
+                                   value="{{ llm_config.get(key_name, '') }}"
+                                   placeholder="{{ key_placeholder }}"
+                                   autocomplete="off"
+                                   class="flex-1 px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                {# --- Параметры генерации --- #}
+                <div class="border-t border-gray-200 pt-5">
+                    <h3 class="text-sm font-semibold text-gray-800 mb-3">Параметры генерации</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Temperature</label>
+                            <input type="number" name="setting_agent_llm_temperature"
+                                   value="{{ llm_config.get('agent_llm_temperature', '') }}"
+                                   placeholder="0.3"
+                                   step="0.1" min="0" max="2"
+                                   class="w-full px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-600 mb-1">Max Tokens</label>
+                            <input type="number" name="setting_agent_llm_max_tokens"
+                                   value="{{ llm_config.get('agent_llm_max_tokens', '') }}"
+                                   placeholder="4096"
+                                   min="256" max="32768"
+                                   class="w-full px-3 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 

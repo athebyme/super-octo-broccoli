@@ -38,7 +38,7 @@ class CharacteristicsFillerAgent(BaseAgent):
 Результат: JSON с полями: characteristics, filled_count, missing, confidence."""
 
     def execute_task(self, task: dict) -> dict:
-        """Автоматически разбивает большие батчи на чанки."""
+        """Batch: tool-assisted с предзагрузкой характеристик категорий. Single: ReAct."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'fill_single')
         if task_type in ('fill_batch',):
@@ -47,9 +47,56 @@ class CharacteristicsFillerAgent(BaseAgent):
                 or input_data.get('imported_product_ids')
                 or []
             )
-            if len(product_ids) > self.max_batch_size:
-                return self._run_chunked_batch(task, product_ids)
+            if len(product_ids) > 1:
+                return self._execute_tool_batch(
+                    task, product_ids, chunk_size=15, max_workers=2,
+                )
         return self._execute_react(task)
+
+    def _prefetch_reference_data(self, products_data: list[dict]) -> dict:
+        """Предзагрузка характеристик для каждой уникальной категории."""
+        subject_ids = set()
+        for p in products_data:
+            sid = p.get('wb_subject_id')
+            if sid:
+                subject_ids.add(sid)
+
+        chars_by_subject = {}
+        for sid in subject_ids:
+            chars = self._prefetch_category_chars(sid)
+            if chars:
+                chars_by_subject[sid] = chars
+
+        return {'chars_by_subject': chars_by_subject}
+
+    def _build_tool_batch_prompt(
+        self, products_data: list[dict], reference_data: dict,
+    ) -> str:
+        """Промпт с данными товаров и предзагруженными характеристиками."""
+        products_json = json.dumps(products_data, ensure_ascii=False, indent=2)
+
+        chars_by_subject = reference_data.get('chars_by_subject', {})
+        chars_parts = []
+        for sid, chars in chars_by_subject.items():
+            chars_json = json.dumps(chars, ensure_ascii=False, indent=2)
+            chars_parts.append(f'subject_id={sid}:\n{chars_json}')
+
+        chars_text = '\n\n'.join(chars_parts) if chars_parts else 'Нет предзагруженных характеристик.'
+
+        return (
+            f"Заполни характеристики для {len(products_data)} товаров.\n\n"
+            f"=== ДАННЫЕ ТОВАРОВ (уже загружены) ===\n{products_json}\n\n"
+            f"=== СХЕМЫ ХАРАКТЕРИСТИК ПО КАТЕГОРИЯМ (уже загружены) ===\n{chars_text}\n\n"
+            f"ВСЕ ДАННЫЕ УЖЕ ЗАГРУЖЕНЫ. НЕ вызывай get_imported_product и get_category_characteristics.\n\n"
+            f"Для КАЖДОГО товара:\n"
+            f"1. Найди его wb_subject_id → возьми схему характеристик выше\n"
+            f"2. Извлеки значения из title/description/brand/category\n"
+            f"3. Вызови update_imported_product(product_id=ID, characteristics=<JSON словарь>)\n\n"
+            f"Формат characteristics: {{\"Цвет\": \"черный\", \"Страна производства\": \"Китай\"}}\n"
+            f"Ключи = ТОЧНЫЕ названия из схемы (поле name).\n"
+            f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара!\n\n"
+            f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
+        )
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

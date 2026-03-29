@@ -52,31 +52,80 @@ class BrandResolverAgent(BaseAgent):
 Результат: JSON с нормализованными брендами."""
 
     def execute_task(self, task: dict) -> dict:
-        """Автоматически разбивает большие батчи на чанки.
-
-        Перед запуском проверяет наличие category (wb_subject_id) у товаров —
-        без категории валидация бренда бессмысленна на любом маркетплейсе.
-        """
+        """Batch: structured output + Python validate_brand. Single: ReAct."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'resolve_single')
 
-        if task_type == 'resolve_single':
-            product_ids = []
-            pid = input_data.get('imported_product_id') or input_data.get('product_id')
-            if pid:
-                product_ids = [pid]
-        elif task_type in ('resolve_batch', ):
+        if task_type in ('resolve_batch',):
             product_ids = (
                 input_data.get('product_ids')
                 or input_data.get('imported_product_ids')
                 or []
             )
-        else:
-            product_ids = []
-
-        if task_type in ('resolve_batch',) and len(product_ids) > self.max_batch_size:
-            return self._run_chunked_batch(task, product_ids)
+            if len(product_ids) > 1:
+                return self._execute_structured_batch(
+                    task, product_ids, chunk_size=30, max_workers=3,
+                )
         return self._execute_react(task)
+
+    # ── Structured Batch hooks ─────────────────────────────────
+
+    def build_structured_prompt(self, products_data: list[dict]) -> str:
+        products_json = json.dumps(products_data, ensure_ascii=False, indent=2)
+        return (
+            f"Нормализуй бренды для {len(products_data)} товаров Wildberries.\n\n"
+            f"=== ТОВАРЫ ===\n{products_json}\n\n"
+            f"Для каждого товара:\n"
+            f"1. Определи бренд из полей brand, title\n"
+            f"2. Нормализуй написание (регистр, транслитерация)\n"
+            f"3. Если бренд неизвестен или не указан — укажи \"Нет бренда\"\n\n"
+            f"Верни JSON: {{\"results\": [{{\"product_id\": ID, \"brand\": \"Каноническое название\"}}]}}"
+        )
+
+    def batch_result_schema(self) -> dict:
+        return {
+            'type': 'object',
+            'properties': {
+                'results': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'product_id': {'type': 'integer'},
+                            'brand': {'type': 'string'},
+                        },
+                        'required': ['product_id', 'brand'],
+                    },
+                },
+            },
+            'required': ['results'],
+        }
+
+    def _postprocess_structured_results(self, results: list[dict]) -> list[dict]:
+        """Валидируем каждый бренд через API (без LLM tool calling)."""
+        for item in results:
+            brand = item.get('brand', '')
+            if not brand or brand == 'Нет бренда':
+                item['brand'] = 'Нет бренда'
+                continue
+            try:
+                check = self.platform.validate_brand(brand)
+                if check.get('found') and check.get('canonical_name'):
+                    item['brand'] = check['canonical_name']
+                elif not check.get('found'):
+                    item['brand'] = 'Нет бренда'
+            except Exception as e:
+                logger.warning(f"Brand validation failed for '{brand}': {e}")
+        return results
+
+    def _map_structured_result_to_updates(self, results: list[dict]) -> list[dict]:
+        updates = []
+        for item in results:
+            pid = item.get('product_id')
+            brand = item.get('brand')
+            if pid and brand:
+                updates.append({'product_id': pid, 'brand': brand})
+        return updates
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

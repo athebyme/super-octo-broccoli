@@ -215,6 +215,32 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             platform_client.update_imported_product(product_id, updates),
     )
 
+    registry.register(
+        name='batch_update_imported_products',
+        description=(
+            'Пакетное обновление нескольких импортированных товаров за один вызов (до 50 шт). '
+            'Каждый элемент массива updates содержит product_id и обновляемые поля. '
+            'Ошибка в одном товаре не блокирует остальные. '
+            'ЗАЩИТА ЦЕН: цена не может быть ниже закупочной + минимальная наценка.'
+        ),
+        parameters={
+            'properties': {
+                'updates': {
+                    'type': 'string',
+                    'description': (
+                        'JSON-массив обновлений. Каждый элемент: '
+                        '{"product_id": int, "title": str, "description": str, ...}. '
+                        'Максимум 50 элементов.'
+                    ),
+                },
+            },
+            'required': ['updates'],
+        },
+        handler=lambda updates: platform_client.batch_update_imported_products(
+            json.loads(updates) if isinstance(updates, str) else updates
+        ),
+    )
+
     # ── Справочник категорий WB ──────────────────────────────────
 
     registry.register(

@@ -38,7 +38,7 @@ class SEOWriterAgent(BaseAgent):
         return None
 
     def execute_task(self, task: dict) -> dict:
-        """Автоматически разбивает большие батчи на чанки."""
+        """Batch: structured output (без tool calling). Single: ReAct."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'seo_single')
         if task_type in ('seo_batch',):
@@ -47,9 +47,91 @@ class SEOWriterAgent(BaseAgent):
                 or input_data.get('imported_product_ids')
                 or []
             )
-            if len(product_ids) > self.max_batch_size:
-                return self._run_chunked_batch(task, product_ids)
+            if len(product_ids) > 1:
+                return self._execute_structured_batch(
+                    task, product_ids, chunk_size=20, max_workers=3,
+                )
         return self._execute_react(task)
+
+    # ── Structured Batch hooks ─────────────────────────────────
+
+    def _prefetch_for_structured_batch(self, product_ids: list[int]) -> list[dict]:
+        """Загружаем brief с описаниями (нужны для генерации SEO)."""
+        all_products = []
+        for i in range(0, len(product_ids), 50):
+            batch = product_ids[i:i + 50]
+            try:
+                products = self.platform.get_imported_products_brief(batch)
+                all_products.extend(products)
+            except Exception as e:
+                logger.warning(f"Failed to prefetch SEO batch {i // 50}: {e}")
+        return all_products
+
+    def build_structured_prompt(self, products_data: list[dict]) -> str:
+        products_json = json.dumps(products_data, ensure_ascii=False, indent=2)
+        return (
+            f"Сгенерируй SEO-оптимизированные заголовки и описания для {len(products_data)} товаров Wildberries.\n\n"
+            f"=== ТОВАРЫ ===\n{products_json}\n\n"
+            f"ПРАВИЛА:\n"
+            f"- Заголовок: до 60 символов, формат «Бренд / Тип / Характеристика»\n"
+            f"- Описание: до 1000 символов, ключевые слова, преимущества, материал\n"
+            f"- Без спецсимволов, рекламных слов, контактов, ссылок\n"
+            f"- Для каждого товара верни product_id, title, description, keywords\n\n"
+            f"Верни JSON: {{\"results\": [{{\"product_id\": ID, \"title\": \"...\", "
+            f"\"description\": \"...\", \"keywords\": [\"...\"]}}]}}"
+        )
+
+    def batch_result_schema(self) -> dict:
+        return {
+            'type': 'object',
+            'properties': {
+                'results': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'product_id': {'type': 'integer'},
+                            'title': {'type': 'string'},
+                            'description': {'type': 'string'},
+                            'keywords': {'type': 'array', 'items': {'type': 'string'}},
+                        },
+                        'required': ['product_id', 'title', 'description'],
+                    },
+                },
+            },
+            'required': ['results'],
+        }
+
+    def _postprocess_structured_results(self, results: list[dict]) -> list[dict]:
+        """Проверяем стоп-слова в Python (без LLM tool calling)."""
+        for item in results:
+            for field in ('title', 'description'):
+                text = item.get(field, '')
+                if not text:
+                    continue
+                try:
+                    check = self.platform.check_prohibited_words(text)
+                    if check.get('has_violations'):
+                        filtered = check.get('filtered_text', text)
+                        if filtered:
+                            item[field] = filtered
+                except Exception as e:
+                    logger.warning(f"Prohibited words check failed: {e}")
+        return results
+
+    def _map_structured_result_to_updates(self, results: list[dict]) -> list[dict]:
+        updates = []
+        for item in results:
+            pid = item.get('product_id')
+            if not pid:
+                continue
+            update = {'product_id': pid}
+            if item.get('title'):
+                update['title'] = item['title']
+            if item.get('description'):
+                update['description'] = item['description']
+            updates.append(update)
+        return updates
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

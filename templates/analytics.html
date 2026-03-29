@@ -1,26 +1,27 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import page_header, stat_card, stat_grid, section_title, badge %}
 
 {% block title %}Аналитика - Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="analyticsPage()">
+<div x-data="analyticsPage()">
 
-    <!-- Header -->
-    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
-        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    {# ── Page Header ── #}
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
             <div>
-                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Аналитика продаж</h1>
-                <p class="mt-1 text-sm text-gray-400">Данные воронки продаж Wildberries</p>
+                <h1 class="sh-page-title">Аналитика продаж</h1>
+                <p class="sh-page-subtitle">Данные воронки продаж Wildberries</p>
             </div>
-            <div class="flex items-center gap-3">
+            <div class="sh-page-actions" style="display:flex;align-items:center;gap:12px">
                 <!-- Refresh button -->
                 <button @click="refreshData()" :disabled="loading"
-                    class="px-3 py-1.5 text-sm rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20 transition-all disabled:opacity-50">
-                    <svg class="w-4 h-4 inline-block mr-1" :class="loading && 'animate-spin'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    class="sh-btn sh-btn--white-outline sh-btn--sm" style="display:inline-flex;align-items:center;gap:6px">
+                    <svg class="w-4 h-4" :class="loading && 'animate-spin'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                     Обновить
                 </button>
                 <!-- Period selector -->
-                <div class="inline-flex rounded-md bg-white/10 p-1">
+                <div style="display:inline-flex;border-radius:6px;background:rgba(255,255,255,0.1);padding:3px">
                     <template x-for="p in periods" :key="p.value">
                         <button @click="changePeriod(p.value)"
                             :class="period === p.value ? 'bg-white shadow-sm text-[#1a1a1a] font-semibold' : 'text-white/80 hover:text-white hover:bg-white/10'"
@@ -31,187 +32,152 @@
         </div>
     </div>
 
+    <div style="max-width:1280px;margin:0 auto;padding:0 24px">
+
     <!-- Loading overlay -->
     <template x-if="loading && !hasData">
-        <div class="flex items-center justify-center py-20">
-            <div class="text-center">
-                <svg class="animate-spin h-10 w-10 text-indigo-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+        <div style="display:flex;align-items:center;justify-content:center;padding:80px 0">
+            <div style="text-align:center">
+                <svg class="animate-spin" style="height:40px;width:40px;color:var(--accent);margin:0 auto 16px" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                 </svg>
-                <p class="text-gray-500">Загрузка аналитики...</p>
+                <p style="color:var(--text-muted)">Загрузка аналитики...</p>
             </div>
         </div>
     </template>
 
     <!-- Error message -->
     <template x-if="error && !hasData">
-        <div class="bg-red-50 border border-red-200 rounded-xl p-6 mb-8">
-            <p class="text-red-700" x-text="error"></p>
-            <button @click="loadData()" class="mt-3 text-sm text-red-600 underline">Попробовать снова</button>
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:24px;margin-bottom:32px">
+            <p style="color:#b91c1c" x-text="error"></p>
+            <button @click="loadData()" style="margin-top:12px;font-size:14px;color:#dc2626;text-decoration:underline">Попробовать снова</button>
         </div>
     </template>
 
     <template x-if="hasData || !loading">
     <div>
-    <!-- KPI Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    {# ── KPI Stat Cards ── #}
+    <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:32px">
         <!-- Revenue -->
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 group hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-indigo-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center justify-between mb-3">
-                <div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
+        <div class="sh-stat-card">
+            <div class="sh-stat-header">
+                <span class="sh-stat-label">Заказы (сумма)</span>
                 <template x-if="kpi.dynamics.revenue !== null && kpi.dynamics.revenue !== 0">
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                        :class="kpi.dynamics.revenue >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                :d="kpi.dynamics.revenue >= 0 ? 'M5 10l7-7m0 0l7 7m-7-7v18' : 'M19 14l-7 7m0 0l-7-7m7 7V3'"/>
-                        </svg>
+                    <span class="sh-stat-trend"
+                        :class="kpi.dynamics.revenue >= 0 ? 'sh-stat-trend--up' : 'sh-stat-trend--down'">
                         <span x-text="(kpi.dynamics.revenue >= 0 ? '+' : '') + kpi.dynamics.revenue.toFixed(1) + '%'"></span>
                     </span>
                 </template>
             </div>
-            <p class="text-sm text-gray-500 mb-1">Заказы (сумма)</p>
-            <p class="text-2xl font-bold text-gray-900" x-text="formatMoney(kpi.revenue)"></p>
-            <div class="mt-3 h-10">
+            <div class="sh-stat-value" x-text="formatMoney(kpi.revenue)"></div>
+            <div style="margin-top:12px;height:40px">
                 <canvas x-ref="sparkRevenue"></canvas>
             </div>
         </div>
 
         <!-- Orders -->
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 group hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-blue-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center justify-between mb-3">
-                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/>
-                    </svg>
-                </div>
+        <div class="sh-stat-card">
+            <div class="sh-stat-header">
+                <span class="sh-stat-label">Заказы (шт.)</span>
                 <template x-if="kpi.dynamics.orders !== null && kpi.dynamics.orders !== 0">
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                        :class="kpi.dynamics.orders >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                :d="kpi.dynamics.orders >= 0 ? 'M5 10l7-7m0 0l7 7m-7-7v18' : 'M19 14l-7 7m0 0l-7-7m7 7V3'"/>
-                        </svg>
+                    <span class="sh-stat-trend"
+                        :class="kpi.dynamics.orders >= 0 ? 'sh-stat-trend--up' : 'sh-stat-trend--down'">
                         <span x-text="(kpi.dynamics.orders >= 0 ? '+' : '') + kpi.dynamics.orders.toFixed(1) + '%'"></span>
                     </span>
                 </template>
             </div>
-            <p class="text-sm text-gray-500 mb-1">Заказы (шт.)</p>
-            <p class="text-2xl font-bold text-gray-900" x-text="kpi.orders.toLocaleString('ru-RU')"></p>
-            <div class="mt-3 h-10">
+            <div class="sh-stat-value" x-text="kpi.orders.toLocaleString('ru-RU')"></div>
+            <div style="margin-top:12px;height:40px">
                 <canvas x-ref="sparkOrders"></canvas>
             </div>
         </div>
 
         <!-- Average Check -->
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 group hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-emerald-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center justify-between mb-3">
-                <div class="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-500 rounded-xl flex items-center justify-center">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-                    </svg>
-                </div>
+        <div class="sh-stat-card">
+            <div class="sh-stat-header">
+                <span class="sh-stat-label">Средний чек</span>
             </div>
-            <p class="text-sm text-gray-500 mb-1">Средний чек</p>
-            <p class="text-2xl font-bold text-gray-900" x-text="formatMoney(kpi.avgCheck)"></p>
-            <div class="mt-3 h-10">
+            <div class="sh-stat-value" x-text="formatMoney(kpi.avgCheck)"></div>
+            <div style="margin-top:12px;height:40px">
                 <canvas x-ref="sparkAvgCheck"></canvas>
             </div>
         </div>
 
         <!-- Buyouts -->
-        <div class="relative overflow-hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-6 group hover:shadow-md transition-shadow">
-            <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-amber-500/10 to-transparent rounded-bl-full"></div>
-            <div class="flex items-center justify-between mb-3">
-                <div class="w-10 h-10 bg-gradient-to-br from-amber-500 to-orange-500 rounded-xl flex items-center justify-center">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
+        <div class="sh-stat-card">
+            <div class="sh-stat-header">
+                <span class="sh-stat-label">Выкупы</span>
                 <template x-if="kpi.dynamics.buyouts !== null && kpi.dynamics.buyouts !== 0">
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                        :class="kpi.dynamics.buyouts >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                :d="kpi.dynamics.buyouts >= 0 ? 'M5 10l7-7m0 0l7 7m-7-7v18' : 'M19 14l-7 7m0 0l-7-7m7 7V3'"/>
-                        </svg>
+                    <span class="sh-stat-trend"
+                        :class="kpi.dynamics.buyouts >= 0 ? 'sh-stat-trend--up' : 'sh-stat-trend--down'">
                         <span x-text="(kpi.dynamics.buyouts >= 0 ? '+' : '') + kpi.dynamics.buyouts.toFixed(1) + '%'"></span>
                     </span>
                 </template>
             </div>
-            <p class="text-sm text-gray-500 mb-1">Выкупы</p>
-            <p class="text-2xl font-bold text-gray-900" x-text="kpi.buyouts.toLocaleString('ru-RU')"></p>
-            <div class="mt-3 h-10">
+            <div class="sh-stat-value" x-text="kpi.buyouts.toLocaleString('ru-RU')"></div>
+            <div style="margin-top:12px;height:40px">
                 <canvas x-ref="sparkBuyouts"></canvas>
             </div>
         </div>
     </div>
 
-    <!-- Conversion funnel -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 text-center">
-            <p class="text-sm text-gray-500 mb-1">Переходы в карточку</p>
-            <p class="text-xl font-bold text-gray-900" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></p>
-            <div class="mt-2 flex items-center justify-center gap-1 text-xs text-indigo-600">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+    {# ── Conversion Funnel ── #}
+    <div class="sh-stat-grid sh-stat-grid--3" style="margin-bottom:32px">
+        <div class="sh-stat-card" style="text-align:center">
+            <div class="sh-stat-label" style="margin-bottom:4px">Переходы в карточку</div>
+            <div class="sh-stat-value" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></div>
+            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--accent)">
+                <svg style="width:12px;height:12px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                 <span x-text="kpi.conversions.addToCartPercent.toFixed(1) + '% в корзину'"></span>
             </div>
         </div>
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 text-center">
-            <p class="text-sm text-gray-500 mb-1">Добавили в корзину</p>
-            <p class="text-xl font-bold text-gray-900" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></p>
-            <div class="mt-2 flex items-center justify-center gap-1 text-xs text-indigo-600">
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+        <div class="sh-stat-card" style="text-align:center">
+            <div class="sh-stat-label" style="margin-bottom:4px">Добавили в корзину</div>
+            <div class="sh-stat-value" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></div>
+            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--accent)">
+                <svg style="width:12px;height:12px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                 <span x-text="kpi.conversions.cartToOrderPercent.toFixed(1) + '% в заказ'"></span>
             </div>
         </div>
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 text-center">
-            <p class="text-sm text-gray-500 mb-1">Процент выкупа</p>
-            <p class="text-xl font-bold text-gray-900" x-text="kpi.conversions.buyoutPercent.toFixed(1) + '%'"></p>
-            <div class="mt-2 flex items-center justify-center gap-1 text-xs text-gray-400">
+        <div class="sh-stat-card" style="text-align:center">
+            <div class="sh-stat-label" style="margin-bottom:4px">Процент выкупа</div>
+            <div class="sh-stat-value" x-text="kpi.conversions.buyoutPercent.toFixed(1) + '%'"></div>
+            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--text-muted)">
                 <span x-text="'Отмены: ' + kpi.cancels.toLocaleString('ru-RU')"></span>
             </div>
         </div>
     </div>
 
-    <!-- Charts row -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+    {# ── Charts Row ── #}
+    <div style="display:grid;grid-template-columns:1fr;gap:24px;margin-bottom:32px" class="lg:grid-cols-3">
         <!-- Sales chart (2 cols) -->
-        <div class="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
-            <svg class="absolute top-0 right-0 w-32 h-32 opacity-[0.03]" viewBox="0 0 120 120" fill="none"><path d="M10 100L30 60L55 75L80 30L110 50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="30" cy="60" r="5" fill="currentColor"/><circle cx="55" cy="75" r="5" fill="currentColor"/><circle cx="80" cy="30" r="5" fill="currentColor"/><circle cx="110" cy="50" r="5" fill="currentColor"/></svg>
-            <div class="flex items-center justify-between mb-6">
-                <h2 class="text-lg font-semibold text-gray-900">Динамика продаж</h2>
-                <div class="flex items-center gap-4 text-xs">
-                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-indigo-500"></span> Заказы (руб)</span>
-                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-emerald-400"></span> Заказы (шт)</span>
+        <div class="sh-card lg:col-span-2" style="position:relative;overflow:hidden;padding:24px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
+                <h2 style="font-family:var(--font-display);font-style:italic;font-size:1.25rem;color:var(--text)">Динамика продаж</h2>
+                <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-secondary)">
+                    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:#6366f1"></span> Заказы (руб)</span>
+                    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:#34d399"></span> Заказы (шт)</span>
                 </div>
             </div>
-            <div class="h-72">
+            <div style="height:288px">
                 <canvas x-ref="salesChart"></canvas>
             </div>
             <template x-if="!dailyData.length && !loadingDaily">
-                <div class="absolute inset-0 flex items-center justify-center bg-white/80">
-                    <div class="text-center">
+                <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.8);border-radius:inherit">
+                    <div style="text-align:center">
                         <template x-if="dailyError">
-                            <p class="text-sm text-red-500 mb-3" x-text="dailyError"></p>
+                            <p style="font-size:14px;color:#ef4444;margin-bottom:12px" x-text="dailyError"></p>
                         </template>
-                        <button @click="loadDailyData()" class="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm hover:bg-indigo-600 transition">
+                        <button @click="loadDailyData()" class="sh-btn sh-btn--primary sh-btn--sm">
                             <span x-text="dailyError ? 'Попробовать снова' : 'Загрузить данные по дням'"></span>
                         </button>
                     </div>
                 </div>
             </template>
             <template x-if="loadingDaily">
-                <div class="absolute inset-0 flex items-center justify-center bg-white/80">
-                    <svg class="animate-spin h-8 w-8 text-indigo-500" fill="none" viewBox="0 0 24 24">
+                <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.8);border-radius:inherit">
+                    <svg class="animate-spin" style="height:32px;width:32px;color:var(--accent)" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                     </svg>
@@ -220,126 +186,118 @@
         </div>
 
         <!-- Conversions donut -->
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-6">Воронка конверсий</h2>
-            <div class="h-56 flex items-center justify-center">
+        <div class="sh-card" style="padding:24px">
+            <h2 style="font-family:var(--font-display);font-style:italic;font-size:1.25rem;color:var(--text);margin-bottom:24px">Воронка конверсий</h2>
+            <div style="height:224px;display:flex;align-items:center;justify-content:center">
                 <canvas x-ref="funnelDonut"></canvas>
             </div>
-            <div class="mt-4 space-y-2">
-                <div class="flex items-center justify-between text-sm">
-                    <span class="flex items-center gap-2">
-                        <span class="w-3 h-3 rounded-full bg-indigo-500"></span>
-                        <span class="text-gray-600">Просмотры</span>
+            <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                    <span style="display:flex;align-items:center;gap:8px">
+                        <span style="width:12px;height:12px;border-radius:50%;background:#6366f1"></span>
+                        <span style="color:var(--text-secondary)">Просмотры</span>
                     </span>
-                    <span class="font-medium text-gray-900" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></span>
+                    <span style="font-weight:500;color:var(--text)" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></span>
                 </div>
-                <div class="flex items-center justify-between text-sm">
-                    <span class="flex items-center gap-2">
-                        <span class="w-3 h-3 rounded-full bg-blue-500"></span>
-                        <span class="text-gray-600">В корзину</span>
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                    <span style="display:flex;align-items:center;gap:8px">
+                        <span style="width:12px;height:12px;border-radius:50%;background:#3b82f6"></span>
+                        <span style="color:var(--text-secondary)">В корзину</span>
                     </span>
-                    <span class="font-medium text-gray-900" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></span>
+                    <span style="font-weight:500;color:var(--text)" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></span>
                 </div>
-                <div class="flex items-center justify-between text-sm">
-                    <span class="flex items-center gap-2">
-                        <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
-                        <span class="text-gray-600">Заказы</span>
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                    <span style="display:flex;align-items:center;gap:8px">
+                        <span style="width:12px;height:12px;border-radius:50%;background:#10b981"></span>
+                        <span style="color:var(--text-secondary)">Заказы</span>
                     </span>
-                    <span class="font-medium text-gray-900" x-text="kpi.orders.toLocaleString('ru-RU')"></span>
+                    <span style="font-weight:500;color:var(--text)" x-text="kpi.orders.toLocaleString('ru-RU')"></span>
                 </div>
-                <div class="flex items-center justify-between text-sm">
-                    <span class="flex items-center gap-2">
-                        <span class="w-3 h-3 rounded-full bg-amber-500"></span>
-                        <span class="text-gray-600">Выкупы</span>
+                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                    <span style="display:flex;align-items:center;gap:8px">
+                        <span style="width:12px;height:12px;border-radius:50%;background:#f59e0b"></span>
+                        <span style="color:var(--text-secondary)">Выкупы</span>
                     </span>
-                    <span class="font-medium text-gray-900" x-text="kpi.buyouts.toLocaleString('ru-RU')"></span>
+                    <span style="font-weight:500;color:var(--text)" x-text="kpi.buyouts.toLocaleString('ru-RU')"></span>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Bottom row -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    {# ── Bottom Row ── #}
+    <div style="display:grid;grid-template-columns:1fr;gap:24px" class="lg:grid-cols-2">
         <!-- Top Products -->
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
-            <svg class="absolute -right-4 -top-4 w-24 h-24 opacity-[0.04]" viewBox="0 0 100 100" fill="none"><path d="M50 5L60 35H95L67 55L77 85L50 67L23 85L33 55L5 35H40Z" fill="currentColor"/></svg>
-            <div class="flex items-center gap-3 mb-6">
-                <div class="w-8 h-8 bg-gradient-to-br from-amber-400 to-orange-500 rounded-lg flex items-center justify-center">
-                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
-                </div>
-                <h2 class="text-lg font-semibold text-gray-900">Топ товаров по заказам</h2>
+        <div class="sh-card" style="padding:24px">
+            <div class="sh-section-title" style="margin-bottom:20px">
+                <span>Топ товаров по заказам</span>
             </div>
-            <div class="space-y-4">
+            <div style="display:flex;flex-direction:column;gap:16px">
                 <template x-for="(product, idx) in topProducts" :key="idx">
                     <div>
-                        <div class="flex items-center justify-between mb-1.5">
-                            <div class="flex items-center gap-3">
-                                <span class="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-bold flex items-center justify-center" x-text="idx + 1"></span>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                            <div style="display:flex;align-items:center;gap:12px">
+                                <span style="width:24px;height:24px;border-radius:6px;background:var(--bg);color:var(--accent);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center" x-text="idx + 1"></span>
                                 <div>
-                                    <span class="text-sm font-medium text-gray-800 truncate max-w-[200px] block" x-text="product.title || product.vendorCode"></span>
-                                    <span class="text-xs text-gray-400" x-text="product.brandName"></span>
+                                    <span style="font-size:14px;font-weight:500;color:var(--text);display:block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="product.title || product.vendorCode"></span>
+                                    <span style="font-size:12px;color:var(--text-muted)" x-text="product.brandName"></span>
                                 </div>
                             </div>
-                            <div class="text-right">
-                                <span class="text-sm font-semibold text-gray-900 block" x-text="formatMoney(product.orderSum)"></span>
-                                <span class="text-xs text-gray-400" x-text="product.orderCount + ' шт.'"></span>
+                            <div style="text-align:right">
+                                <span style="font-size:14px;font-weight:600;color:var(--text);display:block" x-text="formatMoney(product.orderSum)"></span>
+                                <span style="font-size:12px;color:var(--text-muted)" x-text="product.orderCount + ' шт.'"></span>
                             </div>
                         </div>
-                        <div class="w-full bg-gray-100 rounded-full h-2">
-                            <div class="h-2 rounded-full bg-indigo-500 transition-all duration-500"
+                        <div style="width:100%;background:var(--bg);border-radius:9999px;height:8px">
+                            <div style="height:8px;border-radius:9999px;background:var(--accent);transition:width 0.5s"
                                 :style="'width:' + (topProducts.length ? (product.orderSum / topProducts[0].orderSum * 100) : 0) + '%'"></div>
                         </div>
                     </div>
                 </template>
                 <template x-if="!topProducts.length">
-                    <p class="text-sm text-gray-400 text-center py-4">Нет данных за выбранный период</p>
+                    <p style="font-size:14px;color:var(--text-muted);text-align:center;padding:16px 0">Нет данных за выбранный период</p>
                 </template>
             </div>
         </div>
 
         <!-- Product Analytics Table -->
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
-            <svg class="absolute -right-2 -top-2 w-20 h-20 opacity-[0.04]" viewBox="0 0 80 80" fill="none"><rect x="10" y="10" width="60" height="60" rx="8" stroke="currentColor" stroke-width="3"/><path d="M25 35h30M25 45h20M25 55h25" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
-            <div class="flex items-center gap-3 mb-6">
-                <div class="w-8 h-8 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-lg flex items-center justify-center">
-                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                </div>
-                <h2 class="text-lg font-semibold text-gray-900">Детализация по товарам</h2>
+        <div class="sh-card" style="padding:24px">
+            <div class="sh-section-title" style="margin-bottom:20px">
+                <span>Детализация по товарам</span>
             </div>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
+            <div class="sh-table-wrap">
+                <table class="sh-table">
                     <thead>
-                        <tr class="text-left text-gray-500 border-b border-gray-100">
-                            <th class="pb-3 font-medium">Товар</th>
-                            <th class="pb-3 font-medium text-right">Заказы</th>
-                            <th class="pb-3 font-medium text-right">Выкупы</th>
-                            <th class="pb-3 font-medium text-right">Выкуп %</th>
+                        <tr>
+                            <th>Товар</th>
+                            <th style="text-align:right">Заказы</th>
+                            <th style="text-align:right">Выкупы</th>
+                            <th style="text-align:right">Выкуп %</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-50">
+                    <tbody>
                         <template x-for="(item, idx) in productsList" :key="idx">
-                            <tr class="hover:bg-gray-50/50">
-                                <td class="py-3">
-                                    <p class="font-medium text-gray-800 truncate max-w-[180px]" x-text="item.title || item.vendorCode"></p>
-                                    <p class="text-xs text-gray-400" x-text="item.brandName + ' | ' + item.vendorCode"></p>
+                            <tr>
+                                <td>
+                                    <p style="font-weight:500;color:var(--text);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="item.title || item.vendorCode"></p>
+                                    <p style="font-size:12px;color:var(--text-muted)" x-text="item.brandName + ' | ' + item.vendorCode"></p>
                                 </td>
-                                <td class="py-3 text-right">
-                                    <span class="font-medium text-gray-900" x-text="formatMoney(item.ordersSum)"></span>
-                                    <p class="text-xs text-gray-400" x-text="item.ordersCount + ' шт.'"></p>
+                                <td style="text-align:right">
+                                    <span style="font-weight:500;color:var(--text)" x-text="formatMoney(item.ordersSum)"></span>
+                                    <p style="font-size:12px;color:var(--text-muted)" x-text="item.ordersCount + ' шт.'"></p>
                                 </td>
-                                <td class="py-3 text-right">
-                                    <span class="font-medium text-gray-900" x-text="formatMoney(item.buyoutsSum)"></span>
-                                    <p class="text-xs text-gray-400" x-text="item.buyoutsCount + ' шт.'"></p>
+                                <td style="text-align:right">
+                                    <span style="font-weight:500;color:var(--text)" x-text="formatMoney(item.buyoutsSum)"></span>
+                                    <p style="font-size:12px;color:var(--text-muted)" x-text="item.buyoutsCount + ' шт.'"></p>
                                 </td>
-                                <td class="py-3 text-right">
-                                    <span class="text-xs px-2 py-0.5 rounded-full font-medium"
-                                        :class="item.conversions.buyoutPercent >= 50 ? 'bg-green-50 text-green-700' : item.conversions.buyoutPercent >= 30 ? 'bg-yellow-50 text-yellow-700' : 'bg-red-50 text-red-600'"
+                                <td style="text-align:right">
+                                    <span class="sh-badge sh-badge--sm"
+                                        :class="item.conversions.buyoutPercent >= 50 ? 'sh-badge--green' : item.conversions.buyoutPercent >= 30 ? 'sh-badge--yellow' : 'sh-badge--red'"
                                         x-text="item.conversions.buyoutPercent.toFixed(0) + '%'"></span>
                                 </td>
                             </tr>
                         </template>
                         <template x-if="!productsList.length">
-                            <tr><td colspan="4" class="py-6 text-center text-gray-400">Нет данных</td></tr>
+                            <tr><td colspan="4" style="text-align:center;padding:24px;color:var(--text-muted)">Нет данных</td></tr>
                         </template>
                     </tbody>
                 </table>
@@ -349,12 +307,14 @@
 
     <!-- Data age indicator -->
     <template x-if="dataAge">
-        <div class="mt-6 text-center text-xs text-gray-400">
+        <div style="margin-top:24px;text-align:center;font-size:12px;color:var(--text-muted)">
             <span x-text="'Данные обновлены: ' + dataAge"></span>
         </div>
     </template>
     </div>
     </template>
+
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>

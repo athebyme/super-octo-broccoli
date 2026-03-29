@@ -194,6 +194,28 @@ class PlatformClient:
                              json={'product_ids': product_ids})
         return data.get('products', [])
 
+    def batch_update_imported_products(self, updates: list[dict]) -> dict:
+        """Пакетное обновление товаров. Каждый элемент: {product_id: int, ...поля}.
+
+        Автоматически разбивает на пачки по 50 (лимит API).
+        Возвращает: {updated: int, failed: int, results: [{product_id, status, error?}]}.
+        """
+        all_results = []
+        total_updated = 0
+        total_failed = 0
+        for i in range(0, len(updates), 50):
+            batch = updates[i:i + 50]
+            resp = self._request('PATCH', '/imported-products/batch',
+                                 json={'updates': batch})
+            all_results.extend(resp.get('results', []))
+            total_updated += resp.get('updated', 0)
+            total_failed += resp.get('failed', 0)
+        return {
+            'updated': total_updated,
+            'failed': total_failed,
+            'results': all_results,
+        }
+
     # ── Справочник категорий ──────────────────────────────────────
 
     def search_categories(self, query: str, limit: int = 20) -> dict:
@@ -258,6 +280,23 @@ class PlatformClient:
         return self._request('GET', f'/sellers/{seller_id}/pricing')
 
     # ── Задачи (для оркестратора) ────────────────────────────────
+
+    # ── Конфигурация LLM из платформы ────────────────────────────
+
+    def get_llm_config(self) -> dict:
+        """Получает LLM-конфигурацию из платформы (SystemSettings).
+
+        Возвращает dict с env-ключами: {LLM_PROVIDER: 'openrouter', ...}.
+        Пустой dict если платформа недоступна.
+        """
+        try:
+            data = self._request('GET', '/config/llm')
+            return data.get('config', {})
+        except Exception as e:
+            logger.debug(f"Failed to fetch LLM config from platform: {e}")
+            return {}
+
+    # ── Подзадачи оркестратора ─────────────────────────────────────
 
     def create_subtask(self, agent_name: str, task_type: str,
                        seller_id: int, title: str,

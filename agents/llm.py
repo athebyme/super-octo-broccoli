@@ -502,6 +502,39 @@ class CloudRuLLM(OpenAICompatLLM):
         logger.info(f"Cloud.ru LLM initialized: {self.model}")
 
 
+class OpenRouterLLM(OpenAICompatLLM):
+    """
+    OpenRouter — единый API для 300+ моделей (DeepSeek, Claude, Gemini, GPT-4o, Llama и др.)
+
+    Поддерживает OpenAI-совместимый формат с доп. заголовками.
+    https://openrouter.ai/docs
+    """
+
+    def __init__(self, config: AgentConfig = None):
+        cfg = config or AgentConfig
+        from openai import OpenAI
+
+        self.cfg = cfg
+        self.api_key = cfg.OPENROUTER_API_KEY
+        self.base_url = 'https://openrouter.ai/api/v1'
+        self.model = cfg.OPENROUTER_MODEL
+
+        if not self.api_key:
+            raise LLMProviderError("OPENROUTER_API_KEY не задан")
+        if not self.model:
+            raise LLMProviderError("OPENROUTER_MODEL не задан")
+
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            default_headers={
+                'HTTP-Referer': 'https://seller-platform.tech',
+                'X-Title': 'Seller Hub Agents',
+            },
+        )
+        logger.info(f"OpenRouter LLM initialized: {self.model}")
+
+
 # ── Фабрика ───────────────────────────────────────────────────────
 
 def _create_by_provider(provider: str, config: AgentConfig,
@@ -524,6 +557,11 @@ def _create_by_provider(provider: str, config: AgentConfig,
         if model_override:
             llm.model = model_override
         return llm
+    elif provider == 'openrouter':
+        llm = OpenRouterLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     elif provider == 'openai_compat':
         llm = OpenAICompatLLM(config)
         if model_override:
@@ -532,7 +570,7 @@ def _create_by_provider(provider: str, config: AgentConfig,
     else:
         raise ValueError(
             f"Unknown LLM provider: {provider}. "
-            f"Use 'claude', 'gemini', 'cloudru', or 'openai_compat'."
+            f"Use 'claude', 'gemini', 'cloudru', 'openrouter', or 'openai_compat'."
         )
 
 
@@ -557,3 +595,21 @@ def create_fallback_llm(config: AgentConfig = None) -> BaseLLM | None:
 
     logger.info(f"Creating fallback LLM: {fallback_provider} / {cfg.FALLBACK_LLM_MODEL}")
     return _create_by_provider(fallback_provider, cfg, cfg.FALLBACK_LLM_MODEL or None)
+
+
+def create_step_namer_llm(config: AgentConfig = None) -> BaseLLM | None:
+    """
+    Создаёт быструю модель для генерации креативных названий шагов.
+
+    Возвращает None если STEP_NAMER_PROVIDER не задан.
+    Использует самую дешёвую/быструю доступную модель.
+    """
+    cfg = config or AgentConfig
+    provider = cfg.STEP_NAMER_PROVIDER
+
+    if not provider:
+        return None
+
+    model = cfg.STEP_NAMER_MODEL
+    logger.info(f"Creating step namer LLM: {provider} / {model}")
+    return _create_by_provider(provider, cfg, model or None)

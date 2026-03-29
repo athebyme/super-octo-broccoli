@@ -71,6 +71,10 @@ class WBProductImporter:
     def __init__(self, seller: Seller):
         self.seller = seller
         self.api_client = WildberriesAPIClient(seller.wb_api_key) if seller.wb_api_key else None
+        # Кеш API-ответов для батчевых операций (сброс при новом экземпляре)
+        self._category_sizes_cache = {}   # subject_id → bool
+        self._chars_config_cache = {}     # subject_id → list
+        self._brand_cache = {}            # (raw_brand, subject_id) → resolved_name
 
     def import_product_to_wb(self, imported_product: ImportedProduct) -> Tuple[bool, Optional[str], Optional[Product]]:
         """
@@ -591,10 +595,11 @@ class WBProductImporter:
                 product.is_active = True
                 product.last_sync = datetime.utcnow()
                 logger.info(f"Обновлена существующая запись Product ID={product.id} для nmID={nm_id} (без дублирования)")
-            else:
+            elif nm_id:
+                # Создаём Product только если получен валидный nmID
                 product = Product(
                     seller_id=self.seller.id,
-                    nm_id=nm_id or 0,
+                    nm_id=nm_id,
                     vendor_code=vendor_code,
                     title=imported_product.title,
                     brand=imported_product.brand,
@@ -611,6 +616,22 @@ class WBProductImporter:
                     last_sync=datetime.utcnow()
                 )
                 db.session.add(product)
+            else:
+                # nmID не получен — НЕ создаём Product-болванку с nm_id=0.
+                # Карточка создана на WB, но nmID ещё не доступен.
+                # Product будет создан автоматически при следующей синхронизации.
+                logger.warning(
+                    f"nmID не получен для {imported_product.external_id} (vendor_code={vendor_code}). "
+                    f"Product не создан — будет подхвачен при синхронизации."
+                )
+                imported_product.import_status = 'imported_pending_sync'
+                imported_product.imported_at = datetime.utcnow()
+                imported_product.import_error = (
+                    'Карточка создана на WB, но nmID не получен. '
+                    'Product будет создан при следующей синхронизации.'
+                )
+                db.session.commit()
+                return True, None, None
 
             db.session.flush()  # Получить ID
 
@@ -639,6 +660,663 @@ class WBProductImporter:
             db.session.commit()
 
             return False, error_msg, None
+
+    # ==================================================================
+    # BATCH IMPORT — батчевая отправка карточек (1 API-call на N карточек)
+    # ==================================================================
+
+    def _prepare_card_data(self, imported_product: ImportedProduct) -> Dict:
+        """
+        Подготовка данных карточки для WB API.
+        Использует кеш для API-ответов (chars config, sizes, directories).
+
+        Returns:
+            dict с ключами: vendor_code, subject_id, variant, wb_sizes,
+            characteristics, media_urls, dimensions, brand, barcodes
+        """
+        import time as _t
+        _t0 = _t.time()
+
+        # Парсим данные
+        colors = json.loads(imported_product.colors) if imported_product.colors else []
+        sizes_data = json.loads(imported_product.sizes) if imported_product.sizes else {}
+        barcodes = json.loads(imported_product.barcodes) if imported_product.barcodes else []
+        materials = json.loads(imported_product.materials) if imported_product.materials else []
+        photo_urls = json.loads(imported_product.photo_urls) if imported_product.photo_urls else []
+
+        # Определяем размеры
+        has_real_sizes = False
+        sizes_list = []
+        if isinstance(sizes_data, dict):
+            sizes_list = sizes_data.get('simple_sizes', [])
+            if sizes_list:
+                has_real_sizes = True
+            elif sizes_data.get('dimensions'):
+                has_real_sizes = False
+            elif sizes_data.get('raw'):
+                raw = sizes_data['raw']
+                if any(w in raw.lower() for w in ['см', 'мм', 'длина', 'диаметр', 'ширина', 'вес', 'объем']):
+                    has_real_sizes = False
+                else:
+                    norm_raw = _normalize_wb_size(raw)
+                    if norm_raw:
+                        has_real_sizes = True
+                        sizes_list = [norm_raw]
+        elif isinstance(sizes_data, list):
+            sizes_list = sizes_data
+            has_real_sizes = len(sizes_list) > 0
+
+        # Артикул
+        from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
+        pattern, sup_code, supplier_obj = resolve_vendor_code_settings(
+            self.seller.id, imported_product.supplier_id
+        )
+        vendor_code = generate_vendor_code(
+            pattern=pattern, supplier_code=sup_code,
+            external_id=imported_product.external_id,
+            external_vendor_code=imported_product.external_vendor_code,
+            supplier=supplier_obj, fallback_id=imported_product.id,
+            fallback_seller_id=self.seller.id,
+        )
+
+        # Размеры для WB API
+        category_has_sizes = self._category_supports_sizes(imported_product.wb_subject_id)
+        if has_real_sizes and sizes_list and category_has_sizes:
+            normalized = [_normalize_wb_size(str(s)) for s in sizes_list]
+            sizes_list = [s for s in normalized if s]
+            has_real_sizes = len(sizes_list) > 0
+
+        wb_sizes = []
+        if has_real_sizes and sizes_list and category_has_sizes:
+            for idx, size_val in enumerate(sizes_list):
+                barcode = barcodes[idx] if idx < len(barcodes) else (barcodes[0] if barcodes else '')
+                wb_sizes.append({
+                    'techSize': str(size_val), 'wbSize': str(size_val),
+                    'price': 0, 'skus': [barcode] if barcode else []
+                })
+        else:
+            if barcodes:
+                for barcode in barcodes:
+                    wb_sizes.append({'price': 0, 'skus': [barcode]})
+            else:
+                wb_sizes.append({'price': 0, 'skus': []})
+        if not wb_sizes:
+            wb_sizes.append({'price': 0, 'skus': []})
+
+        # Характеристики
+        _t1 = _t.time()
+        characteristics = self._build_wb_characteristics(imported_product)
+        _t2 = _t.time()
+
+        # Медиа
+        from routes.photos import generate_public_photo_urls
+        media_urls = generate_public_photo_urls(imported_product)
+        _t2b = _t.time()
+
+        # Габариты
+        from routes.product_defaults import get_defaults_for_product
+        _defaults = get_defaults_for_product(self.seller.id, imported_product.wb_subject_id)
+        dimensions = {
+            'length': int(_defaults.get('length', 10)),
+            'width': int(_defaults.get('width', 10)),
+            'height': int(_defaults.get('height', 5)),
+            'weightBrutto': round(float(_defaults.get('weightBrutto', 0.1)), 3)
+        }
+        _t2c = _t.time()
+
+        # Бренд
+        product_brand = self._resolve_brand_for_wb(imported_product)
+        _t3 = _t.time()
+
+        logger.warning(
+            f"TIMING _prepare({imported_product.external_id}): "
+            f"parse+vc={_t1-_t0:.1f}s chars={_t2-_t1:.1f}s "
+            f"photos={_t2b-_t2:.1f}s defaults={_t2c-_t2b:.1f}s "
+            f"brand={_t3-_t2c:.1f}s TOTAL={_t3-_t0:.1f}s"
+        )
+
+        # Фильтрация запрещённых слов
+        safe_title = filter_prohibited_words(
+            imported_product.title[:60] if imported_product.title else 'Товар'
+        )
+        if len(safe_title) > 60:
+            safe_title = safe_title[:60].rsplit(' ', 1)[0] or safe_title[:60]
+        safe_description = filter_prohibited_words(
+            imported_product.description or imported_product.title or 'Описание товара'
+        )
+
+        # Variant для API
+        variant = {
+            'vendorCode': vendor_code,
+            'title': safe_title,
+            'description': safe_description,
+            'brand': product_brand,
+            'dimensions': dimensions,
+            'sizes': wb_sizes,
+            'characteristics': characteristics,
+        }
+
+        # Pre-flight валидация
+        if not vendor_code:
+            raise Exception("Артикул продавца (vendorCode) не задан")
+        if not imported_product.wb_subject_id:
+            raise Exception("Категория WB (subjectID) не задана")
+        if not product_brand:
+            raise Exception("Бренд не определён")
+
+        return {
+            'vendor_code': vendor_code,
+            'subject_id': imported_product.wb_subject_id,
+            'variant': variant,
+            'wb_sizes': wb_sizes,
+            'characteristics': characteristics,
+            'media_urls': media_urls,
+            'dimensions': dimensions,
+            'brand': product_brand,
+            'barcodes': barcodes,
+            'safe_title': safe_title,
+            'safe_description': safe_description,
+        }
+
+    def _calculate_price_data(self, nm_id: int, imported_product: ImportedProduct) -> Optional[Dict]:
+        """
+        Рассчитать данные цены для батч-загрузки (без API-вызова).
+
+        Returns:
+            dict {nmID, price, discount} для upload_prices_v2, или None
+        """
+        # Приоритет 1: уже рассчитанные цены
+        if imported_product.calculated_price and imported_product.calculated_price > 0:
+            final_price = int(imported_product.calculated_price)
+            price_before = int(imported_product.calculated_price_before_discount or final_price * 1.55)
+            discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
+            return {
+                'nmID': nm_id, 'price': price_before, 'discount': discount_pct,
+                '_final': final_price,
+                '_discount_price': imported_product.calculated_discount_price,
+                '_price_before': price_before,
+            }
+
+        # Приоритет 2: расчёт из supplier_price + PricingSettings
+        supplier_price = imported_product.supplier_price
+        if not supplier_price or supplier_price <= 0:
+            return None
+
+        pricing_settings = PricingSettings.query.filter_by(seller_id=self.seller.id).first()
+        if not pricing_settings or not pricing_settings.is_enabled:
+            # Fallback: уже рассчитанные
+            if imported_product.calculated_price and imported_product.calculated_price > 0:
+                final_price = int(imported_product.calculated_price)
+                price_before = int(imported_product.calculated_price_before_discount or final_price * 1.55)
+                discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
+                return {
+                    'nmID': nm_id, 'price': price_before, 'discount': discount_pct,
+                    '_final': final_price, '_discount_price': None, '_price_before': price_before,
+                }
+            return None
+
+        try:
+            result = calculate_price(
+                purchase_price=float(supplier_price),
+                settings=pricing_settings,
+                product_id=imported_product.id,
+            )
+            if not result:
+                return None
+            final_price = int(result['final_price'])
+            price_before = int(result.get('price_before_discount', final_price * 1.55))
+            discount_pct = max(0, min(99, int((1 - final_price / price_before) * 100))) if price_before > 0 else 0
+            return {
+                'nmID': nm_id, 'price': price_before, 'discount': discount_pct,
+                '_final': final_price,
+                '_discount_price': result.get('discount_price'),
+                '_price_before': price_before,
+            }
+        except Exception as e:
+            logger.warning(f"Ошибка расчёта цены для {imported_product.external_id}: {e}")
+            return None
+
+    def batch_import_products_to_wb(self, imported_products: List[ImportedProduct],
+                                     progress_callback=None) -> List[Dict]:
+        """
+        Батчевый импорт товаров в WB.
+
+        Фазы:
+        1. Подготовка данных (локально)
+        2. Батч-создание карточек (1 API-вызов)
+        3. Пулинг nmID (параллельно)
+        4. Батч-установка цен (1 API-вызов)
+        5. Параллельная загрузка фото
+        6. Сохранение в БД
+
+        Args:
+            imported_products: Список ImportedProduct
+            progress_callback: fn(phase, detail) для обновления прогресса.
+                phase: 'preparing'|'creating'|'polling'|'pricing'|'photos'|'saving'
+                detail: dict с данными фазы + 'items' для результатов
+                Если callback поднимает Exception — импорт прерывается (cancellation).
+
+        Returns:
+            Список результатов [{product_id, title, status, error, nm_id, warnings}]
+        """
+        import time as _time
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results = []   # финальные результаты
+        prepared = []   # (imported_product, card_data)
+        to_create = []  # (imported_product, card_data) — реально на создание
+
+        def _cb(phase, detail):
+            if progress_callback:
+                detail.setdefault('items', [r for r in results])
+                progress_callback(phase, detail)
+
+        # ────────────────────────────────────────────────────
+        # Фаза 0: Предзагрузка конфигураций WB (параллельно)
+        # ────────────────────────────────────────────────────
+        import time as _bt
+        _bt_start = _bt.time()
+
+        unique_subjects = set(
+            ip.wb_subject_id for ip in imported_products
+            if ip.wb_subject_id and ip.import_status in ('validated', 'imported')
+        )
+        if unique_subjects and self.api_client:
+            _cb('preparing', {'current': 0, 'total': len(imported_products),
+                              'detail': f'Загрузка конфигурации WB ({len(unique_subjects)} кат.)...'})
+            for sid in unique_subjects:
+                try:
+                    if sid not in self._chars_config_cache:
+                        cfg = self.api_client.get_card_characteristics_config(sid)
+                        self._chars_config_cache[sid] = cfg.get('data', [])
+                    # Кеш размеров тоже заполняем из уже загруженных данных
+                    if sid not in self._category_sizes_cache:
+                        wb_chars = self._chars_config_cache.get(sid, [])
+                        has_sizes = any(
+                            (c.get('name') or '').lower() in ('размер', 'рос. размер', 'размер пользователя')
+                            for c in wb_chars
+                        )
+                        self._category_sizes_cache[sid] = has_sizes
+                except Exception as e:
+                    logger.warning(f"Ошибка предзагрузки конфигурации subject {sid}: {e}")
+
+        # ────────────────────────────────────────────────────
+        # Фаза 1: Подготовка и валидация
+        # ────────────────────────────────────────────────────
+        _cb('preparing', {'current': 0, 'total': len(imported_products)})
+
+        for idx, ip in enumerate(imported_products):
+            item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                    'status': 'skipped', 'error': None, 'nm_id': None, 'warnings': []}
+
+            # Валидация статуса
+            if ip.import_status == 'brand_prohibited':
+                item['error'] = f'Бренд "{ip.brand}" запрещён'
+                results.append(item)
+                continue
+            if ip.import_status not in ('validated', 'imported'):
+                status_labels = {
+                    'pending': 'ожидает валидации',
+                    'failed': 'ошибка валидации',
+                    'imported': 'уже импортирован',
+                    'imported_pending_sync': 'ожидает синхронизации',
+                }
+                label = status_labels.get(ip.import_status, ip.import_status)
+                item['error'] = f'Не готов к отправке ({label})'
+                results.append(item)
+                continue
+
+            # Проверка бренда
+            try:
+                from services.prohibited_brands_service import check_brand_for_import
+                can_import, reason = check_brand_for_import(ip.brand, 'wb')
+                if not can_import:
+                    ip.import_status = 'brand_prohibited'
+                    ip.import_error = reason
+                    db.session.commit()
+                    item['error'] = reason
+                    results.append(item)
+                    continue
+            except Exception:
+                pass
+
+            # Уже импортирован?
+            if ip.product_id:
+                existing = Product.query.get(ip.product_id)
+                if existing:
+                    item['status'] = 'skipped'
+                    item['error'] = 'Уже импортирован'
+                    item['nm_id'] = existing.nm_id
+                    results.append(item)
+                    continue
+
+            # Подготовка данных
+            try:
+                card_data = self._prepare_card_data(ip)
+                prepared.append((ip, card_data))
+            except Exception as e:
+                item['status'] = 'failed'
+                item['error'] = str(e)[:200]
+                ip.import_status = 'failed'
+                ip.import_error = str(e)[:500]
+                results.append(item)
+
+            _cb('preparing', {'current': idx + 1, 'total': len(imported_products)})
+
+        db.session.commit()
+
+        if not prepared:
+            _cb('done', {'results': results})
+            return results
+
+        # ────────────────────────────────────────────────────
+        # Фаза 2: Батч-создание карточек (1 API-вызов)
+        # ────────────────────────────────────────────────────
+        logger.warning(f"TIMING Phase 1 (prepare): {_bt.time()-_bt_start:.1f}s, prepared={len(prepared)}")
+        _cb('creating', {'count': len(prepared)})
+
+        batch_body = []
+        for ip, cd in prepared:
+            batch_body.append({
+                'subjectID': cd['subject_id'],
+                'variants': [cd['variant']]
+            })
+
+        batch_error = None
+        try:
+            self.api_client.create_product_cards_batch(
+                cards=batch_body, log_to_db=True, seller_id=self.seller.id
+            )
+            logger.info(f"Batch create sent: {len(batch_body)} cards")
+        except Exception as e:
+            batch_error = str(e)
+            logger.error(f"Batch create failed: {e}")
+
+        if batch_error:
+            # Весь батч провалился — помечаем все как failed
+            for ip, cd in prepared:
+                item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                        'status': 'failed', 'error': f'Batch error: {batch_error}',
+                        'nm_id': None, 'warnings': []}
+                ip.import_status = 'failed'
+                ip.import_error = batch_error[:500]
+                results.append(item)
+            db.session.commit()
+            _cb('done', {'results': results})
+            return results
+
+        # ────────────────────────────────────────────────────
+        # Фаза 3: Пулинг nmID (параллельно, с ретраями)
+        # ────────────────────────────────────────────────────
+        vendor_to_product = {}  # vendor_code → (imported_product, card_data)
+        for ip, cd in prepared:
+            vendor_to_product[cd['vendor_code']] = (ip, cd)
+
+        nm_id_map = {}   # vendor_code → {nmID, sizes, ...}
+        remaining = set(vendor_to_product.keys())
+        poll_delays = [3, 4, 5, 5, 5, 5, 5, 7, 7, 7, 7]  # до 60 сек суммарно
+
+        for attempt, delay in enumerate(poll_delays):
+            if not remaining:
+                break
+            _time.sleep(delay)
+            _cb('polling', {
+                'attempt': attempt + 1, 'max_attempts': len(poll_delays),
+                'found': len(nm_id_map), 'total': len(vendor_to_product)
+            })
+
+            # Параллельный запрос nmID для оставшихся vendor_codes
+            found_this_round = {}
+            with ThreadPoolExecutor(max_workers=5, thread_name_prefix='NmPoll') as pool:
+                def _fetch_nm(vc):
+                    try:
+                        card = self.api_client.get_card_by_vendor_code(vc)
+                        nm = card.get('nmID') if card else None
+                        if nm:
+                            return vc, card
+                    except Exception:
+                        pass
+                    return vc, None
+
+                futures = {pool.submit(_fetch_nm, vc): vc for vc in list(remaining)}
+                for f in as_completed(futures):
+                    vc, card = f.result()
+                    if card and card.get('nmID'):
+                        found_this_round[vc] = card
+
+            nm_id_map.update(found_this_round)
+            remaining -= set(found_this_round.keys())
+
+            if found_this_round:
+                logger.info(
+                    f"Poll attempt {attempt+1}: found {len(found_this_round)} new nmIDs "
+                    f"({len(nm_id_map)}/{len(vendor_to_product)} total)"
+                )
+
+        # Проверяем ошибки создания для оставшихся
+        if remaining:
+            try:
+                errors_resp = self.api_client.get_cards_errors_list(
+                    log_to_db=True, seller_id=self.seller.id
+                )
+                data = errors_resp.get('data', [])
+                if isinstance(data, dict):
+                    error_items = data.get('items', [])
+                else:
+                    error_items = data or []
+
+                def _clean_wb_error(raw):
+                    """Превращает сырую WB-ошибку в читаемый текст."""
+                    if isinstance(raw, list):
+                        return '; '.join(str(e) for e in raw)
+                    if isinstance(raw, dict):
+                        parts = []
+                        for k, v in raw.items():
+                            if isinstance(v, list):
+                                parts.extend(str(e) for e in v)
+                            else:
+                                parts.append(str(v))
+                        return '; '.join(parts)
+                    return str(raw)
+
+                for ec in error_items:
+                    ec_errors = ec.get('errors', {})
+                    ec_vendor_codes = ec.get('vendorCodes', [])
+                    for vc in list(remaining):
+                        if isinstance(ec_errors, dict) and vc in ec_errors:
+                            ip, cd = vendor_to_product[vc]
+                            err_text = _clean_wb_error(ec_errors[vc])
+                            item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                                    'status': 'failed',
+                                    'error': err_text,
+                                    'nm_id': None, 'warnings': []}
+                            ip.import_status = 'failed'
+                            ip.import_error = err_text[:500]
+                            results.append(item)
+                            remaining.discard(vc)
+                        elif vc in ec_vendor_codes:
+                            ip, cd = vendor_to_product[vc]
+                            raw = ec_errors.get(vc, ec_errors) if isinstance(ec_errors, dict) else ec_errors
+                            err_text = _clean_wb_error(raw)
+                            item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                                    'status': 'failed',
+                                    'error': err_text,
+                                    'nm_id': None, 'warnings': []}
+                            ip.import_status = 'failed'
+                            ip.import_error = err_text[:500]
+                            results.append(item)
+                            remaining.discard(vc)
+            except Exception as err_check:
+                logger.warning(f"Не удалось проверить ошибки создания: {err_check}")
+
+        if remaining:
+            logger.warning(
+                f"nmID не получен для {len(remaining)} из {len(vendor_to_product)} карточек "
+                f"после {len(poll_delays)} попыток: {list(remaining)}"
+            )
+
+        # Оставшиеся без nmID — не удалось получить
+        for vc in remaining:
+            ip, cd = vendor_to_product[vc]
+            item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                    'status': 'success', 'error': None, 'nm_id': None,
+                    'warnings': ['nmID не получен — будет при синхронизации']}
+            ip.import_status = 'imported_pending_sync'
+            ip.imported_at = datetime.utcnow()
+            ip.import_error = 'nmID не получен, ждём синхронизации'
+            results.append(item)
+
+        db.session.commit()
+
+        # Карточки с nmID — продолжаем обработку
+        success_cards = []  # (imported_product, card_data, nm_id, wb_card)
+        for vc, wb_card in nm_id_map.items():
+            ip, cd = vendor_to_product[vc]
+            nm_id = wb_card['nmID']
+            # Обновляем sizes из WB (с chrtID)
+            if wb_card.get('sizes'):
+                cd['wb_sizes'] = wb_card['sizes']
+            success_cards.append((ip, cd, nm_id, wb_card))
+
+        # ────────────────────────────────────────────────────
+        # Фаза 4: Батч-установка цен (1 API-вызов)
+        # ────────────────────────────────────────────────────
+        _cb('pricing', {'count': len(success_cards)})
+
+        prices_batch = []
+        price_map = {}  # nm_id → price_data (с _final, _discount_price, _price_before)
+        for ip, cd, nm_id, wb_card in success_cards:
+            pd = self._calculate_price_data(nm_id, ip)
+            if pd:
+                prices_batch.append({
+                    'nmID': pd['nmID'], 'price': pd['price'], 'discount': pd['discount']
+                })
+                price_map[nm_id] = pd
+
+        if prices_batch:
+            price_retries = [5, 3, 5]  # WB может не сразу принять цены для новых карточек
+            for price_attempt, price_delay in enumerate(price_retries):
+                if price_delay > 0:
+                    _time.sleep(price_delay)
+                try:
+                    self.api_client.upload_prices_v2(
+                        prices=prices_batch, log_to_db=True, seller_id=self.seller.id
+                    )
+                    logger.info(f"Batch prices set for {len(prices_batch)} cards")
+                    break
+                except Exception as e:
+                    logger.warning(f"Price batch attempt {price_attempt+1}: {e}")
+                    if price_attempt == len(price_retries) - 1:
+                        logger.error(f"Batch price setting failed after retries: {e}")
+                        for ip, cd, nm_id, _ in success_cards:
+                            # Не критично — предупреждение
+                            pass
+
+        # ────────────────────────────────────────────────────
+        # Фаза 5: Последовательная загрузка фото
+        # ────────────────────────────────────────────────────
+        # ВАЖНО: Загрузка фото выполняется ПОСЛЕДОВАТЕЛЬНО, а не параллельно.
+        # Причина: SQLAlchemy/SQLite не поддерживает concurrent операции
+        # из нескольких потоков на одной сессии. ThreadPoolExecutor вызывал
+        # "This session is provisioning a new connection; concurrent operations"
+        # при параллельном доступе к db.session из фото-потоков.
+        _cb('photos', {'current': 0, 'total': len(success_cards)})
+        photo_results = {}  # nm_id → (success, error)
+
+        for photo_idx, (ip, cd, nm_id, _) in enumerate(success_cards):
+            retry_count = 2
+            last_err = None
+            ok = False
+
+            for attempt in range(retry_count + 1):
+                try:
+                    self._upload_photos_for_card(nm_id, ip)
+                    ok = True
+                    break
+                except Exception as e:
+                    last_err = str(e)[:200]
+                    if attempt < retry_count:
+                        _time.sleep(3 * (attempt + 1))
+                        logger.warning(
+                            f"Фото nmID={nm_id}: попытка {attempt+2}/{retry_count+1} "
+                            f"после ошибки: {last_err}"
+                        )
+
+            photo_results[nm_id] = (ok, last_err)
+            try:
+                _cb('photos', {'current': photo_idx + 1, 'total': len(success_cards)})
+            except Exception:
+                pass
+
+        # ────────────────────────────────────────────────────
+        # Фаза 6: Сохранение в БД
+        # ────────────────────────────────────────────────────
+        _cb('saving', {'count': len(success_cards)})
+
+        for ip, cd, nm_id, wb_card in success_cards:
+            item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                    'status': 'success', 'error': None, 'nm_id': nm_id, 'warnings': []}
+
+            # Цена
+            pd = price_map.get(nm_id)
+            calc_price = pd['_final'] if pd else None
+            calc_discount = pd.get('_discount_price') if pd else None
+            calc_before = pd['_price_before'] if pd else None
+            if not pd:
+                item['warnings'].append('Цена не установлена')
+
+            # Фото
+            photo_ok, photo_err = photo_results.get(nm_id, (False, 'unknown'))
+            if not photo_ok:
+                item['warnings'].append(f'Фото: {photo_err or "не загружены"}')
+
+            # Product запись
+            product = Product.query.filter_by(
+                seller_id=self.seller.id, nm_id=nm_id
+            ).first()
+            if product:
+                product.vendor_code = cd['vendor_code']
+                product.title = ip.title
+                product.brand = ip.brand
+                product.subject_id = ip.wb_subject_id
+                product.object_name = ip.mapped_wb_category
+                product.description = ip.description
+                product.photos_json = json.dumps(cd['media_urls'], ensure_ascii=False)
+                product.sizes_json = json.dumps(cd['wb_sizes'], ensure_ascii=False)
+                product.characteristics_json = json.dumps(cd['characteristics'], ensure_ascii=False)
+                product.price = calc_before
+                product.discount_price = calc_price
+                product.supplier_price = ip.supplier_price
+                product.is_active = True
+                product.last_sync = datetime.utcnow()
+            else:
+                product = Product(
+                    seller_id=self.seller.id, nm_id=nm_id,
+                    vendor_code=cd['vendor_code'], title=ip.title,
+                    brand=ip.brand, subject_id=ip.wb_subject_id,
+                    object_name=ip.mapped_wb_category,
+                    description=ip.description,
+                    photos_json=json.dumps(cd['media_urls'], ensure_ascii=False),
+                    sizes_json=json.dumps(cd['wb_sizes'], ensure_ascii=False),
+                    characteristics_json=json.dumps(cd['characteristics'], ensure_ascii=False),
+                    price=calc_before, discount_price=calc_price,
+                    supplier_price=ip.supplier_price,
+                    is_active=True, last_sync=datetime.utcnow()
+                )
+                db.session.add(product)
+            db.session.flush()
+
+            ip.product_id = product.id
+            ip.import_status = 'imported'
+            ip.imported_at = datetime.utcnow()
+            ip.import_error = '; '.join(item['warnings']) if item['warnings'] else None
+
+            results.append(item)
+
+        db.session.commit()
+        _cb('done', {'results': results})
+        return results
 
     # ------------------------------------------------------------------
     # Helpers: привязка существующих карточек WB
@@ -814,13 +1492,14 @@ class WBProductImporter:
     def _category_supports_sizes(self, wb_subject_id: int) -> bool:
         """
         Проверяет, поддерживает ли WB-категория размеры.
-        Запрашивает характеристики категории и ищет поле 'Размер'.
-
-        Returns:
-            True если категория поддерживает размеры, False если безразмерная
+        Результат кешируется на время жизни importer-а.
         """
         if not wb_subject_id or not self.api_client:
             return False
+
+        # Кеш: один API-вызов на категорию вместо N
+        if wb_subject_id in self._category_sizes_cache:
+            return self._category_sizes_cache[wb_subject_id]
 
         try:
             chars_config = self.api_client.get_card_characteristics_config(wb_subject_id)
@@ -828,16 +1507,16 @@ class WBProductImporter:
 
             for char in wb_chars:
                 char_name = (char.get('name') or '').lower()
-                # Ищем характеристики связанные с размерами
                 if char_name in ('размер', 'рос. размер', 'размер пользователя'):
-                    logger.info(f"Категория {wb_subject_id}: поддерживает размеры (найдена характеристика '{char.get('name')}')")
+                    logger.info(f"Категория {wb_subject_id}: поддерживает размеры")
+                    self._category_sizes_cache[wb_subject_id] = True
                     return True
 
-            logger.info(f"Категория {wb_subject_id}: безразмерная (нет характеристики 'Размер')")
+            self._category_sizes_cache[wb_subject_id] = False
             return False
         except Exception as e:
             logger.warning(f"Не удалось проверить размеры для категории {wb_subject_id}: {e}")
-            # По умолчанию считаем безразмерной — безопаснее
+            self._category_sizes_cache[wb_subject_id] = False
             return False
 
     # Маппинг неофициальных/альтернативных названий стран → WB-валидные названия
@@ -1225,6 +1904,11 @@ class WBProductImporter:
         if not raw_brand:
             return 'NoName'
 
+        # Кеш: одинаковый бренд+категория резолвится 1 раз (экономия ~60с на товар)
+        cache_key = (raw_brand.lower(), imported_product.wb_subject_id)
+        if cache_key in self._brand_cache:
+            return self._brand_cache[cache_key]
+
         # Step 1: Если бренд уже зарезолвлен (resolved_brand_id установлен)
         if imported_product.resolved_brand_id:
             try:
@@ -1258,6 +1942,7 @@ class WBProductImporter:
                                     f"Бренд '{raw_brand}' → WB-валидирован: '{wb_name}' "
                                     f"(brand_id={brand.id}, subject_id={imported_product.wb_subject_id})"
                                 )
+                                self._brand_cache[cache_key] = wb_name
                                 return wb_name
                             else:
                                 logger.warning(
@@ -1268,11 +1953,13 @@ class WBProductImporter:
                                 # Не возвращаем — пусть Step 2 попробует найти бренд
                         except Exception as e:
                             logger.warning(f"Ошибка WB-валидации бренда: {e}, используем resolved")
+                            self._brand_cache[cache_key] = resolved_name
                             return resolved_name
                     else:
                         logger.info(
                             f"Бренд '{raw_brand}' → '{resolved_name}' (brand_id={brand.id})"
                         )
+                        self._brand_cache[cache_key] = resolved_name
                         return resolved_name
 
                 elif brand and brand.status == 'rejected':
@@ -1314,6 +2001,7 @@ class WBProductImporter:
                             db.session.commit()
                         except Exception:
                             db.session.rollback()
+                    self._brand_cache[cache_key] = resolved_name
                     return resolved_name
 
             logger.info(
@@ -1324,7 +2012,9 @@ class WBProductImporter:
             logger.warning(f"BrandEngine недоступен: {e}, используем сырое имя")
 
         # Step 3: Fallback — сырой бренд
-        return raw_brand
+        result = raw_brand
+        self._brand_cache[cache_key] = result
+        return result
 
     def _build_wb_characteristics(self, imported_product: ImportedProduct) -> List[Dict]:
         """
@@ -1389,10 +2079,15 @@ class WBProductImporter:
             logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
             return []
 
-        # Получаем конфигурацию характеристик WB для данного предмета
+        # Получаем конфигурацию характеристик WB (кешируем per subject_id)
+        sid = imported_product.wb_subject_id
         try:
-            chars_config = self.api_client.get_card_characteristics_config(imported_product.wb_subject_id)
-            wb_chars_list = chars_config.get('data', [])
+            if sid in self._chars_config_cache:
+                wb_chars_list = self._chars_config_cache[sid]
+            else:
+                chars_config = self.api_client.get_card_characteristics_config(sid)
+                wb_chars_list = chars_config.get('data', [])
+                self._chars_config_cache[sid] = wb_chars_list
         except Exception as e:
             logger.error(f"Не удалось получить конфигурацию характеристик: {e}")
             return []
@@ -1768,12 +2463,16 @@ class WBProductImporter:
     def _load_wb_directories(self) -> Dict[str, list]:
         """
         Загружает справочники WB из БД (MarketplaceDirectory).
-        Возвращает dict: directory_type -> list of entries.
+        Кешируется на время жизни importer-а.
         """
+        if hasattr(self, '_wb_directories_cache') and self._wb_directories_cache is not None:
+            return self._wb_directories_cache
+
         directories = {}
         try:
             marketplace = Marketplace.query.filter_by(code='wb').first()
             if not marketplace:
+                self._wb_directories_cache = directories
                 return directories
             for md in MarketplaceDirectory.query.filter_by(marketplace_id=marketplace.id).all():
                 try:
@@ -1783,6 +2482,7 @@ class WBProductImporter:
                     pass
         except Exception as e:
             logger.warning(f"Не удалось загрузить справочники из БД: {e}")
+        self._wb_directories_cache = directories
         return directories
 
     @staticmethod

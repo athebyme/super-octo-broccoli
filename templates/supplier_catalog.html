@@ -1,80 +1,239 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, section_title, btn %}
 
 {% block title %}Каталог поставщиков - Seller Hub{% endblock %}
 
+{% block extra_head %}
+<style>
+    .sc-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+    }
+    @media (max-width: 1023px) {
+        .sc-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 639px) {
+        .sc-grid { grid-template-columns: 1fr; }
+    }
+
+    .sc-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .sc-card:hover {
+        border-color: var(--text-muted);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    .sc-card-body {
+        padding: 24px;
+        flex: 1;
+    }
+
+    .sc-supplier-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 16px;
+    }
+
+    .sc-avatar {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-family: var(--font-display);
+        font-size: 20px;
+        font-weight: 400;
+        font-style: italic;
+        color: var(--accent);
+    }
+
+    .sc-supplier-name {
+        font-family: var(--font-display);
+        font-weight: 400;
+        font-size: 18px;
+        color: var(--text);
+        line-height: 1.2;
+        margin: 0;
+    }
+
+    .sc-supplier-url {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+
+    .sc-description {
+        font-size: 13px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+        margin-bottom: 16px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .sc-stats-row {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--border-light);
+        border: 1px solid var(--border-light);
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    .sc-stat {
+        background: var(--bg);
+        padding: 12px 8px;
+        text-align: center;
+    }
+
+    .sc-stat-value {
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+    }
+    .sc-stat-value--green { color: #16a34a; }
+    .sc-stat-value--accent { color: var(--accent); }
+
+    .sc-stat-label {
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-muted);
+        margin-top: 2px;
+    }
+
+    .sc-card-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 24px;
+        border-top: 1px solid var(--border-light);
+    }
+
+    .sc-link {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: color 0.15s;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .sc-link:hover { color: var(--text); }
+    .sc-link svg {
+        width: 14px;
+        height: 14px;
+        transition: transform 0.15s;
+    }
+    .sc-link:hover svg { transform: translateX(2px); }
+
+    .sc-update-btn {
+        font-size: 13px;
+        font-weight: 500;
+        color: #16a34a;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        transition: color 0.15s;
+    }
+    .sc-update-btn:hover { color: #15803d; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative">
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Каталог поставщиков</h1>
-            <p class="mt-2 text-sm text-gray-400">Просматривайте товары подключённых поставщиков и импортируйте к себе</p>
-        </div>
-    </div>
+<div class="sh-page">
+
+    {{ page_header("Каталог поставщиков", "Просматривайте товары подключённых поставщиков и импортируйте к себе") }}
 
     {% if suppliers_data %}
-    <div class="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+
+    {{ section_title("Подключённые поставщики") }}
+
+    <div class="sc-grid">
         {% for item in suppliers_data %}
         {% set s = item.supplier %}
         {% set conn = item.connection %}
         {% set st = item.stats %}
-        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
-            <div class="p-6">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="w-12 h-12 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-xl flex items-center justify-center">
-                        <span class="text-white font-bold text-lg">{{ s.name[0].upper() }}</span>
-                    </div>
+        <div class="sc-card">
+            <div class="sc-card-body">
+                <div class="sc-supplier-row">
+                    <div class="sc-avatar">{{ s.name[0].upper() }}</div>
                     <div>
-                        <h3 class="text-lg font-semibold text-gray-900">{{ s.name }}</h3>
+                        <h3 class="sc-supplier-name">{{ s.name }}</h3>
                         {% if s.website %}
-                        <p class="text-xs text-gray-400">{{ s.website }}</p>
+                        <p class="sc-supplier-url">{{ s.website }}</p>
                         {% endif %}
                     </div>
                 </div>
 
                 {% if s.description %}
-                <p class="text-sm text-gray-600 mb-4 line-clamp-2">{{ s.description }}</p>
+                <p class="sc-description">{{ s.description }}</p>
                 {% endif %}
 
-                <div class="grid grid-cols-3 gap-4 text-center mb-4">
-                    <div>
-                        <p class="text-xl font-bold text-gray-900">{{ st.total }}</p>
-                        <p class="text-xs text-gray-500">Товаров</p>
+                <div class="sc-stats-row">
+                    <div class="sc-stat">
+                        <div class="sc-stat-value">{{ st.total }}</div>
+                        <div class="sc-stat-label">Товаров</div>
                     </div>
-                    <div>
-                        <p class="text-xl font-bold text-green-600">{{ st.ready }}</p>
-                        <p class="text-xs text-gray-500">Готовых</p>
+                    <div class="sc-stat">
+                        <div class="sc-stat-value sc-stat-value--green">{{ st.ready }}</div>
+                        <div class="sc-stat-label">Готовых</div>
                     </div>
-                    <div>
-                        <p class="text-xl font-bold text-indigo-600">{{ item.imported_count }}</p>
-                        <p class="text-xs text-gray-500">Импорт.</p>
+                    <div class="sc-stat">
+                        <div class="sc-stat-value sc-stat-value--accent">{{ item.imported_count }}</div>
+                        <div class="sc-stat-label">Импорт.</div>
                     </div>
                 </div>
             </div>
 
-            <div class="bg-gray-50 px-6 py-3 flex justify-between items-center">
-                <a href="{{ url_for('supplier_catalog_products', supplier_id=s.id) }}"
-                   class="text-sm font-medium text-indigo-600 hover:text-indigo-800">
-                    Открыть каталог &rarr;
+            <div class="sc-card-footer">
+                <a href="{{ url_for('supplier_catalog_products', supplier_id=s.id) }}" class="sc-link">
+                    Открыть каталог
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+                    </svg>
                 </a>
                 {% if item.imported_count > 0 %}
                 <form method="POST" action="{{ url_for('supplier_catalog_update') }}">
                     <input type="hidden" name="supplier_id" value="{{ s.id }}">
                     <button type="submit" onclick="return confirm('Обновить все импортированные товары из базы поставщика?')"
-                            class="text-sm font-medium text-green-600 hover:text-green-800">Обновить</button>
+                            class="sc-update-btn">Обновить</button>
                 </form>
                 {% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
+
     {% else %}
-    <div class="text-center py-12 bg-white rounded-xl border border-gray-200 shadow-sm">
-        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
-        </svg>
-        <h3 class="mt-2 text-sm font-medium text-gray-900">Нет доступных поставщиков</h3>
-        <p class="mt-1 text-sm text-gray-500">Обратитесь к администратору для подключения к поставщику</p>
-    </div>
+
+    {{ empty_state(
+        title="Нет доступных поставщиков",
+        description="Обратитесь к администратору для подключения к поставщику",
+        icon='<svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'
+    ) }}
+
     {% endif %}
+
 </div>
 {% endblock %}

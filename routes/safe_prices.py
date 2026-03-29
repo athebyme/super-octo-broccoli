@@ -259,14 +259,15 @@ def calculate_price_changes(
     change_value: float,
     settings: SafePriceChangeSettings,
     formula: str = None,
-    formula_variables: Dict[str, float] = None
+    formula_variables: Dict[str, float] = None,
+    price_source: str = 'local'
 ) -> Tuple[List[Dict], Dict]:
     """
     Рассчитать изменения цен и классифицировать их по безопасности
 
     Args:
         products: Список товаров
-        change_type: Тип изменения ('fixed', 'percent', 'set', 'formula')
+        change_type: Тип изменения ('fixed', 'percent', 'set', 'formula', 'supplier_pricing')
         change_value: Значение изменения
         settings: Настройки безопасности
         formula: Формула для расчета (если change_type='formula')
@@ -283,15 +284,36 @@ def calculate_price_changes(
         'dangerous': 0
     }
 
+    # Для supplier_pricing: загружаем настройки ценообразования один раз
+    pricing_settings = None
+    if change_type == 'supplier_pricing':
+        from models import PricingSettings
+        from services.pricing_engine import calculate_price as calc_price
+        seller_id = products[0].seller_id if products else None
+        if seller_id:
+            pricing_settings = PricingSettings.query.filter_by(seller_id=seller_id).first()
+
     for product in products:
-        old_price = float(product.price) if product.price else 0
+        # Выбираем источник цены: маркетплейс (WB) или локальная БД
+        if price_source == 'marketplace' and product.wb_price:
+            old_price = float(product.wb_price)
+        else:
+            old_price = float(product.price) if product.price else 0
 
         # Пропускаем товары без nm_id — они не существуют на WB
         if not product.nm_id or product.nm_id <= 0:
             continue
 
         # Рассчитываем новую цену
-        if change_type == 'fixed':
+        if change_type == 'supplier_pricing':
+            # Расчёт по формуле ценообразования из закупочной цены поставщика
+            sup_price = float(product.supplier_price) if product.supplier_price else 0
+            if sup_price > 0 and pricing_settings:
+                result = calc_price(sup_price, pricing_settings, product_id=product.id)
+                new_price = result['final_price'] if result else old_price
+            else:
+                new_price = old_price
+        elif change_type == 'fixed':
             # Изменение на фиксированную сумму
             new_price = old_price + change_value
         elif change_type == 'percent':
@@ -471,6 +493,7 @@ def create_batch():
         selected_ids = data.get('product_ids', [])
         formula = data.get('formula', '').strip()
         formula_variables = data.get('formula_variables', {})
+        price_source = data.get('price_source', 'local')
 
         if not selected_ids:
             return jsonify({'error': 'Выберите хотя бы один товар'}), 400
@@ -495,7 +518,8 @@ def create_batch():
         # Рассчитываем изменения
         items, stats = calculate_price_changes(
             selected_products, change_type, change_value, settings,
-            formula=formula, formula_variables=formula_variables
+            formula=formula, formula_variables=formula_variables,
+            price_source=price_source
         )
 
         # Проверяем режим блокировки
@@ -1004,7 +1028,12 @@ def api_get_products():
             'brand': p.brand or '',
             'category': p.object_name or '',
             'price': float(p.price) if p.price else 0,
-            'discount_price': float(p.discount_price) if p.discount_price else None
+            'discount_price': float(p.discount_price) if p.discount_price else None,
+            'supplier_price': float(p.supplier_price) if p.supplier_price else None,
+            'wb_price': float(p.wb_price) if p.wb_price else None,
+            'wb_discount': p.wb_discount,
+            'wb_discounted_price': float(p.wb_discounted_price) if p.wb_discounted_price else None,
+            'wb_price_synced_at': p.wb_price_synced_at.strftime('%d.%m.%Y %H:%M') if p.wb_price_synced_at else None
         })
 
     return jsonify({
@@ -1034,6 +1063,7 @@ def api_preview_changes():
     change_value = float(data.get('change_value', 0)) if data.get('change_value') else 0
     formula = data.get('formula', '')
     formula_variables = data.get('formula_variables', {})
+    price_source = data.get('price_source', 'local')
 
     if not product_ids:
         return jsonify({'error': 'No products selected'}), 400
@@ -1047,7 +1077,8 @@ def api_preview_changes():
 
     items, stats = calculate_price_changes(
         products, change_type, change_value, settings,
-        formula=formula, formula_variables=formula_variables
+        formula=formula, formula_variables=formula_variables,
+        price_source=price_source
     )
 
     return jsonify({
@@ -1131,6 +1162,69 @@ def api_get_all_product_ids():
         'ids': product_ids,
         'total': len(product_ids)
     })
+
+
+@prices_bp.route('/api/sync-wb', methods=['POST'])
+@login_required
+def api_sync_wb_prices():
+    """API: Синхронизировать цены с маркетплейса WB"""
+    seller = get_current_seller()
+    if not seller:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    if not seller.has_valid_api_key():
+        return jsonify({'error': 'API ключ WB не настроен'}), 400
+
+    try:
+        api_client = WildberriesAPIClient(seller.wb_api_key)
+        all_goods = api_client.get_all_goods_prices(seller_id=seller.id)
+
+        # nm_id -> {price, discount, discounted_price}
+        wb_prices = {}
+        for good in all_goods:
+            nm_id = good.get('nmID')
+            if not nm_id:
+                continue
+            sizes = good.get('sizes', [])
+            price = sizes[0].get('price', 0) if sizes else 0
+            discounted = sizes[0].get('discountedPrice', 0) if sizes else 0
+            discount = good.get('discount', 0)
+            wb_prices[nm_id] = {
+                'price': price,
+                'discount': discount,
+                'discounted_price': discounted,
+            }
+
+        products = Product.query.filter_by(seller_id=seller.id, is_active=True).all()
+        now = datetime.utcnow()
+        updated = 0
+
+        for product in products:
+            wp = wb_prices.get(product.nm_id)
+            if wp:
+                product.wb_price = wp['price']
+                product.wb_discount = wp['discount']
+                product.wb_discounted_price = wp['discounted_price']
+                product.wb_price_synced_at = now
+                updated += 1
+
+        db.session.commit()
+        api_client.close()
+
+        logger.info(f"WB price sync: {updated} products updated from {len(wb_prices)} WB entries")
+
+        return jsonify({
+            'success': True,
+            'synced': updated,
+            'total_from_wb': len(wb_prices),
+        })
+
+    except WBAPIException as e:
+        logger.error(f"WB API error syncing prices: {e}")
+        return jsonify({'error': f'Ошибка WB API: {str(e)}'}), 500
+    except Exception as e:
+        logger.error(f"Error syncing WB prices: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @prices_bp.route('/api/settings')
