@@ -268,7 +268,11 @@ def register_blocked_cards_routes(app):
             logger.exception(f'Manual refresh error for seller {seller.id}')
             flash(f'Ошибка обновления: {str(e)}', 'danger')
 
-        return redirect(url_for('blocked_cards', tab=request.args.get('tab', 'blocked')))
+        # Whitelist валидация tab — иначе semgrep видит request.* → redirect()
+        tab = request.args.get('tab', 'blocked')
+        if tab not in ('blocked', 'hidden'):
+            tab = 'blocked'
+        return redirect(url_for('blocked_cards', tab=tab))
 
     # ==================== ЭКСПОРТ ЗАБЛОКИРОВАННЫХ ====================
 

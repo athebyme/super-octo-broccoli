@@ -4,12 +4,9 @@
 
 Восстановлено из routes/auto_import.py после удаления модуля автоимпорта.
 """
-import ipaddress
 import json
 import logging
-import socket
 from datetime import datetime
-from urllib.parse import urlparse
 
 from flask import request, jsonify, flash, redirect, url_for, render_template
 from flask_login import login_required, current_user
@@ -21,32 +18,7 @@ from services.pricing_engine import (
     SupplierPriceLoader,
     extract_supplier_product_id,
 )
-
-
-def _validate_supplier_url(url: str) -> str | None:
-    """
-    Валидация URL поставщика: защита от SSRF.
-    Возвращает строку с ошибкой или None если URL безопасен.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ('http', 'https'):
-        return 'URL должен начинаться с http:// или https://'
-
-    hostname = parsed.hostname
-    if not hostname:
-        return 'URL не содержит hostname'
-
-    try:
-        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-    except socket.gaierror:
-        return f'Не удалось разрешить hostname: {hostname}'
-
-    for _family, _type, _proto, _canonname, sockaddr in resolved:
-        ip = ipaddress.ip_address(sockaddr[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return 'URL не должен указывать на внутренние/приватные адреса'
-
-    return None
+from services.url_security import validate_external_url as _validate_supplier_url
 
 logger = logging.getLogger(__name__)
 

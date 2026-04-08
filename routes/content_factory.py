@@ -21,6 +21,7 @@ from services.content_factory_service import (
     ContentFactoryService,
     PLATFORM_LABELS, CONTENT_TYPE_LABELS, STATUS_LABELS,
 )
+from services.url_security import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -124,16 +125,12 @@ def register_content_factory_routes(app):
                 rules['category'] = request.form['rule_category']
             if request.form.get('rule_brand'):
                 rules['brand'] = request.form['rule_brand']
-            if request.form.get('rule_min_price'):
-                try:
-                    rules['min_price'] = float(request.form['rule_min_price'])
-                except ValueError:
-                    pass
-            if request.form.get('rule_max_price'):
-                try:
-                    rules['max_price'] = float(request.form['rule_max_price'])
-                except ValueError:
-                    pass
+            min_price = safe_float(request.form.get('rule_min_price'))
+            if min_price is not None:
+                rules['min_price'] = min_price
+            max_price = safe_float(request.form.get('rule_max_price'))
+            if max_price is not None:
+                rules['max_price'] = max_price
             factory.set_selection_rules(rules)
 
             # Соцаккаунт по умолчанию
@@ -199,16 +196,12 @@ def register_content_factory_routes(app):
                 rules['category'] = request.form['rule_category']
             if request.form.get('rule_brand'):
                 rules['brand'] = request.form['rule_brand']
-            if request.form.get('rule_min_price'):
-                try:
-                    rules['min_price'] = float(request.form['rule_min_price'])
-                except ValueError:
-                    pass
-            if request.form.get('rule_max_price'):
-                try:
-                    rules['max_price'] = float(request.form['rule_max_price'])
-                except ValueError:
-                    pass
+            min_price = safe_float(request.form.get('rule_min_price'))
+            if min_price is not None:
+                rules['min_price'] = min_price
+            max_price = safe_float(request.form.get('rule_max_price'))
+            if max_price is not None:
+                rules['max_price'] = max_price
             factory.set_selection_rules(rules)
 
             default_account_id = request.form.get('default_social_account_id')

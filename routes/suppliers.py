@@ -25,6 +25,52 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# SAFE REDIRECTS
+# ============================================================================
+# Хелперы оборачивают redirect(url_for(...)) с числовыми параметрами,
+# полученными из request.form. url_for() всегда возвращает локальный путь,
+# поэтому open-redirect здесь невозможен — но semgrep видит путь
+# request → redirect и поднимает false positive. Эти helpers перехватывают
+# и валидируют id, а заодно дают единое место для fallback.
+
+def _coerce_positive_int(value) -> int | None:
+    try:
+        v = int(value)
+    except (ValueError, TypeError):
+        return None
+    return v if v > 0 else None
+
+
+def _redirect_admin_supplier_products(supplier_id):
+    """Безопасный редирект на список товаров поставщика (admin)."""
+    sid = _coerce_positive_int(supplier_id)
+    if sid is None:
+        return redirect(url_for('admin_suppliers'))
+    return redirect(url_for('admin_supplier_products', supplier_id=sid))
+
+
+def _redirect_admin_supplier_product_detail(supplier_id, product_id):
+    """Безопасный редирект на карточку товара поставщика (admin)."""
+    sid = _coerce_positive_int(supplier_id)
+    pid = _coerce_positive_int(product_id)
+    if sid is None:
+        return redirect(url_for('admin_suppliers'))
+    if pid is None:
+        return redirect(url_for('admin_supplier_products', supplier_id=sid))
+    return redirect(url_for(
+        'admin_supplier_product_detail', supplier_id=sid, product_id=pid
+    ))
+
+
+def _redirect_seller_supplier_catalog(supplier_id):
+    """Безопасный редирект на каталог продавца с фильтром по поставщику."""
+    sid = _coerce_positive_int(supplier_id)
+    if sid is None:
+        return redirect(url_for('supplier_catalog'))
+    return redirect(url_for('supplier_catalog_products', supplier_id=sid))
+
+
+# ============================================================================
 # DECORATORS
 # ============================================================================
 
@@ -532,8 +578,7 @@ def register_supplier_routes(app):
                 flash(f'AI валидация завершена. Оценка: {result.get("score", 0):.0f}%', 'success')
             else:
                 flash(f'Ошибка AI валидации: {result.get("error", "?")}', 'danger')
-            return redirect(url_for('admin_supplier_product_detail',
-                                    supplier_id=supplier_id, product_id=single_product_id))
+            return _redirect_admin_supplier_product_detail(supplier_id, single_product_id)
 
         elif product_ids:
             result = SupplierService.ai_validate_bulk(supplier_id, product_ids)
@@ -548,10 +593,10 @@ def register_supplier_routes(app):
             if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
                 return jsonify(result)
             flash(f'AI валидация: {result.get("validated", 0)} успешно, {result.get("errors", 0)} ошибок', 'success')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+            return _redirect_admin_supplier_products(supplier_id)
 
         flash('Не выбраны товары', 'warning')
-        return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+        return _redirect_admin_supplier_products(supplier_id)
 
     @app.route('/admin/suppliers/<int:supplier_id>/ai/generate-seo', methods=['POST'])
     @login_required
@@ -561,7 +606,7 @@ def register_supplier_routes(app):
         product_id = request.form.get('product_id', type=int)
         if not product_id:
             flash('Не указан товар', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+            return _redirect_admin_supplier_products(supplier_id)
 
         result = SupplierService.ai_generate_seo(product_id)
         log_admin_action(
@@ -580,8 +625,7 @@ def register_supplier_routes(app):
             flash(f'SEO заголовок сгенерирован: {result.get("title", "")}', 'success')
         else:
             flash(f'Ошибка генерации SEO: {result.get("error", "?")}', 'danger')
-        return redirect(url_for('admin_supplier_product_detail',
-                                supplier_id=supplier_id, product_id=product_id))
+        return _redirect_admin_supplier_product_detail(supplier_id, product_id)
 
     @app.route('/admin/suppliers/<int:supplier_id>/ai/generate-desc', methods=['POST'])
     @login_required
@@ -591,7 +635,7 @@ def register_supplier_routes(app):
         product_id = request.form.get('product_id', type=int)
         if not product_id:
             flash('Не указан товар', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+            return _redirect_admin_supplier_products(supplier_id)
 
         result = SupplierService.ai_generate_description(product_id)
         log_admin_action(
@@ -610,8 +654,7 @@ def register_supplier_routes(app):
             flash('AI описание сгенерировано', 'success')
         else:
             flash(f'Ошибка генерации описания: {result.get("error", "?")}', 'danger')
-        return redirect(url_for('admin_supplier_product_detail',
-                                supplier_id=supplier_id, product_id=product_id))
+        return _redirect_admin_supplier_product_detail(supplier_id, product_id)
 
     @app.route('/admin/suppliers/<int:supplier_id>/ai/analyze', methods=['POST'])
     @login_required
@@ -621,7 +664,7 @@ def register_supplier_routes(app):
         product_id = request.form.get('product_id', type=int)
         if not product_id:
             flash('Не указан товар', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+            return _redirect_admin_supplier_products(supplier_id)
 
         result = SupplierService.ai_analyze_product(product_id)
         log_admin_action(
@@ -640,8 +683,7 @@ def register_supplier_routes(app):
             flash(f'AI анализ завершён. Оценка: {result.get("score", 0):.0f}%', 'success')
         else:
             flash(f'Ошибка AI анализа: {result.get("error", "?")}', 'danger')
-        return redirect(url_for('admin_supplier_product_detail',
-                                supplier_id=supplier_id, product_id=product_id))
+        return _redirect_admin_supplier_product_detail(supplier_id, product_id)
 
     @app.route('/admin/suppliers/<int:supplier_id>/ai/enrich', methods=['POST'])
     @login_required
@@ -651,7 +693,7 @@ def register_supplier_routes(app):
         product_id = request.form.get('product_id', type=int)
         if not product_id:
             flash('Не указан товар', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
+            return _redirect_admin_supplier_products(supplier_id)
 
         result = SupplierService.ai_full_enrich(product_id)
         log_admin_action(
@@ -671,8 +713,7 @@ def register_supplier_routes(app):
         else:
             errors_str = '; '.join(result.get('errors', []))
             flash(f'AI обогащение частично завершено: {errors_str}', 'warning')
-        return redirect(url_for('admin_supplier_product_detail',
-                                supplier_id=supplier_id, product_id=product_id))
+        return _redirect_admin_supplier_product_detail(supplier_id, product_id)
 
     # -------------------------------------------------------------------
     # AI RICH КОНТЕНТ (инфографика)
@@ -1738,7 +1779,7 @@ def register_supplier_routes(app):
 
         if not product_ids:
             flash('Не выбраны товары для импорта', 'warning')
-            return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+            return _redirect_seller_supplier_catalog(supplier_id)
 
         result = SupplierService.import_to_seller(seller.id, product_ids)
 
@@ -1752,7 +1793,7 @@ def register_supplier_routes(app):
         else:
             flash(f'Ошибка импорта: {"; ".join(result.error_messages[:3])}', 'danger')
 
-        return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+        return _redirect_seller_supplier_catalog(supplier_id)
 
     # -------------------------------------------------------------------
     # Мои импортированные товары — просмотр и управление
@@ -2854,9 +2895,7 @@ def register_supplier_routes(app):
             'success' if result.errors == 0 else 'warning'
         )
 
-        if supplier_id:
-            return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
-        return redirect(url_for('supplier_catalog'))
+        return _redirect_seller_supplier_catalog(supplier_id)
 
     # -------------------------------------------------------------------
     # Дашборд качества парсинга (HTML)
@@ -3442,7 +3481,7 @@ def register_supplier_routes(app):
 
         if not product_ids:
             flash('Не выбраны товары для импорта', 'warning')
-            return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+            return _redirect_seller_supplier_catalog(supplier_id)
 
         parser = SmartProductParser(supplier_id=supplier_id)
         result = parser.smart_import_to_seller(seller.id, product_ids)
@@ -3464,7 +3503,7 @@ def register_supplier_routes(app):
                 'danger'
             )
 
-        return redirect(url_for('supplier_catalog_products', supplier_id=supplier_id))
+        return _redirect_seller_supplier_catalog(supplier_id)
 
     # -------------------------------------------------------------------
     # API: Поиск категорий WB (для автокомплита)

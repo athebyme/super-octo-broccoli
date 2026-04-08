@@ -294,13 +294,28 @@ def register_photo_routes(app):
         if not url:
             abort(404)
 
+        # SSRF protection: запрещаем приватные/loopback адреса и прочие схемы.
+        # `photo_urls` хранится в БД, но изначально мог прийти от пользователя
+        # через импорт CSV/каталог поставщика — доверять нельзя.
+        from services.url_security import validate_external_url
+        if validate_external_url(url) is not None:
+            return _generate_placeholder_image()
+
         # Прямой прокси для URL
         import requests as _requests
         try:
-            resp = _requests.get(url, timeout=15, allow_redirects=True,
-                                 headers={'User-Agent': 'Mozilla/5.0'})
+            resp = _requests.get(
+                url,
+                timeout=15,
+                # allow_redirects=False — иначе SSRF-проверка обходится через 302 на 127.0.0.1
+                allow_redirects=False,
+                headers={'User-Agent': 'Mozilla/5.0'},
+                stream=True,
+            )
             resp.raise_for_status()
-            response = Response(resp.content, mimetype=resp.headers.get('Content-Type', 'image/jpeg'))
+            # Ограничиваем размер ответа, чтобы прокси нельзя было использовать как амплификатор
+            content = resp.raw.read(10 * 1024 * 1024, decode_content=True)
+            response = Response(content, mimetype=resp.headers.get('Content-Type', 'image/jpeg'))
             response.cache_control.max_age = 86400
             response.cache_control.private = True
             return response

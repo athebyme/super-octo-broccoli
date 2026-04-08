@@ -12,6 +12,7 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
 from models import db, ProductDefaults
+from services.url_security import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +98,11 @@ def register_product_defaults_routes(app):
             rule = ProductDefaults(seller_id=seller.id, rule_type='global', wb_subject_id=None)
             db.session.add(rule)
 
-        try:
-            rule.length_cm = float(request.form.get('length_cm') or 0) or None
-            rule.width_cm = float(request.form.get('width_cm') or 0) or None
-            rule.height_cm = float(request.form.get('height_cm') or 0) or None
-            rule.weight_kg = float(request.form.get('weight_kg') or 0) or None
-        except (ValueError, TypeError):
-            return jsonify({'success': False, 'error': 'Некорректные значения'}), 400
+        # safe_float защищает от NaN/Inf-инжекта в form-инпутах
+        rule.length_cm = safe_float(request.form.get('length_cm')) or None
+        rule.width_cm = safe_float(request.form.get('width_cm')) or None
+        rule.height_cm = safe_float(request.form.get('height_cm')) or None
+        rule.weight_kg = safe_float(request.form.get('weight_kg')) or None
 
         db.session.commit()
         flash('Глобальные дефолты сохранены', 'success')
@@ -152,13 +151,10 @@ def register_product_defaults_routes(app):
         rule.wb_category_name = wb_category_name
         rule.wb_subject_id = wb_subject_id
 
-        try:
-            rule.length_cm = float(request.form.get('length_cm') or 0) or None
-            rule.width_cm = float(request.form.get('width_cm') or 0) or None
-            rule.height_cm = float(request.form.get('height_cm') or 0) or None
-            rule.weight_kg = float(request.form.get('weight_kg') or 0) or None
-        except (ValueError, TypeError):
-            return jsonify({'success': False, 'error': 'Некорректные значения'}), 400
+        rule.length_cm = safe_float(request.form.get('length_cm')) or None
+        rule.width_cm = safe_float(request.form.get('width_cm')) or None
+        rule.height_cm = safe_float(request.form.get('height_cm')) or None
+        rule.weight_kg = safe_float(request.form.get('weight_kg')) or None
 
         db.session.commit()
         flash(f'Правило для "{wb_category_name}" сохранено', 'success')

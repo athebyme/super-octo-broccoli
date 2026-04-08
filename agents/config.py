@@ -59,8 +59,14 @@ def _load_remote_config() -> dict:
 
     try:
         import requests
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        # TLS verification: по умолчанию включена. Отключить можно только явно
+        # через AGENT_TLS_INSECURE=1 для отладки в локальной среде с self-signed
+        # сертификатами. В проде переменная не должна быть выставлена.
+        tls_insecure = os.getenv('AGENT_TLS_INSECURE', '').lower() in ('1', 'true', 'yes')
+        if tls_insecure:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            _logger.warning("AGENT_TLS_INSECURE=1 — TLS verification disabled (debug only!)")
         resp = requests.get(
             f'{platform_url.rstrip("/")}/internal/v1/config/llm',
             headers={
@@ -68,7 +74,7 @@ def _load_remote_config() -> dict:
                 'X-Agent-Key': agent_key,
             },
             timeout=10,
-            verify=False,
+            verify=not tls_insecure,
         )
         if resp.status_code == 200:
             _remote_config = resp.json().get('config', {})

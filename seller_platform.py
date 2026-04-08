@@ -403,14 +403,13 @@ def login():
             flash(f'Добро пожаловать, {user.username}!', 'success')
 
             # Перенаправление на запрошенную страницу или на дашборд
-            # Защита от open redirect: разрешаем только относительные пути
+            # Защита от open redirect: разрешаем только локальные пути.
+            # is_safe_local_path отсеивает абсолютные URL, protocol-relative
+            # (`//evil.com`) и значения без ведущего слеша.
+            from services.url_security import is_safe_local_path
             next_page = request.args.get('next')
-            if next_page:
-                from urllib.parse import urlparse
-                parsed = urlparse(next_page)
-                # Разрешаем только относительные URL без netloc (домена)
-                if not parsed.netloc and not parsed.scheme and next_page.startswith('/'):
-                    return redirect(next_page)
+            if next_page and is_safe_local_path(next_page):
+                return redirect(next_page)
             return redirect(url_for('dashboard'))
         else:
             _record_login_attempt(client_ip)
@@ -5077,12 +5076,14 @@ def price_monitor_settings():
 
     if request.method == 'POST':
         try:
+            from services.url_security import safe_float
             settings.is_enabled = request.form.get('is_enabled') == 'on'
             settings.monitor_prices = request.form.get('monitor_prices') == 'on'
             settings.monitor_stocks = request.form.get('monitor_stocks') == 'on'
             settings.sync_interval_minutes = int(request.form.get('sync_interval_minutes', 60))
-            settings.price_change_threshold_percent = float(request.form.get('price_change_threshold_percent', 10.0))
-            settings.stock_change_threshold_percent = float(request.form.get('stock_change_threshold_percent', 50.0))
+            # safe_float отбрасывает NaN/Inf — иначе пороги отклонений ломаются
+            settings.price_change_threshold_percent = safe_float(request.form.get('price_change_threshold_percent'), 10.0)
+            settings.stock_change_threshold_percent = safe_float(request.form.get('stock_change_threshold_percent'), 50.0)
 
             db.session.commit()
             flash('Настройки мониторинга сохранены', 'success')

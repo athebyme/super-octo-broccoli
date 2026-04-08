@@ -413,9 +413,11 @@ def prices_settings():
 
     if request.method == 'POST':
         try:
+            from services.url_security import safe_float
             settings.is_enabled = request.form.get('is_enabled') == 'on'
-            settings.safe_threshold_percent = float(request.form.get('safe_threshold_percent', 10))
-            settings.warning_threshold_percent = float(request.form.get('warning_threshold_percent', 20))
+            # safe_float отбрасывает NaN/Inf, иначе сравнения с порогами ломаются
+            settings.safe_threshold_percent = safe_float(request.form.get('safe_threshold_percent'), 10.0)
+            settings.warning_threshold_percent = safe_float(request.form.get('warning_threshold_percent'), 20.0)
             settings.mode = request.form.get('mode', 'confirm')
             settings.require_comment_for_dangerous = request.form.get('require_comment_for_dangerous') == 'on'
             settings.allow_bulk_dangerous = request.form.get('allow_bulk_dangerous') == 'on'
@@ -640,7 +642,7 @@ def batch_confirm(batch_id: int):
         if action == 'confirm':
             if settings.require_comment_for_dangerous and not comment:
                 flash('Требуется комментарий для подтверждения опасных изменений', 'warning')
-                return redirect(request.url)
+                return redirect(url_for('prices.batch_confirm', batch_id=batch_id))
 
             batch.status = 'confirmed'
             batch.confirmed_at = datetime.utcnow()
