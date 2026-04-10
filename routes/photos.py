@@ -219,7 +219,12 @@ def register_photo_routes(app):
             if ph.get('original') and ph['original'] != url:
                 fallbacks.append(ph['original'])
 
+        from services.url_security import validate_external_url as _validate_url
+
         for current_url in [url] + fallbacks:
+            # SSRF protection: проверяем каждый URL перед запросом
+            if _validate_url(current_url) is not None:
+                continue
             try:
                 resp = _requests.get(
                     current_url, headers=headers, cookies=auth_cookies,
@@ -301,20 +306,46 @@ def register_photo_routes(app):
         if validate_external_url(url) is not None:
             return _generate_placeholder_image()
 
-        # Прямой прокси для URL
+        # Прямой прокси для URL с ручным follow-redirect + SSRF-валидацией
         import requests as _requests
+        from urllib.parse import urljoin
         try:
-            resp = _requests.get(
-                url,
-                timeout=15,
-                # allow_redirects=False — иначе SSRF-проверка обходится через 302 на 127.0.0.1
-                allow_redirects=False,
-                headers={'User-Agent': 'Mozilla/5.0'},
-                stream=True,
-            )
+            current_url = url
+            resp = None
+            for _ in range(5):  # max redirects
+                resp = _requests.get(
+                    current_url,
+                    timeout=15,
+                    allow_redirects=False,
+                    headers={'User-Agent': 'Mozilla/5.0'},
+                    stream=True,
+                )
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    redirect_target = resp.headers.get('Location')
+                    resp.close()
+                    if not redirect_target:
+                        return _generate_placeholder_image()
+                    redirect_target = urljoin(current_url, redirect_target)
+                    if validate_external_url(redirect_target) is not None:
+                        return _generate_placeholder_image()
+                    current_url = redirect_target
+                    continue
+                break
+
+            if resp is None:
+                return _generate_placeholder_image()
             resp.raise_for_status()
-            # Ограничиваем размер ответа, чтобы прокси нельзя было использовать как амплификатор
-            content = resp.raw.read(10 * 1024 * 1024, decode_content=True)
+            # Ограничиваем размер ответа (10 МБ), читаем полностью через цикл
+            max_size = 10 * 1024 * 1024
+            chunks = []
+            total = 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                total += len(chunk)
+                if total > max_size:
+                    resp.close()
+                    return _generate_placeholder_image()
+                chunks.append(chunk)
+            content = b''.join(chunks)
             response = Response(content, mimetype=resp.headers.get('Content-Type', 'image/jpeg'))
             response.cache_control.max_age = 86400
             response.cache_control.private = True

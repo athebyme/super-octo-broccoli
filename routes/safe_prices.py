@@ -1209,6 +1209,8 @@ def api_sync_wb_prices():
                 product.wb_discounted_price = wp['discounted_price']
                 product.wb_price_synced_at = now
                 updated += 1
+                if updated % 200 == 0:
+                    db.session.commit()
 
         db.session.commit()
         api_client.close()

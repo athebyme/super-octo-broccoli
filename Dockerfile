@@ -16,9 +16,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Playwright + Chromium для рендеринга инфографики
+# gosu — для безопасного drop-privileges в entrypoint (fix-permissions pattern)
 RUN pip install 'playwright==1.52.0' \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+       gosu \
        libglib2.0-0 libnss3 libnspr4 libdbus-1-3 libatk1.0-0 \
        libatk-bridge2.0-0 libcups2 libexpat1 libxcb1 libxkbcommon0 \
        libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 \
@@ -35,7 +37,9 @@ COPY --chown=app:app . .
 RUN chmod +x /app/docker-entrypoint.sh \
     && chown -R app:app /app
 
-USER app
+# USER app — НЕ ставим здесь: entrypoint стартует как root,
+# исправляет владельца на смонтированных volumes, затем делает
+# gosu app для запуска приложения (fix-permissions pattern).
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request, ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen('https://localhost:${PORT:-5001}/login', context=ctx)" || exit 1

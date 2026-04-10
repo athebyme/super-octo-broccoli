@@ -69,6 +69,7 @@ services:
     environment:
       - AGENT_NAME=seo-writer
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_SEO_WRITER_ID:-}
       - AGENT_API_KEY=${AGENT_SEO_WRITER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -93,6 +94,7 @@ services:
     environment:
       - AGENT_NAME=category-mapper
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_CATEGORY_MAPPER_ID:-}
       - AGENT_API_KEY=${AGENT_CATEGORY_MAPPER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -117,6 +119,7 @@ services:
     environment:
       - AGENT_NAME=auto-importer
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_AUTO_IMPORTER_ID:-}
       - AGENT_API_KEY=${AGENT_AUTO_IMPORTER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -145,6 +148,7 @@ services:
     environment:
       - AGENT_NAME=card-doctor
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_CARD_DOCTOR_ID:-}
       - AGENT_API_KEY=${AGENT_CARD_DOCTOR_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -172,6 +176,7 @@ services:
     environment:
       - AGENT_NAME=price-optimizer
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_PRICE_OPTIMIZER_ID:-}
       - AGENT_API_KEY=${AGENT_PRICE_OPTIMIZER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -199,6 +204,7 @@ services:
     environment:
       - AGENT_NAME=size-normalizer
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_SIZE_NORMALIZER_ID:-}
       - AGENT_API_KEY=${AGENT_SIZE_NORMALIZER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -223,6 +229,7 @@ services:
     environment:
       - AGENT_NAME=characteristics-filler
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_CHARACTERISTICS_FILLER_ID:-}
       - AGENT_API_KEY=${AGENT_CHARACTERISTICS_FILLER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -247,6 +254,7 @@ services:
     environment:
       - AGENT_NAME=brand-resolver
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_BRAND_RESOLVER_ID:-}
       - AGENT_API_KEY=${AGENT_BRAND_RESOLVER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -271,6 +279,7 @@ services:
     environment:
       - AGENT_NAME=photo-optimizer
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_PHOTO_OPTIMIZER_ID:-}
       - AGENT_API_KEY=${AGENT_PHOTO_OPTIMIZER_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -295,6 +304,7 @@ services:
     environment:
       - AGENT_NAME=review-analyst
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_REVIEW_ANALYST_ID:-}
       - AGENT_API_KEY=${AGENT_REVIEW_ANALYST_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}
@@ -319,6 +329,7 @@ services:
     environment:
       - AGENT_NAME=orchestrator
       - PLATFORM_URL=https://seller-platform:${SELLER_PORT:-5001}
+      - AGENT_TLS_INSECURE=${AGENT_TLS_INSECURE:-1}
       - AGENT_ID=${AGENT_ORCHESTRATOR_ID:-}
       - AGENT_API_KEY=${AGENT_ORCHESTRATOR_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-cloudru}

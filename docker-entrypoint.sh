@@ -7,6 +7,17 @@ PORT=${PORT:-5001}
 # Ensure Python can find root-level modules when running scripts from subdirectories
 export PYTHONPATH=/app:${PYTHONPATH:-}
 
+# ── Fix-permissions & drop-privileges ────────────────────────────────
+# Docker volumes могут быть созданы от root. Исправляем владельца,
+# а затем перезапускаем ВЕСЬ entrypoint от пользователя app через gosu.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p /app/data /app/uploads /app/processed /app/data/ssl
+  chown -R app:app /app/data /app/uploads /app/processed
+  exec gosu app "$0" "$@"
+fi
+# ─────────────────────────────────────────────────────────────────────
+# С этого момента всё работает от пользователя app (uid 1000).
+
 # Ensure all working directories exist so uploads and reports survive volume mounts.
 mkdir -p uploads processed data
 

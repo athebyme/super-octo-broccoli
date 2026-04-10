@@ -1229,7 +1229,8 @@ class SupplierService:
 
                     batch_count += 1
                     if batch_count % 200 == 0:
-                        db.session.flush()
+                        # Коммитим каждые 200 записей, чтобы не держать write-lock слишком долго
+                        db.session.commit()
 
                 except Exception as e:
                     result.errors += 1
@@ -1289,6 +1290,7 @@ class SupplierService:
             ImportedProduct.supplier_id == supplier_id
         ).all()
 
+        batch_count = 0
         for imp in imported_products:
             try:
                 sp = imp.supplier_product
@@ -1300,6 +1302,9 @@ class SupplierService:
                     imp.supplier_quantity = sp.supplier_quantity
                 imp.updated_at = datetime.utcnow()
                 updated += 1
+                batch_count += 1
+                if batch_count % 200 == 0:
+                    db.session.commit()
             except Exception as e:
                 errors += 1
                 logger.warning(f"Cascade error ImportedProduct {imp.id}: {e}")

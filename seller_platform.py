@@ -98,9 +98,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'timeout': 30,  # Увеличенный timeout до 30 секунд
         'check_same_thread': False,  # Разрешить использование из разных потоков
     },
-    'pool_size': 20,        # Базовый размер пула соединений (дефолт 5 — мало для фоновых потоков)
-    'max_overflow': 30,     # Доп. соединения сверх pool_size при пиковой нагрузке
-    'pool_timeout': 60,     # Ждать свободное соединение до 60 сек (дефолт 30)
+    'pool_size': 5,         # SQLite — один writer, много соединений только мешают
+    'max_overflow': 10,     # Доп. соединения при пиковой нагрузке
+    'pool_timeout': 60,     # Ждать свободное соединение до 60 сек
     'pool_pre_ping': True,  # Проверка соединений перед использованием
     'pool_recycle': 3600,   # Переиспользование соединений каждый час
 }
@@ -218,6 +218,18 @@ app.jinja_env.filters['format_char_value'] = format_characteristic_value
 
 # Инициализация расширений
 db.init_app(app)
+
+# SQLite PRAGMA на КАЖДОЕ новое соединение (WAL, busy_timeout, synchronous)
+from sqlalchemy import event as _sa_event
+
+with app.app_context():
+    @_sa_event.listens_for(db.engine, 'connect')
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA busy_timeout=30000')
+        cursor.execute('PRAGMA synchronous=NORMAL')
+        cursor.close()
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
