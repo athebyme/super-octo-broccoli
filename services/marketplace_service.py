@@ -153,6 +153,8 @@ class MarketplaceService:
                 unit_name = item.get('unitName')
                 max_count = item.get('maxCount', 0)
                 popular = item.get('popular', False)
+                has_filter = item.get('hasFilter', False)
+                is_variable = item.get('isVariable', False)
                 dictionary = item.get('dictionary')
 
                 if required:
@@ -181,6 +183,10 @@ class MarketplaceService:
                         schema_changes.append(
                             f"'{name}' type: {charc.charc_type} -> {charc_type}"
                         )
+                    if getattr(charc, 'has_filter', False) != has_filter:
+                        schema_changes.append(
+                            f"'{name}' hasFilter: {getattr(charc, 'has_filter', False)} -> {has_filter}"
+                        )
 
                     charc.name = name
                     charc.charc_type = charc_type
@@ -188,6 +194,8 @@ class MarketplaceService:
                     charc.unit_name = unit_name
                     charc.max_count = max_count
                     charc.popular = popular
+                    charc.has_filter = has_filter
+                    charc.is_variable = is_variable
                     charc.dictionary_json = dict_json
                     charc.updated_at = datetime.utcnow()
                     # Regenerate AI instruction on schema update
@@ -219,6 +227,8 @@ class MarketplaceService:
                         unit_name=unit_name,
                         max_count=max_count,
                         popular=popular,
+                        has_filter=has_filter,
+                        is_variable=is_variable,
                         dictionary_json=dict_json,
                         ai_instruction=ai_instruction
                     )

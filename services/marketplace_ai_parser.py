@@ -102,6 +102,10 @@ class MarketplaceAwareParsingTask(AITask):
             block = f'FIELD: "{c.name}"\n'
             block += f'  TYPE: {type_label}\n'
             block += f'  REQUIRED: {"ДА" if c.required else "нет"}\n'
+            if getattr(c, 'has_filter', False):
+                block += '  FILTERABLE: ДА (важно для фильтров WB)\n'
+            elif c.popular:
+                block += '  POPULAR: ДА\n'
 
             if c.unit_name:
                 block += f'  UNIT: {c.unit_name}\n'

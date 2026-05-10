@@ -135,6 +135,99 @@ def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     return len(errors) == 0, errors
 
 
+def validate_create_cards_payload(cards: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
+    """
+    Валидация payload для POST /content/v2/cards/upload.
+
+    Официальная структура: [{subjectID, variants: [{vendorCode, dimensions,
+    characteristics, sizes, ...}]}]. dimensions должен быть объектом, а
+    weightBrutto — только внутри dimensions и в килограммах.
+    """
+    errors: List[str] = []
+
+    if not isinstance(cards, list) or not cards:
+        return False, ["Payload создания карточек должен быть непустым массивом"]
+
+    for card_idx, card in enumerate(cards):
+        prefix = f"card[{card_idx}]"
+        if not isinstance(card, dict):
+            errors.append(f"{prefix}: должен быть объектом")
+            continue
+
+        if not card.get('subjectID'):
+            errors.append(f"{prefix}.subjectID обязателен")
+
+        variants = card.get('variants')
+        if not isinstance(variants, list) or not variants:
+            errors.append(f"{prefix}.variants должен быть непустым массивом")
+            continue
+
+        for variant_idx, variant in enumerate(variants):
+            v_prefix = f"{prefix}.variants[{variant_idx}]"
+            if not isinstance(variant, dict):
+                errors.append(f"{v_prefix}: должен быть объектом")
+                continue
+
+            if not variant.get('vendorCode'):
+                errors.append(f"{v_prefix}.vendorCode обязателен")
+            if not variant.get('brand'):
+                errors.append(f"{v_prefix}.brand обязателен")
+            if not variant.get('title'):
+                errors.append(f"{v_prefix}.title обязателен")
+            elif len(str(variant.get('title'))) > 60:
+                errors.append(f"{v_prefix}.title длиннее 60 символов")
+
+            dims = variant.get('dimensions')
+            if not isinstance(dims, dict):
+                errors.append(f"{v_prefix}.dimensions должен быть объектом")
+            else:
+                for field in ('length', 'width', 'height'):
+                    value = dims.get(field)
+                    if not isinstance(value, (int, float)) or value <= 0:
+                        errors.append(f"{v_prefix}.dimensions.{field} должен быть положительным числом")
+                weight = dims.get('weightBrutto')
+                if not isinstance(weight, (int, float)) or weight <= 0:
+                    errors.append(f"{v_prefix}.dimensions.weightBrutto должен быть положительным числом в кг")
+
+            chars = variant.get('characteristics', [])
+            if chars and not isinstance(chars, list):
+                errors.append(f"{v_prefix}.characteristics должен быть массивом")
+            elif isinstance(chars, list):
+                for char_idx, char in enumerate(chars):
+                    if not isinstance(char, dict):
+                        errors.append(f"{v_prefix}.characteristics[{char_idx}] должен быть объектом")
+                        continue
+                    if not char.get('id'):
+                        errors.append(f"{v_prefix}.characteristics[{char_idx}].id обязателен")
+                    if 'value' not in char:
+                        errors.append(f"{v_prefix}.characteristics[{char_idx}].value обязателен")
+
+            sizes = variant.get('sizes')
+            if not isinstance(sizes, list) or not sizes:
+                errors.append(f"{v_prefix}.sizes должен быть непустым массивом")
+            else:
+                for size_idx, size in enumerate(sizes):
+                    if not isinstance(size, dict):
+                        errors.append(f"{v_prefix}.sizes[{size_idx}] должен быть объектом")
+                        continue
+                    skus = size.get('skus')
+                    if not isinstance(skus, list) or not any(skus):
+                        errors.append(f"{v_prefix}.sizes[{size_idx}].skus должен содержать баркод")
+
+    return len(errors) == 0, errors
+
+
+def prepare_create_cards_for_wb(cards: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Нормализовать create payload и удалить legacy packed-weight chars."""
+    from services.wb_content_payload import normalize_create_cards_payload
+
+    normalized = normalize_create_cards_payload(cards)
+    is_valid, errors = validate_create_cards_payload(normalized)
+    if not is_valid:
+        raise WBValidationError('; '.join(errors))
+    return normalized
+
+
 def validate_characteristics_value(
     value: Any,
     charc_type: int,
@@ -206,7 +299,12 @@ def prepare_card_for_update(
 
     # Применяем обновления
     for key, value in updates.items():
-        prepared[key] = value
+        if key == 'dimensions' and isinstance(value, dict) and isinstance(prepared.get('dimensions'), dict):
+            merged_dimensions = dict(prepared.get('dimensions') or {})
+            merged_dimensions.update(value)
+            prepared[key] = merged_dimensions
+        else:
+            prepared[key] = value
 
     # Удаляем поля которые нельзя редактировать через update API
     fields_to_remove = [
@@ -228,6 +326,10 @@ def prepare_card_for_update(
 
     for field in fields_to_remove:
         prepared.pop(field, None)
+
+    from services.wb_content_payload import normalize_update_card_payload
+
+    prepared = normalize_update_card_payload(prepared)
 
     # Проверяем обязательные поля
     required_fields = ['nmID', 'vendorCode', 'sizes']

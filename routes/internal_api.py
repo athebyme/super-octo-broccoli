@@ -801,6 +801,8 @@ def internal_get_category_characteristics(subject_id):
                 'unit_name': c.unit_name or '',
                 'max_count': c.max_count,
                 'popular': c.popular,
+                'has_filter': getattr(c, 'has_filter', False),
+                'is_variable': getattr(c, 'is_variable', False),
                 'dictionary': json.loads(c.dictionary_json) if c.dictionary_json else None,
                 'ai_instruction': c.ai_instruction or '',
                 'ai_example_value': c.ai_example_value or '',

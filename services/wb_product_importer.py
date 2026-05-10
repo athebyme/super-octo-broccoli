@@ -5,11 +5,17 @@
 import json
 import logging
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from models import db, ImportedProduct, Product, Seller, PricingSettings, Marketplace, MarketplaceDirectory
 from services.wb_api_client import WildberriesAPIClient
+from services.wb_content_payload import (
+    build_dimensions,
+    extract_characteristics,
+    is_packed_weight_charc_id,
+    is_packed_weight_name,
+)
 from services.prohibited_words_filter import filter_prohibited_words
 from services.pricing_engine import calculate_price
 
@@ -240,24 +246,24 @@ class WBProductImporter:
             # ВАЖНО: WB API v2 требует характеристики в формате [{id, value}]
             # где id - это числовой ID из справочника WB
             characteristics = self._build_wb_characteristics(imported_product)
+            missing_required = self._validate_characteristics_coverage(
+                imported_product.wb_subject_id,
+                characteristics,
+                imported_product.external_id
+            )
+            if missing_required:
+                raise Exception(
+                    "Не заполнены обязательные характеристики WB: "
+                    + ", ".join(missing_required[:12])
+                )
 
             # Формируем медиа (фотографии) — серверные URL
             from routes.photos import generate_public_photo_urls
             media_urls = generate_public_photo_urls(imported_product)
 
-            # Формируем dimensions (габариты)
-            # Используем настроенные дефолты продавца (глобальные или по категории)
-            from routes.product_defaults import get_defaults_for_product
-            _product_defaults = get_defaults_for_product(
-                self.seller.id, imported_product.wb_subject_id
-            )
-            # WB API spec: length/width/height — integer, weightBrutto — number (max 3 decimals)
-            dimensions = {
-                'length': int(_product_defaults.get('length', 10)),
-                'width': int(_product_defaults.get('width', 10)),
-                'height': int(_product_defaults.get('height', 5)),
-                'weightBrutto': round(float(_product_defaults.get('weightBrutto', 0.1)), 3)
-            }
+            # Формируем dimensions (упаковка: см и кг). Legacy packed weight
+            # из characteristics переносится внутрь dimensions.weightBrutto.
+            dimensions = self._build_wb_dimensions(imported_product)
 
             # Формируем бренд — используем систему резолва брендов
             # Pipeline: resolved_brand_id → MarketplaceBrand → BrandEngine.resolve() → raw brand fallback
@@ -589,6 +595,7 @@ class WBProductImporter:
                 product.photos_json = json.dumps(media_urls, ensure_ascii=False)
                 product.sizes_json = json.dumps(wb_sizes, ensure_ascii=False)
                 product.characteristics_json = json.dumps(characteristics, ensure_ascii=False)
+                product.dimensions_json = json.dumps(dimensions, ensure_ascii=False)
                 product.price = calculated_price_before_discount
                 product.discount_price = calculated_price_value
                 product.supplier_price = imported_product.supplier_price
@@ -609,6 +616,7 @@ class WBProductImporter:
                     photos_json=json.dumps(media_urls, ensure_ascii=False),
                     sizes_json=json.dumps(wb_sizes, ensure_ascii=False),
                     characteristics_json=json.dumps(characteristics, ensure_ascii=False),
+                    dimensions_json=json.dumps(dimensions, ensure_ascii=False),
                     price=calculated_price_before_discount,
                     discount_price=calculated_price_value,
                     supplier_price=imported_product.supplier_price,
@@ -746,6 +754,16 @@ class WBProductImporter:
         # Характеристики
         _t1 = _t.time()
         characteristics = self._build_wb_characteristics(imported_product)
+        missing_required = self._validate_characteristics_coverage(
+            imported_product.wb_subject_id,
+            characteristics,
+            imported_product.external_id
+        )
+        if missing_required:
+            raise Exception(
+                "Не заполнены обязательные характеристики WB: "
+                + ", ".join(missing_required[:12])
+            )
         _t2 = _t.time()
 
         # Медиа
@@ -753,15 +771,8 @@ class WBProductImporter:
         media_urls = generate_public_photo_urls(imported_product)
         _t2b = _t.time()
 
-        # Габариты
-        from routes.product_defaults import get_defaults_for_product
-        _defaults = get_defaults_for_product(self.seller.id, imported_product.wb_subject_id)
-        dimensions = {
-            'length': int(_defaults.get('length', 10)),
-            'width': int(_defaults.get('width', 10)),
-            'height': int(_defaults.get('height', 5)),
-            'weightBrutto': round(float(_defaults.get('weightBrutto', 0.1)), 3)
-        }
+        # Габариты упаковки для WB: length/width/height в см, weightBrutto в кг.
+        dimensions = self._build_wb_dimensions(imported_product)
         _t2c = _t.time()
 
         # Бренд
@@ -1285,6 +1296,7 @@ class WBProductImporter:
                 product.photos_json = json.dumps(cd['media_urls'], ensure_ascii=False)
                 product.sizes_json = json.dumps(cd['wb_sizes'], ensure_ascii=False)
                 product.characteristics_json = json.dumps(cd['characteristics'], ensure_ascii=False)
+                product.dimensions_json = json.dumps(cd['dimensions'], ensure_ascii=False)
                 product.price = calc_before
                 product.discount_price = calc_price
                 product.supplier_price = ip.supplier_price
@@ -1300,6 +1312,7 @@ class WBProductImporter:
                     photos_json=json.dumps(cd['media_urls'], ensure_ascii=False),
                     sizes_json=json.dumps(cd['wb_sizes'], ensure_ascii=False),
                     characteristics_json=json.dumps(cd['characteristics'], ensure_ascii=False),
+                    dimensions_json=json.dumps(cd['dimensions'], ensure_ascii=False),
                     price=calc_before, discount_price=calc_price,
                     supplier_price=ip.supplier_price,
                     is_active=True, last_sync=datetime.utcnow()
@@ -1655,6 +1668,60 @@ class WBProductImporter:
             logger.info(f"Извлечено из описания: {dims}")
 
         return dims
+
+    def _build_wb_dimensions(self, imported_product: ImportedProduct) -> Dict[str, Any]:
+        """
+        Собирает dimensions для WB Content API.
+
+        По документации WB это габариты товара с упаковкой: length/width/height
+        в сантиметрах, weightBrutto в килограммах. Старые источники с
+        "Вес с упаковкой" в characteristics используются только как источник
+        dimensions.weightBrutto и не отправляются характеристикой.
+        """
+        from routes.product_defaults import get_defaults_for_product
+
+        defaults = get_defaults_for_product(self.seller.id, imported_product.wb_subject_id)
+        sources: List[Any] = []
+
+        supplier_product = getattr(imported_product, 'supplier_product', None)
+        if supplier_product and getattr(supplier_product, 'dimensions_json', None):
+            try:
+                sources.append(json.loads(supplier_product.dimensions_json))
+            except Exception as exc:
+                logger.debug(f"Не удалось разобрать SupplierProduct.dimensions_json: {exc}")
+
+        if imported_product.ai_dimensions:
+            try:
+                sources.append(json.loads(imported_product.ai_dimensions))
+            except Exception as exc:
+                logger.debug(f"Не удалось разобрать ImportedProduct.ai_dimensions: {exc}")
+
+        if imported_product.characteristics:
+            try:
+                raw_chars = (
+                    json.loads(imported_product.characteristics)
+                    if isinstance(imported_product.characteristics, str)
+                    else imported_product.characteristics
+                )
+                extracted = extract_characteristics(raw_chars)
+                if extracted.dimensions:
+                    sources.append(extracted.dimensions)
+                    logger.info(
+                        f"Товар {imported_product.external_id}: packed dimensions извлечены из characteristics "
+                        f"({', '.join(extracted.dropped)})"
+                    )
+            except Exception as exc:
+                logger.debug(f"Не удалось извлечь dimensions из characteristics: {exc}")
+
+        seller_default_chars = defaults.get('default_characteristics') or {}
+        if seller_default_chars:
+            extracted = extract_characteristics(seller_default_chars)
+            if extracted.dimensions:
+                sources.append(extracted.dimensions)
+
+        dimensions = build_dimensions(defaults, *sources)
+        logger.debug(f"Товар {imported_product.external_id}: WB dimensions={dimensions}")
+        return dimensions
 
     @staticmethod
     def _assemble_chars_from_fields(imported_product: ImportedProduct) -> Dict:
@@ -2034,9 +2101,18 @@ class WBProductImporter:
 
         # Загружаем сохранённые характеристики
         product_chars = {}
+        raw_wb_characteristics = []
         try:
             if imported_product.characteristics:
-                product_chars = json.loads(imported_product.characteristics) if isinstance(imported_product.characteristics, str) else imported_product.characteristics
+                raw_chars = json.loads(imported_product.characteristics) if isinstance(imported_product.characteristics, str) else imported_product.characteristics
+                extracted = extract_characteristics(raw_chars)
+                product_chars = extracted.values
+                raw_wb_characteristics = extracted.wb_characteristics
+                if extracted.dropped:
+                    logger.info(
+                        f"Товар {imported_product.external_id}: legacy packed-weight/dimensions "
+                        f"удалены из characteristics ({', '.join(extracted.dropped)})"
+                    )
         except Exception as e:
             logger.warning(f"Ошибка парсинга характеристик: {e}")
             product_chars = {}
@@ -2075,9 +2151,28 @@ class WBProductImporter:
             if key not in product_chars:
                 product_chars[key] = val
 
+        # Финальная очистка: seller defaults/AI тоже могли добавить "Вес с упаковкой".
+        final_extracted = extract_characteristics(product_chars)
+        if final_extracted.dropped:
+            logger.info(
+                f"Товар {imported_product.external_id}: packed-weight поля исключены из "
+                f"WB characteristics ({', '.join(final_extracted.dropped)})"
+            )
+        product_chars = final_extracted.values
+
         if not product_chars:
-            logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
-            return []
+            if not raw_wb_characteristics:
+                logger.info(f"Товар {imported_product.external_id}: нет сохранённых характеристик")
+                return []
+            logger.info(
+                f"Товар {imported_product.external_id}: используем {len(raw_wb_characteristics)} "
+                f"характеристик уже в формате WB"
+            )
+            return [
+                {'id': int(ch['id']), 'value': ch.get('value')}
+                for ch in raw_wb_characteristics
+                if ch.get('id') and ch.get('value') not in (None, '', [])
+            ]
 
         # Получаем конфигурацию характеристик WB (кешируем per subject_id)
         sid = imported_product.wb_subject_id
@@ -2234,6 +2329,21 @@ class WBProductImporter:
         result_characteristics = []
         used_char_ids = set()  # Дедупликация: не добавляем одну и ту же WB-характеристику дважды
 
+        for raw_char in raw_wb_characteristics:
+            try:
+                char_id = int(raw_char.get('id'))
+            except (TypeError, ValueError):
+                continue
+            if char_id in used_char_ids:
+                continue
+            if raw_char.get('value') in (None, '', []):
+                continue
+            result_characteristics.append({
+                'id': char_id,
+                'value': raw_char.get('value')
+            })
+            used_char_ids.add(char_id)
+
         for char_name, char_value in product_chars.items():
             # Пропускаем служебные поля
             if char_name.startswith('_'):
@@ -2361,6 +2471,74 @@ class WBProductImporter:
 
         logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
         return result_characteristics
+
+    def _validate_characteristics_coverage(
+        self,
+        wb_subject_id: int,
+        characteristics: List[Dict],
+        external_id: str = ''
+    ) -> List[str]:
+        """
+        Проверяет покрытие обязательных и filterable характеристик WB.
+
+        Required поля блокируют отправку локально с понятной ошибкой. Поля
+        hasFilter/isVariable считаем важными для качества карточки, но не
+        ломаем импорт, если WB не пометил их как required.
+        """
+        if not wb_subject_id:
+            return []
+
+        try:
+            if wb_subject_id in self._chars_config_cache:
+                wb_chars_list = self._chars_config_cache[wb_subject_id]
+            else:
+                chars_config = self.api_client.get_card_characteristics_config(wb_subject_id)
+                wb_chars_list = chars_config.get('data', [])
+                self._chars_config_cache[wb_subject_id] = wb_chars_list
+        except Exception as exc:
+            logger.warning(f"Не удалось проверить обязательные характеристики subject={wb_subject_id}: {exc}")
+            return []
+
+        present_ids = set()
+        for char in characteristics or []:
+            try:
+                present_ids.add(int(char.get('id')))
+            except (TypeError, ValueError):
+                continue
+
+        missing_required = []
+        missing_filterable = []
+
+        for wb_char in wb_chars_list:
+            char_id = wb_char.get('charcID') or wb_char.get('id')
+            name = wb_char.get('name') or ''
+            if not char_id:
+                continue
+            if is_packed_weight_charc_id(char_id) or is_packed_weight_name(name):
+                continue
+            if wb_char.get('charcType') == 0:
+                continue
+
+            try:
+                char_id_int = int(char_id)
+            except (TypeError, ValueError):
+                continue
+
+            if char_id_int in present_ids:
+                continue
+
+            if wb_char.get('required'):
+                missing_required.append(name or str(char_id))
+            elif wb_char.get('hasFilter') or wb_char.get('popular'):
+                missing_filterable.append(name or str(char_id))
+
+        if missing_filterable:
+            logger.info(
+                f"Товар {external_id}: не заполнены filterable/popular WB характеристики "
+                f"({len(missing_filterable)}): {', '.join(missing_filterable[:12])}"
+            )
+
+        return missing_required
 
     def _format_char_value(self, value, wb_char: Dict) -> any:
         """
@@ -3105,6 +3283,8 @@ class WBProductImporter:
         warnings = len([i for i in issues if i['level'] == 'warning'])
         is_ready = errors == 0
 
+        dimensions = self._build_wb_dimensions(imported_product)
+
         # --- Pricing — рассчитываем полную разбивку по формуле продавца ---
         pricing_data = {
             'supplier_price': imported_product.supplier_price,
@@ -3167,12 +3347,7 @@ class WBProductImporter:
                 'brand_category_ok': brand_category_ok,
                 'subjectID': imported_product.wb_subject_id,
                 'subjectName': imported_product.mapped_wb_category or '',
-                'dimensions': {
-                    'length': 10,
-                    'width': 10,
-                    'height': 5,
-                    'weightBrutto': 0.1
-                },
+                'dimensions': dimensions,
                 'sizes': wb_sizes,
                 'has_real_sizes': has_real_sizes,
                 'photos': media_urls,

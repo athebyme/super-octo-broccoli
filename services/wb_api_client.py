@@ -15,6 +15,8 @@ from requests.packages.urllib3.util.retry import Retry
 # Настройка логирования
 logger = logging.getLogger('wb_api')
 
+MAX_WB_MEDIA_FILES = 30
+
 
 def chunk_list(items: List, chunk_size: int) -> List[List]:
     """
@@ -918,6 +920,13 @@ class WildberriesAPIClient:
             logger.warning("⚠️ Empty cards list provided to update_cards_batch")
             return {'success': True, 'updated': 0}
 
+        from services.wb_content_payload import normalize_update_card_payload
+        cards = [normalize_update_card_payload(card) for card in cards]
+        from services.wb_validators import clean_characteristics_for_update
+        for card in cards:
+            if card.get('characteristics'):
+                card['characteristics'] = clean_characteristics_for_update(card['characteristics'])
+
         # Проверка размера запроса
         import json
         size_bytes = sys.getsizeof(json.dumps(cards))
@@ -991,6 +1000,11 @@ class WildberriesAPIClient:
             Body: multipart/form-data с полем uploadfile
         """
         endpoint = "/content/v3/media/file"
+        if len(photo_paths) > MAX_WB_MEDIA_FILES:
+            logger.warning(
+                f"WB media limit: trimming photos from {len(photo_paths)} to {MAX_WB_MEDIA_FILES}"
+            )
+            photo_paths = photo_paths[:MAX_WB_MEDIA_FILES]
         results = []
 
         for idx, path in enumerate(photo_paths):
@@ -1059,6 +1073,11 @@ class WildberriesAPIClient:
             Новые фото ЗАМЕНЯЮТ старые. Чтобы добавить — укажите и новые, и старые URL.
         """
         endpoint = "/content/v3/media/save"
+        if len(photo_urls) > MAX_WB_MEDIA_FILES:
+            logger.warning(
+                f"WB media limit: trimming photo URLs from {len(photo_urls)} to {MAX_WB_MEDIA_FILES}"
+            )
+            photo_urls = photo_urls[:MAX_WB_MEDIA_FILES]
 
         body = {
             "nmId": nm_id,
@@ -2420,6 +2439,9 @@ class WildberriesAPIClient:
             'variants': variants
         }]
 
+        from services.wb_validators import prepare_create_cards_for_wb
+        request_body = prepare_create_cards_for_wb(request_body)
+
         logger.info(f"📤 Creating product card: subjectID={subject_id}, variants={len(variants)}")
 
         try:
@@ -2481,6 +2503,9 @@ class WildberriesAPIClient:
         endpoint = "/content/v2/cards/upload"
 
         logger.info(f"📤 Batch creating {len(cards)} product cards")
+
+        from services.wb_validators import prepare_create_cards_for_wb
+        cards = prepare_create_cards_for_wb(cards)
 
         try:
             start_time = time.time()

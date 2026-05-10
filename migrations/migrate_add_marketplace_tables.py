@@ -76,6 +76,8 @@ def run_migration():
         add_column_safe('supplier_products', 'marketplace_fields_json', 'TEXT')
         add_column_safe('supplier_products', 'marketplace_validation_status', 'VARCHAR(50)')
         add_column_safe('supplier_products', 'marketplace_fill_pct', 'FLOAT')
+        add_column_safe('marketplace_category_characteristics', 'has_filter', 'BOOLEAN DEFAULT 0')
+        add_column_safe('marketplace_category_characteristics', 'is_variable', 'BOOLEAN DEFAULT 0')
 
         db.session.commit()
         print("\n" + "=" * 60)

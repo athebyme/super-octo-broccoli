@@ -2897,6 +2897,8 @@ class MarketplaceCategoryCharacteristic(db.Model):
     unit_name = db.Column(db.String(50))                       # "см", "г", etc
     max_count = db.Column(db.Integer, default=0)               # Max values (0=unlimited)
     popular = db.Column(db.Boolean, default=False)
+    has_filter = db.Column(db.Boolean, default=False)          # WB hasFilter: участвует в фильтрах
+    is_variable = db.Column(db.Boolean, default=False)         # WB isVariable: вариативная характеристика
 
     # Dictionary of allowed values (JSON array)
     dictionary_json = db.Column(db.Text)                       # [{"value":"Черный"},...]

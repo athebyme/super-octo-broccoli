@@ -70,6 +70,8 @@ class MarketplaceValidator:
         filled_count = 0
         required_filled = 0
         required_total = 0
+        filterable_filled = 0
+        filterable_total = 0
 
         for charc in schema_charcs:
             if charc.charc_type == 0:
@@ -79,6 +81,8 @@ class MarketplaceValidator:
 
             if charc.required:
                 required_total += 1
+            if getattr(charc, 'has_filter', False):
+                filterable_total += 1
 
             value = merged_data.get(charc.name)
             is_valid, err_msg, coerced_val = cls.validate_single_characteristic(value, charc)
@@ -93,6 +97,8 @@ class MarketplaceValidator:
                 filled_count += 1
                 if charc.required:
                     required_filled += 1
+                if getattr(charc, 'has_filter', False):
+                    filterable_filled += 1
 
             if not is_valid and charc.required:
                 errors.append(f"{charc.name}: {err_msg}")
@@ -106,6 +112,8 @@ class MarketplaceValidator:
                 "valid": is_valid,
                 "error": err_msg,
                 "required": charc.required,
+                "has_filter": getattr(charc, 'has_filter', False),
+                "is_variable": getattr(charc, 'is_variable', False),
                 "has_value": has_value
             })
 
@@ -133,7 +141,9 @@ class MarketplaceValidator:
                 "total_enabled": total_enabled,
                 "filled": filled_count,
                 "required_total": required_total,
-                "required_filled": required_filled
+                "required_filled": required_filled,
+                "filterable_total": filterable_total,
+                "filterable_filled": filterable_filled
             }
         }
 

@@ -84,6 +84,14 @@
                             <span
                                 class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">Обяз.</span>
                             {% endif %}
+                            {% if charc.has_filter %}
+                            <span
+                                class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-800">Фильтр</span>
+                            {% endif %}
+                            {% if charc.is_variable %}
+                            <span
+                                class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-cyan-100 text-cyan-800">Вариант</span>
+                            {% endif %}
                             {% if charc.unit_name %}
                             <span class="text-xs text-gray-500">({{ charc.unit_name }})</span>
                             {% endif %}

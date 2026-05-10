@@ -443,7 +443,8 @@ class SupplierCSVParser:
             if field_type == 'characteristics':
                 # Сборка характеристик из отдельных колонок
                 columns = config.get('columns', {})
-                chars = product.get('_extra_characteristics', [])
+                target = '_extra_dimensions' if field_name in ('dimensions', 'package_dimensions') else '_extra_characteristics'
+                chars = product.get(target, [])
                 if isinstance(columns, dict):
                     for col_idx, char_name in columns.items():
                         col_idx = int(col_idx) if isinstance(col_idx, str) and col_idx.isdigit() else col_idx
@@ -451,7 +452,7 @@ class SupplierCSVParser:
                             val = row[col_idx].strip()
                             if val:
                                 chars.append({'name': char_name, 'value': val})
-                product['_extra_characteristics'] = chars
+                product[target] = chars
                 continue
 
             # --- Одиночные колонки ---
@@ -493,6 +494,10 @@ class SupplierCSVParser:
             existing.extend(product['_extra_characteristics'])
             product['characteristics'] = existing
             del product['_extra_characteristics']
+
+        if product.get('_extra_dimensions'):
+            product['dimensions'] = product['_extra_dimensions']
+            del product['_extra_dimensions']
 
         # Валидация минимальных полей
         if not product.get('external_id') or not product.get('title'):
@@ -4360,6 +4365,10 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
     # Характеристики из CSV (составной тип characteristics)
     if 'characteristics' in data and data['characteristics']:
         sp.characteristics_json = json.dumps(data['characteristics'], ensure_ascii=False)
+
+    # Габариты упаковки из CSV (составной тип dimensions)
+    if 'dimensions' in data and data['dimensions']:
+        sp.dimensions_json = json.dumps(data['dimensions'], ensure_ascii=False)
 
     # Контент хеш для отслеживания изменений
     content_str = f"{sp.title}|{sp.brand}|{sp.category}|{sp.supplier_price}"

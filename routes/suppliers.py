@@ -2601,32 +2601,36 @@ def register_supplier_routes(app):
                 updates['characteristics'] = charcs
                 updated_fields.append(f'характеристики ({len(charcs)} шт.)')
 
-        # Габариты — из AI или sp
+        # Габариты — из AI или sp. Сбор через общий WB helper, чтобы
+        # weightBrutto оставался внутри dimensions и в килограммах.
+        from services.wb_content_payload import extract_dimensions
+
+        dimension_sources = []
         try:
             ai_dims = json_mod.loads(sp.dimensions_json) if sp.dimensions_json else None
+            if ai_dims:
+                dimension_sources.append(ai_dims)
         except (json_mod.JSONDecodeError, TypeError):
-            ai_dims = None
+            pass
 
-        if not ai_dims:
-            try:
-                ai_dims = json_mod.loads(imp.ai_dimensions) if imp.ai_dimensions else None
-            except (json_mod.JSONDecodeError, TypeError):
-                ai_dims = None
+        try:
+            ai_dims = json_mod.loads(imp.ai_dimensions) if imp.ai_dimensions else None
+            if ai_dims:
+                dimension_sources.append(ai_dims)
+        except (json_mod.JSONDecodeError, TypeError):
+            pass
 
-        if ai_dims and isinstance(ai_dims, dict):
-            dimensions = {}
-            if ai_dims.get('length'):
-                dimensions['length'] = int(ai_dims['length'])
-            if ai_dims.get('width'):
-                dimensions['width'] = int(ai_dims['width'])
-            if ai_dims.get('height'):
-                dimensions['height'] = int(ai_dims['height'])
-            weight = ai_dims.get('weight') or ai_dims.get('weightBrutto')
-            if weight:
-                dimensions['weightBrutto'] = float(weight)
-            if dimensions:
-                updates['dimensions'] = dimensions
-                updated_fields.append('габариты')
+        if marketplace_data and isinstance(marketplace_data, dict):
+            if marketplace_data.get('package_dimensions'):
+                dimension_sources.append(marketplace_data['package_dimensions'])
+
+        dimensions = {}
+        for source in dimension_sources:
+            dimensions.update(extract_dimensions(source))
+
+        if dimensions:
+            updates['dimensions'] = dimensions
+            updated_fields.append('габариты')
 
         if not updates:
             return jsonify({

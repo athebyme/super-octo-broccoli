@@ -1,0 +1,143 @@
+# -*- coding: utf-8 -*-
+"""
+Regression tests for WB Content API card payload normalization.
+"""
+
+import unittest
+
+from services.wb_content_payload import (
+    build_dimensions,
+    extract_characteristics,
+    normalize_create_cards_payload,
+)
+from services.wb_validators import (
+    WBValidationError,
+    prepare_card_for_update,
+    prepare_create_cards_for_wb,
+)
+
+
+class TestWBContentPayload(unittest.TestCase):
+    def test_extract_characteristics_moves_legacy_packed_weight_to_dimensions(self):
+        raw = {
+            "Цвет": "черный",
+            "Вес с упаковкой": "200 г",
+            "Длина упаковки, см": "12",
+            "Ширина упаковки, см": "8",
+            "Высота упаковки, см": "3",
+        }
+
+        extracted = extract_characteristics(raw)
+
+        self.assertEqual(extracted.values, {"Цвет": "черный"})
+        self.assertEqual(extracted.dimensions, {
+            "weightBrutto": 0.2,
+            "length": 12,
+            "width": 8,
+            "height": 3,
+        })
+        self.assertIn("Вес с упаковкой", extracted.dropped)
+
+    def test_normalize_create_payload_drops_wb_weight_characteristic_id(self):
+        payload = [{
+            "subjectID": 123,
+            "variants": [{
+                "vendorCode": "SKU-1",
+                "brand": "Brand",
+                "title": "Товар",
+                "description": "Описание товара",
+                "dimensions": {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
+                "sizes": [{"price": 1000, "skus": ["2000000000011"]}],
+                "characteristics": [
+                    {"id": "88952", "value": "250 г"},
+                    {"id": 14177449, "value": ["Россия"]},
+                ],
+            }],
+        }]
+
+        normalized = normalize_create_cards_payload(payload)
+        variant = normalized[0]["variants"][0]
+
+        self.assertEqual(variant["dimensions"], {
+            "length": 10,
+            "width": 8,
+            "height": 4,
+            "weightBrutto": 0.25,
+        })
+        self.assertEqual(variant["characteristics"], [
+            {"id": 14177449, "value": ["Россия"]},
+        ])
+
+    def test_prepare_create_cards_for_wb_validates_final_shape(self):
+        payload = [{
+            "subjectID": 123,
+            "variants": [{
+                "vendorCode": "SKU-1",
+                "brand": "Brand",
+                "title": "Товар",
+                "sizes": [{"price": 1000, "skus": ["2000000000011"]}],
+                "characteristics": [{"id": 14177449, "value": ["Россия"]}],
+            }],
+        }]
+
+        normalized = prepare_create_cards_for_wb(payload)
+
+        variant = normalized[0]["variants"][0]
+        self.assertEqual(set(variant["dimensions"]), {"length", "width", "height", "weightBrutto"})
+        self.assertEqual(variant["dimensions"]["weightBrutto"], 0.1)
+
+    def test_prepare_create_cards_for_wb_rejects_missing_barcode(self):
+        payload = [{
+            "subjectID": 123,
+            "variants": [{
+                "vendorCode": "SKU-1",
+                "brand": "Brand",
+                "title": "Товар",
+                "sizes": [{"price": 1000, "skus": []}],
+            }],
+        }]
+
+        with self.assertRaises(WBValidationError) as exc_info:
+            prepare_create_cards_for_wb(payload)
+
+        self.assertIn("skus", str(exc_info.exception))
+
+    def test_prepare_card_for_update_merges_dimensions_and_strips_weight_char(self):
+        full_card = {
+            "nmID": 100,
+            "vendorCode": "SKU-1",
+            "brand": "Brand",
+            "sizes": [{"chrtID": 10, "skus": ["2000000000011"]}],
+            "dimensions": {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
+            "characteristics": [
+                {"id": "88952", "value": "400 г"},
+                {"id": 14177449, "value": "Россия"},
+            ],
+            "photos": ["https://example.test/photo.jpg"],
+        }
+
+        prepared = prepare_card_for_update(full_card, {"dimensions": {"width": 9}})
+
+        self.assertEqual(prepared["dimensions"], {
+            "length": 10,
+            "width": 9,
+            "height": 4,
+            "weightBrutto": 0.4,
+        })
+        self.assertEqual(prepared["characteristics"], [
+            {"id": 14177449, "value": ["Россия"]},
+        ])
+        self.assertNotIn("photos", prepared)
+
+    def test_build_dimensions_converts_mm_and_grams_from_legacy_sources(self):
+        dimensions = build_dimensions(
+            {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
+            {"package_length_mm": 120, "package_weight_g": 350},
+        )
+
+        self.assertEqual(dimensions["length"], 12)
+        self.assertEqual(dimensions["weightBrutto"], 0.35)
+
+
+if __name__ == "__main__":
+    unittest.main()
