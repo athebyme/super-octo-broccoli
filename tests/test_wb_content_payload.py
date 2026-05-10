@@ -138,6 +138,15 @@ class TestWBContentPayload(unittest.TestCase):
         self.assertEqual(dimensions["length"], 12)
         self.assertEqual(dimensions["weightBrutto"], 0.35)
 
+    def test_build_dimensions_later_product_sources_override_fallback_defaults(self):
+        dimensions = build_dimensions(
+            {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
+            {"Вес с упаковкой": "500 г"},
+            {"package_weight_g": 250},
+        )
+
+        self.assertEqual(dimensions["weightBrutto"], 0.25)
+
 
 if __name__ == "__main__":
     unittest.main()

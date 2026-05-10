@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from models import db, ImportedProduct, Product, Seller, PricingSettings, Marketplace, MarketplaceDirectory
-from services.wb_api_client import WildberriesAPIClient
+from services.wb_api_client import MAX_WB_MEDIA_FILES, WildberriesAPIClient
 from services.wb_content_payload import (
     build_dimensions,
     extract_characteristics,
@@ -815,6 +815,21 @@ class WBProductImporter:
         if not product_brand:
             raise Exception("Бренд не определён")
 
+        # Валидируем и нормализуем shape на уровне одной карточки, чтобы один
+        # локально битый товар не валил весь WB batch-запрос.
+        try:
+            from services.wb_validators import prepare_create_cards_for_wb
+            normalized_card = prepare_create_cards_for_wb([{
+                'subjectID': imported_product.wb_subject_id,
+                'variants': [variant],
+            }])[0]
+            variant = normalized_card['variants'][0]
+            wb_sizes = variant.get('sizes', wb_sizes)
+            characteristics = variant.get('characteristics', characteristics)
+            dimensions = variant.get('dimensions', dimensions)
+        except Exception as exc:
+            raise Exception(f"Payload WB невалиден: {exc}")
+
         return {
             'vendor_code': vendor_code,
             'subject_id': imported_product.wb_subject_id,
@@ -1027,35 +1042,49 @@ class WBProductImporter:
         logger.warning(f"TIMING Phase 1 (prepare): {_bt.time()-_bt_start:.1f}s, prepared={len(prepared)}")
         _cb('creating', {'count': len(prepared)})
 
-        batch_body = []
-        for ip, cd in prepared:
-            batch_body.append({
-                'subjectID': cd['subject_id'],
-                'variants': [cd['variant']]
-            })
+        created_prepared = []
+        WB_CREATE_CHUNK_SIZE = 100
 
-        batch_error = None
-        try:
-            self.api_client.create_product_cards_batch(
-                cards=batch_body, log_to_db=True, seller_id=self.seller.id
-            )
-            logger.info(f"Batch create sent: {len(batch_body)} cards")
-        except Exception as e:
-            batch_error = str(e)
-            logger.error(f"Batch create failed: {e}")
+        for chunk_start in range(0, len(prepared), WB_CREATE_CHUNK_SIZE):
+            chunk = prepared[chunk_start:chunk_start + WB_CREATE_CHUNK_SIZE]
+            batch_body = [
+                {
+                    'subjectID': cd['subject_id'],
+                    'variants': [cd['variant']],
+                }
+                for ip, cd in chunk
+            ]
 
-        if batch_error:
-            # Весь батч провалился — помечаем все как failed
-            for ip, cd in prepared:
-                item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
-                        'status': 'failed', 'error': f'Batch error: {batch_error}',
-                        'nm_id': None, 'warnings': []}
-                ip.import_status = 'failed'
-                ip.import_error = batch_error[:500]
-                results.append(item)
-            db.session.commit()
+            try:
+                self.api_client.create_product_cards_batch(
+                    cards=batch_body, log_to_db=True, seller_id=self.seller.id
+                )
+                created_prepared.extend(chunk)
+                logger.info(
+                    f"Batch create sent: {len(batch_body)} cards "
+                    f"({chunk_start + 1}-{chunk_start + len(chunk)} of {len(prepared)})"
+                )
+            except Exception as e:
+                batch_error = str(e)
+                logger.error(
+                    f"Batch create chunk failed "
+                    f"({chunk_start + 1}-{chunk_start + len(chunk)} of {len(prepared)}): {e}"
+                )
+                for ip, cd in chunk:
+                    item = {'product_id': ip.id, 'title': (ip.title or '')[:50],
+                            'status': 'failed', 'error': f'Batch error: {batch_error}',
+                            'nm_id': None, 'warnings': []}
+                    ip.import_status = 'failed'
+                    ip.import_error = batch_error[:500]
+                    results.append(item)
+
+        db.session.commit()
+
+        if not created_prepared:
             _cb('done', {'results': results})
             return results
+
+        prepared = created_prepared
 
         # ────────────────────────────────────────────────────
         # Фаза 3: Пулинг nmID (параллельно, с ретраями)
@@ -1681,7 +1710,14 @@ class WBProductImporter:
         from routes.product_defaults import get_defaults_for_product
 
         defaults = get_defaults_for_product(self.seller.id, imported_product.wb_subject_id)
+        fallback_sources: List[Any] = []
         sources: List[Any] = []
+
+        seller_default_chars = defaults.get('default_characteristics') or {}
+        if seller_default_chars:
+            extracted = extract_characteristics(seller_default_chars)
+            if extracted.dimensions:
+                fallback_sources.append(extracted.dimensions)
 
         supplier_product = getattr(imported_product, 'supplier_product', None)
         if supplier_product and getattr(supplier_product, 'dimensions_json', None):
@@ -1713,13 +1749,7 @@ class WBProductImporter:
             except Exception as exc:
                 logger.debug(f"Не удалось извлечь dimensions из characteristics: {exc}")
 
-        seller_default_chars = defaults.get('default_characteristics') or {}
-        if seller_default_chars:
-            extracted = extract_characteristics(seller_default_chars)
-            if extracted.dimensions:
-                sources.append(extracted.dimensions)
-
-        dimensions = build_dimensions(defaults, *sources)
+        dimensions = build_dimensions(defaults, *fallback_sources, *sources)
         logger.debug(f"Товар {imported_product.external_id}: WB dimensions={dimensions}")
         return dimensions
 
@@ -2852,6 +2882,13 @@ class WBProductImporter:
         if not photo_urls_raw:
             return
 
+        if len(photo_urls_raw) > MAX_WB_MEDIA_FILES:
+            logger.info(
+                f"Товар {imported_product.external_id}: ограничиваем фото "
+                f"{len(photo_urls_raw)} -> {MAX_WB_MEDIA_FILES} по лимиту WB"
+            )
+            photo_urls_raw = photo_urls_raw[:MAX_WB_MEDIA_FILES]
+
         # Получаем supplier product
         sp = getattr(imported_product, 'supplier_product', None)
         if not sp and imported_product.supplier_product_id:
@@ -3473,8 +3510,28 @@ def import_products_batch(seller_id: int, product_ids: List[int]) -> Dict:
             'error': 'Продавец не найден'
         }
 
+    products = ImportedProduct.query.filter(
+        ImportedProduct.id.in_(product_ids),
+        ImportedProduct.seller_id == seller_id,
+    ).all()
+    id_to_product = {product.id: product for product in products}
+    ordered_products = [id_to_product[pid] for pid in product_ids if pid in id_to_product]
+
     importer = WBProductImporter(seller)
-    stats = importer.import_multiple_products(product_ids)
+    batch_results = importer.batch_import_products_to_wb(ordered_products)
+    stats = {
+        'total': len(product_ids),
+        'imported': sum(1 for item in batch_results if item.get('status') == 'success'),
+        'failed': sum(1 for item in batch_results if item.get('status') == 'failed'),
+        'skipped': len(product_ids) - len(ordered_products) + sum(
+            1 for item in batch_results if item.get('status') == 'skipped'
+        ),
+        'errors': [
+            f"Товар {item.get('product_id')}: {item.get('error')}"
+            for item in batch_results
+            if item.get('error')
+        ],
+    }
 
     return {
         'success': True,
