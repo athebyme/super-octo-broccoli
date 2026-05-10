@@ -12,6 +12,7 @@ from services.wb_content_payload import (
 )
 from services.wb_validators import (
     WBValidationError,
+    clean_characteristics_for_update,
     prepare_card_for_update,
     prepare_create_cards_for_wb,
 )
@@ -67,6 +68,32 @@ class TestWBContentPayload(unittest.TestCase):
         self.assertEqual(variant["characteristics"], [
             {"id": 14177449, "value": ["Россия"]},
         ])
+
+    def test_normalize_create_payload_keeps_net_weight_as_number(self):
+        payload = [{
+            "subjectID": 123,
+            "variants": [{
+                "vendorCode": "SKU-1",
+                "brand": "Brand",
+                "title": "Товар",
+                "description": "Описание товара",
+                "dimensions": {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
+                "sizes": [{"price": 1000, "skus": ["2000000000011"]}],
+                "characteristics": [
+                    {
+                        "id": 123456,
+                        "name": "Вес товара без упаковки (г)",
+                        "charcType": "4",
+                        "value": "250 г",
+                    },
+                ],
+            }],
+        }]
+
+        normalized = normalize_create_cards_payload(payload)
+        characteristic = normalized[0]["variants"][0]["characteristics"][0]
+
+        self.assertEqual(characteristic, {"id": 123456, "value": 250})
 
     def test_prepare_create_cards_for_wb_validates_final_shape(self):
         payload = [{
@@ -146,6 +173,22 @@ class TestWBContentPayload(unittest.TestCase):
         )
 
         self.assertEqual(dimensions["weightBrutto"], 0.25)
+
+    def test_clean_characteristics_for_update_keeps_net_weight_as_number(self):
+        cleaned = clean_characteristics_for_update([
+            {
+                "id": 123456,
+                "name": "Вес товара без упаковки (г)",
+                "charcType": "4",
+                "value": ["318"],
+            },
+            {"id": 14177449, "name": "Страна производства", "value": "Россия"},
+        ])
+
+        self.assertEqual(cleaned, [
+            {"id": 123456, "value": 318},
+            {"id": 14177449, "value": ["Россия"]},
+        ])
 
 
 if __name__ == "__main__":

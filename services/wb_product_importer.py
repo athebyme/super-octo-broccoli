@@ -12,7 +12,10 @@ from models import db, ImportedProduct, Product, Seller, PricingSettings, Market
 from services.wb_api_client import MAX_WB_MEDIA_FILES, WildberriesAPIClient
 from services.wb_content_payload import (
     build_dimensions,
+    coerce_numeric_characteristic_value,
     extract_characteristics,
+    is_numeric_charc_type,
+    is_numeric_characteristic_name,
     is_packed_weight_charc_id,
     is_packed_weight_name,
 )
@@ -2224,10 +2227,17 @@ class WBProductImporter:
         # Загружаем справочники WB из БД для характеристик с пустым dictionary
         wb_directories = self._load_wb_directories()
 
-        # Создаём словарь: name -> {id, type, dictionary, ...}
+        # Создаём словари: name/id -> {id, type, dictionary, ...}
         wb_chars_by_name = {}
+        wb_chars_by_id = {}
         for char in wb_chars_list:
             char_name = char.get('name', '').strip()
+            char_id = char.get('charcID') or char.get('id')
+            try:
+                if char_id:
+                    wb_chars_by_id[int(char_id)] = char
+            except (TypeError, ValueError):
+                pass
             if char_name:
                 # Если dictionary пуст — подставляем из справочника
                 if not char.get('dictionary'):
@@ -2460,7 +2470,7 @@ class WBProductImporter:
 
             if formatted_value is not None and formatted_value != '':
                 # charcType=4 (числовой) — WB ожидает число, НЕ массив
-                if charc_type == 4:
+                if is_numeric_charc_type(charc_type):
                     if isinstance(formatted_value, list):
                         # Фильтруем None из списка
                         formatted_value = [v for v in formatted_value if v is not None]
@@ -2498,6 +2508,32 @@ class WBProductImporter:
                 })
                 used_char_ids.add(char_id)
                 logger.debug(f"Характеристика '{char_name}' -> id={char_id}, value={formatted_value}, charcType={charc_type}")
+
+        normalized_characteristics = []
+        for char in result_characteristics:
+            char_id = char.get('id')
+            try:
+                wb_char = wb_chars_by_id.get(int(char_id), {})
+            except (TypeError, ValueError):
+                wb_char = {}
+
+            if (
+                is_numeric_charc_type(wb_char.get('charcType'))
+                or is_numeric_characteristic_name(wb_char.get('name'))
+            ):
+                numeric_value = coerce_numeric_characteristic_value(char.get('value'))
+                if numeric_value is None:
+                    logger.warning(
+                        f"Числовая характеристика id={char_id} "
+                        f"'{wb_char.get('name', '')}': не удалось привести "
+                        f"{char.get('value')!r} к числу, пропускаем"
+                    )
+                    continue
+                char['value'] = numeric_value
+
+            normalized_characteristics.append(char)
+
+        result_characteristics = normalized_characteristics
 
         logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
         return result_characteristics
@@ -2612,7 +2648,7 @@ class WBProductImporter:
             return None
 
         # Для числовых типов (charcType=4) - извлекаем число и возвращаем как число
-        is_numeric = (charc_type == 4) or (isinstance(charc_type, str) and charc_type in ('numeric', 'integer', 'float', 'number'))
+        is_numeric = is_numeric_charc_type(charc_type)
         if is_numeric:
             # Убираем единицы измерения и извлекаем число
             # "6 шт" -> 6, "10 мм" -> 10, "0.1 кг" -> 0.1, "250 мл" -> 250

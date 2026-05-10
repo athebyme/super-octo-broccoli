@@ -405,10 +405,20 @@ def clean_characteristics_for_update(
     """
     cleaned = []
     wrapped_count = 0
+    numeric_count = 0
+
+    from services.wb_content_payload import (
+        coerce_numeric_characteristic_value,
+        is_numeric_characteristic,
+    )
 
     logger.info(f"🧹 Cleaning {len(characteristics)} characteristics for WB API update")
 
     for i, char in enumerate(characteristics):
+        if not isinstance(char, dict):
+            logger.debug(f"  Char #{i+1}: Skipping non-dict characteristic")
+            continue
+
         # Оставляем только необходимые поля
         cleaned_char = {
             'id': char.get('id'),
@@ -418,6 +428,22 @@ def clean_characteristics_for_update(
         # Пропускаем характеристики без значения
         if cleaned_char['value'] is None or cleaned_char['value'] == '':
             logger.debug(f"  Char #{i+1} (id={cleaned_char['id']}): Skipping (empty value)")
+            continue
+
+        if is_numeric_characteristic(char):
+            numeric_value = coerce_numeric_characteristic_value(cleaned_char['value'])
+            if numeric_value is None:
+                logger.warning(
+                    f"  Char #{i+1} (id={cleaned_char['id']}): Numeric value "
+                    f"{cleaned_char['value']!r} is not parseable, skipping"
+                )
+                continue
+            cleaned_char['value'] = numeric_value
+            numeric_count += 1
+            logger.debug(
+                f"  Char #{i+1} (id={cleaned_char['id']}): numeric characteristic -> {numeric_value}"
+            )
+            cleaned.append(cleaned_char)
             continue
 
         # КРИТИЧНО: Если value - строка, оборачиваем в массив
@@ -443,7 +469,10 @@ def clean_characteristics_for_update(
 
         cleaned.append(cleaned_char)
 
-    logger.info(f"✅ Cleaned {len(cleaned)} characteristics: {wrapped_count} wrapped in arrays, {len(characteristics) - len(cleaned)} skipped")
+    logger.info(
+        f"✅ Cleaned {len(cleaned)} characteristics: {wrapped_count} wrapped in arrays, "
+        f"{numeric_count} numeric, {len(characteristics) - len(cleaned)} skipped"
+    )
     return cleaned
 
 

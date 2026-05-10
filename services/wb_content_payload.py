@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 
 PACKED_WEIGHT_CHARC_IDS = {88952}
 
+NUMERIC_CHARACTERISTIC_NAME_FRAGMENTS = (
+    "вес товара без упаков",
+)
+
 DEFAULT_DIMENSIONS = {
     "length": 10,
     "width": 10,
@@ -72,8 +76,41 @@ def _to_number(value: Any) -> Optional[float]:
         return None
 
 
+def _normalize_number(value: float) -> Any:
+    return int(value) if value == int(value) else value
+
+
+def coerce_numeric_characteristic_value(value: Any) -> Optional[Any]:
+    number = _to_number(value)
+    if number is None:
+        return None
+    return _normalize_number(number)
+
+
 def _norm_name(name: Any) -> str:
     return re.sub(r"\s+", " ", str(name or "").strip().lower())
+
+
+def is_numeric_charc_type(value: Any) -> bool:
+    if isinstance(value, int):
+        return value == 4
+    normalized = str(value or "").strip().lower()
+    return normalized in {"4", "number", "numeric", "integer", "float"}
+
+
+def is_numeric_characteristic_name(name: Any) -> bool:
+    normalized = _norm_name(name)
+    return any(fragment in normalized for fragment in NUMERIC_CHARACTERISTIC_NAME_FRAGMENTS)
+
+
+def is_numeric_characteristic(char: Mapping[str, Any]) -> bool:
+    charc_type = char.get("charcType")
+    if charc_type is None:
+        charc_type = char.get("type")
+    return (
+        is_numeric_charc_type(charc_type)
+        or is_numeric_characteristic_name(char.get("name") or char.get("charcName"))
+    )
 
 
 def is_packed_weight_name(name: Any) -> bool:
@@ -347,6 +384,15 @@ def sanitize_wb_characteristics(characteristics: Any) -> Tuple[List[Dict[str, An
                 extracted_dimensions["weightBrutto"] = coerced
             logger.info("Dropped deprecated WB packed-weight characteristic id=%s name=%s", char_id, name)
             continue
+        if is_numeric_characteristic(char):
+            coerced_value = coerce_numeric_characteristic_value(value)
+            if coerced_value is None:
+                logger.info(
+                    "Dropped numeric WB characteristic with unparsable value id=%s name=%s value=%r",
+                    char_id, name, value,
+                )
+                continue
+            value = coerced_value
         cleaned.append({"id": char_id, "value": value})
 
     return cleaned, extracted_dimensions
