@@ -4717,3 +4717,247 @@ class CompetitorAlert(db.Model):
 
     def __repr__(self):
         return f'<CompetitorAlert #{self.id} {self.alert_type} {self.severity}>'
+
+
+# ============= АВТО-ПУБЛИКАЦИЯ ТОВАРОВ =============
+
+class AutoPublishSettings(db.Model):
+    """Настройки автоматической публикации товаров на маркетплейсы"""
+    __tablename__ = 'auto_publish_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+
+    # Главный переключатель
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)
+
+    # Целевой маркетплейс (пока только 'wb')
+    marketplace_code = db.Column(db.String(50), default='wb', nullable=False)
+
+    # Расписание
+    check_interval_minutes = db.Column(db.Integer, default=30, nullable=False)
+    last_run_at = db.Column(db.DateTime, nullable=True)
+    next_run_at = db.Column(db.DateTime, nullable=True)
+
+    # Лимиты пакета
+    batch_size = db.Column(db.Integer, default=10, nullable=False)
+    max_daily_publishes = db.Column(db.Integer, default=100, nullable=False)
+    daily_published_count = db.Column(db.Integer, default=0, nullable=False)
+    daily_count_reset_at = db.Column(db.DateTime, nullable=True)
+
+    # Строгость валидации: 'strict' (все проверки) | 'lenient' (только критические)
+    validation_mode = db.Column(db.String(20), default='strict', nullable=False)
+
+    # Retry
+    max_retries_per_product = db.Column(db.Integer, default=3, nullable=False)
+    retry_delay_minutes = db.Column(db.Integer, default=60, nullable=False)
+
+    # Circuit breaker: пауза при N подряд ошибках
+    failure_threshold = db.Column(db.Integer, default=5, nullable=False)
+    is_paused = db.Column(db.Boolean, default=False, nullable=False)
+    paused_reason = db.Column(db.Text, nullable=True)
+    paused_at = db.Column(db.DateTime, nullable=True)
+
+    # Фильтр поставщиков (JSON array supplier_ids, null = все)
+    supplier_ids_json = db.Column(db.Text, nullable=True)
+
+    # Уведомления
+    notify_on_success = db.Column(db.Boolean, default=False, nullable=False)
+    notify_on_failure = db.Column(db.Boolean, default=True, nullable=False)
+    notify_on_pause = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Атомарный лок для concurrency: UUID-токен, проставляется
+    # при захвате через "UPDATE ... WHERE _run_lock_token IS NULL" и сбрасывается
+    # в finally-блоке. SQLite сериализует write-транзакции — два процесса
+    # не смогут одновременно захватить.
+    _run_lock_token = db.Column('run_lock_token', db.String(64), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    seller = db.relationship('Seller', backref=db.backref('auto_publish_settings', uselist=False))
+
+    def get_supplier_ids(self):
+        if not self.supplier_ids_json:
+            return None
+        try:
+            return json.loads(self.supplier_ids_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'is_enabled': self.is_enabled,
+            'marketplace_code': self.marketplace_code,
+            'check_interval_minutes': self.check_interval_minutes,
+            'last_run_at': self.last_run_at.isoformat() if self.last_run_at else None,
+            'next_run_at': self.next_run_at.isoformat() if self.next_run_at else None,
+            'batch_size': self.batch_size,
+            'max_daily_publishes': self.max_daily_publishes,
+            'daily_published_count': self.daily_published_count,
+            'validation_mode': self.validation_mode,
+            'max_retries_per_product': self.max_retries_per_product,
+            'retry_delay_minutes': self.retry_delay_minutes,
+            'failure_threshold': self.failure_threshold,
+            'is_paused': self.is_paused,
+            'paused_reason': self.paused_reason,
+            'paused_at': self.paused_at.isoformat() if self.paused_at else None,
+            'supplier_ids': self.get_supplier_ids(),
+            'notify_on_success': self.notify_on_success,
+            'notify_on_failure': self.notify_on_failure,
+            'notify_on_pause': self.notify_on_pause,
+        }
+
+    def __repr__(self):
+        state = 'paused' if self.is_paused else ('enabled' if self.is_enabled else 'disabled')
+        return f'<AutoPublishSettings seller={self.seller_id} {state}>'
+
+
+class AutoPublishRun(db.Model):
+    """Один запуск автопубликации (цикл обработки пакета товаров)"""
+    __tablename__ = 'auto_publish_runs'
+    __table_args__ = (
+        db.Index('idx_apr_seller_status', 'seller_id', 'status'),
+        db.Index('idx_apr_created', 'created_at'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    run_uid = db.Column(db.String(36), unique=True, nullable=False, index=True)
+
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    # pending → running → completed | failed | cancelled | paused
+    triggered_by = db.Column(db.String(20), default='scheduler')  # scheduler | manual
+
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    duration_seconds = db.Column(db.Float, nullable=True)
+
+    # Счётчики
+    total_candidates = db.Column(db.Integer, default=0)
+    total_validated = db.Column(db.Integer, default=0)
+    total_published = db.Column(db.Integer, default=0)
+    total_failed = db.Column(db.Integer, default=0)
+    total_skipped = db.Column(db.Integer, default=0)
+
+    error_summary = db.Column(db.Text, nullable=True)  # JSON
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller', backref=db.backref('auto_publish_runs', lazy='dynamic'))
+    items = db.relationship('AutoPublishItem', backref='run', lazy='dynamic', cascade='all, delete-orphan')
+
+    def to_dict(self, include_items=False):
+        d = {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'run_uid': self.run_uid,
+            'status': self.status,
+            'triggered_by': self.triggered_by,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'duration_seconds': self.duration_seconds,
+            'total_candidates': self.total_candidates,
+            'total_validated': self.total_validated,
+            'total_published': self.total_published,
+            'total_failed': self.total_failed,
+            'total_skipped': self.total_skipped,
+            'error_summary': json.loads(self.error_summary) if self.error_summary else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+        if include_items:
+            d['items'] = [item.to_dict() for item in self.items.all()]
+        return d
+
+    def __repr__(self):
+        return f'<AutoPublishRun #{self.id} seller={self.seller_id} {self.status}>'
+
+
+class AutoPublishItem(db.Model):
+    """Один товар в запуске автопубликации — пошаговый трекинг через pipeline"""
+    __tablename__ = 'auto_publish_items'
+    __table_args__ = (
+        db.Index('idx_api_run_status', 'run_id', 'status'),
+        db.Index('idx_api_seller_status', 'seller_id', 'status'),
+        db.Index('idx_api_retry', 'status', 'next_retry_at'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.Integer, db.ForeignKey('auto_publish_runs.id'), nullable=False, index=True)
+    imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+
+    # Текущий шаг pipeline
+    step = db.Column(db.String(30), default='queued')
+    # queued → validating → uploading_card → card_created
+    # → uploading_photos → photos_done → setting_price
+    # → verifying → completed | failed | skipped
+
+    status = db.Column(db.String(20), default='pending')  # pending | processing | completed | failed | skipped
+
+    # Результат
+    wb_nm_id = db.Column(db.Integer, nullable=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True)
+
+    # Ошибки
+    error_message = db.Column(db.Text, nullable=True)
+    error_step = db.Column(db.String(30), nullable=True)
+    error_history_json = db.Column(db.Text, default='[]')
+
+    # Retry
+    retry_count = db.Column(db.Integer, default=0, nullable=False)
+    next_retry_at = db.Column(db.DateTime, nullable=True)
+
+    # Снимок валидации
+    validation_result_json = db.Column(db.Text, nullable=True)
+
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    imported_product = db.relationship('ImportedProduct', backref=db.backref('auto_publish_items', lazy='dynamic'))
+    product = db.relationship('Product', backref=db.backref('auto_publish_items', lazy='dynamic'))
+
+    def add_error(self, step, error_msg, retryable=False):
+        try:
+            history = json.loads(self.error_history_json or '[]')
+        except (json.JSONDecodeError, TypeError):
+            history = []
+        history.append({
+            'step': step,
+            'error': str(error_msg)[:500],
+            'at': datetime.utcnow().isoformat(),
+            'retryable': retryable,
+        })
+        self.error_history_json = json.dumps(history, ensure_ascii=False)
+
+    def to_dict(self):
+        product_title = None
+        if self.imported_product:
+            product_title = self.imported_product.title
+        try:
+            error_history = json.loads(self.error_history_json or '[]')
+        except (json.JSONDecodeError, TypeError):
+            error_history = []
+        return {
+            'id': self.id,
+            'run_id': self.run_id,
+            'imported_product_id': self.imported_product_id,
+            'product_title': product_title,
+            'step': self.step,
+            'status': self.status,
+            'wb_nm_id': self.wb_nm_id,
+            'product_id': self.product_id,
+            'error_message': self.error_message,
+            'error_step': self.error_step,
+            'error_history': error_history,
+            'retry_count': self.retry_count,
+            'next_retry_at': self.next_retry_at.isoformat() if self.next_retry_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AutoPublishItem #{self.id} product={self.imported_product_id} {self.step}/{self.status}>'

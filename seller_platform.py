@@ -38,6 +38,7 @@ from models import (
     ContentFactory, SocialAccount, ContentTemplate, ContentItem, ContentPlan,
     CompetitorMonitorSettings, CompetitorGroup, CompetitorProduct,
     CompetitorPriceSnapshot, CompetitorAlert,
+    AutoPublishSettings, AutoPublishRun, AutoPublishItem,
 )
 from services.wildberries_api import WildberriesAPIError, list_cards
 import json
@@ -6153,6 +6154,10 @@ register_content_factory_routes(app)
 from routes.competitors import register_competitor_routes
 register_competitor_routes(app)
 
+# ============= АВТО-ПУБЛИКАЦИЯ ТОВАРОВ =============
+from routes.auto_publish import register_auto_publish_routes
+register_auto_publish_routes(app)
+
 # ============= INTERNAL API ДЛЯ АГЕНТОВ =============
 from routes.internal_api import internal_api_bp
 app.register_blueprint(internal_api_bp)
@@ -6198,6 +6203,8 @@ def _run_startup_migrations():
         ('products', 'wb_discount', 'INTEGER'),
         ('products', 'wb_discounted_price', 'NUMERIC(10, 2)'),
         ('products', 'wb_price_synced_at', 'DATETIME'),
+        # Auto-publish atomic lock token
+        ('auto_publish_settings', 'run_lock_token', 'VARCHAR(64)'),
     ]
 
     for table, column, col_type in migrations:

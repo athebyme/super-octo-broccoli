@@ -977,6 +977,96 @@ def migrate(db_path):
                 pass
 
         # ============================================================
+        # Auto-publish tables
+        # ============================================================
+        print("\n📋 Таблицы авто-публикации товаров")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS auto_publish_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL UNIQUE REFERENCES sellers(id),
+                is_enabled BOOLEAN NOT NULL DEFAULT 0,
+                marketplace_code VARCHAR(50) NOT NULL DEFAULT 'wb',
+                check_interval_minutes INTEGER NOT NULL DEFAULT 30,
+                last_run_at DATETIME,
+                next_run_at DATETIME,
+                batch_size INTEGER NOT NULL DEFAULT 10,
+                max_daily_publishes INTEGER NOT NULL DEFAULT 100,
+                daily_published_count INTEGER NOT NULL DEFAULT 0,
+                daily_count_reset_at DATETIME,
+                validation_mode VARCHAR(20) NOT NULL DEFAULT 'strict',
+                max_retries_per_product INTEGER NOT NULL DEFAULT 3,
+                retry_delay_minutes INTEGER NOT NULL DEFAULT 60,
+                failure_threshold INTEGER NOT NULL DEFAULT 5,
+                is_paused BOOLEAN NOT NULL DEFAULT 0,
+                paused_reason TEXT,
+                paused_at DATETIME,
+                supplier_ids_json TEXT,
+                notify_on_success BOOLEAN NOT NULL DEFAULT 0,
+                notify_on_failure BOOLEAN NOT NULL DEFAULT 1,
+                notify_on_pause BOOLEAN NOT NULL DEFAULT 1,
+                run_lock_token VARCHAR(64),
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME
+            )
+        """)
+        aps_cols = {row[1] for row in cursor.execute("PRAGMA table_info(auto_publish_settings)").fetchall()}
+        add_column_if_missing(cursor, 'auto_publish_settings', 'run_lock_token', 'VARCHAR(64)', aps_cols)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS auto_publish_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                run_uid VARCHAR(36) NOT NULL UNIQUE,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                triggered_by VARCHAR(20) DEFAULT 'scheduler',
+                started_at DATETIME,
+                completed_at DATETIME,
+                duration_seconds REAL,
+                total_candidates INTEGER DEFAULT 0,
+                total_validated INTEGER DEFAULT 0,
+                total_published INTEGER DEFAULT 0,
+                total_failed INTEGER DEFAULT 0,
+                total_skipped INTEGER DEFAULT 0,
+                error_summary TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS auto_publish_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL REFERENCES auto_publish_runs(id),
+                imported_product_id INTEGER NOT NULL REFERENCES imported_products(id),
+                seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                step VARCHAR(30) DEFAULT 'queued',
+                status VARCHAR(20) DEFAULT 'pending',
+                wb_nm_id INTEGER,
+                product_id INTEGER REFERENCES products(id),
+                error_message TEXT,
+                error_step VARCHAR(30),
+                error_history_json TEXT DEFAULT '[]',
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at DATETIME,
+                validation_result_json TEXT,
+                started_at DATETIME,
+                completed_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_aps_seller ON auto_publish_settings(seller_id)",
+            "CREATE INDEX IF NOT EXISTS idx_apr_seller_status ON auto_publish_runs(seller_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_apr_created ON auto_publish_runs(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_api_run_status ON auto_publish_items(run_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_api_seller_status ON auto_publish_items(seller_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_api_retry ON auto_publish_items(status, next_retry_at)",
+            "CREATE INDEX IF NOT EXISTS idx_api_imported_product ON auto_publish_items(imported_product_id)",
+        ]:
+            try:
+                cursor.execute(idx_sql)
+            except sqlite3.OperationalError:
+                pass
+
+        # ============================================================
         # Коммит изменений
         # ============================================================
         conn.commit()

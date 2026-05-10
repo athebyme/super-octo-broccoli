@@ -45,6 +45,13 @@ def init_scheduler(flask_app):
         except Exception as e:
             logger.error(f"Failed to reset stuck sync statuses: {e}")
 
+        # Сброс зависших авто-публикаций после перезапуска
+        try:
+            from services.auto_publish_service import reset_stuck_auto_publish
+            reset_stuck_auto_publish(flask_app)
+        except Exception as e:
+            logger.error(f"Failed to reset stuck auto-publish runs: {e}")
+
     # Создаем фоновый планировщик
     scheduler = BackgroundScheduler(
         daemon=True,
@@ -158,6 +165,16 @@ def init_scheduler(flask_app):
         trigger=IntervalTrigger(hours=24),
         id='competitor_snapshot_compaction',
         name='Compact old competitor price snapshots',
+        replace_existing=True
+    )
+
+    # Авто-публикация товаров на WB (каждые 5 минут проверяет продавцов)
+    from services.auto_publish_service import check_and_auto_publish_all_sellers
+    scheduler.add_job(
+        func=lambda: check_and_auto_publish_all_sellers(flask_app),
+        trigger=IntervalTrigger(minutes=5),
+        id='auto_publish_products',
+        name='Auto-publish validated products to WB',
         replace_existing=True
     )
 
