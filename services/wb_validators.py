@@ -320,6 +320,7 @@ def prepare_card_for_update(
         'subjectName',
         'wholesale',
         'needKiz',
+        'isSwatchTryOn',
         # ВАЖНО: brand НЕ удаляем — если поле отсутствует, WB обнуляет бренд на карточке.
         # Бренд всегда передаём как есть из карточки (или новый при update_brand).
     ]

@@ -134,13 +134,26 @@ class TestWBContentPayload(unittest.TestCase):
             "nmID": 100,
             "vendorCode": "SKU-1",
             "brand": "Brand",
+            "imtID": 200,
+            "subjectID": 300,
+            "subjectName": "Subject",
+            "needKiz": False,
+            "isSwatchTryOn": False,
             "sizes": [{"chrtID": 10, "skus": ["2000000000011"]}],
-            "dimensions": {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
+            "dimensions": {
+                "length": 10,
+                "width": 8,
+                "height": 4,
+                "weightBrutto": 0.1,
+                "isValid": True,
+            },
             "characteristics": [
                 {"id": "88952", "value": "400 г"},
                 {"id": 14177449, "value": "Россия"},
             ],
             "photos": ["https://example.test/photo.jpg"],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
         }
 
         prepared = prepare_card_for_update(full_card, {"dimensions": {"width": 9}})
@@ -155,6 +168,14 @@ class TestWBContentPayload(unittest.TestCase):
             {"id": 14177449, "value": ["Россия"]},
         ])
         self.assertNotIn("photos", prepared)
+        self.assertNotIn("imtID", prepared)
+        self.assertNotIn("subjectID", prepared)
+        self.assertNotIn("subjectName", prepared)
+        self.assertNotIn("needKiz", prepared)
+        self.assertNotIn("isSwatchTryOn", prepared)
+        self.assertNotIn("createdAt", prepared)
+        self.assertNotIn("updatedAt", prepared)
+        self.assertNotIn("isValid", prepared["dimensions"])
 
     def test_build_dimensions_converts_mm_and_grams_from_legacy_sources(self):
         dimensions = build_dimensions(

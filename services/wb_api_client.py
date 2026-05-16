@@ -1276,7 +1276,7 @@ class WildberriesAPIClient:
 
         Note:
             - Макс 1000 товаров за запрос
-            - Цена должна быть в копейках (целое число) или в рублях (число с плавающей точкой)
+            - Цена должна быть целым числом в валюте магазина
             - Скидка указывается в процентах (0-99)
         """
         if len(prices) > 1000:
@@ -1299,11 +1299,34 @@ class WildberriesAPIClient:
                 logger.warning(f"⚠️ Skipping invalid nmID: {nm_id}")
                 invalid_count += 1
                 continue
-            if price is None or (isinstance(price, (int, float)) and price <= 0):
+            if price is None or not isinstance(price, (int, float)) or price <= 0:
                 logger.warning(f"⚠️ Skipping nmID {nm_id}: price={price} (must be > 0)")
                 invalid_count += 1
                 continue
-            valid_prices.append(p)
+            if isinstance(price, float) and not price.is_integer():
+                logger.warning(f"⚠️ Skipping nmID {nm_id}: price={price} (must be a whole number)")
+                invalid_count += 1
+                continue
+
+            item = {
+                'nmID': nm_id,
+                'price': int(price),
+            }
+
+            discount = p.get('discount')
+            if discount is not None:
+                if (
+                    not isinstance(discount, (int, float))
+                    or isinstance(discount, float) and not discount.is_integer()
+                    or discount < 0
+                    or discount > 99
+                ):
+                    logger.warning(f"⚠️ Skipping nmID {nm_id}: discount={discount} (must be 0-99)")
+                    invalid_count += 1
+                    continue
+                item['discount'] = int(discount)
+
+            valid_prices.append(item)
 
         if invalid_count > 0:
             logger.warning(f"⚠️ Filtered out {invalid_count} invalid items before upload")
@@ -1784,16 +1807,13 @@ class WildberriesAPIClient:
         Returns:
             Список ошибок: [{"object": "...", "nmID": 123, "updatedAt": "...", "errors": ["..."]}]
         """
-        endpoint = "/content/v2/cards/error/list"
-
         try:
-            response = self._make_request(
-                'GET', 'content', endpoint,
-                log_to_db=log_to_db,
-                seller_id=seller_id
-            )
-            result = response.json()
-            errors = result.get('data', []) or []
+            result = self.get_cards_errors_list(log_to_db=log_to_db, seller_id=seller_id)
+            data = result.get('data')
+            if isinstance(data, dict):
+                errors = data.get('items', []) or []
+            else:
+                errors = data or []
             if errors:
                 logger.warning(f"WB cards error list: {len(errors)} errors found")
             return errors
@@ -2431,6 +2451,11 @@ class WildberriesAPIClient:
             ...     }]
             ... )
         """
+        if len(variants) > 30:
+            raise WBAPIException(
+                f"Too many variants ({len(variants)}). Max 30 variants per imtID."
+            )
+
         endpoint = "/content/v2/cards/upload"
 
         # Формируем тело запроса согласно спецификации WB API
@@ -2500,6 +2525,14 @@ class WildberriesAPIClient:
                 f"Too many cards ({len(cards)}). Max 100 per request."
             )
 
+        for idx, card in enumerate(cards):
+            variants = card.get('variants') if isinstance(card, dict) else None
+            if isinstance(variants, list) and len(variants) > 30:
+                raise WBAPIException(
+                    f"Too many variants in card[{idx}] ({len(variants)}). "
+                    f"Max 30 variants per imtID."
+                )
+
         endpoint = "/content/v2/cards/upload"
 
         logger.info(f"📤 Batch creating {len(cards)} product cards")
@@ -2566,6 +2599,14 @@ class WildberriesAPIClient:
             Полный ответ от WB API
         """
         endpoint = "/content/v2/cards/error/list"
+        body = {
+            "cursor": {
+                "limit": 100
+            },
+            "order": {
+                "ascending": False
+            }
+        }
 
         logger.info("Getting cards errors list")
 
@@ -2574,7 +2615,7 @@ class WildberriesAPIClient:
                 'POST',
                 'content',
                 endpoint,
-                json={},
+                json=body,
                 log_to_db=log_to_db,
                 seller_id=seller_id
             )
