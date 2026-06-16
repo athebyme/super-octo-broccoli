@@ -687,6 +687,24 @@ class SupplierCSVParser:
         return products
 
 
+def discover_columns_by_prefix(header_index: dict, prefix: str) -> list:
+    """Найти индексы колонок, заголовки которых матчат ^<prefix>\\d*$.
+
+    Возвращает индексы в порядке: голый префикс (image) первым, затем
+    числовые суффиксы по возрастанию (image1, image2, ..., image10).
+    """
+    pattern = re.compile(rf'^{re.escape(prefix)}(\d*)$')
+    matched = []
+    for name, idx in header_index.items():
+        m = pattern.match(name)
+        if m:
+            suffix = m.group(1)
+            order = int(suffix) if suffix else -1  # голый префикс — первым
+            matched.append((order, idx))
+    matched.sort(key=lambda pair: pair[0])
+    return [idx for _, idx in matched]
+
+
 # ============================================================================
 # SUPPLIER SERVICE
 # ============================================================================
