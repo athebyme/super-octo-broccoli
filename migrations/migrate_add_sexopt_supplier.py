@@ -55,9 +55,10 @@ SEXOPT_CSV_COLUMN_MAPPING = {
         "type": "stock_sum"
     },
 
-    # Фото (прямые URL из нескольких колонок)
+    # Фото (прямые URL — все колонки image, image1..imageN автоматически)
     "photo_urls": {
         "columns": ["image", "image1", "image2"],
+        "columns_prefix": "image",
         "type": "photo_urls"
     },
 
