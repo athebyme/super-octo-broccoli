@@ -1831,7 +1831,7 @@
             </div>
 
             <!-- Товары -->
-            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history'] %}
+            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if products_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }" :aria-expanded="open" aria-label="Товары">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -1848,6 +1848,7 @@
                     <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_sync_status_page' %}active{% endif %}">Синхронизация</a>
                     <a href="{{ url_for('products_merge') }}" class="sidebar-sublink {% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %}active{% endif %}">Объединение</a>
                     <a href="{{ url_for('blocked_cards') }}" class="sidebar-sublink {% if request.endpoint in ['blocked_cards', 'blocked_cards_export'] %}active{% endif %}">Блокировки</a>
+                    <a href="{{ url_for('card_quality_page') }}" class="sidebar-sublink {% if request.endpoint == 'card_quality_page' %}active{% endif %}">Качество</a>
                 </div>
             </div>
 
@@ -1871,7 +1872,7 @@
             </div>
 
             <!-- Поставщики -->
-            {% set suppliers_active = request.endpoint and ('supplier_catalog' in request.endpoint or request.endpoint in ['seller_my_products', 'seller_product_wb_preview']) %}
+            {% set suppliers_active = request.endpoint and ('supplier_catalog' in request.endpoint or request.endpoint in ['seller_my_products', 'seller_product_wb_preview', 'auto_publish_settings']) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if suppliers_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if suppliers_active else 'false' }} }" :aria-expanded="open" aria-label="Поставщики">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -1885,6 +1886,7 @@
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('supplier_catalog') }}" class="sidebar-sublink {% if request.endpoint and 'supplier_catalog' in request.endpoint %}active{% endif %}">Каталог</a>
                     <a href="{{ url_for('seller_my_products') }}" class="sidebar-sublink {% if request.endpoint in ['seller_my_products', 'seller_product_wb_preview'] %}active{% endif %}">Мои товары</a>
+                    <a href="{{ url_for('auto_publish_settings') }}" class="sidebar-sublink {% if request.endpoint in ['auto_publish_settings'] %}active{% endif %}">Авто-публикация</a>
                 </div>
             </div>
 

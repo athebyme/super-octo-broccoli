@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% from "macros/components.html" import page_header, stat_card, stat_grid, badge, score_gauge, wb_rating_badge %}
+{% block title %}Качество карточек - Seller Hub{% endblock %}
+{% block content %}
+<div x-data="cardQualityPage()" x-init="init()">
+  <div class="sh-page-header"><div class="sh-page-header-content">
+    <div><h1 class="sh-page-title">Качество карточек</h1>
+      <p class="sh-page-subtitle">WB-рейтинг и наш Quality Score</p></div>
+    <div class="sh-page-actions">
+      <button @click="refresh()" :disabled="refreshing" class="sh-btn sh-btn--white-outline sh-btn--sm">Обновить рейтинги</button>
+    </div>
+  </div></div>
+
+  <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:32px">
+    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Средний Quality Score</span></div>
+      <div class="sh-stat-value" x-text="summary.avg_quality ?? '—'"></div></div>
+    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Средний WB-рейтинг (0–10)</span></div>
+      <div class="sh-stat-value" x-text="summary.avg_wb_rating ?? '—'"></div></div>
+    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Карточек</span></div>
+      <div class="sh-stat-value" x-text="summary.total ?? 0"></div></div>
+    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Требуют внимания</span></div>
+      <div class="sh-stat-value" x-text="needAttention"></div></div>
+  </div>
+
+  <div class="sh-card" style="padding:0;overflow:hidden">
+    <table class="sh-table" style="width:100%">
+      <thead><tr>
+        <th>Артикул</th><th>Название</th><th>WB карточка</th><th>WB отзывы</th><th>Quality</th><th></th>
+      </tr></thead>
+      <tbody>
+        <template x-for="it in items" :key="it.product_id">
+          <tr>
+            <td x-text="it.nm_id"></td>
+            <td x-text="it.title"></td>
+            <td x-html="wbBadge(it.wb_product_rating, 10)"></td>
+            <td x-html="wbBadge(it.wb_feedback_rating, 5)"></td>
+            <td><span :style="gaugeStyle(it.quality_score)" x-text="it.quality_score ?? '—'"></span></td>
+            <td><button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  {# ── Slideover деталь ── #}
+  <div x-show="drawer" x-cloak class="sh-slideover-backdrop" @click="drawer=false"></div>
+  <div x-show="drawer" x-cloak class="sh-slideover">
+    <template x-if="detail">
+      <div style="padding:24px">
+        <h2 class="sh-page-title" style="font-size:1.25rem" x-text="'Артикул ' + (detail.nm_id||'')"></h2>
+        <div style="display:flex;gap:24px;align-items:center;margin:16px 0">
+          <div :style="gaugeStyle(detail.quality_score, 72)" x-text="Math.round(detail.quality_score)"></div>
+          <div>
+            <div>WB: оценка карточки <span x-html="wbBadge(detail.wb_product_rating,10)"></span></div>
+            <div>WB: по отзывам <span x-html="wbBadge(detail.wb_feedback_rating,5)"></span></div>
+            <div class="text-gray-400 text-xs" x-text="detail.nm_rating_checked_at ? ('обновлено '+detail.nm_rating_checked_at) : ''"></div>
+          </div>
+        </div>
+        <template x-for="(d,name) in detail.dimensions" :key="name">
+          <div style="margin:8px 0">
+            <div style="display:flex;justify-content:space-between;font-size:13px">
+              <span x-text="name"></span><span x-text="d.score + '%'"></span></div>
+            <div style="height:8px;background:#ece9e4;border-radius:4px">
+              <div :style="'height:8px;border-radius:4px;width:'+d.score+'%;background:'+barColor(d.status)"></div></div>
+            <div class="text-gray-500 text-xs" x-show="d.hint" x-text="d.hint"></div>
+          </div>
+        </template>
+        <div style="margin-top:16px;display:flex;gap:8px">
+          <button class="sh-btn sh-btn--primary sh-btn--sm" @click="aiAnalyze(detail.product_id)" :disabled="aiRunning">🤖 Глубокий AI-анализ</button>
+        </div>
+        <div x-show="aiRunning" class="text-gray-500 text-xs" style="margin-top:8px" x-text="aiStatus"></div>
+      </div>
+    </template>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+function cardQualityPage() {
+  return {
+    items: [], summary: {}, detail: null, drawer: false,
+    refreshing: false, aiRunning: false, aiStatus: '', _poll: null,
+    get needAttention() { return this.items.filter(i => (i.quality_score ?? 0) < 50 || (i.wb_product_rating ?? 10) < 6).length; },
+    async init() { await this.load(); },
+    async load() {
+      const r = await fetch('/api/card-quality/list?sort=quality_score&order=asc&per_page=100');
+      const d = await r.json();
+      this.items = d.items || []; this.summary = d.summary || {};
+    },
+    async openDetail(id) {
+      this.drawer = true; this.detail = null;
+      const r = await fetch('/api/card-quality/' + id);
+      const d = await r.json(); this.detail = d.data;
+    },
+    async refresh() {
+      this.refreshing = true;
+      await fetch('/api/card-quality/refresh', {method:'POST', headers:{'X-CSRFToken':'{{ csrf_token() }}'}});
+      this.$store.toasts.info('Обновление рейтингов запущено — данные появятся через несколько минут');
+      this.refreshing = false;
+    },
+    async aiAnalyze(id) {
+      this.aiRunning = true; this.aiStatus = 'Запуск агентов…';
+      const r = await fetch('/api/card-quality/' + id + '/ai-analyze', {method:'POST', headers:{'X-CSRFToken':'{{ csrf_token() }}'}});
+      const d = await r.json();
+      if (!d.success) { this.aiStatus = d.error || 'Ошибка'; this.aiRunning = false; return; }
+      const taskId = Object.values(d.task_ids)[0];
+      this._poll = setInterval(async () => {
+        const s = await (await fetch('/agents/api/tasks/' + taskId + '/status')).json();
+        const t = s.task; this.aiStatus = 'Статус: ' + t.status;
+        if (t.status !== 'queued' && t.status !== 'running') {
+          clearInterval(this._poll); this.aiRunning = false;
+          this.aiStatus = (t.result && t.result.recommendations) ? t.result.recommendations.join(' · ') : 'Готово';
+        }
+      }, 3000);
+    },
+    wbBadge(v, scale) {
+      if (v === null || v === undefined) return '<span style="color:#9a9a9a">—</span>';
+      const col = scale === 10 ? (v>=8?'#15803d':v>=6?'#b45309':'#b91c1c') : (v>=4.5?'#15803d':v>=3.5?'#b45309':'#b91c1c');
+      return '<span style="color:'+col+';font-weight:500">★ '+v.toFixed(1)+'<span style="color:#9a9a9a;font-size:11px">/'+scale+'</span></span>';
+    },
+    barColor(status) { return status==='ok'?'#16a34a':status==='warning'?'#d97706':'#dc2626'; },
+    gaugeStyle(v, size) {
+      const col = (v??0)>=70?'#16a34a':(v??0)>=50?'#d97706':'#dc2626';
+      const s = size||40;
+      return `display:inline-flex;align-items:center;justify-content:center;width:${s}px;height:${s}px;border-radius:50%;color:#fff;font-weight:600;font-size:${Math.round(s/3)}px;background:${col}`;
+    },
+  };
+}
+</script>
+</div>
+{% endblock %}
