@@ -6069,6 +6069,10 @@ register_pricing_routes(app)
 from routes.blocked_cards import register_blocked_cards_routes
 register_blocked_cards_routes(app)
 
+# ============= РОУТЫ КАЧЕСТВА КАРТОЧЕК =============
+from routes.card_quality import register_card_quality_routes
+register_card_quality_routes(app)
+
 # ============= РОУТЫ ОБОГАЩЕНИЯ КАРТОЧЕК ДАННЫМИ ПОСТАВЩИКА =============
 from routes.enrichment import register_enrichment_routes
 register_enrichment_routes(app)
