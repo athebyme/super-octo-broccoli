@@ -5,6 +5,7 @@ import threading
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
+from sqlalchemy import func
 
 from models import db, Product, CardRatingHistory
 from services.card_quality_scorer import card_quality_detail
@@ -42,12 +43,18 @@ def register_card_quality_routes(app):
             pagination = q.paginate(page=page, per_page=per_page, error_out=False)
             items = [card_quality_detail(p) for p in pagination.items]
 
-            scored = [p.quality_score for p in pagination.items if p.quality_score is not None]
-            ratings = [p.nm_rating for p in pagination.items if p.nm_rating is not None]
+            agg = db.session.query(
+                func.avg(Product.quality_score),
+                func.avg(Product.nm_rating),
+            ).filter(Product.seller_id == current_user.seller.id, Product.is_active == True).one()
+            need_attention = Product.query.filter(
+                Product.seller_id == current_user.seller.id, Product.is_active == True
+            ).filter((Product.quality_score < 50) | (Product.nm_rating < 6)).count()
             summary = {
-                'avg_quality': round(sum(scored) / len(scored), 1) if scored else None,
-                'avg_wb_rating': round(sum(ratings) / len(ratings), 1) if ratings else None,
+                'avg_quality': round(agg[0], 1) if agg[0] is not None else None,
+                'avg_wb_rating': round(agg[1], 1) if agg[1] is not None else None,
                 'total': pagination.total,
+                'need_attention': need_attention,
             }
             return jsonify({'success': True, 'items': items, 'summary': summary,
                             'page': page, 'pages': pagination.pages})
@@ -113,7 +120,8 @@ def register_card_quality_routes(app):
     def api_card_quality_refresh():
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'API ключ WB не настроен'}), 403
-        from services.product_sync_scheduler import sync_card_ratings_all_sellers
+        from services.product_sync_scheduler import sync_card_ratings_for_seller
         app_obj = current_app._get_current_object()
-        threading.Thread(target=sync_card_ratings_all_sellers, args=(app_obj,), daemon=True).start()
+        seller_id = current_user.seller.id
+        threading.Thread(target=sync_card_ratings_for_seller, args=(app_obj, seller_id), daemon=True).start()
         return jsonify({'success': True, 'message': 'Обновление рейтингов запущено'})

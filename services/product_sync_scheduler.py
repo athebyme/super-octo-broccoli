@@ -378,9 +378,9 @@ def _perform_price_monitoring_task(seller_id, flask_app):
             logger.exception(f"❌ Price monitoring failed for seller {seller_id}: {str(e)}")
 
 
-def sync_card_ratings_all_sellers(flask_app):
-    """Тянет WB productRating/feedbackRating для активного каталога и
-    пересчитывает Quality Score. Запускается планировщиком (раз в несколько часов).
+def sync_card_ratings_for_seller(flask_app, seller_id):
+    """Тянет WB productRating/feedbackRating для одного продавца и
+    пересчитывает Quality Score.
     Лимит sales-funnel: 3 req/min → пауза 20с между батчами по 1000 nmId."""
     import time
     from datetime import timedelta
@@ -390,67 +390,88 @@ def sync_card_ratings_all_sellers(flask_app):
 
     with flask_app.app_context():
         try:
-            sellers = Seller.query.filter(
-                Seller._wb_api_key_encrypted.isnot(None),
-                Seller._wb_api_key_encrypted != ''
-            ).all()
+            seller = Seller.query.get(seller_id)
+            if not seller or not seller.has_valid_api_key():
+                logger.info(f"sync_card_ratings_for_seller: seller {seller_id} not found or no valid API key")
+                return
+
+            products = Product.query.filter_by(seller_id=seller.id, is_active=True)\
+                .filter(Product.nm_id.isnot(None)).all()
+            if not products:
+                logger.info(f"sync_card_ratings_for_seller: no active products with nm_id for seller {seller_id}")
+                return
+
+            by_nm = {p.nm_id: p for p in products}
+            nm_ids = list(by_nm.keys())
+
             period_end = datetime.utcnow().date()
             period_start = period_end - timedelta(days=30)
             ps, pe = period_start.isoformat(), period_end.isoformat()
 
-            for seller in sellers:
-                if not seller.has_valid_api_key():
-                    continue
-                products = Product.query.filter_by(seller_id=seller.id, is_active=True)\
-                    .filter(Product.nm_id.isnot(None)).all()
-                if not products:
-                    continue
-                by_nm = {p.nm_id: p for p in products}
-                nm_ids = list(by_nm.keys())
-
-                client = WildberriesAPIClient(
-                    api_key=seller.wb_api_key,
-                    db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
-                )
-                now = datetime.utcnow()
-                try:
-                    for i in range(0, len(nm_ids), 1000):
-                        batch = nm_ids[i:i + 1000]
-                        resp = client.get_sales_funnel_products(
-                            period_start=ps, period_end=pe,
-                            nm_ids=batch, limit=1000,
-                            log_to_db=True, seller_id=seller.id
-                        )
-                        ratings = parse_sales_funnel_ratings(resp)
-                        for nm_id, r in ratings.items():
-                            p = by_nm.get(nm_id)
-                            if not p:
-                                continue
-                            if r['product_rating'] is not None:
-                                p.nm_rating = r['product_rating']
+            client = WildberriesAPIClient(
+                api_key=seller.wb_api_key,
+                db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
+            )
+            now = datetime.utcnow()
+            try:
+                for i in range(0, len(nm_ids), 1000):
+                    batch = nm_ids[i:i + 1000]
+                    resp = client.get_sales_funnel_products(
+                        period_start=ps, period_end=pe,
+                        nm_ids=batch, limit=1000,
+                        log_to_db=True, seller_id=seller.id
+                    )
+                    ratings = parse_sales_funnel_ratings(resp)
+                    for nm_id, r in ratings.items():
+                        p = by_nm.get(nm_id)
+                        if not p:
+                            continue
+                        if r['product_rating'] is not None:
+                            p.nm_rating = r['product_rating']
+                        if r['feedback_rating'] is not None:
                             p.wb_feedback_rating = r['feedback_rating']
-                            p.nm_rating_checked_at = now
-                        if i + 1000 < len(nm_ids):
-                            time.sleep(20)  # лимит 3 req/min
+                        p.nm_rating_checked_at = now
+                    if i + 1000 < len(nm_ids):
+                        time.sleep(20)  # лимит 3 req/min
 
-                    # Пересчёт Quality Score для всех активных карточек (дёшево)
-                    for p in products:
-                        cq = compute_card_quality(product_to_card_input(p))
-                        p.quality_score = cq['score']
-                        p.quality_breakdown_json = json.dumps(cq['dimensions'], ensure_ascii=False)
-                        p.quality_checked_at = now
-                        db.session.add(CardRatingHistory(
-                            seller_id=seller.id, product_id=p.id, nm_id=p.nm_id,
-                            wb_product_rating=p.nm_rating, wb_feedback_rating=p.wb_feedback_rating,
-                            quality_score=cq['score'], captured_at=now,
-                        ))
-                    db.session.commit()
-                    logger.info(f"✅ Card ratings synced for seller {seller.id}: {len(products)} products")
-                except Exception as e:
-                    db.session.rollback()
-                    logger.error(f"❌ Card rating sync failed for seller {seller.id}: {e}")
+                # Пересчёт Quality Score для всех активных карточек (дёшево)
+                for p in products:
+                    cq = compute_card_quality(product_to_card_input(p))
+                    p.quality_score = cq['score']
+                    p.quality_breakdown_json = json.dumps(cq['dimensions'], ensure_ascii=False)
+                    p.quality_checked_at = now
+                    db.session.add(CardRatingHistory(
+                        seller_id=seller.id, product_id=p.id, nm_id=p.nm_id,
+                        wb_product_rating=p.nm_rating, wb_feedback_rating=p.wb_feedback_rating,
+                        quality_score=cq['score'], captured_at=now,
+                    ))
+                db.session.commit()
+                logger.info(f"✅ Card ratings synced for seller {seller.id}: {len(products)} products")
+            except Exception as e:
+                db.session.rollback()
+                logger.error(f"❌ Card rating sync failed for seller {seller.id}: {e}")
+        except Exception as e:
+            logger.exception(f"❌ Error in sync_card_ratings_for_seller for seller {seller_id}: {e}")
+
+
+def sync_card_ratings_all_sellers(flask_app):
+    """Тянет WB productRating/feedbackRating для активного каталога всех продавцов и
+    пересчитывает Quality Score. Запускается планировщиком (раз в несколько часов)."""
+    from models import Seller, db
+
+    with flask_app.app_context():
+        try:
+            sellers = Seller.query.filter(
+                Seller._wb_api_key_encrypted.isnot(None),
+                Seller._wb_api_key_encrypted != ''
+            ).all()
+            seller_ids = [s.id for s in sellers]
         except Exception as e:
             logger.exception(f"❌ Error in sync_card_ratings_all_sellers: {e}")
+            return
+
+    for seller_id in seller_ids:
+        sync_card_ratings_for_seller(flask_app, seller_id)
 
 
 def sync_blocked_cards_all_sellers(flask_app):

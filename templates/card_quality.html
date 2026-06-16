@@ -19,7 +19,7 @@
     <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Карточек</span></div>
       <div class="sh-stat-value" x-text="summary.total ?? 0"></div></div>
     <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Требуют внимания</span></div>
-      <div class="sh-stat-value" x-text="needAttention"></div></div>
+      <div class="sh-stat-value" x-text="summary.need_attention ?? needAttention"></div></div>
   </div>
 
   <div class="sh-card" style="padding:0;overflow:hidden">
