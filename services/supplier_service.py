@@ -399,6 +399,17 @@ class SupplierCSVParser:
                     resolved_cols[col_key] = label
             resolved['columns'] = resolved_cols
 
+        # Авто-обнаружение колонок по префиксу (например, все image, image1..imageN)
+        prefix = config.get('columns_prefix')
+        if isinstance(prefix, str) and prefix:
+            discovered = discover_columns_by_prefix(header_index, prefix)
+            existing = resolved.get('columns')
+            merged = list(existing) if isinstance(existing, list) else []
+            for idx in discovered:
+                if idx not in merged:
+                    merged.append(idx)
+            resolved['columns'] = merged
+
         return resolved
 
     def _extract_fields_by_mapping(self, row: list, mapping: dict) -> Optional[Dict]:
@@ -429,14 +440,21 @@ class SupplierCSVParser:
                 continue
 
             if field_type == 'photo_urls':
-                # Сборка фото из нескольких колонок (прямые URL)
+                # Сборка фото из нескольких колонок (прямые URL).
+                # Если в колонке несколько URL через разделитель — разбиваем.
                 columns = config.get('columns', [])
+                sep = config.get('separator')
                 photos = []
                 for col_idx in columns:
-                    if isinstance(col_idx, int) and col_idx < len(row):
-                        url = row[col_idx].strip()
-                        if url and url.startswith('http'):
-                            photos.append({'original': url})
+                    if isinstance(col_idx, int) and 0 <= col_idx < len(row):
+                        cell = row[col_idx].strip()
+                        if not cell:
+                            continue
+                        parts = cell.split(sep) if sep else [cell]
+                        for part in parts:
+                            url = part.strip()
+                            if url and url.startswith('http'):
+                                photos.append({'original': url})
                 product['photo_urls'] = photos
                 continue
 
