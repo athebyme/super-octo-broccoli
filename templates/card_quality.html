@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/components.html" import page_header, stat_card, stat_grid, badge, score_gauge, wb_rating_badge %}
+{% from "macros/components.html" import page_header, stat_card, stat_grid, badge, wb_rating_badge %}
 {% block title %}Качество карточек - Seller Hub{% endblock %}
 {% block content %}
 <div x-data="cardQualityPage()" x-init="init()">
@@ -65,6 +65,11 @@
             <div class="text-gray-500 text-xs" x-show="d.hint" x-text="d.hint"></div>
           </div>
         </template>
+        <div style="margin-top:16px">
+          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px">Тренд (Quality Score / рейтинг WB)</div>
+          <div style="height:160px"><canvas x-ref="trendChart"></canvas></div>
+          <div x-show="!detail.trend || !detail.trend.length" class="text-gray-400 text-xs">Пока нет истории — появится после нескольких синхронизаций</div>
+        </div>
         <div style="margin-top:16px;display:flex;gap:8px">
           <button class="sh-btn sh-btn--primary sh-btn--sm" @click="aiAnalyze(detail.product_id)" :disabled="aiRunning">🤖 Глубокий AI-анализ</button>
         </div>
@@ -78,7 +83,7 @@
 function cardQualityPage() {
   return {
     items: [], summary: {}, detail: null, drawer: false,
-    refreshing: false, aiRunning: false, aiStatus: '', _poll: null,
+    refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
     get needAttention() { return this.items.filter(i => (i.quality_score ?? 0) < 50 || (i.wb_product_rating ?? 10) < 6).length; },
     async init() { await this.load(); },
     async load() {
@@ -90,6 +95,7 @@ function cardQualityPage() {
       this.drawer = true; this.detail = null;
       const r = await fetch('/api/card-quality/' + id);
       const d = await r.json(); this.detail = d.data;
+      this.$nextTick(() => this.renderTrend());
     },
     async refresh() {
       this.refreshing = true;
@@ -111,6 +117,34 @@ function cardQualityPage() {
           this.aiStatus = (t.result && t.result.recommendations) ? t.result.recommendations.join(' · ') : 'Готово';
         }
       }, 3000);
+    },
+    renderTrend() {
+      const el = this.$refs.trendChart;
+      if (!el) return;
+      if (this._trendChart) { this._trendChart.destroy(); this._trendChart = null; }
+      const pts = (this.detail && this.detail.trend) || [];
+      if (!pts.length) return;
+      const labels = pts.map(p => {
+        const d = new Date(p.captured_at);
+        return isNaN(d) ? '' : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+      });
+      this._trendChart = new Chart(el, {
+        type: 'line',
+        data: { labels, datasets: [
+          { label: 'Quality Score', data: pts.map(p => p.quality_score), borderColor: '#c45d3e', backgroundColor: 'rgba(196,93,62,0.08)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 2, yAxisID: 'y' },
+          { label: 'WB рейтинг', data: pts.map(p => p.wb_product_rating), borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)', fill: false, tension: 0.4, borderWidth: 2, pointRadius: 2, yAxisID: 'y1' },
+        ] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: true, labels: { boxWidth: 10, font: { size: 11 } } } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+            y: { min: 0, max: 100, position: 'left', grid: { color: '#f3f4f6' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+            y1: { min: 0, max: 10, position: 'right', grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+          }
+        }
+      });
     },
     wbBadge(v, scale) {
       if (v === null || v === undefined) return '<span style="color:#9a9a9a">—</span>';
