@@ -214,6 +214,13 @@ class Product(db.Model):
 
     # Рейтинг карточки WB (из Analytics API)
     nm_rating = db.Column(db.Float, nullable=True)  # Рейтинг карточки (0-10)
+    wb_feedback_rating = db.Column(db.Float, nullable=True)  # Оценка по отзывам WB (0-5)
+    nm_rating_checked_at = db.Column(db.DateTime, nullable=True)  # Когда обновлён WB-рейтинг
+
+    # Наш Quality Score (детерминированный, 0-100)
+    quality_score = db.Column(db.Float, nullable=True)  # Quality Score (0-100)
+    quality_breakdown_json = db.Column(db.Text)  # JSON разбивки по измерениям
+    quality_checked_at = db.Column(db.DateTime, nullable=True)  # Когда пересчитан Quality Score
 
     # Метаданные
     is_active = db.Column(db.Boolean, default=True)  # Активна ли карточка
@@ -258,6 +265,16 @@ class Product(db.Model):
             return json.loads(self.characteristics_json)
         except:
             return []
+
+    def get_quality_breakdown(self):
+        """Разбивка Quality Score по измерениям."""
+        if not self.quality_breakdown_json:
+            return {}
+        try:
+            import json
+            return json.loads(self.quality_breakdown_json)
+        except Exception:
+            return {}
 
     def set_characteristics(self, characteristics):
         """Установить характеристики товара из списка словарей"""
@@ -2039,6 +2056,30 @@ class ShadowedCard(db.Model):
 
     def __repr__(self):
         return f'<ShadowedCard nm_id={self.nm_id} rating={self.nm_rating}>'
+
+
+class CardRatingHistory(db.Model):
+    """Снимок рейтингов и Quality Score карточки для трендов."""
+    __tablename__ = 'card_rating_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True, index=True)
+    nm_id = db.Column(db.BigInteger, nullable=False)
+
+    wb_product_rating = db.Column(db.Float)   # Оценка карточки WB (0-10)
+    wb_feedback_rating = db.Column(db.Float)  # Оценка по отзывам WB (0-5)
+    quality_score = db.Column(db.Float)       # Наш Quality Score (0-100)
+
+    captured_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        db.Index('idx_crh_product_captured', 'product_id', 'captured_at'),
+        db.Index('idx_crh_seller_captured', 'seller_id', 'captured_at'),
+    )
+
+    def __repr__(self):
+        return f'<CardRatingHistory nm_id={self.nm_id} q={self.quality_score} at={self.captured_at}>'
 
 
 class BlockedCardsSyncSettings(db.Model):

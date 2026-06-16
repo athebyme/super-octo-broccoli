@@ -6185,6 +6185,11 @@ def _run_startup_migrations():
         ('notifications', 'metadata_json', "TEXT DEFAULT '{}'"),
         # Product rating from WB Analytics API
         ('products', 'nm_rating', 'REAL'),
+        ('products', 'wb_feedback_rating', 'REAL'),
+        ('products', 'nm_rating_checked_at', 'DATETIME'),
+        ('products', 'quality_score', 'REAL'),
+        ('products', 'quality_breakdown_json', 'TEXT'),
+        ('products', 'quality_checked_at', 'DATETIME'),
         # Service agents extended columns
         ('service_agents', 'category', "TEXT NOT NULL DEFAULT 'general'"),
         ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
@@ -6276,6 +6281,29 @@ def _run_startup_migrations():
         except Exception as e:
             db.session.rollback()
             logger.warning(f"Could not create prohibited_words table: {e}")
+
+    # Таблица истории рейтингов карточек (для трендов)
+    if 'card_rating_history' not in insp.get_table_names():
+        try:
+            db.session.execute(db.text('''
+                CREATE TABLE card_rating_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL REFERENCES sellers(id),
+                    product_id INTEGER REFERENCES products(id),
+                    nm_id BIGINT NOT NULL,
+                    wb_product_rating REAL,
+                    wb_feedback_rating REAL,
+                    quality_score REAL,
+                    captured_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            '''))
+            db.session.execute(db.text('CREATE INDEX idx_crh_product_captured ON card_rating_history(product_id, captured_at)'))
+            db.session.execute(db.text('CREATE INDEX idx_crh_seller_captured ON card_rating_history(seller_id, captured_at)'))
+            db.session.commit()
+            logger.info("Created table 'card_rating_history'")
+        except Exception as e:
+            db.session.rollback()
+            logger.warning(f"Could not create card_rating_history table: {e}")
 
     # Создаём таблицы аналитики если их нет
     for tbl_name, tbl_sql in [
