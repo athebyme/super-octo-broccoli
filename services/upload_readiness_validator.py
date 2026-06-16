@@ -186,19 +186,39 @@ def _check_photos(product, issues: List[UploadIssue]) -> Dict:
         ))
         return {'status': 'error', 'count': 0, 'details': 'photo_urls пуст'}
 
-    # Ключевая проверка: привязка к SupplierProduct
+    # Без привязки к SupplierProduct importer работает через fallback —
+    # _build_imported_photo_url + _ensure_photos_cached_direct. Фото идут на WB,
+    # просто без SP-кэша (чуть медленнее). Это НЕ ошибка, а warning.
     if not product.supplier_product_id:
+        valid_count = 0
+        for ph in photo_urls:
+            if isinstance(ph, dict):
+                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur') or ph.get('url')
+            elif isinstance(ph, str):
+                url = ph
+            else:
+                url = None
+            if url and isinstance(url, str) and url.startswith('http'):
+                valid_count += 1
+
+        if valid_count == 0:
+            issues.append(UploadIssue(
+                UploadIssue.ERROR, 'photos',
+                f'Есть {len(photo_urls)} записей фото, но ни одного валидного URL'
+            ))
+            return {'status': 'error', 'count': len(photo_urls),
+                    'details': 'нет валидных http URL'}
+
         issues.append(UploadIssue(
-            UploadIssue.ERROR, 'photos',
-            f'Есть {len(photo_urls)} URL фото, но нет привязки к SupplierProduct '
-            f'(supplier_product_id = None). Фото НЕ попадут на WB!',
-            'Привяжите ImportedProduct к SupplierProduct через supplier_product_id'
+            UploadIssue.WARNING, 'photos',
+            f'{valid_count} фото без привязки к SupplierProduct — '
+            f'будут отдаваться через imported-product fallback (медленнее)',
         ))
         return {
-            'status': 'error',
-            'count': len(photo_urls),
+            'status': 'ok',
+            'count': valid_count,
             'supplier_product_id': None,
-            'details': 'supplier_product_id = None → generate_public_photo_urls() вернёт []'
+            'details': f'{valid_count} фото готовы (fallback URL)'
         }
 
     # Проверяем SupplierProduct

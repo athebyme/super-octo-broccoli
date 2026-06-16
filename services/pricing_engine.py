@@ -450,10 +450,38 @@ def generate_vendor_code(
         pattern = _DEFAULT_VENDOR_CODE_PATTERN
 
     product_id_val = extract_product_id_for_vendor_code(ext_id, supplier)
+    ext_vc_val = str(external_vendor_code or '')
+
+    # Поставщик 'andrey' (sex-opt.ru): подставляемые из CSV значения переводим
+    # в латинские строчные буквы. Кириллица из external_id ("УТ-00008335")
+    # визуально транслитерируется в латиницу ("yt-00008335"), литералы
+    # паттерна и {supplier_code} не трогаем.
+    if supplier is not None and getattr(supplier, 'code', None) == 'andrey':
+        product_id_val = _andrey_normalize(product_id_val)
+        ext_vc_val = _andrey_normalize(ext_vc_val)
+        ext_id = _andrey_normalize(ext_id)
 
     result = pattern.replace('{product_id}', product_id_val)
     result = result.replace('{supplier_code}', supplier_code or '')
-    result = result.replace('{external_vendor_code}', str(external_vendor_code or ''))
+    result = result.replace('{external_vendor_code}', ext_vc_val)
     result = result.replace('{external_id}', ext_id)
 
     return result
+
+
+# Визуальная Cyrillic → Latin транслитерация для артикулов поставщика 'andrey'.
+# Только похожие по начертанию буквы — артикулы в CSV у этого поставщика
+# содержат именно такие префиксы ('УТ', '0T' и т.п.).
+_ANDREY_CYR_TO_LAT = {
+    'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H',
+    'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y',
+    'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm', 'н': 'h',
+    'о': 'o', 'р': 'p', 'с': 'c', 'т': 't', 'х': 'x', 'у': 'y',
+}
+
+
+def _andrey_normalize(value: str) -> str:
+    """Транслитерация Cyrillic→Latin (визуальная) + lowercase."""
+    if not value:
+        return value
+    return ''.join(_ANDREY_CYR_TO_LAT.get(ch, ch) for ch in value).lower()
