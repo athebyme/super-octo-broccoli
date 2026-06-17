@@ -161,7 +161,7 @@ def register_card_quality_routes(app):
                     seller_id=current_user.seller.id,
                     task_type=task_type,
                     title=f'Улучшение карточки {product.nm_id}',
-                    input_data={'product_id': product.id},
+                    input_data={'product_id': product.id, 'seller_id': current_user.seller.id},
                 )
                 task_ids[agent_name] = task.id
 
