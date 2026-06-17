@@ -145,38 +145,70 @@
 
   {# ── Slideover деталь ── #}
   <div x-show="drawer" x-cloak class="sh-slideover-backdrop" @click="drawer=false"></div>
-  <div x-show="drawer" x-cloak class="sh-slideover">
-    <template x-if="detail">
-      <div style="padding:24px">
-        <h2 class="sh-page-title" style="font-size:1.25rem" x-text="'Артикул ' + (detail.nm_id||'')"></h2>
-        <div style="display:flex;gap:24px;align-items:center;margin:16px 0">
-          <div :style="gaugeStyle(detail.quality_score, 72)" x-text="Math.round(detail.quality_score)"></div>
+  <div x-show="drawer" x-cloak class="sh-slideover sh-slideover--lg">
+    <div class="sh-slideover-panel">
+      <div class="sh-slideover-header">
+        <div class="sh-slideover-title" x-text="detail ? ('Артикул ' + (detail.nm_id||'')) : 'Карточка'"></div>
+        <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="drawer=false" aria-label="Закрыть">✕</button>
+      </div>
+
+      <div class="sh-slideover-body">
+        {# Загрузка #}
+        <template x-if="drawer && !detail">
+          <div class="sh-empty"><p class="sh-empty-title">Загрузка карточки…</p></div>
+        </template>
+
+        <template x-if="detail">
           <div>
-            <div>WB: оценка карточки <span x-html="wbBadge(detail.wb_product_rating,10)"></span></div>
-            <div>WB: по отзывам <span x-html="wbBadge(detail.wb_feedback_rating,5)"></span></div>
-            <div class="text-gray-400 text-xs" x-text="detail.nm_rating_checked_at ? ('обновлено '+detail.nm_rating_checked_at) : ''"></div>
-          </div>
-        </div>
-        <template x-for="(d,name) in detail.dimensions" :key="name">
-          <div style="margin:8px 0">
-            <div style="display:flex;justify-content:space-between;font-size:13px">
-              <span x-text="name"></span><span x-text="d.score + '%'"></span></div>
-            <div style="height:8px;background:#ece9e4;border-radius:4px">
-              <div :style="'height:8px;border-radius:4px;width:'+d.score+'%;background:'+barColor(d.status)"></div></div>
-            <div class="text-gray-500 text-xs" x-show="d.hint" x-text="d.hint"></div>
+            {# Шапка: кольцо + WB-бейджи + обновлено #}
+            <div style="display:flex;gap:24px;align-items:center;margin-bottom:20px">
+              <div :style="gaugeRing(detail.quality_score, 72)">
+                <div :style="gaugeRingInner(detail.quality_score, 72)" x-text="detail.quality_score ?? '—'"></div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <div style="font-size:13px;color:var(--text-secondary)">WB: оценка карточки
+                  <span x-html="wbBadge(detail.wb_product_rating, 10)"></span></div>
+                <div style="font-size:13px;color:var(--text-secondary)">WB: по отзывам
+                  <span x-html="wbBadge(detail.wb_feedback_rating, 5)"></span></div>
+                <div style="font-size:11px;color:var(--text-muted)"
+                     x-text="detail.nm_rating_checked_at ? ('обновлено ' + fmtDate(detail.nm_rating_checked_at)) : 'рейтинг ещё не синхронизирован'"></div>
+              </div>
+            </div>
+
+            {# Разбивка по 8 измерениям #}
+            <div class="sh-section-title"><span>Разбор Quality Score</span></div>
+            <template x-for="(d, name) in detail.dimensions" :key="name">
+              <div style="margin:10px 0">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px">
+                  <span style="color:var(--text)" x-text="DIM_LABELS[name] || name"></span>
+                  <span style="color:var(--text-muted)">
+                    <span x-text="d.score + '%'"></span>
+                    <span style="font-size:11px"> · вес <span x-text="d.weight"></span>%</span>
+                  </span>
+                </div>
+                <div style="height:8px;background:#ece9e4;border-radius:4px;margin:4px 0">
+                  <div :style="'height:8px;border-radius:4px;width:'+d.score+'%;background:'+barColor(d.status)"></div>
+                </div>
+                <div style="font-size:12px;color:var(--text-secondary)" x-show="d.hint" x-text="d.hint"></div>
+              </div>
+            </template>
+
+            {# Тренд (СОХРАНЁН renderTrend) #}
+            <div class="sh-section-title" style="margin-top:20px"><span>Тренд (Quality Score / рейтинг WB)</span></div>
+            <div style="height:160px"><canvas x-ref="trendChart"></canvas></div>
+            <div x-show="!detail.trend || !detail.trend.length" style="font-size:12px;color:var(--text-muted)">
+              Пока нет истории — появится после нескольких синхронизаций</div>
+
+            {# Действия #}
+            <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
+              <button class="sh-btn sh-btn--accent sh-btn--sm" disabled title="Появится в Фазе 3">⚡ Улучшить карточку</button>
+              <button class="sh-btn sh-btn--primary sh-btn--sm" @click="aiAnalyze(detail.product_id)" :disabled="aiRunning">🤖 Глубокий AI-анализ</button>
+            </div>
+            <div x-show="aiRunning" style="font-size:12px;color:var(--text-secondary);margin-top:8px" x-text="aiStatus"></div>
           </div>
         </template>
-        <div style="margin-top:16px">
-          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px">Тренд (Quality Score / рейтинг WB)</div>
-          <div style="height:160px"><canvas x-ref="trendChart"></canvas></div>
-          <div x-show="!detail.trend || !detail.trend.length" class="text-gray-400 text-xs">Пока нет истории — появится после нескольких синхронизаций</div>
-        </div>
-        <div style="margin-top:16px;display:flex;gap:8px">
-          <button class="sh-btn sh-btn--primary sh-btn--sm" @click="aiAnalyze(detail.product_id)" :disabled="aiRunning">🤖 Глубокий AI-анализ</button>
-        </div>
-        <div x-show="aiRunning" class="text-gray-500 text-xs" style="margin-top:8px" x-text="aiStatus"></div>
       </div>
-    </template>
+    </div>
   </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -187,7 +219,7 @@ function cardQualityPage() {
     DIM_LABELS: { characteristics:'характеристики', photos:'фото', description:'описание',
                   title:'заголовок', brand:'бренд', barcodes:'штрихкоды', price:'цена', category:'категория' },
     refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
-    get needAttention() { return this.items.filter(i => (i.quality_score ?? 0) < 50 || (i.wb_product_rating ?? 10) < 6).length; },
+    get needAttention() { return this.weakItems.length; },
     get weakItems() {
       return this.items.filter(it =>
         (it.quality_score != null && it.quality_score < 50) ||
@@ -281,6 +313,11 @@ function cardQualityPage() {
       return '<span style="color:'+col+';font-weight:500">★ '+v.toFixed(1)+'<span style="color:#9a9a9a;font-size:11px">/'+scale+'</span></span>';
     },
     barColor(status) { return status==='ok'?'#16a34a':status==='warning'?'#d97706':'#dc2626'; },
+    fmtDate(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      return isNaN(d) ? iso : d.toLocaleString('ru-RU', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+    },
     firstPhoto(it) {
       const p = (it && it.photos) || [];
       return p.length ? p[0] : null;
