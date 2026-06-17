@@ -7,19 +7,53 @@
     <div><h1 class="sh-page-title">Качество карточек</h1>
       <p class="sh-page-subtitle">WB-рейтинг и наш Quality Score</p></div>
     <div class="sh-page-actions">
-      <button @click="refresh()" :disabled="refreshing" class="sh-btn sh-btn--white-outline sh-btn--sm">Обновить рейтинги</button>
+      <button @click="refresh()" :disabled="refreshing" class="sh-btn sh-btn--white-outline sh-btn--sm" x-text="refreshing ? 'Обновление…' : 'Обновить рейтинги'"></button>
+      <button @click="improveWeak()" :disabled="!summary.need_attention" class="sh-btn sh-btn--accent sh-btn--sm">⚡ Улучшить слабые</button>
     </div>
   </div></div>
 
-  <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:32px">
-    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Средний Quality Score</span></div>
-      <div class="sh-stat-value" x-text="summary.avg_quality ?? '—'"></div></div>
-    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Средний WB-рейтинг (0–10)</span></div>
-      <div class="sh-stat-value" x-text="summary.avg_wb_rating ?? '—'"></div></div>
-    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Карточек</span></div>
-      <div class="sh-stat-value" x-text="summary.total ?? 0"></div></div>
-    <div class="sh-stat-card"><div class="sh-stat-header"><span class="sh-stat-label">Требуют внимания</span></div>
-      <div class="sh-stat-value" x-text="summary.need_attention ?? needAttention"></div></div>
+  {# ── Сводная лента ── #}
+  <div class="sh-card" style="margin-bottom:32px">
+    <div style="display:flex;gap:32px;align-items:center;flex-wrap:wrap">
+      {# Кольцо среднего Quality Score (inline conic-gradient, как макрос score_gauge) #}
+      <div style="flex:0 0 auto;text-align:center">
+        <div :style="gaugeRing(summary.avg_quality, 96)">
+          <div :style="gaugeRingInner(summary.avg_quality, 96)" x-text="summary.avg_quality ?? '—'"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:8px">Средний Quality Score</div>
+      </div>
+
+      {# Полоса распределения здоровья каталога #}
+      <div style="flex:1 1 320px;min-width:260px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <span style="font-size:13px;color:var(--text-secondary)">Здоровье каталога</span>
+          <span style="font-size:13px;color:var(--text-secondary)">Карточек: <b x-text="summary.total ?? 0"></b></span>
+        </div>
+        <div style="display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--border)">
+          <template x-for="seg in distSegments" :key="seg.key">
+            <div :style="'width:'+seg.pct+'%;background:'+seg.color"
+                 :title="seg.label+': '+seg.count"></div>
+          </template>
+        </div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
+          <template x-for="seg in distSegments" :key="seg.key">
+            <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+              <span :style="'width:10px;height:10px;border-radius:2px;display:inline-block;background:'+seg.color"></span>
+              <span x-text="seg.label"></span>
+              <b x-text="seg.count"></b>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      {# WB-бейджи + требуют внимания #}
+      <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:13px;color:var(--text-secondary)">Средний WB-рейтинг карточек</div>
+        <div x-html="wbBadge(summary.avg_wb_rating, 10)" style="font-size:20px"></div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-top:6px">Требуют внимания</div>
+        <div style="font-family:var(--font-display);font-style:italic;font-size:28px;color:var(--accent)" x-text="summary.need_attention ?? 0"></div>
+      </div>
+    </div>
   </div>
 
   <div class="sh-card" style="padding:0;overflow:hidden">
@@ -85,6 +119,17 @@ function cardQualityPage() {
     items: [], summary: {}, detail: null, drawer: false,
     refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
     get needAttention() { return this.items.filter(i => (i.quality_score ?? 0) < 50 || (i.wb_product_rating ?? 10) < 6).length; },
+    get distSegments() {
+      const d = (this.summary && this.summary.distribution) || {};
+      const defs = [
+        { key:'poor',      label:'Низкое',     color:'#dc2626', count: d.poor || 0 },
+        { key:'average',   label:'Среднее',    color:'#d97706', count: d.average || 0 },
+        { key:'good',      label:'Хорошее',    color:'#16a34a', count: d.good || 0 },
+        { key:'excellent', label:'Отличное',   color:'#15803d', count: d.excellent || 0 },
+      ];
+      const total = defs.reduce((s, x) => s + x.count, 0) || 1;
+      return defs.map(x => ({ ...x, pct: (x.count / total * 100) }));
+    },
     async init() { await this.load(); },
     async load() {
       const r = await fetch('/api/card-quality/list?sort=quality_score&order=asc&per_page=100');
@@ -152,6 +197,21 @@ function cardQualityPage() {
       return '<span style="color:'+col+';font-weight:500">★ '+v.toFixed(1)+'<span style="color:#9a9a9a;font-size:11px">/'+scale+'</span></span>';
     },
     barColor(status) { return status==='ok'?'#16a34a':status==='warning'?'#d97706':'#dc2626'; },
+    gaugeRing(v, size) {
+      const val = (v ?? 0);
+      const col = val >= 70 ? '#16a34a' : val >= 50 ? '#d97706' : '#dc2626';
+      const s = size || 96;
+      return `width:${s}px;height:${s}px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:conic-gradient(${col} ${val}%, #ece9e4 0)`;
+    },
+    gaugeRingInner(v, size) {
+      const val = (v ?? 0);
+      const col = val >= 70 ? '#16a34a' : val >= 50 ? '#d97706' : '#dc2626';
+      const s = (size || 96) - 14;
+      return `width:${s}px;height:${s}px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-style:italic;font-size:${Math.round((size||96)/3.2)}px;color:${col}`;
+    },
+    improveWeak() {
+      this.$store.toasts.info('Массовое улучшение слабых карточек появится скоро', 'Скоро');
+    },
     gaugeStyle(v, size) {
       const col = (v??0)>=70?'#16a34a':(v??0)>=50?'#d97706':'#dc2626';
       const s = size||40;
