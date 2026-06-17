@@ -93,6 +93,8 @@ class TestRecomputeAndPersist(unittest.TestCase):
         recompute_and_persist(product, capture_history=False)
 
         self.assertIsNotNone(product.quality_score)
+        self.assertIsNotNone(product.quality_breakdown_json)
+        self.assertIsNotNone(product.quality_checked_at)
         rows = CardRatingHistory.query.filter_by(product_id=product.id).all()
         self.assertEqual(len(rows), 0)
 
