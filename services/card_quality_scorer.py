@@ -184,7 +184,9 @@ def product_to_card_input(product) -> Dict[str, Any]:
 
 def card_quality_detail(product) -> Dict[str, Any]:
     """Полный payload карточки для UI: WB-рейтинг + Quality Score + рекомендации."""
-    cq = compute_card_quality(product_to_card_input(product))
+    card_input = product_to_card_input(product)
+    cq = compute_card_quality(card_input)
+    photos = card_input.get('photos') or []
     checked = getattr(product, 'nm_rating_checked_at', None)
     return {
         'product_id': getattr(product, 'id', None),
@@ -194,6 +196,7 @@ def card_quality_detail(product) -> Dict[str, Any]:
         'wb_product_rating': getattr(product, 'nm_rating', None),       # 0-10
         'wb_feedback_rating': getattr(product, 'wb_feedback_rating', None),  # 0-5
         'nm_rating_checked_at': checked.isoformat() if checked else None,
+        'photos': photos,
         'quality_score': cq['score'],
         'quality_status': cq['status'],
         'dimensions': cq['dimensions'],

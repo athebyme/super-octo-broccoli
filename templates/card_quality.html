@@ -1,8 +1,21 @@
 {% extends "base.html" %}
-{% from "macros/components.html" import page_header, stat_card, stat_grid, badge, wb_rating_badge %}
 {% block title %}Качество карточек - Seller Hub{% endblock %}
 {% block content %}
 <div x-data="cardQualityPage()" x-init="init()">
+<style>
+  .cq-row{display:flex;gap:16px;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s}
+  .cq-row:last-child{border-bottom:none}
+  .cq-row:hover{background:var(--bg)}
+  .cq-row--weak{border-left:3px solid var(--accent);padding-left:12px}
+  .cq-thumb{flex:0 0 48px;width:48px;height:48px;border-radius:8px;overflow:hidden;background:var(--border);display:flex;align-items:center;justify-content:center}
+  .cq-thumb img{width:100%;height:100%;object-fit:cover}
+  .cq-thumb-ph{font-size:9px;color:var(--text-muted);text-align:center}
+  .cq-main{flex:1 1 auto;min-width:0}
+  .cq-title{font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cq-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .cq-ratings{flex:0 0 auto}
+  .cq-actions{flex:0 0 auto;display:flex;gap:8px}
+</style>
   <div class="sh-page-header"><div class="sh-page-header-content">
     <div><h1 class="sh-page-title">Качество карточек</h1>
       <p class="sh-page-subtitle">WB-рейтинг и наш Quality Score</p></div>
@@ -56,24 +69,78 @@
     </div>
   </div>
 
-  <div class="sh-card" style="padding:0;overflow:hidden">
-    <table class="sh-table" style="width:100%">
-      <thead><tr>
-        <th>Артикул</th><th>Название</th><th>WB карточка</th><th>WB отзывы</th><th>Quality</th><th></th>
-      </tr></thead>
-      <tbody>
-        <template x-for="it in items" :key="it.product_id">
-          <tr>
-            <td x-text="it.nm_id"></td>
-            <td x-text="it.title"></td>
-            <td x-html="wbBadge(it.wb_product_rating, 10)"></td>
-            <td x-html="wbBadge(it.wb_feedback_rating, 5)"></td>
-            <td><span :style="gaugeStyle(it.quality_score)" x-text="it.quality_score ?? '—'"></span></td>
-            <td><button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button></td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
+  {# ── Скелетоны загрузки ── #}
+  <div x-show="loading" class="sh-card" style="margin-bottom:24px">
+    <template x-for="i in 5" :key="i">
+      <div style="display:flex;gap:16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="width:48px;height:48px;border-radius:8px;background:var(--border)"></div>
+        <div style="flex:1">
+          <div style="width:40%;height:12px;border-radius:4px;background:var(--border);margin-bottom:8px"></div>
+          <div style="width:60%;height:10px;border-radius:4px;background:var(--border)"></div>
+        </div>
+        <div style="width:40px;height:40px;border-radius:50%;background:var(--border)"></div>
+      </div>
+    </template>
+  </div>
+
+  {# ── Группа: требуют внимания ── #}
+  <div x-show="!loading" class="sh-card" style="margin-bottom:20px">
+    <div class="sh-card-header">
+      <h3 class="sh-card-title">Требуют внимания · <span x-text="weakItems.length"></span></h3>
+    </div>
+    <template x-if="weakItems.length === 0">
+      <div class="sh-empty"><p class="sh-empty-title">Слабых карточек нет — каталог в порядке</p></div>
+    </template>
+    <template x-for="it in weakItems" :key="it.product_id">
+      <div class="cq-row cq-row--weak" @click="openDetail(it.product_id)">
+        <div class="cq-thumb">
+          <template x-if="firstPhoto(it)"><img :src="firstPhoto(it)" alt="" loading="lazy"></template>
+          <template x-if="!firstPhoto(it)"><span class="cq-thumb-ph">нет фото</span></template>
+        </div>
+        <div class="cq-main">
+          <div class="cq-title"><b x-text="it.nm_id"></b> · <span x-text="it.title || '—'"></span></div>
+          <div class="cq-chips">
+            <template x-for="chip in weakChips(it)" :key="chip.name">
+              <span class="sh-badge" :class="chip.cls" x-text="chip.label"></span>
+            </template>
+          </div>
+        </div>
+        <div class="cq-ratings">
+          <span x-html="wbBadge(it.wb_product_rating, 10)"></span>
+        </div>
+        <div :style="gaugeStyle(it.quality_score, 40)" x-text="it.quality_score ?? '—'"></div>
+        <div class="cq-actions" @click.stop>
+          <button class="sh-btn sh-btn--accent sh-btn--sm" disabled title="Появится в Фазе 3">Улучшить</button>
+          <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  {# ── Группа: в порядке (свёрнута) ── #}
+  <div x-show="!loading" class="sh-card" x-data="{ open: false }">
+    <div class="sh-card-header" style="cursor:pointer" @click="open = !open">
+      <h3 class="sh-card-title">В порядке · <span x-text="okItems.length"></span></h3>
+      <span class="sh-btn sh-btn--ghost sh-btn--sm" x-text="open ? 'Свернуть' : 'Показать'"></span>
+    </div>
+    <div x-show="open" x-cloak>
+      <template x-for="it in okItems" :key="it.product_id">
+        <div class="cq-row" @click="openDetail(it.product_id)">
+          <div class="cq-thumb">
+            <template x-if="firstPhoto(it)"><img :src="firstPhoto(it)" alt="" loading="lazy"></template>
+            <template x-if="!firstPhoto(it)"><span class="cq-thumb-ph">нет фото</span></template>
+          </div>
+          <div class="cq-main">
+            <div class="cq-title"><b x-text="it.nm_id"></b> · <span x-text="it.title || '—'"></span></div>
+          </div>
+          <div class="cq-ratings"><span x-html="wbBadge(it.wb_product_rating, 10)"></span></div>
+          <div :style="gaugeStyle(it.quality_score, 40)" x-text="it.quality_score ?? '—'"></div>
+          <div class="cq-actions" @click.stop>
+            <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
+          </div>
+        </div>
+      </template>
+    </div>
   </div>
 
   {# ── Slideover деталь ── #}
@@ -116,9 +183,21 @@
 <script>
 function cardQualityPage() {
   return {
-    items: [], summary: {}, detail: null, drawer: false,
+    items: [], summary: {}, detail: null, drawer: false, loading: true,
+    DIM_LABELS: { characteristics:'характеристики', photos:'фото', description:'описание',
+                  title:'заголовок', brand:'бренд', barcodes:'штрихкоды', price:'цена', category:'категория' },
     refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
     get needAttention() { return this.items.filter(i => (i.quality_score ?? 0) < 50 || (i.wb_product_rating ?? 10) < 6).length; },
+    get weakItems() {
+      return this.items.filter(it =>
+        (it.quality_score != null && it.quality_score < 50) ||
+        (it.wb_product_rating != null && it.wb_product_rating < 6));
+    },
+    get okItems() {
+      return this.items.filter(it => !(
+        (it.quality_score != null && it.quality_score < 50) ||
+        (it.wb_product_rating != null && it.wb_product_rating < 6)));
+    },
     get distSegments() {
       const d = (this.summary && this.summary.distribution) || {};
       const defs = [
@@ -132,9 +211,14 @@ function cardQualityPage() {
     },
     async init() { await this.load(); },
     async load() {
-      const r = await fetch('/api/card-quality/list?sort=quality_score&order=asc&per_page=100');
-      const d = await r.json();
-      this.items = d.items || []; this.summary = d.summary || {};
+      this.loading = true;
+      try {
+        const r = await fetch('/api/card-quality/list?sort=quality_score&order=asc&per_page=100');
+        const d = await r.json();
+        this.items = d.items || []; this.summary = d.summary || {};
+      } finally {
+        this.loading = false;
+      }
     },
     async openDetail(id) {
       this.drawer = true; this.detail = null;
@@ -197,6 +281,21 @@ function cardQualityPage() {
       return '<span style="color:'+col+';font-weight:500">★ '+v.toFixed(1)+'<span style="color:#9a9a9a;font-size:11px">/'+scale+'</span></span>';
     },
     barColor(status) { return status==='ok'?'#16a34a':status==='warning'?'#d97706':'#dc2626'; },
+    firstPhoto(it) {
+      const p = (it && it.photos) || [];
+      return p.length ? p[0] : null;
+    },
+    weakChips(it) {
+      const dims = (it && it.dimensions) || {};
+      return Object.keys(dims)
+        .filter(name => dims[name].status === 'warning' || dims[name].status === 'error')
+        .sort((a, b) => (dims[b].weight * (100 - dims[b].score)) - (dims[a].weight * (100 - dims[a].score)))
+        .map(name => ({
+          name,
+          label: this.DIM_LABELS[name] || name,
+          cls: dims[name].status === 'error' ? 'sh-badge--red' : 'sh-badge--yellow',
+        }));
+    },
     gaugeRing(v, size) {
       const val = (v ?? 0);
       const col = val >= 70 ? '#16a34a' : val >= 50 ? '#d97706' : '#dc2626';
