@@ -47,6 +47,8 @@ class ApplyRouteTest(unittest.TestCase):
             self.assertTrue(data['success'])
             self.assertEqual(data['fields_applied'], ['title'])
             self.assertEqual(data['new_quality'], 62.0)
+            self.assertEqual(data['old_quality'], 40.0)
+            self.assertTrue(data['wb_sync'])
             # apply_card_updates получил только whitelisted поля
             called_updates = mock_apply.call_args.args[1] if mock_apply.call_args.args else mock_apply.call_args.kwargs['updates']
             self.assertIn('title', called_updates)
@@ -58,6 +60,46 @@ class ApplyRouteTest(unittest.TestCase):
             resp = self.client.post('/api/card-quality/101/apply',
                                     json={'updates': {'title': 'x'}})
             self.assertEqual(resp.status_code, 403)
+            self.assertIn('ключ', resp.get_json().get('error', '').lower())
+
+    def test_apply_returns_422_on_failure(self):
+        user, seller = self._login_ctx()
+        product = MagicMock()
+        product.id = 101
+        product.nm_id = 555
+
+        with patch('routes.card_quality.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.card_quality.Product') as MockProduct, \
+             patch('routes.card_quality.WildberriesAPIClient'), \
+             patch('routes.card_quality.apply_card_updates') as mock_apply:
+            MockProduct.query.filter_by.return_value.first.return_value = product
+            mock_apply.return_value = {
+                'success': False, 'fields_applied': [],
+                'old_quality': 40.0, 'new_quality': 40.0, 'wb_sync': False, 'error': 'WB rejected',
+            }
+            resp = self.client.post('/api/card-quality/101/apply',
+                                    json={'updates': {'title': 'Новый заголовок'}})
+            self.assertEqual(resp.status_code, 422)
+            data = resp.get_json()
+            self.assertEqual(data['error'], 'WB rejected')
+
+    def test_apply_returns_500_on_exception(self):
+        user, seller = self._login_ctx()
+        product = MagicMock()
+        product.id = 101
+        product.nm_id = 555
+
+        with patch('routes.card_quality.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.card_quality.Product') as MockProduct, \
+             patch('routes.card_quality.WildberriesAPIClient'), \
+             patch('routes.card_quality.apply_card_updates') as mock_apply:
+            MockProduct.query.filter_by.return_value.first.return_value = product
+            mock_apply.side_effect = RuntimeError('boom')
+            resp = self.client.post('/api/card-quality/101/apply',
+                                    json={'updates': {'title': 'Новый заголовок'}})
+            self.assertEqual(resp.status_code, 500)
 
     def test_apply_filters_unknown_fields(self):
         user, seller = self._login_ctx()
