@@ -159,5 +159,72 @@ class ImproveProposalRouteTest(unittest.TestCase):
             self.assertEqual(passed, [])
 
 
+    def test_improve_enqueues_generative_agents_for_weak_dims(self):
+        """Генеративные агенты ставятся в очередь в propose-mode для слабых измерений."""
+        user = _user()
+        product = MagicMock()
+        product.id = 101
+        product.nm_id = 555
+
+        # Счётчик для уникальных id задач
+        call_counter = {'n': 0}
+
+        def make_task(*args, **kwargs):
+            call_counter['n'] += 1
+            t = MagicMock()
+            t.id = f'tid-{call_counter["n"]}'
+            return t
+
+        with patch('routes.card_quality.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.card_quality.Product') as MockProduct, \
+             patch('routes.card_quality.card_quality_detail', return_value={'dimensions': {}}), \
+             patch('routes.card_quality.collect_weak_dimensions',
+                   return_value=['title', 'brand', 'category']), \
+             patch('routes.card_quality.get_enrichment_service') as mock_es, \
+             patch('routes.card_quality.agent_service') as mock_as:
+
+            MockProduct.query.filter_by.return_value.first.return_value = product
+            svc = MagicMock()
+            svc.find_supplier_data.return_value = None
+            mock_es.return_value = svc
+
+            online = MagicMock()
+            online.status = 'online'
+            online.id = 'agent-id'
+            mock_as.get_agent_by_name.return_value = online
+            mock_as.create_task.side_effect = make_task
+
+            resp = self.client.post('/api/card-quality/101/improve', json={})
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            task_ids = data['task_ids']
+
+            # Диагностические агенты всегда присутствуют (если online)
+            self.assertIn('photo-optimizer', task_ids)
+            self.assertIn('card-doctor', task_ids)
+
+            # Генеративные агенты для слабых измерений
+            self.assertIn('seo-writer', task_ids)       # title слабый
+            self.assertIn('brand-resolver', task_ids)   # brand слабый
+            self.assertIn('category-mapper', task_ids)  # category слабый
+
+            # characteristics не слабый → characteristics-filler не запускается
+            self.assertNotIn('characteristics-filler', task_ids)
+
+            # seo-writer вызван с mode='propose'
+            seo_calls = [
+                c for c in mock_as.create_task.call_args_list
+                if c.kwargs.get('agent_id') == 'agent-id'
+                and c.kwargs.get('task_type') == 'seo_single'
+            ]
+            self.assertEqual(len(seo_calls), 1)
+            self.assertEqual(seo_calls[0].kwargs['input_data']['mode'], 'propose')
+
+            # seo-writer вызван ровно один раз (title и description не дублируют)
+            all_types = [c.kwargs.get('task_type') for c in mock_as.create_task.call_args_list]
+            self.assertEqual(all_types.count('seo_single'), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

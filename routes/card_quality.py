@@ -201,6 +201,61 @@ def register_card_quality_routes(app):
                 )
                 task_ids[agent_name] = task.id
 
+            # (d) генеративные агенты в режиме propose для слабых измерений
+            _gen_input = {'product_id': product.id, 'seller_id': current_user.seller.id, 'mode': 'propose'}
+
+            # seo-writer: запускается один раз при наличии слабого title ИЛИ description
+            if 'title' in weak_dims or 'description' in weak_dims:
+                agent = agent_service.get_agent_by_name('seo-writer')
+                if agent and getattr(agent, 'status', None) == 'online':
+                    task = agent_service.create_task(
+                        agent_id=agent.id,
+                        seller_id=current_user.seller.id,
+                        task_type='seo_single',
+                        title=f'SEO-текст для карточки {product.nm_id}',
+                        input_data=_gen_input,
+                    )
+                    task_ids['seo-writer'] = task.id
+
+            # brand-resolver: при слабом brand
+            if 'brand' in weak_dims:
+                agent = agent_service.get_agent_by_name('brand-resolver')
+                if agent and getattr(agent, 'status', None) == 'online':
+                    task = agent_service.create_task(
+                        agent_id=agent.id,
+                        seller_id=current_user.seller.id,
+                        task_type='resolve_single',
+                        title=f'Уточнение бренда для карточки {product.nm_id}',
+                        input_data=_gen_input,
+                    )
+                    task_ids['brand-resolver'] = task.id
+
+            # category-mapper: при слабой category
+            if 'category' in weak_dims:
+                agent = agent_service.get_agent_by_name('category-mapper')
+                if agent and getattr(agent, 'status', None) == 'online':
+                    task = agent_service.create_task(
+                        agent_id=agent.id,
+                        seller_id=current_user.seller.id,
+                        task_type='map_single',
+                        title=f'Маппинг категории для карточки {product.nm_id}',
+                        input_data=_gen_input,
+                    )
+                    task_ids['category-mapper'] = task.id
+
+            # characteristics-filler: при слабых characteristics
+            if 'characteristics' in weak_dims:
+                agent = agent_service.get_agent_by_name('characteristics-filler')
+                if agent and getattr(agent, 'status', None) == 'online':
+                    task = agent_service.create_task(
+                        agent_id=agent.id,
+                        seller_id=current_user.seller.id,
+                        task_type='fill_single',
+                        title=f'Заполнение характеристик для карточки {product.nm_id}',
+                        input_data=_gen_input,
+                    )
+                    task_ids['characteristics-filler'] = task.id
+
             return jsonify({'success': True, 'weak_dims': weak_dims,
                             'supplier_diff': supplier_diff, 'task_ids': task_ids})
         except Exception as e:
