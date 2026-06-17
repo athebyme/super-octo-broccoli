@@ -21,7 +21,9 @@
       <p class="sh-page-subtitle">WB-рейтинг и наш Quality Score</p></div>
     <div class="sh-page-actions">
       <button @click="refresh()" :disabled="refreshing" class="sh-btn sh-btn--white-outline sh-btn--sm" x-text="refreshing ? 'Обновление…' : 'Обновить рейтинги'"></button>
-      <button @click="improveWeak()" :disabled="!summary.need_attention" class="sh-btn sh-btn--accent sh-btn--sm">⚡ Улучшить слабые</button>
+      <a href="{{ url_for('card_quality_bulk_improve_page') }}"
+         :class="!summary.need_attention ? 'opacity-50 pointer-events-none' : ''"
+         class="sh-btn sh-btn--accent sh-btn--sm">⚡ Улучшить слабые</a>
     </div>
   </div></div>
 

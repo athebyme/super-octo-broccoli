@@ -16,31 +16,51 @@
     <div class="sh-empty">Нет слабых карточек или нет данных для предложений.</div>
   {% else %}
   <form method="POST" action="{{ url_for('card_quality_bulk_improve_apply') }}"
-        class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-    <div class="overflow-x-auto mb-6">
-      <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
-          <tr>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Артикул</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quality</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Слабые места</th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Поставщик → применить</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-200">
-          {% for c in candidates %}
-          <tr>
-            <td class="px-4 py-3 text-sm">
-              <div class="text-gray-900">{{ c.nm_id }}</div>
-              <div class="text-xs text-gray-400">{{ c.vendor_code or '' }}</div>
-            </td>
-            <td class="px-4 py-3 text-sm font-medium text-red-600">{{ c.quality_score if c.quality_score is not none else '—' }}</td>
-            <td class="px-4 py-3 text-xs text-gray-600">{{ c.weak_dims|join(', ') }}</td>
-            <td class="px-4 py-3 text-sm">
-              {% if c.has_supplier %}
-                {% set sd = c.supplier_diff %}
+        class="space-y-6">
+
+    {# ── Группа 1: карточки С данными поставщика (есть что применить) ── #}
+    {% set with_supplier = candidates | selectattr('has_supplier') | list %}
+    {% set without_supplier = candidates | rejectattr('has_supplier') | list %}
+
+    {% if with_supplier %}
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+         x-data="{ open: true }">
+      <button @click="open = !open" type="button"
+              class="w-full px-6 py-4 border-b border-indigo-200 bg-indigo-50 flex items-center justify-between">
+        <h2 class="text-base font-medium text-indigo-800 flex items-center">
+          <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+          </svg>
+          Слабые карточки с данными поставщика ({{ with_supplier|length }})
+        </h2>
+        <svg class="w-5 h-5 text-indigo-600 transform transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div x-show="open" x-collapse class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Артикул</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quality</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Слабые места</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Поставщик → применить</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
+            {% for c in with_supplier %}
+            <tr>
+              <td class="px-4 py-3 text-sm">
+                <div class="text-gray-900">{{ c.nm_id }}</div>
+                <div class="text-xs text-gray-400">{{ c.vendor_code or '' }}</div>
+              </td>
+              <td class="px-4 py-3 text-sm font-medium text-red-600">{{ c.quality_score if c.quality_score is not none else '—' }}</td>
+              <td class="px-4 py-3 text-xs text-gray-600">{{ c.weak_dims|join(', ') }}</td>
+              <td class="px-4 py-3 text-sm">
+                {% set sd = c.supplier_diff or {} %}
                 {% for fld, label in [('title','Заголовок'),('brand','Бренд'),('description','Описание'),('dimensions','Габариты')] %}
-                  {% if sd[fld] and sd[fld].has_change %}
+                  {% set fld_data = sd.get(fld) %}
+                  {% if fld_data and fld_data.get('has_change') %}
                   <label class="flex items-center gap-2 mb-1 cursor-pointer">
                     <input type="checkbox" name="apply_{{ c.product_id }}_{{ fld }}" checked
                            class="w-4 h-4 rounded text-indigo-600 border-gray-300">
@@ -48,17 +68,62 @@
                   </label>
                   {% endif %}
                 {% endfor %}
-              {% else %}
-                <span class="text-xs text-gray-400">Нет данных поставщика</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
+    {% endif %}
 
-    <div class="flex items-center justify-between">
+    {# ── Группа 2: карточки БЕЗ данных поставщика (только слабые места) ── #}
+    {% if without_supplier %}
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+         x-data="{ open: false }">
+      <button @click="open = !open" type="button"
+              class="w-full px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+        <h2 class="text-base font-medium text-gray-700 flex items-center">
+          <svg class="w-5 h-5 mr-2 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+          </svg>
+          Слабые карточки без данных поставщика ({{ without_supplier|length }})
+        </h2>
+        <svg class="w-5 h-5 text-gray-500 transform transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div x-show="open" x-collapse class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Артикул</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quality</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Слабые места</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Поставщик → применить</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
+            {% for c in without_supplier %}
+            <tr>
+              <td class="px-4 py-3 text-sm">
+                <div class="text-gray-900">{{ c.nm_id }}</div>
+                <div class="text-xs text-gray-400">{{ c.vendor_code or '' }}</div>
+              </td>
+              <td class="px-4 py-3 text-sm font-medium text-red-600">{{ c.quality_score if c.quality_score is not none else '—' }}</td>
+              <td class="px-4 py-3 text-xs text-gray-600">{{ c.weak_dims|join(', ') }}</td>
+              <td class="px-4 py-3 text-sm">
+                <span class="text-xs text-gray-400">Нет данных поставщика</span>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 flex items-center justify-between">
       <button type="submit" name="action" value="reject"
               class="px-6 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
         Отклонить
@@ -68,6 +133,7 @@
         Подтвердить улучшения
       </button>
     </div>
+
   </form>
   {% endif %}
 </div>

@@ -2,6 +2,7 @@
 """Роуты фичи «Качество карточек»: кокпит, деталь карточки, AI-анализ, обновление."""
 import logging
 import threading
+from datetime import datetime as _dt
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
@@ -24,7 +25,7 @@ def _collect_bulk_candidates(seller_id: int, limit: int = BULK_IMPROVE_LIMIT) ->
     base = Product.query.filter(
         Product.seller_id == seller_id, Product.is_active == True
     ).filter(
-        Product.quality_score.op('<')(50) | Product.nm_rating.op('<')(6)
+        (Product.quality_score < 50) | (Product.nm_rating < 6)
     )
 
     total_weak = base.count()
@@ -357,7 +358,6 @@ def register_card_quality_routes(app):
         bulk.error_count = errors
         bulk.status = 'completed'
         bulk.wb_synced = success > 0
-        from datetime import datetime as _dt
         bulk.completed_at = _dt.utcnow()
         db.session.commit()
 
