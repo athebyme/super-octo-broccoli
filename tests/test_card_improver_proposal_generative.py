@@ -105,6 +105,16 @@ class GenerativeProposalTest(unittest.TestCase):
         proposal = build_proposal_from_tasks(product, results)
         self.assertIn('brand', proposal)
 
+    def test_missing_confidence_defaults_to_1(self):
+        """Результат агента без ключа 'confidence' должен попасть в proposal (дефолт 1.0 >= 0.7)."""
+        from services.card_improver import build_proposal_from_tasks
+        product = FakeProduct()
+        # Нет ключа confidence — должен дефолтиться к 1.0 и пройти порог
+        results = [{'agent': 'brand-resolver', 'result': {'brand': 'Nike'}}]
+        proposal = build_proposal_from_tasks(product, results)
+        self.assertEqual(proposal['brand']['proposed'], 'Nike')
+        self.assertEqual(proposal['brand']['source'], 'brand-resolver')
+
     def test_multiple_agents_combined(self):
         """Несколько агентов одновременно — все маппятся в один proposal."""
         from services.card_improver import build_proposal_from_tasks

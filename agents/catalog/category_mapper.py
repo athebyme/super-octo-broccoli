@@ -139,7 +139,7 @@ class CategoryMapperAgent(BaseAgent):
                         f"1. get_product(seller_id={seller_id}, product_id={product_id})\n"
                         f"2. search_wb_categories(query=<ключевое слово из названия>)\n"
                         f"3. Выбери наиболее подходящую КОНЕЧНУЮ категорию (subject_name)\n"
-                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product или update_imported_product — НИЧЕГО не сохраняй.\n\n"
                         f"Верни ТОЛЬКО JSON: {{subject_id, subject_name, confidence: 0..1}}"
                     )
                 return (

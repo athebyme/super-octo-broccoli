@@ -119,7 +119,7 @@ class CharacteristicsFillerAgent(BaseAgent):
                         f"1. get_product(seller_id={seller_id}, product_id={product_id})\n"
                         f"2. get_category_characteristics(subject_id=<wb_subject_id>)\n"
                         f"3. Заполни характеристики в формате [{{id, value}}]\n"
-                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product или update_imported_product — НИЧЕГО не сохраняй.\n\n"
                         f"Верни ТОЛЬКО JSON: {{characteristics: [{{id, value}}, ...], confidence: 0..1}}"
                     )
                 return (

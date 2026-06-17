@@ -25,6 +25,15 @@ logger = logging.getLogger('card_improver')
 # Поля, которые движок имеет право применять к карточке.
 ALLOWED_FIELDS = {'title', 'brand', 'description', 'characteristics', 'dimensions', 'subject_id', 'photos'}
 
+# Маппинг генеративных агентов (propose-mode) на поля proposal.
+# agent_name → [(result_field, dimension_name), ...]
+_GENERATIVE_FIELD_MAP: Dict[str, List] = {
+    'seo-writer': [('title', 'title'), ('description', 'description')],
+    'brand-resolver': [('brand', 'brand')],
+    'category-mapper': [('subject_id', 'category')],
+    'characteristics-filler': [('characteristics', 'characteristics')],
+}
+
 
 def _build_wb_updates(clean: Dict[str, Any]) -> Dict[str, Any]:
     """Из отфильтрованных явных значений строит payload для WB update_card.
@@ -279,16 +288,10 @@ def build_proposal_from_tasks(product, task_results: List[Dict[str, Any]]) -> Di
         # Генеративные агенты (Задача 3.7): seo-writer, brand-resolver,
         # category-mapper, characteristics-filler — propose-mode.
         # Порог confidence >= 0.7; совпадения с текущим значением пропускаются.
-        GEN_MAP = {
-            'seo-writer': [('title', 'title'), ('description', 'description')],
-            'brand-resolver': [('brand', 'brand')],
-            'category-mapper': [('subject_id', 'category')],
-            'characteristics-filler': [('characteristics', 'characteristics')],
-        }
-        if agent in GEN_MAP:
+        if agent in _GENERATIVE_FIELD_MAP:
             conf = result.get('confidence', 1.0)
             if isinstance(conf, (int, float)) and conf >= 0.7:
-                for field, dim in GEN_MAP[agent]:
+                for field, dim in _GENERATIVE_FIELD_MAP[agent]:
                     proposed = result.get(field)
                     # characteristics — не сравниваем с текущим (нет прямого атрибута)
                     current = getattr(product, field, None) if field != 'characteristics' else None

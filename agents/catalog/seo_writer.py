@@ -169,7 +169,7 @@ class SEOWriterAgent(BaseAgent):
                         f"1. Получи данные товара через get_product\n"
                         f"2. Сгенерируй оптимизированный заголовок (до 60 символов)\n"
                         f"3. Сгенерируй SEO-описание (до 1000 символов)\n"
-                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product или update_imported_product — НИЧЕГО не сохраняй.\n\n"
                         f"Верни ТОЛЬКО JSON: {{title, description, keywords: [...], confidence: 0..1}}"
                     )
                 return (
