@@ -207,7 +207,7 @@
             <div x-show="aiRunning" style="font-size:12px;color:var(--text-secondary);margin-top:8px" x-text="aiStatus"></div>
 
             {# Статус improve #}
-            <div x-show="improveRunning" class="text-gray-500 text-xs" style="margin-top:8px" x-text="improveStatus"></div>
+            <div x-show="improveRunning || improveStatus" class="text-gray-500 text-xs" style="margin-top:8px" x-text="improveStatus"></div>
 
             {# ── Дифф от поставщика (было→стало) ── #}
             <template x-if="supplierDiff">
@@ -372,7 +372,7 @@ function cardQualityPage() {
       return out;
     },
     get anySelected() { return Object.values(this.selected).some(Boolean); },
-    proposalLabel(field) { return field === 'photos' ? 'Переупорядочить фото' : field; },
+    proposalLabel(field) { return field === 'photos' ? 'Переупорядочить фото' : (this.DIM_LABELS[field] || field); },
     proposalHint(field, p) {
       if (field === 'photos') return 'Новый порядок: ' + (p.proposed||[]).length + ' фото (рекомендация агента)';
       return p.proposed != null ? String(p.proposed).slice(0,120) : '';
@@ -416,6 +416,7 @@ function cardQualityPage() {
         } catch (e) {
           clearInterval(this._improvePoll); this._improvePoll = null;
           this.improveRunning = false; this.improveStatus = 'Ошибка при опросе агентов';
+          this.$store.toasts.error('Ошибка при опросе агентов');
         }
       }, 3000);
     },
@@ -432,7 +433,9 @@ function cardQualityPage() {
         if (this.selected.characteristics && sd.characteristics) updates.characteristics = sd.characteristics.supplier_parsed;
       }
       if (this.selected.photos && this.proposal.photos) updates.photos = this.proposal.photos.proposed;
+      const ALLOWED = new Set(['title','brand','description','characteristics','dimensions','subject_id','photos']);
       for (const [field, p] of Object.entries(this.proposal)) {
+        if (!ALLOWED.has(field)) continue;
         if (field !== 'photos' && this.selected[field] && p) updates[field] = p.proposed;
       }
       try {
@@ -453,7 +456,7 @@ function cardQualityPage() {
     },
     async openAndImprove(id) {
       await this.openDetail(id);
-      this.startImprove(id);
+      await this.startImprove(id);
     },
     wbBadge(v, scale) {
       if (v === null || v === undefined) return '<span style="color:#9a9a9a">—</span>';
