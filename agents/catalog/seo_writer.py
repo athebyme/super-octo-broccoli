@@ -161,6 +161,17 @@ class SEOWriterAgent(BaseAgent):
                 )
 
             if product_id:
+                # Режим предложения (propose): генерируем, но НЕ сохраняем
+                if input_data.get('mode') == 'propose':
+                    return (
+                        f"Сгенерируй улучшенные SEO-тексты для товара (РЕЖИМ ПРЕДЛОЖЕНИЯ).\n"
+                        f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
+                        f"1. Получи данные товара через get_product\n"
+                        f"2. Сгенерируй оптимизированный заголовок (до 60 символов)\n"
+                        f"3. Сгенерируй SEO-описание (до 1000 символов)\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"Верни ТОЛЬКО JSON: {{title, description, keywords: [...], confidence: 0..1}}"
+                    )
                 return (
                     f"Оптимизируй SEO для товара.\n"
                     f"Seller ID: {seller_id}\n"

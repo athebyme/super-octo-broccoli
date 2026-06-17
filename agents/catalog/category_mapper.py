@@ -131,6 +131,17 @@ class CategoryMapperAgent(BaseAgent):
                 return self._build_single_prompt(imported_product_id)
 
             if product_id:
+                # Режим предложения (propose): определяем категорию, но НЕ сохраняем
+                if input_data.get('mode') == 'propose':
+                    return (
+                        f"Определи категорию WB для товара (РЕЖИМ ПРЕДЛОЖЕНИЯ).\n"
+                        f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
+                        f"1. get_product(seller_id={seller_id}, product_id={product_id})\n"
+                        f"2. search_wb_categories(query=<ключевое слово из названия>)\n"
+                        f"3. Выбери наиболее подходящую КОНЕЧНУЮ категорию (subject_name)\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"Верни ТОЛЬКО JSON: {{subject_id, subject_name, confidence: 0..1}}"
+                    )
                 return (
                     f"Определи категорию WB для товара.\n"
                     f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"

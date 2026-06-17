@@ -156,6 +156,16 @@ class BrandResolverAgent(BaseAgent):
                 )
 
             if product_id:
+                # Режим предложения (propose): определяем бренд, но НЕ сохраняем
+                if input_data.get('mode') == 'propose':
+                    return (
+                        f"Определи бренд товара (РЕЖИМ ПРЕДЛОЖЕНИЯ).\n"
+                        f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
+                        f"1. Получи данные товара через get_product\n"
+                        f"2. Определи и нормализуй бренд из названия/описания\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"Верни ТОЛЬКО JSON: {{brand, confidence: 0..1}}"
+                    )
                 return (
                     f"Определи и нормализуй бренд товара.\n"
                     f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"

@@ -111,6 +111,17 @@ class CharacteristicsFillerAgent(BaseAgent):
                 return self._build_single_prompt(imported_product_id)
 
             if product_id:
+                # Режим предложения (propose): генерируем характеристики, но НЕ сохраняем
+                if input_data.get('mode') == 'propose':
+                    return (
+                        f"Предложи характеристики карточки WB (РЕЖИМ ПРЕДЛОЖЕНИЯ).\n"
+                        f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"
+                        f"1. get_product(seller_id={seller_id}, product_id={product_id})\n"
+                        f"2. get_category_characteristics(subject_id=<wb_subject_id>)\n"
+                        f"3. Заполни характеристики в формате [{{id, value}}]\n"
+                        f"ЗАПРЕЩЕНО вызывать update_product — НИЧЕГО не сохраняй.\n\n"
+                        f"Верни ТОЛЬКО JSON: {{characteristics: [{{id, value}}, ...], confidence: 0..1}}"
+                    )
                 return (
                     f"Заполни характеристики карточки WB.\n"
                     f"Seller ID: {seller_id}, Product ID: {product_id}\n\n"

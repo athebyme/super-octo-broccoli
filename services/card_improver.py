@@ -275,6 +275,32 @@ def build_proposal_from_tasks(product, task_results: List[Dict[str, Any]]) -> Di
                         'source': 'photo-optimizer',
                     }
         # card-doctor — диагностический (рекомендации-текст), не формирует proposal-поля.
-        # Генеративные агенты (Задача 3.7) подключаются здесь по agent name.
+
+        # Генеративные агенты (Задача 3.7): seo-writer, brand-resolver,
+        # category-mapper, characteristics-filler — propose-mode.
+        # Порог confidence >= 0.7; совпадения с текущим значением пропускаются.
+        GEN_MAP = {
+            'seo-writer': [('title', 'title'), ('description', 'description')],
+            'brand-resolver': [('brand', 'brand')],
+            'category-mapper': [('subject_id', 'category')],
+            'characteristics-filler': [('characteristics', 'characteristics')],
+        }
+        if agent in GEN_MAP:
+            conf = result.get('confidence', 1.0)
+            if isinstance(conf, (int, float)) and conf >= 0.7:
+                for field, dim in GEN_MAP[agent]:
+                    proposed = result.get(field)
+                    # characteristics — не сравниваем с текущим (нет прямого атрибута)
+                    current = getattr(product, field, None) if field != 'characteristics' else None
+                    if proposed in (None, '', [], {}):
+                        continue
+                    if field != 'characteristics' and proposed == current:
+                        continue
+                    proposal[field] = {
+                        'current': current,
+                        'proposed': proposed,
+                        'dimension': dim,
+                        'source': agent,
+                    }
 
     return proposal
