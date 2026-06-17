@@ -215,3 +215,66 @@ def apply_card_updates(
         'wb_sync': wb_sync_success,
         'error': wb_error,
     }
+
+
+def collect_weak_dimensions(detail: Dict[str, Any]) -> List[str]:
+    """Имена измерений со статусом warning/error, отсортированные по impact = weight*(100-score) убыванию."""
+    dims = (detail or {}).get('dimensions') or {}
+    weak = []
+    for name, d in dims.items():
+        if d.get('status') in ('warning', 'error'):
+            impact = d.get('weight', 0) * (100 - d.get('score', 0))
+            weak.append((impact, name))
+    weak.sort(key=lambda t: (-t[0], t[1]))
+    return [name for _, name in weak]
+
+
+def build_proposal_from_tasks(product, task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Маппит результаты завершённых задач агентов в форму proposal.
+
+    task_results: [{'agent': '<name>', 'result': <dict из AgentTask.get_result()>}]
+    Returns: {'<field>': {'current','proposed','dimension','source'}}
+
+    photo-optimizer/recommended_order → предложение «переупорядочить фото».
+    Генеративные значения seo/characteristics/brand/category добавляются
+    в Задаче 3.7 (propose-mode), здесь — расширяемая ветка по agent name.
+    """
+    proposal: Dict[str, Any] = {}
+
+    try:
+        current_photos = json.loads(getattr(product, 'photos_json', None) or '[]')
+    except (json.JSONDecodeError, TypeError):
+        current_photos = []
+    if not isinstance(current_photos, list):
+        current_photos = []
+
+    for entry in task_results or []:
+        agent = entry.get('agent')
+        result = entry.get('result') or {}
+
+        if agent == 'photo-optimizer':
+            order = result.get('recommended_order')
+            if isinstance(order, list) and current_photos:
+                # Берём только валидные индексы в диапазоне, без дублей, в указанном порядке
+                seen = set()
+                valid = []
+                for idx in order:
+                    if isinstance(idx, int) and 0 <= idx < len(current_photos) and idx not in seen:
+                        seen.add(idx)
+                        valid.append(idx)
+                # Достраиваем хвостом пропущенные индексы, чтобы не потерять фото
+                for idx in range(len(current_photos)):
+                    if idx not in seen:
+                        valid.append(idx)
+                reordered = [current_photos[i] for i in valid]
+                if reordered != current_photos:
+                    proposal['photos'] = {
+                        'current': current_photos,
+                        'proposed': reordered,
+                        'dimension': 'photos',
+                        'source': 'photo-optimizer',
+                    }
+        # card-doctor — диагностический (рекомендации-текст), не формирует proposal-поля.
+        # Генеративные агенты (Задача 3.7) подключаются здесь по agent name.
+
+    return proposal
