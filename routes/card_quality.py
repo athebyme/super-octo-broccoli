@@ -5,10 +5,9 @@ import threading
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
-from sqlalchemy import func
 
 from models import db, Product, CardRatingHistory
-from services.card_quality_scorer import card_quality_detail
+from services.card_quality_scorer import card_quality_detail, compute_quality_summary
 from services import agent_service
 
 logger = logging.getLogger('card_quality')
@@ -43,19 +42,8 @@ def register_card_quality_routes(app):
             pagination = q.paginate(page=page, per_page=per_page, error_out=False)
             items = [card_quality_detail(p) for p in pagination.items]
 
-            agg = db.session.query(
-                func.avg(Product.quality_score),
-                func.avg(Product.nm_rating),
-            ).filter(Product.seller_id == current_user.seller.id, Product.is_active == True).one()
-            need_attention = Product.query.filter(
-                Product.seller_id == current_user.seller.id, Product.is_active == True
-            ).filter((Product.quality_score < 50) | (Product.nm_rating < 6)).count()
-            summary = {
-                'avg_quality': round(agg[0], 1) if agg[0] is not None else None,
-                'avg_wb_rating': round(agg[1], 1) if agg[1] is not None else None,
-                'total': pagination.total,
-                'need_attention': need_attention,
-            }
+            summary = compute_quality_summary(current_user.seller.id)
+            summary['total'] = pagination.total
             return jsonify({'success': True, 'items': items, 'summary': summary,
                             'page': page, 'pages': pagination.pages})
         except Exception as e:

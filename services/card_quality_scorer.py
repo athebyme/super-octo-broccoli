@@ -7,7 +7,7 @@
 «как поднять». Чистые функции без БД — пригодны для unit-тестов.
 """
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 WEIGHTS = {
     'characteristics': 25,
@@ -198,4 +198,61 @@ def card_quality_detail(product) -> Dict[str, Any]:
         'quality_status': cq['status'],
         'dimensions': cq['dimensions'],
         'recommendations': cq['recommendations'],
+    }
+
+
+WEAK_QUALITY_THRESHOLD = 50.0
+WEAK_WB_RATING_THRESHOLD = 6.0
+
+
+def is_weak(quality_score: Optional[float], nm_rating: Optional[float]) -> bool:
+    """Карточка «слабая», если Quality Score < 50 ИЛИ WB-рейтинг карточки < 6.
+
+    None-значения игнорируются (не делают карточку слабой сами по себе).
+    """
+    if quality_score is not None and quality_score < WEAK_QUALITY_THRESHOLD:
+        return True
+    if nm_rating is not None and nm_rating < WEAK_WB_RATING_THRESHOLD:
+        return True
+    return False
+
+
+def compute_quality_summary(seller_id: int) -> Dict[str, Any]:
+    """Сводка по качеству карточек продавца для кокпита.
+
+    distribution — бакеты по score_status(quality_score): poor/average/good/excellent.
+    need_attention — число «слабых» карточек по is_weak(quality_score, nm_rating).
+    """
+    from models import db, Product
+
+    rows = db.session.query(Product.quality_score, Product.nm_rating).filter(
+        Product.seller_id == seller_id,
+        Product.is_active == True,  # noqa: E712
+    ).all()
+
+    distribution = {'poor': 0, 'average': 0, 'good': 0, 'excellent': 0}
+    total = len(rows)
+    need_attention = 0
+    q_sum = 0.0
+    q_cnt = 0
+    r_sum = 0.0
+    r_cnt = 0
+
+    for quality_score, nm_rating in rows:
+        if quality_score is not None:
+            distribution[score_status(quality_score)] += 1
+            q_sum += quality_score
+            q_cnt += 1
+        if nm_rating is not None:
+            r_sum += nm_rating
+            r_cnt += 1
+        if is_weak(quality_score, nm_rating):
+            need_attention += 1
+
+    return {
+        'avg_quality': round(q_sum / q_cnt, 1) if q_cnt else None,
+        'avg_wb_rating': round(r_sum / r_cnt, 1) if r_cnt else None,
+        'total': total,
+        'need_attention': need_attention,
+        'distribution': distribution,
     }
