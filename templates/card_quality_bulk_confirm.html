@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Массовое улучшение карточек - Seller Hub{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-6">
+  <div class="sh-page-header"><div class="sh-page-header-content">
+    <div>
+      <h1 class="sh-page-title">Массовое улучшение слабых карточек</h1>
+      <p class="sh-page-subtitle">
+        Обработано top-{{ shown }} из {{ total_weak }} слабых карточек
+        {% if total_weak > shown %}<strong>(показаны самые слабые; остальные — следующим заходом)</strong>{% endif %}
+      </p>
+    </div>
+  </div></div>
+
+  {% if not candidates %}
+    <div class="sh-empty">Нет слабых карточек или нет данных для предложений.</div>
+  {% else %}
+  <form method="POST" action="{{ url_for('card_quality_bulk_improve_apply') }}"
+        class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+    <div class="overflow-x-auto mb-6">
+      <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Артикул</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quality</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Слабые места</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Поставщик → применить</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200">
+          {% for c in candidates %}
+          <tr>
+            <td class="px-4 py-3 text-sm">
+              <div class="text-gray-900">{{ c.nm_id }}</div>
+              <div class="text-xs text-gray-400">{{ c.vendor_code or '' }}</div>
+            </td>
+            <td class="px-4 py-3 text-sm font-medium text-red-600">{{ c.quality_score if c.quality_score is not none else '—' }}</td>
+            <td class="px-4 py-3 text-xs text-gray-600">{{ c.weak_dims|join(', ') }}</td>
+            <td class="px-4 py-3 text-sm">
+              {% if c.has_supplier %}
+                {% set sd = c.supplier_diff %}
+                {% for fld, label in [('title','Заголовок'),('brand','Бренд'),('description','Описание'),('dimensions','Габариты')] %}
+                  {% if sd[fld] and sd[fld].has_change %}
+                  <label class="flex items-center gap-2 mb-1 cursor-pointer">
+                    <input type="checkbox" name="apply_{{ c.product_id }}_{{ fld }}" checked
+                           class="w-4 h-4 rounded text-indigo-600 border-gray-300">
+                    <span class="text-xs text-gray-700">{{ label }}</span>
+                  </label>
+                  {% endif %}
+                {% endfor %}
+              {% else %}
+                <span class="text-xs text-gray-400">Нет данных поставщика</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <button type="submit" name="action" value="reject"
+              class="px-6 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+        Отклонить
+      </button>
+      <button type="submit" name="action" value="confirm"
+              class="px-6 py-2 rounded-md text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700">
+        Подтвердить улучшения
+      </button>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

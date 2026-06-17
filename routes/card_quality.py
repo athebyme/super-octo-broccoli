@@ -6,7 +6,7 @@ import threading
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
 
-from models import db, Product, CardRatingHistory, AgentTask
+from models import db, Product, CardRatingHistory, AgentTask, BulkEditHistory
 from services.card_quality_scorer import card_quality_detail, compute_quality_summary
 from services import agent_service
 from services.wb_api_client import WildberriesAPIClient
@@ -15,6 +15,41 @@ from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
 from services.supplier_enrichment import get_enrichment_service
 
 logger = logging.getLogger('card_quality')
+
+BULK_IMPROVE_LIMIT = 30
+
+
+def _collect_bulk_candidates(seller_id: int, limit: int = BULK_IMPROVE_LIMIT) -> dict:
+    """Собирает top-N слабых карточек продавца с весами и (если есть) диффом поставщика."""
+    base = Product.query.filter(
+        Product.seller_id == seller_id, Product.is_active == True
+    ).filter(
+        Product.quality_score.op('<')(50) | Product.nm_rating.op('<')(6)
+    )
+
+    total_weak = base.count()
+    rows = base.order_by(Product.quality_score.asc()).limit(limit).all()
+
+    es = get_enrichment_service()
+    candidates = []
+    for p in rows:
+        detail = card_quality_detail(p)
+        weak_dims = collect_weak_dimensions(detail)
+        supplier_diff = None
+        imp = es.find_supplier_data(p, seller_id)
+        if imp:
+            supplier_diff = es.build_preview(p, imp)
+        candidates.append({
+            'product_id': detail['product_id'],
+            'nm_id': detail['nm_id'],
+            'vendor_code': detail.get('vendor_code'),
+            'title': detail.get('title'),
+            'quality_score': detail.get('quality_score'),
+            'weak_dims': weak_dims,
+            'has_supplier': bool(supplier_diff),
+            'supplier_diff': supplier_diff,
+        })
+    return {'candidates': candidates, 'total_weak': total_weak, 'shown': len(candidates)}
 
 
 def register_card_quality_routes(app):
@@ -233,3 +268,98 @@ def register_card_quality_routes(app):
         except Exception as e:
             logger.exception('Ошибка в api_card_quality_apply: %s', e)
             return jsonify({'error': 'Внутренняя ошибка'}), 500
+
+    @app.route('/card-quality/bulk-improve', methods=['GET'])
+    @login_required
+    def card_quality_bulk_improve_page():
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            flash('Для массового улучшения необходимо настроить API ключ WB', 'warning')
+            return redirect(url_for('api_settings'))
+        data = _collect_bulk_candidates(current_user.seller.id, BULK_IMPROVE_LIMIT)
+        return render_template('card_quality_bulk_confirm.html',
+                               candidates=data['candidates'],
+                               total_weak=data['total_weak'],
+                               shown=data['shown'],
+                               limit=BULK_IMPROVE_LIMIT)
+
+    @app.route('/card-quality/bulk-improve', methods=['POST'])
+    @login_required
+    def card_quality_bulk_improve_apply():
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        action = request.form.get('action')
+        if action == 'reject':
+            flash('Массовое улучшение отклонено', 'info')
+            return redirect(url_for('card_quality_page'))
+
+        # Карта product_id -> список выбранных полей
+        selections = {}
+        for key in request.form:
+            if key.startswith('apply_'):
+                # apply_<pid>_<field>
+                parts = key.split('_', 2)
+                if len(parts) == 3:
+                    _, pid, field = parts
+                    try:
+                        selections.setdefault(int(pid), []).append(field)
+                    except ValueError:
+                        pass
+
+        if not selections:
+            flash('Не выбрано ни одного изменения', 'warning')
+            return redirect(url_for('card_quality_bulk_improve_page'))
+
+        bulk = BulkEditHistory(
+            seller_id=current_user.seller.id,
+            operation_type='card_quality_bulk_improve',
+            operation_params={'product_ids': list(selections.keys())},
+            description=f'Массовое улучшение {len(selections)} карточек',
+            total_products=len(selections),
+            status='in_progress',
+        )
+        db.session.add(bulk)
+        db.session.commit()
+
+        wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
+        es = get_enrichment_service()
+        success, errors = 0, 0
+        for pid, fields in selections.items():
+            product = Product.query.filter_by(id=pid, seller_id=current_user.seller.id).first()
+            if not product:
+                errors += 1
+                continue
+            updates = {}
+            imp = es.find_supplier_data(product, current_user.seller.id)
+            if imp:
+                preview = es.build_preview(product, imp)
+                if 'title' in fields and preview.get('title', {}).get('supplier'):
+                    updates['title'] = preview['title']['supplier']
+                if 'brand' in fields and preview.get('brand', {}).get('supplier'):
+                    updates['brand'] = preview['brand']['supplier']
+                if 'description' in fields and preview.get('description', {}).get('supplier'):
+                    updates['description'] = preview['description']['supplier']
+                if 'dimensions' in fields and preview.get('dimensions', {}).get('supplier'):
+                    updates['dimensions'] = preview['dimensions']['supplier']
+            if not updates:
+                continue
+            try:
+                res = apply_card_updates(product, updates, current_user.seller, wb_client,
+                                         source='card-quality-bulk')
+                if res.get('success'):
+                    success += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.exception('bulk improve pid=%s: %s', pid, e)
+                errors += 1
+
+        bulk.success_count = success
+        bulk.error_count = errors
+        bulk.status = 'completed'
+        bulk.wb_synced = success > 0
+        from datetime import datetime as _dt
+        bulk.completed_at = _dt.utcnow()
+        db.session.commit()
+
+        flash(f'Улучшено карточек: {success}, ошибок: {errors}', 'success' if success else 'warning')
+        return redirect(url_for('card_quality_page'))

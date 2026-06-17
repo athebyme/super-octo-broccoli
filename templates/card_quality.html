@@ -497,7 +497,7 @@ function cardQualityPage() {
       return `width:${s}px;height:${s}px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-style:italic;font-size:${Math.round((size||96)/3.2)}px;color:${col}`;
     },
     improveWeak() {
-      this.$store.toasts.info('Массовое улучшение слабых карточек появится скоро', 'Скоро');
+      window.location.href = "{{ url_for('card_quality_bulk_improve_page') }}";
     },
     gaugeStyle(v, size) {
       const col = (v??0)>=70?'#16a34a':(v??0)>=50?'#d97706':'#dc2626';
