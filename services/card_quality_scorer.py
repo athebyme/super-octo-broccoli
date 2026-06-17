@@ -7,6 +7,7 @@
 «как поднять». Чистые функции без БД — пригодны для unit-тестов.
 """
 import json
+from datetime import datetime
 from typing import Dict, Any, Optional
 
 WEIGHTS = {
@@ -259,3 +260,32 @@ def compute_quality_summary(seller_id: int) -> Dict[str, Any]:
         'need_attention': need_attention,
         'distribution': distribution,
     }
+
+
+def recompute_and_persist(product, capture_history: bool = True) -> Dict[str, Any]:
+    """Пересчитать Quality Score карточки и записать его в Product.
+
+    Выставляет product.quality_score, product.quality_breakdown_json (JSON разбивки
+    по измерениям) и product.quality_checked_at. При capture_history=True добавляет
+    снимок CardRatingHistory в сессию. НЕ делает commit — коммитит вызывающий код.
+    Возвращает результат compute_card_quality (score, status, dimensions, recommendations).
+    """
+    from models import db, CardRatingHistory
+
+    cq = compute_card_quality(product_to_card_input(product))
+
+    product.quality_score = cq['score']
+    product.quality_breakdown_json = json.dumps(cq['dimensions'], ensure_ascii=False)
+    product.quality_checked_at = datetime.utcnow()
+
+    if capture_history:
+        db.session.add(CardRatingHistory(
+            seller_id=getattr(product, 'seller_id', None),
+            product_id=getattr(product, 'id', None),
+            nm_id=getattr(product, 'nm_id', None),
+            wb_product_rating=getattr(product, 'nm_rating', None),
+            wb_feedback_rating=getattr(product, 'wb_feedback_rating', None),
+            quality_score=cq['score'],
+        ))
+
+    return cq
