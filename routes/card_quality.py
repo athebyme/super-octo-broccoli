@@ -9,6 +9,8 @@ from flask_login import login_required, current_user
 from models import db, Product, CardRatingHistory
 from services.card_quality_scorer import card_quality_detail, compute_quality_summary
 from services import agent_service
+from services.wb_api_client import WildberriesAPIClient
+from services.card_improver import ALLOWED_FIELDS, apply_card_updates
 
 logger = logging.getLogger('card_quality')
 
@@ -125,3 +127,35 @@ def register_card_quality_routes(app):
         seller_id = current_user.seller.id
         threading.Thread(target=sync_card_ratings_for_seller, args=(app_obj, seller_id), daemon=True).start()
         return jsonify({'success': True, 'message': 'Обновление рейтингов запущено'})
+
+    @app.route('/api/card-quality/<int:product_id>/apply', methods=['POST'])
+    @login_required
+    def api_card_quality_apply(product_id):
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        product = Product.query.filter_by(id=product_id, seller_id=current_user.seller.id).first()
+        if not product:
+            return jsonify({'error': 'Карточка не найдена'}), 404
+
+        body = request.get_json(silent=True) or {}
+        raw_updates = body.get('updates') or {}
+        updates = {k: v for k, v in raw_updates.items() if k in ALLOWED_FIELDS}
+        if not updates:
+            return jsonify({'error': 'Нет допустимых полей для применения'}), 400
+
+        try:
+            wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
+            res = apply_card_updates(product, updates, current_user.seller, wb_client,
+                                     source='card-quality')
+            status = 200 if res.get('success') else 422
+            return jsonify({
+                'success': res.get('success', False),
+                'fields_applied': res.get('fields_applied', []),
+                'old_quality': res.get('old_quality'),
+                'new_quality': res.get('new_quality'),
+                'wb_sync': res.get('wb_sync', False),
+                'error': res.get('error'),
+            }), status
+        except Exception as e:
+            logger.exception('Ошибка в api_card_quality_apply: %s', e)
+            return jsonify({'error': 'Внутренняя ошибка'}), 500
