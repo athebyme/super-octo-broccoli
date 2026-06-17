@@ -110,7 +110,7 @@
         </div>
         <div :style="gaugeStyle(it.quality_score, 40)" x-text="it.quality_score ?? '—'"></div>
         <div class="cq-actions" @click.stop>
-          <button class="sh-btn sh-btn--accent sh-btn--sm" disabled title="Появится в Фазе 3">Улучшить</button>
+          <button class="sh-btn sh-btn--accent sh-btn--sm" @click="openAndImprove(it.product_id)">Улучшить</button>
           <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
         </div>
       </div>
@@ -201,10 +201,55 @@
 
             {# Действия #}
             <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
-              <button class="sh-btn sh-btn--accent sh-btn--sm" disabled title="Появится в Фазе 3">⚡ Улучшить карточку</button>
+              <button class="sh-btn sh-btn--accent sh-btn--sm" @click="startImprove(detail.product_id)" :disabled="improveRunning">⚡ Улучшить карточку</button>
               <button class="sh-btn sh-btn--primary sh-btn--sm" @click="aiAnalyze(detail.product_id)" :disabled="aiRunning">🤖 Глубокий AI-анализ</button>
             </div>
             <div x-show="aiRunning" style="font-size:12px;color:var(--text-secondary);margin-top:8px" x-text="aiStatus"></div>
+
+            {# Статус improve #}
+            <div x-show="improveRunning" class="text-gray-500 text-xs" style="margin-top:8px" x-text="improveStatus"></div>
+
+            {# ── Дифф от поставщика (было→стало) ── #}
+            <template x-if="supplierDiff">
+              <div style="margin-top:20px">
+                <div style="font-weight:600;margin-bottom:8px">Данные поставщика</div>
+                <template x-for="f in supplierFields" :key="f.key">
+                  <div x-show="f.hasChange" class="sh-card" style="padding:12px;margin-bottom:8px">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                      <input type="checkbox" x-model="selected[f.key]">
+                      <span style="font-weight:500" x-text="f.label"></span>
+                    </label>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px;font-size:13px">
+                      <div><div class="text-gray-400 text-xs">Сейчас</div><div x-text="f.current || '—'"></div></div>
+                      <div style="background:var(--accent-light);border-radius:6px;padding:6px">
+                        <div class="text-gray-500 text-xs">Предложено</div><div x-text="f.proposed || '—'"></div></div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            {# ── Предложения от агентов (порядок фото и т.п.) ── #}
+            <template x-if="Object.keys(proposal).length">
+              <div style="margin-top:16px">
+                <div style="font-weight:600;margin-bottom:8px">Предложения по улучшению</div>
+                <template x-for="(p,field) in proposal" :key="field">
+                  <div class="sh-card" style="padding:12px;margin-bottom:8px">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                      <input type="checkbox" x-model="selected[field]">
+                      <span style="font-weight:500" x-text="proposalLabel(field)"></span>
+                      <span class="text-gray-400 text-xs" x-text="'(' + (p.source||'') + ')'"></span>
+                    </label>
+                    <div class="text-gray-500 text-xs" style="margin-top:4px" x-text="proposalHint(field, p)"></div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <div x-show="supplierDiff || Object.keys(proposal).length" style="margin-top:16px">
+              <button class="sh-btn sh-btn--primary sh-btn--sm" @click="applySelected(detail.product_id)"
+                      :disabled="applyRunning || !anySelected" x-text="applyRunning ? 'Применяю…' : 'Применить выбранное'"></button>
+            </div>
           </div>
         </template>
       </div>
@@ -219,6 +264,8 @@ function cardQualityPage() {
     DIM_LABELS: { characteristics:'характеристики', photos:'фото', description:'описание',
                   title:'заголовок', brand:'бренд', barcodes:'штрихкоды', price:'цена', category:'категория' },
     refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
+    improveRunning: false, improveStatus: '', applyRunning: false,
+    supplierDiff: null, proposal: {}, selected: {}, _improvePoll: null,
     get needAttention() { return this.weakItems.length; },
     get weakItems() {
       return this.items.filter(it =>
@@ -254,6 +301,9 @@ function cardQualityPage() {
     },
     async openDetail(id) {
       this.drawer = true; this.detail = null;
+      this.supplierDiff = null; this.proposal = {}; this.selected = {};
+      this.improveRunning = false; this.improveStatus = '';
+      if (this._improvePoll) { clearInterval(this._improvePoll); this._improvePoll = null; }
       const r = await fetch('/api/card-quality/' + id);
       const d = await r.json(); this.detail = d.data;
       this.$nextTick(() => this.renderTrend());
@@ -306,6 +356,104 @@ function cardQualityPage() {
           }
         }
       });
+    },
+    get supplierFields() {
+      const sd = this.supplierDiff; if (!sd) return [];
+      const fmt = (v) => Array.isArray(v) ? (v.length + ' значений') : (typeof v === 'object' && v ? JSON.stringify(v).slice(0,80) : v);
+      const out = [];
+      const map = [
+        ['title','Заголовок', sd.title && sd.title.current, sd.title && sd.title.supplier, sd.title && sd.title.has_change],
+        ['brand','Бренд', sd.brand && sd.brand.current, sd.brand && sd.brand.supplier, sd.brand && sd.brand.has_change],
+        ['description','Описание', sd.description && sd.description.current, sd.description && sd.description.supplier, sd.description && sd.description.has_change],
+        ['characteristics','Характеристики', (sd.characteristics && sd.characteristics.current||[]).length+' шт', (sd.characteristics && sd.characteristics.supplier_parsed||[]).length+' шт', sd.characteristics && sd.characteristics.has_change],
+        ['dimensions','Габариты', sd.dimensions && fmt(sd.dimensions.current), sd.dimensions && fmt(sd.dimensions.supplier), sd.dimensions && sd.dimensions.has_change],
+      ];
+      for (const [key,label,cur,prop,ch] of map) out.push({key,label,current:cur,proposed:prop,hasChange:!!ch});
+      return out;
+    },
+    get anySelected() { return Object.values(this.selected).some(Boolean); },
+    proposalLabel(field) { return field === 'photos' ? 'Переупорядочить фото' : field; },
+    proposalHint(field, p) {
+      if (field === 'photos') return 'Новый порядок: ' + (p.proposed||[]).length + ' фото (рекомендация агента)';
+      return p.proposed != null ? String(p.proposed).slice(0,120) : '';
+    },
+    async startImprove(id) {
+      this.improveRunning = true; this.improveStatus = 'Анализ карточки…';
+      this.supplierDiff = null; this.proposal = {}; this.selected = {};
+      try {
+        const r = await fetch('/api/card-quality/' + id + '/improve', {method:'POST'});
+        const d = await r.json();
+        if (!d.success) { this.improveStatus = d.error || 'Ошибка'; this.improveRunning = false; return; }
+        this.supplierDiff = d.supplier_diff || null;
+        const taskIds = d.task_ids || {};
+        if (Object.keys(taskIds).length === 0) {
+          this.improveRunning = false;
+          this.improveStatus = this.supplierDiff ? '' : 'AI-агенты офлайн — доступен только дифф поставщика (если есть)';
+          if (!this.supplierDiff) this.$store.toasts.info('Нет данных поставщика и агенты офлайн');
+          return;
+        }
+        this.improveStatus = 'AI-агенты анализируют фото…';
+        this._waitTasks(id, taskIds);
+      } catch (e) { this.improveStatus = 'Ошибка сети'; this.improveRunning = false; }
+    },
+    _waitTasks(id, taskIds) {
+      const ids = Object.values(taskIds);
+      this._improvePoll = setInterval(async () => {
+        try {
+          const states = await Promise.all(ids.map(t =>
+            fetch('/agents/api/tasks/' + t + '/status').then(r => r.json()).then(s => s.task.status)));
+          const done = states.every(s => s !== 'queued' && s !== 'running');
+          if (done) {
+            clearInterval(this._improvePoll); this._improvePoll = null;
+            const pr = await fetch('/api/card-quality/' + id + '/proposal',
+              {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({task_ids: taskIds})});
+            const pd = await pr.json();
+            this.proposal = pd.proposal || {};
+            if (pd.supplier_diff && !this.supplierDiff) this.supplierDiff = pd.supplier_diff;
+            this.improveRunning = false;
+            this.improveStatus = Object.keys(this.proposal).length ? '' : 'Дополнительных предложений нет';
+          }
+        } catch (e) {
+          clearInterval(this._improvePoll); this._improvePoll = null;
+          this.improveRunning = false; this.improveStatus = 'Ошибка при опросе агентов';
+        }
+      }, 3000);
+    },
+    async applySelected(id) {
+      if (!this.anySelected || this.applyRunning) return;
+      this.applyRunning = true;
+      const updates = {};
+      const sd = this.supplierDiff;
+      if (sd) {
+        if (this.selected.title && sd.title) updates.title = sd.title.supplier;
+        if (this.selected.brand && sd.brand) updates.brand = sd.brand.supplier;
+        if (this.selected.description && sd.description) updates.description = sd.description.supplier;
+        if (this.selected.dimensions && sd.dimensions) updates.dimensions = sd.dimensions.supplier;
+        if (this.selected.characteristics && sd.characteristics) updates.characteristics = sd.characteristics.supplier_parsed;
+      }
+      if (this.selected.photos && this.proposal.photos) updates.photos = this.proposal.photos.proposed;
+      for (const [field, p] of Object.entries(this.proposal)) {
+        if (field !== 'photos' && this.selected[field] && p) updates[field] = p.proposed;
+      }
+      try {
+        const r = await fetch('/api/card-quality/' + id + '/apply',
+          {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({updates})});
+        const d = await r.json();
+        if (r.ok && d.success) {
+          this.$store.toasts.success('Quality ' + Math.round(d.old_quality ?? 0) + ' → ' + Math.round(d.new_quality ?? 0),
+                                     'Карточка улучшена');
+          this.supplierDiff = null; this.proposal = {}; this.selected = {};
+          await this.openDetail(id);
+          await this.load();
+        } else {
+          this.$store.toasts.error(d.error || 'Не удалось применить изменения');
+        }
+      } catch (e) { this.$store.toasts.error('Ошибка сети'); }
+      finally { this.applyRunning = false; }
+    },
+    async openAndImprove(id) {
+      await this.openDetail(id);
+      this.startImprove(id);
     },
     wbBadge(v, scale) {
       if (v === null || v === undefined) return '<span style="color:#9a9a9a">—</span>';
