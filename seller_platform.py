@@ -1337,6 +1337,7 @@ def products_list():
         filter_block_status = request.args.get('block_status', '').strip()  # 'blocked', 'shadowed', 'ok', ''
         filter_rating_min = request.args.get('rating_min', '', type=str).strip()
         filter_rating_max = request.args.get('rating_max', '', type=str).strip()
+        filter_quality_weak = request.args.get('quality_weak', '').strip() in ['1', 'true', 'True', 'on']
 
         # Сортировка
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
@@ -1432,6 +1433,12 @@ def products_list():
             except (ValueError, TypeError):
                 pass
 
+        # Фильтр «Только слабые карточки» (Quality Score < 50 ИЛИ WB-рейтинг < 6)
+        if filter_quality_weak:
+            query = query.filter(
+                (Product.quality_score < 50) | (Product.nm_rating < 6)
+            )
+
         # Сортировка
         sort_column = {
             'updated_at': Product.updated_at,
@@ -1444,6 +1451,7 @@ def products_list():
             'price': Product.price,
             'supplier_price': Product.supplier_price,
             'nm_rating': Product.nm_rating,
+            'quality_score': Product.quality_score,
         }.get(sort_by, Product.updated_at)
 
         if sort_order == 'asc':
@@ -1531,6 +1539,7 @@ def products_list():
             filter_block_status=filter_block_status,
             filter_rating_min=filter_rating_min,
             filter_rating_max=filter_rating_max,
+            filter_quality_weak=filter_quality_weak,
             enrichment_map=enrichment_map,
             disabled_products=disabled_products,
         )

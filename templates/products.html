@@ -169,13 +169,13 @@
                     <span class="sh-btn-icon"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg></span>
                     Применить
                 </button>
-                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or active_only or (disabled_only is defined and disabled_only) %}
+                {% if search or filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or filter_quality_weak or active_only or (disabled_only is defined and disabled_only) %}
                 <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--secondary sh-btn--md">Сбросить</a>
                 {% endif %}
             </div>
 
             <!-- Расширенные фильтры -->
-            <details class="group" {% if filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or sort_by != 'updated_at' %}open{% endif %}>
+            <details class="group" {% if filter_brand or filter_category or filter_has_stock or filter_block_status or filter_rating_min or filter_rating_max or filter_quality_weak or sort_by != 'updated_at' %}open{% endif %}>
                 <summary class="cursor-pointer text-sm font-medium text-gray-700 flex items-center gap-2">
                     <svg class="w-5 h-5 transform group-open:rotate-90 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
@@ -259,6 +259,16 @@
                         </div>
                     </div>
 
+                    <!-- Фильтр «Только слабые карточки» -->
+                    <div class="flex items-end">
+                        <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+                            <input type="checkbox" name="quality_weak" value="1"
+                                   {% if filter_quality_weak %}checked{% endif %}
+                                   class="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500">
+                            Только слабые карточки
+                        </label>
+                    </div>
+
                     <!-- Сортировка -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">
@@ -277,6 +287,7 @@
                                 <option value="price" {% if sort_by == 'price' %}selected{% endif %}>Цена WB</option>
                                 <option value="supplier_price" {% if sort_by == 'supplier_price' %}selected{% endif %}>Цена поставщика</option>
                                 <option value="nm_rating" {% if sort_by == 'nm_rating' %}selected{% endif %}>Рейтинг</option>
+                                <option value="quality_score" {% if sort_by == 'quality_score' %}selected{% endif %}>Качество</option>
                             </select>
                             <select name="order"
                                     class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
@@ -419,6 +430,7 @@
                         <th class="text-right">Цена WB</th>
                         <th class="text-right">Цена пост.</th>
                         <th class="text-center">Рейтинг</th>
+                        <th class="text-center">Качество</th>
                         <th>Обновлено</th>
                         <th class="text-right">Действия</th>
                     </tr>
@@ -530,6 +542,20 @@
                                 </svg>
                                 {{ '%.1f'|format(product.nm_rating) }}
                             </div>
+                            {% else %}
+                            <span class="text-xs text-gray-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            {% if product.quality_score is not none %}
+                            <a href="{{ url_for('card_quality_page') }}"
+                               class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold
+                                {% if product.quality_score >= 70 %}bg-green-100 text-green-700
+                                {% elif product.quality_score >= 50 %}bg-yellow-100 text-yellow-700
+                                {% else %}bg-red-100 text-red-700{% endif %}"
+                               title="Quality Score — разобрать в кокпите качества">
+                                {{ product.quality_score|round|int }}
+                            </a>
                             {% else %}
                             <span class="text-xs text-gray-400">—</span>
                             {% endif %}
