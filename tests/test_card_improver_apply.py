@@ -208,5 +208,54 @@ class ApplyCardUpdatesTest(unittest.TestCase):
         self.assertTrue(self.committed)
 
 
+    # ------------------------------------------------------------------
+    # Fix 1: photos записываются в photos_json локально, WB не вызывается
+    # ------------------------------------------------------------------
+    def test_photos_written_to_photos_json_locally(self):
+        """photos сохраняются в product.photos_json и попадают в fields_applied; WB не вызывается."""
+        from services.card_improver import apply_card_updates
+        product = FakeProduct()
+        wb = FakeWBClient()
+
+        res = apply_card_updates(
+            product,
+            {'photos': ['url1', 'url2']},
+            FakeSeller(), wb, source='card-quality',
+        )
+
+        # photos должны быть в fields_applied
+        self.assertIn('photos', res['fields_applied'])
+        # photos_json должен содержать переданные URL
+        stored = json.loads(product.photos_json)
+        self.assertEqual(stored, ['url1', 'url2'])
+        # WB API не должен вызываться — photos не уходят через update_card
+        self.assertEqual(len(wb.calls), 0)
+
+    # ------------------------------------------------------------------
+    # Fix 2: wb_sync_status='skipped' когда WB-вызов не делался
+    # ------------------------------------------------------------------
+    def test_wb_sync_status_skipped_when_only_local_fields(self):
+        """Если применяются только локальные поля (subject_id / photos), wb_sync_status == 'skipped'."""
+        from services.card_improver import apply_card_updates
+
+        for updates in (
+            {'subject_id': 42},
+            {'photos': ['url1']},
+            {'subject_id': 42, 'photos': ['url1']},
+        ):
+            with self.subTest(updates=updates):
+                product = FakeProduct()
+                wb = FakeWBClient()
+                apply_card_updates(product, updates, FakeSeller(), wb, source='card-quality')
+
+                self.assertEqual(len(self.history_records), 1)
+                h = self.history_records[-1]
+                self.assertEqual(h.wb_sync_status, 'skipped',
+                                 f"Ожидался 'skipped', получен '{h.wb_sync_status}' для {updates}")
+                # Сбрасываем историю между subTest-ами
+                self.history_records.clear()
+                self.committed = False
+
+
 if __name__ == '__main__':
     unittest.main()

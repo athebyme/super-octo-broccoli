@@ -168,6 +168,11 @@ def apply_card_updates(
         product.subject_id = clean['subject_id']
         fields_applied.append('subject_id')
 
+    # photos хранятся локально; синхронизация медиа с WB — отдельный flow, не через update_card
+    if 'photos' in clean:
+        product.photos_json = json.dumps(clean['photos'], ensure_ascii=False)
+        fields_applied.append('photos')
+
     # Обновляем метку времени карточки
     if hasattr(product, 'updated_at'):
         product.updated_at = datetime.utcnow()
@@ -193,7 +198,7 @@ def apply_card_updates(
         snapshot_before=snapshot_before,
         snapshot_after=snapshot_after,
         wb_synced=wb_sync_success,
-        wb_sync_status='success' if wb_sync_success else ('failed' if wb_error else 'pending'),
+        wb_sync_status='success' if wb_sync_success else ('failed' if wb_error else 'skipped'),
         wb_error_message=wb_error,
         user_comment=f'Улучшение карточки ({source})',
     )
