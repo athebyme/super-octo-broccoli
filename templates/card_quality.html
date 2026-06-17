@@ -147,7 +147,7 @@
 
   {# ── Slideover деталь ── #}
   <div x-show="drawer" x-cloak class="sh-slideover-backdrop" @click="drawer=false"></div>
-  <div x-show="drawer" x-cloak class="sh-slideover sh-slideover--lg">
+  <div x-show="drawer" x-cloak class="sh-slideover sh-slideover--lg" @click.self="drawer=false">
     <div class="sh-slideover-panel">
       <div class="sh-slideover-header">
         <div class="sh-slideover-title" x-text="detail ? ('Артикул ' + (detail.nm_id||'')) : 'Карточка'"></div>
