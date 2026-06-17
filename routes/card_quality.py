@@ -6,11 +6,13 @@ import threading
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
 
-from models import db, Product, CardRatingHistory
+from models import db, Product, CardRatingHistory, AgentTask
 from services.card_quality_scorer import card_quality_detail, compute_quality_summary
 from services import agent_service
 from services.wb_api_client import WildberriesAPIClient
-from services.card_improver import ALLOWED_FIELDS, apply_card_updates
+from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
+                                     collect_weak_dimensions, build_proposal_from_tasks)
+from services.supplier_enrichment import get_enrichment_service
 
 logger = logging.getLogger('card_quality')
 
@@ -127,6 +129,78 @@ def register_card_quality_routes(app):
         seller_id = current_user.seller.id
         threading.Thread(target=sync_card_ratings_for_seller, args=(app_obj, seller_id), daemon=True).start()
         return jsonify({'success': True, 'message': 'Обновление рейтингов запущено'})
+
+    @app.route('/api/card-quality/<int:product_id>/improve', methods=['POST'])
+    @login_required
+    def api_card_quality_improve(product_id):
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        product = Product.query.filter_by(id=product_id, seller_id=current_user.seller.id).first()
+        if not product:
+            return jsonify({'error': 'Карточка не найдена'}), 404
+        try:
+            detail = card_quality_detail(product)
+            weak_dims = collect_weak_dimensions(detail)
+
+            # (a) данные поставщика → готовый дифф
+            supplier_diff = None
+            es = get_enrichment_service()
+            imp = es.find_supplier_data(product, current_user.seller.id)
+            if imp:
+                supplier_diff = es.build_preview(product, imp)
+
+            # (b)/(c) диагностические агенты по product_id (если online)
+            task_ids = {}
+            for agent_name, task_type in (('photo-optimizer', 'optimize_single'),
+                                          ('card-doctor', 'diagnose_single')):
+                agent = agent_service.get_agent_by_name(agent_name)
+                if not agent or getattr(agent, 'status', None) != 'online':
+                    continue
+                task = agent_service.create_task(
+                    agent_id=agent.id,
+                    seller_id=current_user.seller.id,
+                    task_type=task_type,
+                    title=f'Улучшение карточки {product.nm_id}',
+                    input_data={'product_id': product.id},
+                )
+                task_ids[agent_name] = task.id
+
+            return jsonify({'success': True, 'weak_dims': weak_dims,
+                            'supplier_diff': supplier_diff, 'task_ids': task_ids})
+        except Exception as e:
+            logger.exception('Ошибка в api_card_quality_improve: %s', e)
+            return jsonify({'error': 'Внутренняя ошибка'}), 500
+
+    @app.route('/api/card-quality/<int:product_id>/proposal', methods=['POST'])
+    @login_required
+    def api_card_quality_proposal(product_id):
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        product = Product.query.filter_by(id=product_id, seller_id=current_user.seller.id).first()
+        if not product:
+            return jsonify({'error': 'Карточка не найдена'}), 404
+        try:
+            body = request.get_json(silent=True) or {}
+            task_ids = body.get('task_ids') or {}
+
+            task_results = []
+            for agent_name, task_id in task_ids.items():
+                task = AgentTask.query.filter_by(id=task_id, seller_id=current_user.seller.id).first()
+                if task and task.status == 'completed':
+                    task_results.append({'agent': agent_name, 'result': task.get_result()})
+
+            proposal = build_proposal_from_tasks(product, task_results)
+
+            supplier_diff = None
+            es = get_enrichment_service()
+            imp = es.find_supplier_data(product, current_user.seller.id)
+            if imp:
+                supplier_diff = es.build_preview(product, imp)
+
+            return jsonify({'success': True, 'proposal': proposal, 'supplier_diff': supplier_diff})
+        except Exception as e:
+            logger.exception('Ошибка в api_card_quality_proposal: %s', e)
+            return jsonify({'error': 'Внутренняя ошибка'}), 500
 
     @app.route('/api/card-quality/<int:product_id>/apply', methods=['POST'])
     @login_required
