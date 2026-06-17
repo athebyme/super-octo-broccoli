@@ -50,6 +50,18 @@ def register_card_quality_routes(app):
             logger.exception('Ошибка в api_card_quality_list: %s', e)
             return jsonify({'error': 'Внутренняя ошибка'}), 500
 
+    @app.route('/api/card-quality/summary')
+    @login_required
+    def api_card_quality_summary():
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        try:
+            data = compute_quality_summary(current_user.seller.id)
+            return jsonify({'success': True, 'data': data})
+        except Exception as e:
+            logger.exception('Ошибка в api_card_quality_summary: %s', e)
+            return jsonify({'error': 'Внутренняя ошибка'}), 500
+
     @app.route('/api/card-quality/<int:product_id>')
     @login_required
     def api_card_quality_detail(product_id):

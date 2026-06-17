@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import score_gauge %}
 
 {% block title %}Дашборд - Seller Hub{% endblock %}
 
@@ -99,6 +100,40 @@
         border-radius: 50%;
         flex-shrink: 0;
     }
+
+    /* Quality widget */
+    .dash-quality {
+        display: flex;
+        gap: 32px;
+        align-items: center;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 24px 28px;
+        margin-bottom: 40px;
+    }
+    @media (max-width: 640px) { .dash-quality { flex-direction: column; align-items: flex-start; gap: 20px; } }
+    .dash-quality-gauge { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
+    .dash-quality-gauge-label {
+        font-size: 11px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.08em; color: var(--text-muted); text-align: center; max-width: 110px;
+    }
+    .dash-quality-body { flex: 1; min-width: 0; }
+    .dash-quality-headline { display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; }
+    .dash-quality-count {
+        font-family: var(--font-display); font-style: italic; font-size: 32px;
+        color: var(--accent); line-height: 1;
+    }
+    .dash-quality-headline-text { font-size: 14px; color: var(--text-secondary); }
+    .dash-quality-bar {
+        display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+        background: #ece9e4; margin-bottom: 10px;
+    }
+    .dash-quality-bar-seg { min-width: 0; }
+    .dash-quality-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+    .dash-quality-legend .dash-dot { display: inline-block; margin-right: 4px; }
+    .dash-quality-cta { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; }
+    .dash-quality-cta:hover { text-decoration: underline; }
 
     /* Navigation cards */
     .dash-nav-grid {
@@ -296,6 +331,47 @@
             </div>
         </a>
     </div>
+
+    <!-- Качество карточек -->
+    {% if current_user.seller and current_user.seller.has_valid_api_key() %}
+    <div class="dash-section-header">
+        <span class="dash-section-title">Качество карточек</span>
+        <div class="dash-section-line"></div>
+    </div>
+
+    <div class="dash-quality" x-data="cardQualityWidget()" x-init="load()">
+        <div class="dash-quality-gauge">
+            <template x-if="!loading && data && data.avg_quality !== null">
+                <div :style="'width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:conic-gradient(' + gaugeColor() + ' ' + Math.round(data.avg_quality) + '%, #ece9e4 0)'">
+                    <div style="width:80px;height:80px;border-radius:50%;background:var(--bg-card);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-style:italic;font-size:28px"
+                         :style="'color:' + gaugeColor()" x-text="Math.round(data.avg_quality)"></div>
+                </div>
+            </template>
+            <template x-if="loading || !data || data.avg_quality === null">
+                <div style="width:96px;height:96px;border-radius:50%;background:#ece9e4;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-style:italic;font-size:28px;color:var(--text-muted)">—</div>
+            </template>
+            <div class="dash-quality-gauge-label">средний Quality Score</div>
+        </div>
+
+        <div class="dash-quality-body">
+            <div class="dash-quality-headline">
+                <span class="dash-quality-count" x-text="loading ? '…' : (data ? data.need_attention : 0)"></span>
+                <span class="dash-quality-headline-text">карточек тянут рейтинг вниз</span>
+            </div>
+            <div class="dash-quality-bar" x-show="!loading && data && data.total">
+                <template x-for="seg in segments()" :key="seg.key">
+                    <div class="dash-quality-bar-seg" :style="'flex:' + seg.count + ';background:' + seg.color" :title="seg.label + ': ' + seg.count"></div>
+                </template>
+            </div>
+            <div class="dash-quality-legend" x-show="!loading && data && data.total">
+                <span><span class="dash-dot" style="background:#dc2626"></span> Слабые: <span x-text="data ? data.distribution.poor : 0"></span></span>
+                <span><span class="dash-dot" style="background:#d97706"></span> Средние: <span x-text="data ? data.distribution.average : 0"></span></span>
+                <span><span class="dash-dot" style="background:#16a34a"></span> Хорошие: <span x-text="data ? (data.distribution.good + data.distribution.excellent) : 0"></span></span>
+            </div>
+            <a href="{{ url_for('card_quality_page') }}" class="dash-quality-cta">Разобрать &rarr;</a>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Quick navigation -->
     <div class="dash-section-header">
@@ -517,6 +593,33 @@ function dashMetrics() {
                 })
                 .catch(e => console.warn('Dashboard finances error:', e))
                 .finally(check);
+        }
+    };
+}
+
+function cardQualityWidget() {
+    return {
+        loading: true,
+        data: null,
+        load() {
+            fetch('/api/card-quality/summary')
+                .then(r => r.json())
+                .then(json => { if (json.success) this.data = json.data; })
+                .catch(e => console.warn('Card quality widget error:', e))
+                .finally(() => { this.loading = false; });
+        },
+        gaugeColor() {
+            const v = this.data ? this.data.avg_quality : 0;
+            return v >= 70 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626';
+        },
+        segments() {
+            if (!this.data) return [];
+            const d = this.data.distribution;
+            return [
+                { key: 'poor', count: d.poor, color: '#dc2626', label: 'Слабые' },
+                { key: 'average', count: d.average, color: '#d97706', label: 'Средние' },
+                { key: 'good', count: d.good + d.excellent, color: '#16a34a', label: 'Хорошие' },
+            ].filter(s => s.count > 0);
         }
     };
 }
