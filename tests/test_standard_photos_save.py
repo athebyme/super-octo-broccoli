@@ -199,7 +199,7 @@ class TestStandardPhotosSave(unittest.TestCase):
             self.assertEqual(rule.min_photos, 6)
 
     def test_save_global_min_photos_zero_clears(self):
-        """POST save-global с min_photos=0 → min_photos хранится как 0 или None."""
+        """POST save-global с min_photos=0 → min_photos хранится как явный 0 ('никогда не добивать')."""
         client = self._client_logged_in()
         resp = client.post(
             '/settings/product-defaults/save-global',
@@ -214,8 +214,8 @@ class TestStandardPhotosSave(unittest.TestCase):
             rule = ProductDefaults.query.filter_by(
                 seller_id=self.seller_id, rule_type='global'
             ).first()
-            # 0 или None — оба допустимы
-            self.assertIn(rule.min_photos, (0, None))
+            # 0 хранится явно — означает "никогда не добивать фото"
+            self.assertEqual(rule.min_photos, 0)
 
 
 if __name__ == '__main__':

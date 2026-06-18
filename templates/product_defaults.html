@@ -569,7 +569,16 @@
                              saving: false,
                              position: {{ (m.position if m.position is defined else 'last') | tojson }},
                              mode: {{ (m.mode if m.mode is defined else 'fill') | tojson }},
-                             order: {{ (m.order if m.order is defined else 0) | int }}
+                             order: {{ (m.order if m.order is defined else 0) | int }},
+                             async saveLocalMeta(filename) {
+                                 if (this.saving) return;
+                                 this.saving = true;
+                                 try {
+                                     await this.saveMediaMeta(filename, this.position, this.mode, this.order);
+                                 } finally {
+                                     this.saving = false;
+                                 }
+                             }
                          }">
                         <!-- Превью -->
                         <div class="group relative aspect-video">
@@ -639,7 +648,7 @@
                                            class="w-full rounded border border-gray-300 text-xs px-2 py-1 focus:ring-1 focus:ring-[#c45d3e] focus:border-[#c45d3e]">
                                 </div>
                             </div>
-                            <button @click="saveMediaMeta('{{ media.filename }}', position, mode, order)"
+                            <button @click="saveLocalMeta('{{ media.filename }}')"
                                     :disabled="saving"
                                     class="w-full py-1 text-xs bg-[#c45d3e] text-white rounded hover:bg-[#a84d31] transition disabled:opacity-50">
                                 <span x-show="!saving">Сохранить</span>
@@ -695,7 +704,7 @@ function productDefaults() {
         },
 
         // Минимум фото для режима «Если мало»
-        minPhotos: {{ (global_rule.min_photos if global_rule and global_rule.min_photos) or 'null' }},
+        minPhotos: {{ global_rule.min_photos | tojson if (global_rule and global_rule.min_photos is not none) else 'null' }},
 
         // Глобальные характеристики
         globalChars: {{ global_chars | tojson }},
@@ -786,8 +795,8 @@ function productDefaults() {
         },
 
         async saveMediaMeta(filename, position, mode, order) {
-            // Ищем компонент с saving=true по имени файла; используем $dispatch или просто устанавливаем через Alpine
-            // saving управляется в x-data каждой карточки, поэтому здесь только fetch
+            // Вызывается из saveLocalMeta() каждой карточки, которая управляет своим
+            // локальным флагом saving (disable кнопки на время запроса). Здесь только fetch.
             const form = new FormData();
             form.append('filename', filename);
             form.append('position', position);

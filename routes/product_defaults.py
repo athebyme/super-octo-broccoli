@@ -11,7 +11,7 @@ from flask import render_template, redirect, url_for, flash, request, jsonify, s
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
-from models import db, ProductDefaults
+from models import db, ProductDefaults, normalize_media_item
 from services.url_security import safe_float
 
 logger = logging.getLogger(__name__)
@@ -104,12 +104,13 @@ def register_product_defaults_routes(app):
         rule.height_cm = safe_float(request.form.get('height_cm')) or None
         rule.weight_kg = safe_float(request.form.get('weight_kg')) or None
 
-        # min_photos: число > 0 сохраняем, 0 или пустое — None
+        # min_photos: explicit 0 means "never fill"; negative → None (default 4).
+        # Blank/absent → leave existing value unchanged.
         min_photos_raw = request.form.get('min_photos')
         if min_photos_raw is not None and min_photos_raw.strip() != '':
             try:
                 val = int(min_photos_raw)
-                rule.min_photos = val if val > 0 else None
+                rule.min_photos = val if val >= 0 else None
             except (ValueError, TypeError):
                 pass
 
@@ -384,8 +385,6 @@ def register_product_defaults_routes(app):
         ).first()
         if not rule:
             return jsonify({'success': False, 'error': 'Правило не найдено'}), 404
-
-        from models import normalize_media_item
 
         media_list = rule.get_global_media_list()
         found = False
