@@ -7,7 +7,7 @@ from datetime import datetime as _dt
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
 
-from models import db, Product, CardRatingHistory, AgentTask, BulkEditHistory
+from models import db, Product, CardRatingHistory, AgentTask, BulkEditHistory, CardEditHistory
 from services.card_quality_scorer import card_quality_detail, compute_quality_summary
 from services import agent_service
 from services.wb_api_client import WildberriesAPIClient
@@ -418,3 +418,33 @@ def register_card_quality_routes(app):
 
         flash(f'Улучшено карточек: {success}, ошибок: {errors}', 'success' if success else 'warning')
         return redirect(url_for('card_quality_page'))
+
+    @app.route('/api/card-quality/<int:product_id>/history')
+    @login_required
+    def api_card_quality_history(product_id):
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Нет продавца'}), 403
+        product = Product.query.filter_by(id=product_id, seller_id=current_user.seller.id).first()
+        if not product:
+            return jsonify({'success': False, 'error': 'Карточка не найдена'}), 404
+        try:
+            rows = CardEditHistory.query.filter_by(
+                product_id=product.id,
+                seller_id=current_user.seller.id
+            ).order_by(CardEditHistory.created_at.desc()).limit(50).all()
+            items = [
+                {
+                    'created_at': row.created_at.isoformat(),
+                    'action': row.action,
+                    'changed_fields': row.changed_fields or [],
+                    'wb_synced': row.wb_synced,
+                    'wb_sync_status': row.wb_sync_status,
+                    'user_comment': row.user_comment,
+                    'changes': row.get_changes_summary(),
+                }
+                for row in rows
+            ]
+            return jsonify({'success': True, 'items': items})
+        except Exception as e:
+            current_app.logger.error('api_card_quality_history error: %s', e, exc_info=True)
+            return jsonify({'success': False, 'error': 'Ошибка сервера при загрузке истории'}), 500

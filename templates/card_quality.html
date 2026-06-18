@@ -252,6 +252,61 @@
               <button class="sh-btn sh-btn--primary sh-btn--sm" @click="applySelected(detail.product_id)"
                       :disabled="applyRunning || !anySelected" x-text="applyRunning ? 'Применяю…' : 'Применить выбранное'"></button>
             </div>
+
+            {# ── История изменений ── #}
+            <div style="margin-top:24px">
+              <div class="sh-section-title"><span>История изменений</span></div>
+
+              <div x-show="historyLoading" style="font-size:12px;color:var(--text-muted);padding:8px 0">Загрузка истории…</div>
+
+              <template x-if="!historyLoading && history.length === 0">
+                <div style="font-size:13px;color:var(--text-muted);padding:8px 0">Пока нет изменений</div>
+              </template>
+
+              <template x-for="(h, idx) in history" :key="idx">
+                <div class="sh-card" style="padding:12px;margin-bottom:8px;font-size:13px">
+                  {# Дата + действие #}
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <span style="font-weight:600;color:var(--text)" x-text="fmtDate(h.created_at)"></span>
+                    <span style="font-size:11px;color:var(--text-muted)" x-text="h.action"></span>
+                  </div>
+
+                  {# Чипы изменённых полей #}
+                  <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
+                    <template x-for="f in (h.changed_fields||[])" :key="f">
+                      <span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--accent-light);color:var(--accent)"
+                            x-text="DIM_LABELS[f] || f"></span>
+                    </template>
+                  </div>
+
+                  {# было→стало для каждого изменённого поля #}
+                  <template x-if="h.changes && Object.keys(h.changes).length">
+                    <div style="margin-bottom:6px">
+                      <template x-for="(chg, field) in h.changes" :key="field">
+                        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:2px"
+                             x-show="chg.before !== chg.after">
+                          <span style="color:var(--text-muted)" x-text="DIM_LABELS[field]||field"></span>:
+                          <span style="text-decoration:line-through;color:var(--danger,#dc2626)" x-text="chg.before ?? '—'"></span>
+                          → <span style="color:var(--success,#16a34a)" x-text="chg.after ?? '—'"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  {# Комментарий пользователя #}
+                  <div x-show="h.user_comment" style="font-size:12px;color:var(--text-secondary);font-style:italic"
+                       x-text="h.user_comment"></div>
+
+                  {# WB-sync индикатор #}
+                  <div style="margin-top:4px;font-size:11px" x-show="h.wb_synced !== null">
+                    <span x-show="h.wb_synced" style="color:var(--success,#16a34a)">&#10003; синхронизировано с WB</span>
+                    <span x-show="!h.wb_synced && h.wb_sync_status === 'failed'" style="color:var(--danger,#dc2626)">&#10007; ошибка синхронизации WB</span>
+                    <span x-show="!h.wb_synced && h.wb_sync_status === 'pending'" style="color:var(--text-muted)">&#8987; ожидает синхронизации</span>
+                    <span x-show="!h.wb_synced && h.wb_sync_status === 'skipped'" style="color:var(--text-muted)">— не отправлено на WB</span>
+                  </div>
+                </div>
+              </template>
+            </div>
           </div>
         </template>
       </div>
@@ -268,6 +323,7 @@ function cardQualityPage() {
     refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
     improveRunning: false, improveStatus: '', applyRunning: false,
     supplierDiff: null, proposal: {}, selected: {}, _improvePoll: null,
+    history: [], historyLoading: false,
     get needAttention() { return this.weakItems.length; },
     get weakItems() {
       return this.items.filter(it =>
@@ -309,6 +365,18 @@ function cardQualityPage() {
       const r = await fetch('/api/card-quality/' + id);
       const d = await r.json(); this.detail = d.data;
       this.$nextTick(() => this.renderTrend());
+      this.loadHistory(id);
+    },
+    async loadHistory(id) {
+      this.historyLoading = true;
+      this.history = [];
+      try {
+        const r = await fetch('/api/card-quality/' + id + '/history');
+        const d = await r.json();
+        if (d.success) this.history = d.items || [];
+      } finally {
+        this.historyLoading = false;
+      }
     },
     async refresh() {
       this.refreshing = true;
