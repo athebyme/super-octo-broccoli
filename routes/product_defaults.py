@@ -104,6 +104,15 @@ def register_product_defaults_routes(app):
         rule.height_cm = safe_float(request.form.get('height_cm')) or None
         rule.weight_kg = safe_float(request.form.get('weight_kg')) or None
 
+        # min_photos: число > 0 сохраняем, 0 или пустое — None
+        min_photos_raw = request.form.get('min_photos')
+        if min_photos_raw is not None and min_photos_raw.strip() != '':
+            try:
+                val = int(min_photos_raw)
+                rule.min_photos = val if val > 0 else None
+            except (ValueError, TypeError):
+                pass
+
         db.session.commit()
         flash('Глобальные дефолты сохранены', 'success')
         return jsonify({'success': True})
@@ -356,6 +365,54 @@ def register_product_defaults_routes(app):
         if os.path.exists(filepath):
             os.remove(filepath)
 
+        return jsonify({'success': True})
+
+    @app.route('/settings/product-defaults/save-media-meta', methods=['POST'])
+    @login_required
+    def product_defaults_save_media_meta():
+        """Сохранить метаданные медиа-элемента (position, mode, order)"""
+        if not current_user.seller:
+            return jsonify({'success': False, 'error': 'Forbidden'}), 403
+
+        seller = current_user.seller
+        filename = (request.form.get('filename') or '').strip()
+        if not filename:
+            return jsonify({'success': False, 'error': 'filename обязателен'}), 400
+
+        rule = ProductDefaults.query.filter_by(
+            seller_id=seller.id, rule_type='global'
+        ).first()
+        if not rule:
+            return jsonify({'success': False, 'error': 'Правило не найдено'}), 404
+
+        from models import normalize_media_item
+
+        media_list = rule.get_global_media_list()
+        found = False
+        for item in media_list:
+            if item.get('filename') == filename:
+                # Применяем переданные значения, нормализуем через normalize_media_item
+                position = request.form.get('position', item.get('position', 'last'))
+                mode = request.form.get('mode', item.get('mode', 'fill'))
+                try:
+                    order = int(request.form.get('order', item.get('order', 0)))
+                except (ValueError, TypeError):
+                    order = 0
+                item['position'] = position
+                item['mode'] = mode
+                item['order'] = order
+                # normalize_media_item гарантирует все поля (backward compat)
+                item.update(normalize_media_item(item))
+                found = True
+                break
+
+        if not found:
+            return jsonify({'success': False, 'error': 'Файл не найден в списке медиа'}), 404
+
+        rule.global_media = json.dumps(media_list, ensure_ascii=False)
+        db.session.commit()
+
+        logger.info(f"Seller {seller.id}: updated media meta for {filename}")
         return jsonify({'success': True})
 
     @app.route('/settings/product-defaults/media/<filename>')
