@@ -1005,8 +1005,8 @@ def normalize_media_item(item: dict) -> dict:
 def get_min_photos(seller_id: int) -> int:
     """Порог «мало фото» из глобального правила продавца; дефолт 4."""
     rule = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
-    val = getattr(rule, 'min_photos', None) if rule else None
-    return int(val) if val else 4
+    val = rule.min_photos if rule else None
+    return int(val) if val is not None else 4
 
 
 def get_standard_media(seller_id: int, subject_id) -> list:

@@ -28,10 +28,12 @@ class StandardMediaModelTest(unittest.TestCase):
 
     def test_normalize_backward_compat(self):
         from models import normalize_media_item
-        n = normalize_media_item({'filename': 'a.jpg', 'type': 'photo'})
+        orig = {'filename': 'a.jpg', 'type': 'photo'}
+        n = normalize_media_item(orig)
         self.assertEqual(n['position'], 'last')
         self.assertEqual(n['mode'], 'fill')
         self.assertEqual(n['order'], 0)
+        self.assertNotIn('position', orig)
 
     def test_get_min_photos_default_and_value(self):
         from models import get_min_photos
