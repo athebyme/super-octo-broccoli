@@ -1600,6 +1600,7 @@ class AIConfig:
             central = None
 
         if central and central.get('api_key'):
+            # Центральный API-ключ имеет приоритет над provider_override, но model_override всё ещё уважается
             c_provider, c_base, c_default_model = cls._central_provider_base_model(central)
 
             c_model = model_override or central['model'] or c_default_model
