@@ -8,12 +8,14 @@ from flask import render_template, request, redirect, url_for, flash, jsonify, c
 from flask_login import login_required, current_user
 
 from models import db, Product, CardRatingHistory, AgentTask, BulkEditHistory, CardEditHistory
+from models import get_standard_media, get_min_photos
 from services.card_quality_scorer import card_quality_detail, compute_quality_summary
 from services import agent_service
 from services.wb_api_client import WildberriesAPIClient
 from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
                                      collect_weak_dimensions, build_proposal_from_tasks)
 from services.supplier_enrichment import get_enrichment_service
+from services.standard_photos import compose_card_photo_urls
 
 logger = logging.getLogger('card_quality')
 
@@ -281,6 +283,26 @@ def register_card_quality_routes(app):
                     task_results.append({'agent': agent_name, 'result': task.get_result()})
 
             proposal = build_proposal_from_tasks(product, task_results)
+
+            # Предложение стандартных фото: compose собственных URL + глобальное медиа продавца
+            try:
+                import json as _json
+                own = _json.loads(product.photos_json) if product.photos_json else []
+            except (ValueError, TypeError):
+                own = []
+            try:
+                media = get_standard_media(current_user.seller.id, product.subject_id)
+                composed = compose_card_photo_urls(own, media, current_user.seller.id,
+                                                   get_min_photos(current_user.seller.id))
+                if composed:
+                    proposal['photos'] = {
+                        'current': own,
+                        'proposed': composed,
+                        'dimension': 'photos',
+                        'source': 'standard-photos',
+                    }
+            except Exception as _e:
+                logger.warning('standard-photos proposal skipped: %s', _e)
 
             supplier_diff = None
             es = get_enrichment_service()

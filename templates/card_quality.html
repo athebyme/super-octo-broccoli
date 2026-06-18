@@ -243,6 +243,45 @@
                       <span class="text-gray-400 text-xs" x-text="'(' + (p.source||'') + ')'"></span>
                     </label>
                     <div class="text-gray-500 text-xs" style="margin-top:4px" x-text="proposalHint(field, p)"></div>
+
+                    {# Превью фото: показываем миниатюры до → после для dimension=photos #}
+                    <template x-if="field === 'photos' && (p.current||[]).length + (p.proposed||[]).length > 0">
+                      <div style="margin-top:10px">
+                        <template x-if="(p.current||[]).length > 0">
+                          <div style="margin-bottom:8px">
+                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Сейчас (<span x-text="(p.current||[]).length"></span> фото)</div>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                              <template x-for="(url, idx) in (p.current||[]).slice(0,8)" :key="idx">
+                                <img :src="url" alt="" loading="lazy"
+                                     style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+                              </template>
+                              <template x-if="(p.current||[]).length > 8">
+                                <div style="width:52px;height:52px;border-radius:6px;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)"
+                                     x-text="'+' + ((p.current||[]).length - 8)"></div>
+                              </template>
+                            </div>
+                          </div>
+                        </template>
+                        <div>
+                          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Предлагается (<span x-text="(p.proposed||[]).length"></span> фото)</div>
+                          <div style="display:flex;gap:6px;flex-wrap:wrap">
+                            <template x-for="(url, idx) in (p.proposed||[]).slice(0,8)" :key="idx">
+                              <div style="position:relative">
+                                <img :src="url" alt="" loading="lazy"
+                                     style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:2px solid var(--accent)">
+                                <template x-if="idx === 0">
+                                  <span style="position:absolute;top:2px;left:2px;font-size:9px;background:var(--accent);color:#fff;border-radius:3px;padding:1px 3px;line-height:1.2">1-е</span>
+                                </template>
+                              </div>
+                            </template>
+                            <template x-if="(p.proposed||[]).length > 8">
+                              <div style="width:52px;height:52px;border-radius:6px;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)"
+                                   x-text="'+' + ((p.proposed||[]).length - 8)"></div>
+                            </template>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </template>
               </div>
