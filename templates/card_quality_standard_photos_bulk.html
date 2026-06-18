@@ -17,6 +17,7 @@
   {% else %}
   <form method="POST" action="{{ url_for('card_quality_standard_photos_bulk_apply') }}"
         class="space-y-6">
+    <input type="hidden" name="total_m" value="{{ total_m }}">
 
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
          x-data="{ open: true }">

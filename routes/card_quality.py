@@ -34,8 +34,6 @@ def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS
     Карточка считается «sparse», если len(own_photos) < get_min_photos(seller.id).
     В список попадает только если compose_card_photo_urls(...) вернул непустой список.
     """
-    import json as _json
-
     min_photos = get_min_photos(seller.id)
 
     # Загружаем все активные карточки продавца
@@ -46,7 +44,7 @@ def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS
     all_candidates = []  # (photo_count, product, composed_urls)
     for product in active_products:
         try:
-            own = _json.loads(product.photos_json) if product.photos_json else []
+            own = json.loads(product.photos_json) if product.photos_json else []
         except (ValueError, TypeError):
             own = []
 
@@ -506,11 +504,11 @@ def register_card_quality_routes(app):
             current_user.seller, db.session, limit=STANDARD_PHOTOS_BULK_LIMIT
         )
         # Подготовим данные для шаблона: добавим удобные поля
+        min_photos = get_min_photos(current_user.seller.id)
         candidate_list = []
         for product, composed in candidates:
             try:
-                import json as _json
-                own = _json.loads(product.photos_json) if product.photos_json else []
+                own = json.loads(product.photos_json) if product.photos_json else []
             except (ValueError, TypeError):
                 own = []
             candidate_list.append({
@@ -520,7 +518,7 @@ def register_card_quality_routes(app):
                 'title': product.title,
                 'quality_score': product.quality_score,
                 'own_photo_count': len(own),
-                'min_photos': get_min_photos(current_user.seller.id),
+                'min_photos': min_photos,
                 'composed_count': len(composed),
                 'composed_preview': composed[:3],  # первые 3 URL для превью
             })
@@ -556,6 +554,12 @@ def register_card_quality_routes(app):
             flash('Не выбрано ни одной карточки', 'warning')
             return redirect(url_for('card_quality_standard_photos_bulk_page'))
 
+        # Полное число sparse-карточек (M) приходит из формы; падаем на N, если нет
+        try:
+            total_m = int(request.form.get('total_m', len(selected_ids)))
+        except (ValueError, TypeError):
+            total_m = len(selected_ids)
+
         bulk = BulkEditHistory(
             seller_id=current_user.seller.id,
             operation_type='standard_photos_bulk',
@@ -577,8 +581,7 @@ def register_card_quality_routes(app):
                 errors += 1
                 continue
             try:
-                import json as _json
-                own = _json.loads(product.photos_json) if product.photos_json else []
+                own = json.loads(product.photos_json) if product.photos_json else []
             except (ValueError, TypeError):
                 own = []
             media = get_standard_media(current_user.seller.id, product.subject_id)
@@ -607,8 +610,8 @@ def register_card_quality_routes(app):
         db.session.commit()
 
         flash(
-            f'Дополнено карточек: {success}, ошибок: {errors} '
-            f'(обработано {len(selected_ids)} из {bulk.total_products})',
+            f'Дополнено фото: {success}, ошибок: {errors} '
+            f'(выбрано {len(selected_ids)} из {total_m} слабых)',
             'success' if success else 'warning'
         )
         return redirect(url_for('card_quality_page'))
