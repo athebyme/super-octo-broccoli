@@ -1614,6 +1614,77 @@ class AIConfig:
         if not hasattr(settings, 'ai_enabled') or not settings.ai_enabled:
             return None
 
+        # Проверяем центральный LLM-ключ из SystemSettings (приоритет над per-seller)
+        try:
+            from services.llm_config import get_central_llm_config
+            central = get_central_llm_config()
+        except Exception:
+            central = None
+
+        if central and central.get('api_key'):
+            # Маппинг provider string → AIProvider
+            _provider_map = {
+                'openrouter': AIProvider.OPENROUTER,
+                'claude': AIProvider.OPENROUTER,      # нет native anthropic → через openrouter
+                'anthropic': AIProvider.OPENROUTER,   # то же
+                'gemini': AIProvider.OPENROUTER,      # gemini тоже через openrouter
+                'cloudru': AIProvider.CLOUDRU,
+                'openai': AIProvider.OPENAI,
+                'mimo': AIProvider.MIMO,
+            }
+            c_provider = _provider_map.get(central['provider'], AIProvider.CUSTOM)
+
+            # Базовый URL по провайдеру
+            if c_provider == AIProvider.CLOUDRU:
+                c_base = central['base_url'] or 'https://foundation-models.api.cloud.ru/v1'
+                c_default_model = 'openai/gpt-oss-120b'
+            elif c_provider == AIProvider.OPENROUTER:
+                c_base = central['base_url'] or 'https://openrouter.ai/api/v1'
+                c_default_model = 'google/gemini-2.5-flash-preview'
+            elif c_provider == AIProvider.MIMO:
+                c_base = central['base_url'] or 'https://api.xiaomimimo.com/v1'
+                c_default_model = 'mimo-v2-pro'
+            elif c_provider == AIProvider.OPENAI:
+                c_base = central['base_url'] or 'https://api.openai.com/v1'
+                c_default_model = 'gpt-4o-mini'
+            else:  # CUSTOM
+                c_base = central['base_url'] or 'https://api.openai.com/v1'
+                c_default_model = 'gpt-4o-mini'
+
+            c_model = central['model'] or c_default_model
+
+            # Возвращаем конфиг из центральных настроек
+            # temperature/max_tokens/timeout берём из per-seller (или дефолты)
+            return cls(
+                provider=c_provider,
+                api_key=central['api_key'],
+                api_base_url=c_base,
+                model=c_model,
+                temperature=getattr(settings, 'ai_temperature', 0.3) or 0.3,
+                max_tokens=getattr(settings, 'ai_max_tokens', 2000) or 2000,
+                timeout=getattr(settings, 'ai_timeout', 120) or 120,
+                top_p=getattr(settings, 'ai_top_p', 0.95) or 0.95,
+                presence_penalty=getattr(settings, 'ai_presence_penalty', 0.0) or 0.0,
+                frequency_penalty=getattr(settings, 'ai_frequency_penalty', 0.0) or 0.0,
+                custom_category_instruction=getattr(settings, 'ai_category_instruction', '') or '',
+                custom_size_instruction=getattr(settings, 'ai_size_instruction', '') or '',
+                custom_seo_title_instruction=getattr(settings, 'ai_seo_title_instruction', '') or '',
+                custom_keywords_instruction=getattr(settings, 'ai_keywords_instruction', '') or '',
+                custom_bullets_instruction=getattr(settings, 'ai_bullets_instruction', '') or '',
+                custom_description_instruction=getattr(settings, 'ai_description_instruction', '') or '',
+                custom_rich_content_instruction=getattr(settings, 'ai_rich_content_instruction', '') or '',
+                custom_analysis_instruction=getattr(settings, 'ai_analysis_instruction', '') or '',
+                custom_dimensions_instruction=getattr(settings, 'ai_dimensions_instruction', '') or '',
+                custom_clothing_sizes_instruction=getattr(settings, 'ai_clothing_sizes_instruction', '') or '',
+                custom_brand_instruction=getattr(settings, 'ai_brand_instruction', '') or '',
+                custom_material_instruction=getattr(settings, 'ai_material_instruction', '') or '',
+                custom_color_instruction=getattr(settings, 'ai_color_instruction', '') or '',
+                custom_attributes_instruction=getattr(settings, 'ai_attributes_instruction', '') or '',
+                custom_parsing_instruction=getattr(settings, 'ai_parsing_instruction', '') or '',
+                proxy_enabled=getattr(settings, 'ai_proxy_enabled', False) or False,
+                seller_id=getattr(settings, 'seller_id', 0) or 0,
+            )
+
         provider = AIProvider(settings.ai_provider or 'cloudru')
 
         # Все провайдеры используют API ключ (Bearer token)
