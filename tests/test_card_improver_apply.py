@@ -22,13 +22,27 @@ class FakeWBClient:
         })
         return {'data': {}, 'error': False}
 
+    def upload_photos_by_url(self, nm_id, photo_urls, seller_id=None):
+        # Task 5: фото теперь уходят в WB через media/save
+        self.calls.append({
+            'method': 'upload_photos_by_url',
+            'nm_id': nm_id,
+            'photo_urls': list(photo_urls),
+            'seller_id': seller_id,
+        })
+        return {'data': {}, 'error': False}
+
 
 class FakeWBClientRaises:
-    """Фейковый WB-клиент, который бросает исключение."""
+    """Фейковый WB-клиент, который бросает исключение при любом WB-вызове."""
     def __init__(self):
         self.calls = []
 
     def update_card(self, nm_id, updates, merge_with_existing=True, seller_id=None):
+        self.calls.append({'nm_id': nm_id})
+        raise RuntimeError('WB API недоступен')
+
+    def upload_photos_by_url(self, nm_id, photo_urls, seller_id=None):
         self.calls.append({'nm_id': nm_id})
         raise RuntimeError('WB API недоступен')
 
@@ -209,10 +223,10 @@ class ApplyCardUpdatesTest(unittest.TestCase):
 
 
     # ------------------------------------------------------------------
-    # Fix 1: photos записываются в photos_json локально, WB не вызывается
+    # Task 5: photos уходят в WB через upload_photos_by_url (media/save), не update_card
     # ------------------------------------------------------------------
-    def test_photos_written_to_photos_json_locally(self):
-        """photos сохраняются в product.photos_json и попадают в fields_applied; WB не вызывается."""
+    def test_photos_uploaded_via_media_save(self):
+        """photos отправляются в WB через upload_photos_by_url и сохраняются в photos_json."""
         from services.card_improver import apply_card_updates
         product = FakeProduct()
         wb = FakeWBClient()
@@ -228,33 +242,52 @@ class ApplyCardUpdatesTest(unittest.TestCase):
         # photos_json должен содержать переданные URL
         stored = json.loads(product.photos_json)
         self.assertEqual(stored, ['url1', 'url2'])
-        # WB API не должен вызываться — photos не уходят через update_card
-        self.assertEqual(len(wb.calls), 0)
+        # wb_sync=True — upload_photos_by_url вызван успешно
+        self.assertTrue(res['wb_sync'])
+        # upload_photos_by_url вызван с правильными аргументами; update_card НЕ вызывался
+        photo_calls = [c for c in wb.calls if c.get('method') == 'upload_photos_by_url']
+        self.assertEqual(len(photo_calls), 1)
+        self.assertEqual(photo_calls[0]['photo_urls'], ['url1', 'url2'])
+        update_calls = [c for c in wb.calls if 'updates' in c]
+        self.assertEqual(len(update_calls), 0, "update_card не должен вызываться для photos")
 
     # ------------------------------------------------------------------
-    # Fix 2: wb_sync_status='skipped' когда WB-вызов не делался
+    # Fix 2 (обновлён для Task 5): wb_sync_status при только-локальных полях
+    # subject_id — локальный (skipped), photos — через WB media/save (success)
     # ------------------------------------------------------------------
-    def test_wb_sync_status_skipped_when_only_local_fields(self):
-        """Если применяются только локальные поля (subject_id / photos), wb_sync_status == 'skipped'."""
+    def test_wb_sync_status_skipped_when_only_subject_id(self):
+        """Если применяется только subject_id (локальный, без WB), wb_sync_status == 'skipped'."""
         from services.card_improver import apply_card_updates
+        product = FakeProduct()
+        wb = FakeWBClient()
+        apply_card_updates(product, {'subject_id': 42}, FakeSeller(), wb, source='card-quality')
 
-        for updates in (
-            {'subject_id': 42},
-            {'photos': ['url1']},
-            {'subject_id': 42, 'photos': ['url1']},
-        ):
-            with self.subTest(updates=updates):
-                product = FakeProduct()
-                wb = FakeWBClient()
-                apply_card_updates(product, updates, FakeSeller(), wb, source='card-quality')
+        self.assertEqual(len(self.history_records), 1)
+        h = self.history_records[0]
+        self.assertEqual(h.wb_sync_status, 'skipped')
 
-                self.assertEqual(len(self.history_records), 1)
-                h = self.history_records[-1]
-                self.assertEqual(h.wb_sync_status, 'skipped',
-                                 f"Ожидался 'skipped', получен '{h.wb_sync_status}' для {updates}")
-                # Сбрасываем историю между subTest-ами
-                self.history_records.clear()
-                self.committed = False
+    def test_wb_sync_status_success_when_only_photos(self):
+        """photos отправляются через WB media/save, поэтому wb_sync_status == 'success'."""
+        from services.card_improver import apply_card_updates
+        product = FakeProduct()
+        wb = FakeWBClient()
+        apply_card_updates(product, {'photos': ['url1']}, FakeSeller(), wb, source='card-quality')
+
+        self.assertEqual(len(self.history_records), 1)
+        h = self.history_records[0]
+        self.assertEqual(h.wb_sync_status, 'success')
+
+    def test_wb_sync_status_success_when_subject_id_and_photos(self):
+        """subject_id + photos: photos уходят в WB → wb_sync_status == 'success'."""
+        from services.card_improver import apply_card_updates
+        product = FakeProduct()
+        wb = FakeWBClient()
+        apply_card_updates(product, {'subject_id': 42, 'photos': ['url1']}, FakeSeller(), wb,
+                           source='card-quality')
+
+        self.assertEqual(len(self.history_records), 1)
+        h = self.history_records[0]
+        self.assertEqual(h.wb_sync_status, 'success')
 
 
 if __name__ == '__main__':

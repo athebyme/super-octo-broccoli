@@ -177,10 +177,27 @@ def apply_card_updates(
         product.subject_id = clean['subject_id']
         fields_applied.append('subject_id')
 
-    # photos хранятся локально; синхронизация медиа с WB — отдельный flow, не через update_card
-    if 'photos' in clean:
-        product.photos_json = json.dumps(clean['photos'], ensure_ascii=False)
-        fields_applied.append('photos')
+    # photos — отправляем упорядоченный список URL в WB через media/save (Content API v3).
+    # Вызов upload_photos_by_url заменяет набор фото в карточке; порядок сохраняется.
+    # При ошибке — фиксируем wb_error / статус 'failed' (аналогично текстовым полям).
+    if 'photos' in clean and isinstance(clean['photos'], list) and clean['photos']:
+        try:
+            wb_client.upload_photos_by_url(
+                product.nm_id,
+                clean['photos'],
+                seller_id=seller.id,
+            )
+            wb_sync_success = True
+            product.photos_json = json.dumps(clean['photos'], ensure_ascii=False)
+            fields_applied.append('photos')
+            logger.info(
+                f"[Improve/{source}] WB media/save nmID={product.nm_id}: {len(clean['photos'])} фото"
+            )
+        except Exception as e:
+            wb_error = str(e)
+            logger.error(
+                f"[Improve/{source}] WB media/save error nmID={product.nm_id}: {e}"
+            )
 
     # Обновляем метку времени карточки
     if hasattr(product, 'updated_at'):
