@@ -1558,6 +1558,67 @@ class AIConfig:
         """
         from models import AutoImportSettings
         ai_settings = AutoImportSettings.query.filter_by(seller_id=seller_id).first()
+
+        # Проверяем центральный LLM-ключ — он имеет приоритет над per-seller ключом
+        # (аналогично AIConfig.from_settings, добавлено в рамках унификации B2)
+        try:
+            from services.llm_config import get_central_llm_config
+            central = get_central_llm_config()
+        except Exception:
+            central = None
+
+        if central and central.get('api_key'):
+            # Маппинг provider string → AIProvider (зеркалим from_settings)
+            _provider_map = {
+                'openrouter': AIProvider.OPENROUTER,
+                'claude': AIProvider.OPENROUTER,      # нет native anthropic → через openrouter
+                'anthropic': AIProvider.OPENROUTER,   # то же
+                'gemini': AIProvider.OPENROUTER,      # gemini тоже через openrouter
+                'cloudru': AIProvider.CLOUDRU,
+                'openai': AIProvider.OPENAI,
+                'mimo': AIProvider.MIMO,
+            }
+            c_provider = _provider_map.get(central['provider'], AIProvider.CUSTOM)
+
+            # Базовый URL по провайдеру
+            if c_provider == AIProvider.CLOUDRU:
+                c_base = central['base_url'] or 'https://foundation-models.api.cloud.ru/v1'
+                c_default_model = 'openai/gpt-oss-120b'
+            elif c_provider == AIProvider.OPENROUTER:
+                c_base = central['base_url'] or 'https://openrouter.ai/api/v1'
+                c_default_model = 'google/gemini-2.5-flash-preview'
+            elif c_provider == AIProvider.MIMO:
+                c_base = central['base_url'] or 'https://api.xiaomimimo.com/v1'
+                c_default_model = 'mimo-v2-pro'
+            elif c_provider == AIProvider.OPENAI:
+                c_base = central['base_url'] or 'https://api.openai.com/v1'
+                c_default_model = 'gpt-4o-mini'
+            else:  # CUSTOM
+                c_base = central['base_url'] or 'https://api.openai.com/v1'
+                c_default_model = 'gpt-4o-mini'
+
+            c_model = model_override or central['model'] or c_default_model
+
+            # temperature/max_tokens/timeout берём из per-seller настроек или дефолты
+            _temp = temperature if temperature is not None else (
+                getattr(ai_settings, 'ai_temperature', 0.3) if ai_settings else 0.3) or 0.3
+            _max_tok = max_tokens if max_tokens is not None else (
+                getattr(ai_settings, 'ai_max_tokens', 2000) if ai_settings else 2000) or 2000
+            _timeout = timeout if timeout is not None else (
+                getattr(ai_settings, 'ai_timeout', 120) if ai_settings else 120) or 120
+
+            return cls(
+                provider=c_provider,
+                api_key=central['api_key'],
+                api_base_url=c_base,
+                model=c_model,
+                temperature=_temp,
+                max_tokens=_max_tok,
+                timeout=_timeout,
+                seller_id=seller_id,
+            )
+
+        # Центральный ключ отсутствует → используем per-seller настройки (прежнее поведение)
         if not ai_settings:
             raise ValueError("AI не настроен. Перейдите в Профиль → AI-провайдер и укажите API ключ.")
 

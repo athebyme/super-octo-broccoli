@@ -213,12 +213,28 @@ class ImageGenerationConfig:
         tensorart_api_key = ""
 
         if provider == ImageProvider.OPENROUTER:
-            # Берём ключ из AI настроек поставщика
-            openrouter_key = getattr(settings, 'openrouter_api_key', '') or ''
-            if not openrouter_key:
-                # Fallback на ai_api_key
-                if hasattr(settings, 'ai_api_key'):
-                    openrouter_key = settings.ai_api_key or ''
+            # Сначала пробуем центральный ключ (только для openrouter-совместимых провайдеров)
+            _central_key = ''
+            try:
+                from services.llm_config import get_central_llm_config
+                _central = get_central_llm_config()
+                # Центральный ключ применяем только если провайдер — openrouter
+                # (image-gen не знает, как работать с cloudru/mimo/openai через центральный конфиг)
+                if _central and _central.get('api_key') and _central.get('provider') == 'openrouter':
+                    _central_key = _central['api_key']
+            except Exception:
+                _central_key = ''
+
+            if _central_key:
+                # Центральный openrouter-ключ перекрывает per-supplier ключ
+                openrouter_key = _central_key
+            else:
+                # Берём ключ из AI настроек поставщика (прежнее поведение)
+                openrouter_key = getattr(settings, 'openrouter_api_key', '') or ''
+                if not openrouter_key:
+                    # Fallback на ai_api_key
+                    if hasattr(settings, 'ai_api_key'):
+                        openrouter_key = settings.ai_api_key or ''
             api_key = openrouter_key
         elif provider == ImageProvider.FLUXAPI:
             fluxapi_key = getattr(settings, 'fluxapi_key', '') or ''
