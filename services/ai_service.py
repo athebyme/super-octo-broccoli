@@ -1532,6 +1532,38 @@ class AIConfig:
     # Для логирования
     seller_id: int = 0
 
+    @staticmethod
+    def _central_provider_base_model(central: dict):
+        """Из central-конфига → (AIProvider, base_url, default_model). Единый источник для for_seller/from_settings."""
+        _provider_map = {
+            'openrouter': AIProvider.OPENROUTER,
+            'claude': AIProvider.OPENROUTER,      # нет native anthropic → через openrouter
+            'anthropic': AIProvider.OPENROUTER,   # то же
+            'gemini': AIProvider.OPENROUTER,      # gemini тоже через openrouter
+            'cloudru': AIProvider.CLOUDRU,
+            'openai': AIProvider.OPENAI,
+            'mimo': AIProvider.MIMO,
+        }
+        provider = _provider_map.get(central['provider'], AIProvider.CUSTOM)
+
+        if provider == AIProvider.CLOUDRU:
+            base_url = central['base_url'] or 'https://foundation-models.api.cloud.ru/v1'
+            default_model = 'openai/gpt-oss-120b'
+        elif provider == AIProvider.OPENROUTER:
+            base_url = central['base_url'] or 'https://openrouter.ai/api/v1'
+            default_model = 'google/gemini-2.5-flash-preview'
+        elif provider == AIProvider.MIMO:
+            base_url = central['base_url'] or 'https://api.xiaomimimo.com/v1'
+            default_model = 'mimo-v2-pro'
+        elif provider == AIProvider.OPENAI:
+            base_url = central['base_url'] or 'https://api.openai.com/v1'
+            default_model = 'gpt-4o-mini'
+        else:  # CUSTOM
+            base_url = central['base_url'] or 'https://api.openai.com/v1'
+            default_model = 'gpt-4o-mini'
+
+        return provider, base_url, default_model
+
     @classmethod
     def for_seller(cls, seller_id: int, provider_override: str = None,
                    model_override: str = None,
@@ -1568,34 +1600,7 @@ class AIConfig:
             central = None
 
         if central and central.get('api_key'):
-            # Маппинг provider string → AIProvider (зеркалим from_settings)
-            _provider_map = {
-                'openrouter': AIProvider.OPENROUTER,
-                'claude': AIProvider.OPENROUTER,      # нет native anthropic → через openrouter
-                'anthropic': AIProvider.OPENROUTER,   # то же
-                'gemini': AIProvider.OPENROUTER,      # gemini тоже через openrouter
-                'cloudru': AIProvider.CLOUDRU,
-                'openai': AIProvider.OPENAI,
-                'mimo': AIProvider.MIMO,
-            }
-            c_provider = _provider_map.get(central['provider'], AIProvider.CUSTOM)
-
-            # Базовый URL по провайдеру
-            if c_provider == AIProvider.CLOUDRU:
-                c_base = central['base_url'] or 'https://foundation-models.api.cloud.ru/v1'
-                c_default_model = 'openai/gpt-oss-120b'
-            elif c_provider == AIProvider.OPENROUTER:
-                c_base = central['base_url'] or 'https://openrouter.ai/api/v1'
-                c_default_model = 'google/gemini-2.5-flash-preview'
-            elif c_provider == AIProvider.MIMO:
-                c_base = central['base_url'] or 'https://api.xiaomimimo.com/v1'
-                c_default_model = 'mimo-v2-pro'
-            elif c_provider == AIProvider.OPENAI:
-                c_base = central['base_url'] or 'https://api.openai.com/v1'
-                c_default_model = 'gpt-4o-mini'
-            else:  # CUSTOM
-                c_base = central['base_url'] or 'https://api.openai.com/v1'
-                c_default_model = 'gpt-4o-mini'
+            c_provider, c_base, c_default_model = cls._central_provider_base_model(central)
 
             c_model = model_override or central['model'] or c_default_model
 
@@ -1683,34 +1688,7 @@ class AIConfig:
             central = None
 
         if central and central.get('api_key'):
-            # Маппинг provider string → AIProvider
-            _provider_map = {
-                'openrouter': AIProvider.OPENROUTER,
-                'claude': AIProvider.OPENROUTER,      # нет native anthropic → через openrouter
-                'anthropic': AIProvider.OPENROUTER,   # то же
-                'gemini': AIProvider.OPENROUTER,      # gemini тоже через openrouter
-                'cloudru': AIProvider.CLOUDRU,
-                'openai': AIProvider.OPENAI,
-                'mimo': AIProvider.MIMO,
-            }
-            c_provider = _provider_map.get(central['provider'], AIProvider.CUSTOM)
-
-            # Базовый URL по провайдеру
-            if c_provider == AIProvider.CLOUDRU:
-                c_base = central['base_url'] or 'https://foundation-models.api.cloud.ru/v1'
-                c_default_model = 'openai/gpt-oss-120b'
-            elif c_provider == AIProvider.OPENROUTER:
-                c_base = central['base_url'] or 'https://openrouter.ai/api/v1'
-                c_default_model = 'google/gemini-2.5-flash-preview'
-            elif c_provider == AIProvider.MIMO:
-                c_base = central['base_url'] or 'https://api.xiaomimimo.com/v1'
-                c_default_model = 'mimo-v2-pro'
-            elif c_provider == AIProvider.OPENAI:
-                c_base = central['base_url'] or 'https://api.openai.com/v1'
-                c_default_model = 'gpt-4o-mini'
-            else:  # CUSTOM
-                c_base = central['base_url'] or 'https://api.openai.com/v1'
-                c_default_model = 'gpt-4o-mini'
+            c_provider, c_base, c_default_model = cls._central_provider_base_model(central)
 
             c_model = central['model'] or c_default_model
 
