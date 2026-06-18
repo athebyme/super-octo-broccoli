@@ -303,6 +303,7 @@
                     <span x-show="!h.wb_synced && h.wb_sync_status === 'failed'" style="color:var(--danger,#dc2626)">&#10007; ошибка синхронизации WB</span>
                     <span x-show="!h.wb_synced && h.wb_sync_status === 'pending'" style="color:var(--text-muted)">&#8987; ожидает синхронизации</span>
                     <span x-show="!h.wb_synced && h.wb_sync_status === 'skipped'" style="color:var(--text-muted)">— не отправлено на WB</span>
+                    <span x-show="!h.wb_synced && !['failed','pending','skipped'].includes(h.wb_sync_status)" style="color:var(--text-muted)" x-text="h.wb_sync_status ? ('статус: ' + h.wb_sync_status) : 'не синхронизировано'"></span>
                   </div>
                 </div>
               </template>
@@ -365,7 +366,7 @@ function cardQualityPage() {
       const r = await fetch('/api/card-quality/' + id);
       const d = await r.json(); this.detail = d.data;
       this.$nextTick(() => this.renderTrend());
-      this.loadHistory(id);
+      this.history = []; this.loadHistory(id);
     },
     async loadHistory(id) {
       this.historyLoading = true;
