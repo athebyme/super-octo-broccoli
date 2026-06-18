@@ -52,3 +52,12 @@ class ComposeTest(unittest.TestCase):
     def test_skips_non_photo(self):
         media = [{'filename': 'v.mp4', 'type': 'video', 'position': 'first', 'mode': 'pin', 'order': 0}]
         self.assertEqual(compose_card_photo_urls(self.own, media, 1, 4), [])
+
+    def test_min_photos_zero_means_never_fill(self):
+        fill = m('f.jpg', 'last', 'fill')
+        pin = m('p.jpg', 'first', 'pin')
+        # min_photos=0 → never sparse → fill not added
+        self.assertEqual(compose_card_photo_urls([], [fill], 1, 0), [])
+        # pin still added (it's always added when sparse would be true, but here we're checking pin works even at 0)
+        res = compose_card_photo_urls([], [pin], 1, 0)
+        self.assertTrue(res and res[0].endswith('p.jpg'))

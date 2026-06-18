@@ -25,7 +25,7 @@ def compose_card_photo_urls(own_urls, media_items, seller_id, min_photos):
     """
     own = list(own_urls or [])
     # «Разреженная» карточка — своих фото меньше минимума
-    sparse = len(own) < int(min_photos or 4)
+    sparse = len(own) < (int(min_photos) if min_photos is not None else 4)
     # Фильтруем только фото (не видео и не другие типы)
     photos = [it for it in (media_items or []) if (it or {}).get('type', 'photo') == 'photo']
 
