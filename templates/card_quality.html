@@ -239,7 +239,7 @@
                   <div class="sh-card" style="padding:12px;margin-bottom:8px">
                     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                       <input type="checkbox" x-model="selected[field]">
-                      <span style="font-weight:500" x-text="proposalLabel(field)"></span>
+                      <span style="font-weight:500" x-text="proposalLabel(field, p)"></span>
                       <span class="text-gray-400 text-xs" x-text="'(' + (p.source||'') + ')'"></span>
                     </label>
                     <div class="text-gray-500 text-xs" style="margin-top:4px" x-text="proposalHint(field, p)"></div>
@@ -482,9 +482,19 @@ function cardQualityPage() {
       return out;
     },
     get anySelected() { return Object.values(this.selected).some(Boolean); },
-    proposalLabel(field) { return field === 'photos' ? 'Переупорядочить фото' : (this.DIM_LABELS[field] || field); },
+    proposalLabel(field, p) {
+      if (field === 'photos') {
+        return (p && p.source === 'standard-photos') ? 'Стандартные фото' : 'Переупорядочить фото';
+      }
+      return this.DIM_LABELS[field] || field;
+    },
     proposalHint(field, p) {
-      if (field === 'photos') return 'Новый порядок: ' + (p.proposed||[]).length + ' фото (рекомендация агента)';
+      if (field === 'photos') {
+        const n = (p && p.proposed || []).length;
+        return (p && p.source === 'standard-photos')
+          ? ('Итоговый порядок: ' + n + ' фото (стандартные)')
+          : ('Новый порядок: ' + n + ' фото (рекомендация агента)');
+      }
       return p.proposed != null ? String(p.proposed).slice(0,120) : '';
     },
     async startImprove(id) {
@@ -497,9 +507,19 @@ function cardQualityPage() {
         this.supplierDiff = d.supplier_diff || null;
         const taskIds = d.task_ids || {};
         if (Object.keys(taskIds).length === 0) {
+          // Агенты офлайн: всё равно запрашиваем детерминированное предложение
+          // (стандартные фото не зависят от агентов), передавая пустой task_ids.
+          try {
+            const pr = await fetch('/api/card-quality/' + id + '/proposal',
+              {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({task_ids: {}})});
+            const pd = await pr.json();
+            if (pd && pd.proposal) this.proposal = pd.proposal;
+            if (pd && pd.supplier_diff && !this.supplierDiff) this.supplierDiff = pd.supplier_diff;
+          } catch (e) { /* проглатываем: офлайн-ветка не должна падать */ }
           this.improveRunning = false;
-          this.improveStatus = this.supplierDiff ? '' : 'AI-агенты офлайн — доступен только дифф поставщика (если есть)';
-          if (!this.supplierDiff) this.$store.toasts.info('Нет данных поставщика и агенты офлайн');
+          const hasSomething = Object.keys(this.proposal || {}).length || this.supplierDiff;
+          this.improveStatus = hasSomething ? '' : 'AI-агенты офлайн, нет предложений';
+          if (!hasSomething) this.$store.toasts.info('Нет данных поставщика и агенты офлайн');
           return;
         }
         this.improveStatus = 'AI-агенты анализируют фото…';

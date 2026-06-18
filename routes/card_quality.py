@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Роуты фичи «Качество карточек»: кокпит, деталь карточки, AI-анализ, обновление."""
+import json
 import logging
 import threading
 from datetime import datetime as _dt
@@ -286,8 +287,7 @@ def register_card_quality_routes(app):
 
             # Предложение стандартных фото: compose собственных URL + глобальное медиа продавца
             try:
-                import json as _json
-                own = _json.loads(product.photos_json) if product.photos_json else []
+                own = json.loads(product.photos_json) if product.photos_json else []
             except (ValueError, TypeError):
                 own = []
             try:
@@ -295,6 +295,10 @@ def register_card_quality_routes(app):
                 composed = compose_card_photo_urls(own, media, current_user.seller.id,
                                                    get_min_photos(current_user.seller.id))
                 if composed:
+                    # Стандартные фото приоритетнее реордера агента (photo-optimizer):
+                    # они реально добавляют фото и поднимают измерение photos,
+                    # тогда как реордер агента не меняет их количество. Намеренно
+                    # перезаписываем proposal['photos'], если он был построен из задач агента.
                     proposal['photos'] = {
                         'current': own,
                         'proposed': composed,
