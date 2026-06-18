@@ -21,6 +21,57 @@ from services.standard_photos import compose_card_photo_urls
 logger = logging.getLogger('card_quality')
 
 BULK_IMPROVE_LIMIT = 30
+STANDARD_PHOTOS_BULK_LIMIT = 30
+
+
+def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS_BULK_LIMIT):
+    """Возвращает (candidates, total_M) для «Дополнить фото» слабым карточкам.
+
+    candidates — list[(Product, composed_urls)] длиной <= limit, отсортированный
+                 по количеству собственных фото (asc, меньше фото → выше).
+    total_M    — полное число sparse-карточек с непустой композицией (до обрезки limit).
+
+    Карточка считается «sparse», если len(own_photos) < get_min_photos(seller.id).
+    В список попадает только если compose_card_photo_urls(...) вернул непустой список.
+    """
+    import json as _json
+
+    min_photos = get_min_photos(seller.id)
+
+    # Загружаем все активные карточки продавца
+    active_products = Product.query.filter_by(
+        seller_id=seller.id, is_active=True
+    ).all()
+
+    all_candidates = []  # (photo_count, product, composed_urls)
+    for product in active_products:
+        try:
+            own = _json.loads(product.photos_json) if product.photos_json else []
+        except (ValueError, TypeError):
+            own = []
+
+        # Пропускаем не-sparse карточки
+        if len(own) >= min_photos:
+            continue
+
+        # Получаем стандартные медиа для категории
+        media = get_standard_media(seller.id, product.subject_id)
+
+        # Пробуем скомпоновать
+        composed = compose_card_photo_urls(own, media, seller.id, min_photos)
+        if not composed:
+            continue  # нечего добавлять
+
+        all_candidates.append((len(own), product, composed))
+
+    # Сортируем по количеству своих фото (меньше → в начало)
+    all_candidates.sort(key=lambda t: t[0])
+
+    total_m = len(all_candidates)
+    top_n = all_candidates[:limit]
+
+    candidates = [(product, composed) for (_, product, composed) in top_n]
+    return candidates, total_m
 
 
 def _collect_bulk_candidates(seller_id: int, limit: int = BULK_IMPROVE_LIMIT) -> dict:
@@ -443,6 +494,123 @@ def register_card_quality_routes(app):
         db.session.commit()
 
         flash(f'Улучшено карточек: {success}, ошибок: {errors}', 'success' if success else 'warning')
+        return redirect(url_for('card_quality_page'))
+
+    @app.route('/card-quality/standard-photos-bulk', methods=['GET'])
+    @login_required
+    def card_quality_standard_photos_bulk_page():
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            flash('Для дополнения фото необходимо настроить API ключ WB', 'warning')
+            return redirect(url_for('api_settings'))
+        candidates, total_m = get_sparse_photo_candidates(
+            current_user.seller, db.session, limit=STANDARD_PHOTOS_BULK_LIMIT
+        )
+        # Подготовим данные для шаблона: добавим удобные поля
+        candidate_list = []
+        for product, composed in candidates:
+            try:
+                import json as _json
+                own = _json.loads(product.photos_json) if product.photos_json else []
+            except (ValueError, TypeError):
+                own = []
+            candidate_list.append({
+                'product_id': product.id,
+                'nm_id': product.nm_id,
+                'vendor_code': product.vendor_code,
+                'title': product.title,
+                'quality_score': product.quality_score,
+                'own_photo_count': len(own),
+                'min_photos': get_min_photos(current_user.seller.id),
+                'composed_count': len(composed),
+                'composed_preview': composed[:3],  # первые 3 URL для превью
+            })
+        return render_template(
+            'card_quality_standard_photos_bulk.html',
+            candidates=candidate_list,
+            total_m=total_m,
+            shown=len(candidate_list),
+            limit=STANDARD_PHOTOS_BULK_LIMIT,
+        )
+
+    @app.route('/card-quality/standard-photos-bulk/apply', methods=['POST'])
+    @login_required
+    def card_quality_standard_photos_bulk_apply():
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        action = request.form.get('action')
+        if action == 'reject':
+            flash('Дополнение фото отклонено', 'info')
+            return redirect(url_for('card_quality_page'))
+
+        # Получаем выбранные product_id из чекбоксов
+        selected_ids = []
+        for key in request.form:
+            if key.startswith('product_'):
+                try:
+                    pid = int(key[len('product_'):])
+                    selected_ids.append(pid)
+                except ValueError:
+                    pass
+
+        if not selected_ids:
+            flash('Не выбрано ни одной карточки', 'warning')
+            return redirect(url_for('card_quality_standard_photos_bulk_page'))
+
+        bulk = BulkEditHistory(
+            seller_id=current_user.seller.id,
+            operation_type='standard_photos_bulk',
+            operation_params={'product_ids': selected_ids},
+            description=f'Дополнение стандартных фото: {len(selected_ids)} карточек',
+            total_products=len(selected_ids),
+            status='in_progress',
+        )
+        db.session.add(bulk)
+        db.session.commit()
+
+        wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
+        min_photos = get_min_photos(current_user.seller.id)
+        success, errors = 0, 0
+
+        for pid in selected_ids:
+            product = Product.query.filter_by(id=pid, seller_id=current_user.seller.id).first()
+            if not product:
+                errors += 1
+                continue
+            try:
+                import json as _json
+                own = _json.loads(product.photos_json) if product.photos_json else []
+            except (ValueError, TypeError):
+                own = []
+            media = get_standard_media(current_user.seller.id, product.subject_id)
+            composed = compose_card_photo_urls(own, media, current_user.seller.id, min_photos)
+            if not composed:
+                errors += 1
+                continue
+            try:
+                res = apply_card_updates(
+                    product, {'photos': composed}, current_user.seller, wb_client,
+                    source='standard-photos-bulk'
+                )
+                if res.get('success'):
+                    success += 1
+                else:
+                    errors += 1
+            except Exception as e:
+                logger.exception('standard-photos-bulk pid=%s: %s', pid, e)
+                errors += 1
+
+        bulk.success_count = success
+        bulk.error_count = errors
+        bulk.status = 'completed'
+        bulk.wb_synced = success > 0
+        bulk.completed_at = _dt.utcnow()
+        db.session.commit()
+
+        flash(
+            f'Дополнено карточек: {success}, ошибок: {errors} '
+            f'(обработано {len(selected_ids)} из {bulk.total_products})',
+            'success' if success else 'warning'
+        )
         return redirect(url_for('card_quality_page'))
 
     @app.route('/api/card-quality/<int:product_id>/history')

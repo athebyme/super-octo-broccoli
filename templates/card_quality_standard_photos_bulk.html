@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Дополнить фото слабым карточкам - Seller Hub{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-6">
+  <div class="sh-page-header"><div class="sh-page-header-content">
+    <div>
+      <h1 class="sh-page-title">Дополнить фото слабым карточкам</h1>
+      <p class="sh-page-subtitle">
+        Показаны {{ shown }} из {{ total_m }} карточек с нехваткой фото
+        {% if total_m > shown %}<strong>(самые бедные по фото; остальные — следующим заходом)</strong>{% endif %}
+      </p>
+    </div>
+  </div></div>
+
+  {% if not candidates %}
+    <div class="sh-empty">Нет карточек с недостатком фото или нет стандартных медиа для дополнения.</div>
+  {% else %}
+  <form method="POST" action="{{ url_for('card_quality_standard_photos_bulk_apply') }}"
+        class="space-y-6">
+
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+         x-data="{ open: true }">
+      <button @click="open = !open" type="button"
+              class="w-full px-6 py-4 border-b border-blue-200 bg-blue-50 flex items-center justify-between">
+        <h2 class="text-base font-medium text-blue-800 flex items-center">
+          <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd"/>
+          </svg>
+          Карточки с нехваткой фото ({{ candidates|length }})
+        </h2>
+        <svg class="w-5 h-5 text-blue-600 transform transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div x-show="open" x-collapse class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Выбрать</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Артикул</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Quality</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Фото сейчас / мин.</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Будет после</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Превью URL</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
+            {% for c in candidates %}
+            <tr>
+              <td class="px-4 py-3 text-sm">
+                <input type="checkbox" name="product_{{ c.product_id }}" value="1" checked
+                       class="w-4 h-4 rounded text-blue-600 border-gray-300">
+              </td>
+              <td class="px-4 py-3 text-sm">
+                <div class="text-gray-900">{{ c.nm_id }}</div>
+                <div class="text-xs text-gray-400">{{ c.vendor_code or '' }}</div>
+                {% if c.title %}
+                <div class="text-xs text-gray-500 truncate max-w-xs">{{ c.title }}</div>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 text-sm font-medium
+                         {% if c.quality_score is not none and c.quality_score < 50 %}text-red-600
+                         {% elif c.quality_score is not none %}text-yellow-600
+                         {% else %}text-gray-400{% endif %}">
+                {{ c.quality_score | round(1) if c.quality_score is not none else '—' }}
+              </td>
+              <td class="px-4 py-3 text-sm">
+                <span class="font-semibold text-red-600">{{ c.own_photo_count }}</span>
+                <span class="text-gray-400">/</span>
+                <span class="text-gray-600">{{ c.min_photos }}</span>
+              </td>
+              <td class="px-4 py-3 text-sm font-medium text-green-600">
+                {{ c.composed_count }}
+              </td>
+              <td class="px-4 py-3 text-xs text-gray-500 max-w-xs">
+                {% for url in c.composed_preview %}
+                <div class="truncate">{{ url }}</div>
+                {% endfor %}
+                {% if c.composed_count > c.composed_preview|length %}
+                <div class="text-gray-400">…ещё {{ c.composed_count - c.composed_preview|length }}</div>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# ── Итоговая строка «обработано N из M» ── #}
+    <div class="bg-blue-50 rounded-lg border border-blue-200 px-6 py-3 text-sm text-blue-700">
+      Обработано top-{{ shown }} из {{ total_m }} карточек с нехваткой фото
+      {% if total_m > shown %} — остальные {{ total_m - shown }} карточек будут доступны следующим заходом{% endif %}.
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 flex items-center justify-between">
+      <button type="submit" name="action" value="reject"
+              class="px-6 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+        Отклонить
+      </button>
+      <button type="submit" name="action" value="confirm"
+              class="px-6 py-2 rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
+        📸 Дополнить фото
+      </button>
+    </div>
+
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
