@@ -372,6 +372,23 @@ def register_product_defaults_routes(app):
             return '', 404
         return send_file(filepath)
 
+    @app.route('/media/standard/<int:seller_id>/<path:filename>')
+    def standard_media_public(seller_id, filename):
+        """Публичная read-only отдача стандартного фото (чтобы WB media/save забрал по URL).
+        Без @login_required — доступен всем, но только конкретный файл из директории продавца.
+        """
+        from flask import abort
+        # Защита от path-traversal: secure_filename убирает '/', '..' и прочие опасные символы
+        safe = secure_filename(filename)
+        if not safe or safe != filename:
+            abort(404)
+        directory = os.path.join(current_app.root_path, 'data', 'global_media', str(seller_id))
+        path = os.path.join(directory, safe)
+        # Отдаём файл только если он реально существует внутри директории продавца
+        if not os.path.isfile(path):
+            abort(404)
+        return send_file(path)
+
     # ==================== API: получить дефолты для товара ====================
 
     @app.route('/api/product-defaults/for-product/<int:product_id>')
