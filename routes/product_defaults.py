@@ -305,9 +305,7 @@ def register_product_defaults_routes(app):
             finally:
                 file.seek(0)
             if width < 700 or height < 900:
-                return jsonify({
-                    'error': 'Фото меньше 700×900 — WB отклонит. Загрузите изображение крупнее.'
-                }), 400
+                return jsonify({'success': False, 'error': 'Фото меньше 700×900 — WB отклонит. Загрузите изображение крупнее.'}), 400
 
         # Сохраняем файл
         media_dir = _get_media_dir(seller.id)
