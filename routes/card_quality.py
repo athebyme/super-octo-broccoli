@@ -440,7 +440,10 @@ def register_card_quality_routes(app):
                     'wb_synced': row.wb_synced,
                     'wb_sync_status': row.wb_sync_status,
                     'user_comment': row.user_comment,
-                    'changes': row.get_changes_summary(),
+                    'changes': {
+                        field: {k: v for k, v in fld.items() if k not in ('before_raw', 'after_raw')}
+                        for field, fld in (row.get_changes_summary() or {}).items()
+                    },
                 }
                 for row in rows
             ]

@@ -140,8 +140,9 @@ class TestCardQualityHistoryRoute(unittest.TestCase):
         self.assertTrue(payload['success'])
         items = payload['items']
         self.assertEqual(len(items), 2)
-        # newest first
-        self.assertGreater(items[0]['created_at'], items[1]['created_at'])
+        # newest first — explicit date checks on seeded rows
+        self.assertEqual(items[0]['created_at'][:10], '2025-01-02')
+        self.assertEqual(items[1]['created_at'][:10], '2025-01-01')
         # fields present
         for item in items:
             self.assertIn('created_at', item)
