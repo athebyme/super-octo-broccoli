@@ -10,6 +10,7 @@ from datetime import datetime
 from flask import render_template, redirect, url_for, flash, request, jsonify, send_file, current_app, abort
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
+from PIL import Image
 
 from models import db, ProductDefaults, normalize_media_item
 from services.url_security import safe_float
@@ -293,6 +294,20 @@ def register_product_defaults_routes(app):
         file.seek(0)
         if size > MAX_FILE_SIZE:
             return jsonify({'success': False, 'error': 'Файл слишком большой (макс. 20 МБ)'}), 400
+
+        # Проверяем минимальный размер фото (WB требует ≥700×900)
+        if _file_type(file.filename) == 'photo':
+            try:
+                img = Image.open(file)
+                width, height = img.size
+            except Exception:
+                return jsonify({'success': False, 'error': 'Не удалось прочитать изображение'}), 400
+            finally:
+                file.seek(0)
+            if width < 700 or height < 900:
+                return jsonify({
+                    'error': 'Фото меньше 700×900 — WB отклонит. Загрузите изображение крупнее.'
+                }), 400
 
         # Сохраняем файл
         media_dir = _get_media_dir(seller.id)
