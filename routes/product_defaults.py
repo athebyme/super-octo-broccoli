@@ -7,7 +7,7 @@ import os
 import uuid
 import logging
 from datetime import datetime
-from flask import render_template, redirect, url_for, flash, request, jsonify, send_file, current_app
+from flask import render_template, redirect, url_for, flash, request, jsonify, send_file, current_app, abort
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
@@ -377,15 +377,22 @@ def register_product_defaults_routes(app):
         """Публичная read-only отдача стандартного фото (чтобы WB media/save забрал по URL).
         Без @login_required — доступен всем, но только конкретный файл из директории продавца.
         """
-        from flask import abort
         # Защита от path-traversal: secure_filename убирает '/', '..' и прочие опасные символы
         safe = secure_filename(filename)
         if not safe or safe != filename:
+            abort(404)
+        # Extension whitelist — never serve .py/.env/etc. from the media dir
+        if not _allowed_file(safe):
             abort(404)
         directory = os.path.join(current_app.root_path, 'data', 'global_media', str(seller_id))
         path = os.path.join(directory, safe)
         # Отдаём файл только если он реально существует внутри директории продавца
         if not os.path.isfile(path):
+            abort(404)
+        # Symlink/containment guard: reject any path (incl. symlinks) resolving outside seller dir
+        real = os.path.realpath(path)
+        base = os.path.realpath(directory)
+        if not (real == base or real.startswith(base + os.sep)):
             abort(404)
         return send_file(path)
 
