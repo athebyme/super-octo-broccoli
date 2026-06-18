@@ -931,6 +931,9 @@ class ProductDefaults(db.Model):
     # JSON: [{"filename": "...", "original_name": "...", "type": "photo|video", "size": 12345}]
     global_media = db.Column(db.Text, nullable=True)
 
+    # Порог «мало фото» (глобальное правило); дефолт логики 4
+    min_photos = db.Column(db.Integer, nullable=True)
+
     # Активность правила
     is_active = db.Column(db.Boolean, default=True, nullable=False)
 
@@ -988,6 +991,36 @@ class ProductDefaults(db.Model):
             return json.loads(self.global_media)
         except (json.JSONDecodeError, TypeError):
             return []
+
+
+def normalize_media_item(item: dict) -> dict:
+    """Гарантирует поля позиционирования у элемента global_media (обратная совместимость)."""
+    out = dict(item or {})
+    out.setdefault('position', 'last')
+    out.setdefault('mode', 'fill')
+    out.setdefault('order', 0)
+    return out
+
+
+def get_min_photos(seller_id: int) -> int:
+    """Порог «мало фото» из глобального правила продавца; дефолт 4."""
+    rule = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
+    val = getattr(rule, 'min_photos', None) if rule else None
+    return int(val) if val else 4
+
+
+def get_standard_media(seller_id: int, subject_id) -> list:
+    """Нормализованный union стандартных медиа: глобальное правило + правило категории subject_id."""
+    items = []
+    g = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
+    if g:
+        items.extend(g.get_global_media_list() or [])
+    if subject_id is not None:
+        c = ProductDefaults.query.filter_by(
+            seller_id=seller_id, rule_type='category', wb_subject_id=subject_id).first()
+        if c:
+            items.extend(c.get_global_media_list() or [])
+    return [normalize_media_item(m) for m in items]
 
 
 class ImportedProduct(db.Model):

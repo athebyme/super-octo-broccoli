@@ -6223,6 +6223,8 @@ def _run_startup_migrations():
         ('products', 'wb_price_synced_at', 'DATETIME'),
         # Auto-publish atomic lock token
         ('auto_publish_settings', 'run_lock_token', 'VARCHAR(64)'),
+        # Standard photos — минимальный порог фото для глобального правила продавца
+        ('product_defaults', 'min_photos', 'INTEGER'),
     ]
 
     for table, column, col_type in migrations:
