@@ -30,7 +30,7 @@
               {% else %}background:var(--bg);border-color:var(--border);color:var(--text){% endif %}">
       <span>{{ c.name }}</span>
       <span class="text-xs px-1.5 py-0.5 rounded-md"
-            style="background:{% if c.with_new %}#f59e0b{% else %}var(--border){% endif %};color:{% if c.with_new %}#fff{% else %}var(--text-muted){% endif %}">
+            style="background:{% if c.with_new %}var(--warn){% else %}var(--border){% endif %};color:{% if c.with_new %}var(--text-on-accent){% else %}var(--text-muted){% endif %}">
         {% if c.with_new %}+{{ c.with_new }}{% else %}{{ c.total }}{% endif %}
       </span>
     </a>
@@ -66,7 +66,7 @@
         <span class="text-sm" style="color:var(--text-secondary)"
               x-text="job.processed + ' / ' + job.total + ' (успешно: ' + job.succeeded + ', ошибок: ' + job.failed + ')'"></span>
         <button x-show="job.status === 'running' || job.status === 'pending'" @click="cancelJob()"
-                class="text-sm px-3 py-1 rounded-lg border" style="color:#dc2626;border-color:#fca5a5">Отменить</button>
+                class="text-sm px-3 py-1 rounded-lg border" style="color:var(--danger);border-color:var(--danger-border)">Отменить</button>
       </div>
     </div>
     <div class="w-full h-2 rounded-full overflow-hidden" style="background:var(--border)">
@@ -132,7 +132,7 @@
             <span style="color:var(--text-muted)"> → </span>
             <span class="font-semibold" style="color:var(--text)">{{ r.supplier_count }}</span>
             {% if r.delta > 0 %}
-            <span class="ml-2 text-xs font-semibold px-1.5 py-0.5 rounded-md" style="background:#dcfce7;color:#15803d">+{{ r.delta }}</span>
+            <span class="ml-2 text-xs font-semibold px-1.5 py-0.5 rounded-md" style="background:var(--ok-bg);color:var(--ok)">+{{ r.delta }}</span>
             {% elif r.delta < 0 %}
             <span class="ml-2 text-xs px-1.5 py-0.5 rounded-md" style="background:var(--border);color:var(--text-muted)">{{ r.delta }}</span>
             {% endif %}

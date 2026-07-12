@@ -156,17 +156,17 @@
     <!-- Разовая подсказка: раздел «Обновление карточек» -->
     <div x-data="{ shown: !localStorage.getItem('hint_supplier_updates_v1') }" x-show="shown" x-cloak
          class="mb-6 p-4 rounded-xl border flex items-start gap-3"
-         style="background:#eef2ff;border-color:#c7d2fe">
-        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="#4f46e5" viewBox="0 0 24 24">
+         style="background:var(--accent-light);border-color:var(--accent)">
+        <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" style="stroke:var(--accent)" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
         </svg>
-        <div class="flex-1 text-sm" style="color:#3730a3">
+        <div class="flex-1 text-sm" style="color:var(--text)">
             <span class="font-semibold">Новое: раздел «Обновление карточек».</span>
             Смотрите карточки по поставщикам и дозагружайте свежие фото поставщика на WB в один клик.
-            <a href="{{ url_for('supplier_updates_page') }}" class="font-semibold underline ml-1">Открыть раздел →</a>
+            <a href="{{ url_for('supplier_updates_page') }}" class="font-semibold underline ml-1" style="color:var(--accent)">Открыть раздел →</a>
         </div>
         <button @click="shown = false; localStorage.setItem('hint_supplier_updates_v1', '1')"
-                class="flex-shrink-0" style="color:#6366f1" title="Скрыть">
+                class="flex-shrink-0" style="color:var(--accent)" title="Скрыть">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
     </div>

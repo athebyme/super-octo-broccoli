@@ -7,6 +7,17 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}Seller Hub{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <script>
+        /* Тема до отрисовки CSS — без вспышки белого при загрузке */
+        (function () {
+            var t = null;
+            try { t = localStorage.getItem('sh-theme'); } catch (e) {}
+            if (t !== 'dark' && t !== 'light') {
+                t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-theme', t);
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -31,25 +42,74 @@
     <style>
         [x-cloak] { display: none !important; }
 
+        /* Переключатель темы: показываем действие, противоположное текущей теме */
+        .theme-when-dark { display: none; }
+        [data-theme="dark"] .theme-when-dark { display: inline-flex; }
+        [data-theme="dark"] .theme-when-light { display: none; }
+
         *, *::before, *::after { box-sizing: border-box; }
 
+        /* ============================================================
+           ПАЛИТРА «Тёплая редакция» — единственный источник цветов.
+           Светлая тема: тёплая бумага + терракотовый акцент.
+           Тёмная тема: тёплый графит (не сине-чёрный), терракота ярче.
+           Все цвета в шаблонах должны идти через эти токены.
+           ============================================================ */
         :root {
+            color-scheme: light;
             --bg: #faf9f7;
             --bg-card: #ffffff;
             --bg-sidebar: #0a0a0a;
+            --bg-hover: #f3f0ec;
             --text: #1a1a1a;
             --text-secondary: #6b6b6b;
             --text-muted: #9a9a9a;
             --text-sidebar: #e8e8e8;
             --text-sidebar-muted: #737373;
+            --text-on-accent: #ffffff;
             --accent: #c45d3e;
+            --accent-strong: #a34a2f;
             --accent-light: #f0e0da;
             --border: #e8e5e1;
             --border-light: #f0eeeb;
+            --focus-ring: rgba(196, 93, 62, 0.22);
+            /* Семантика статусов (тёплые оттенки в тон палитре) */
+            --ok: #2e7d54;         --ok-bg: #eaf5ee;      --ok-border: #cbe5d4;
+            --warn: #9a6b1f;       --warn-bg: #fbf3e0;    --warn-border: #edd9a8;
+            --danger: #b3362b;     --danger-bg: #f9e9e6;  --danger-border: #ecc9c2;
+            --info: #3d6b8e;       --info-bg: #e9f1f6;    --info-border: #c8dce9;
+            /* Легаси-алиасы (встречаются в шаблонах) */
+            --success: var(--ok);
+            --accent-dark: var(--accent-strong);
+            --bg-secondary: var(--bg-hover);
             --font-display: 'Instrument Serif', Georgia, serif;
             --font-body: 'Inter', -apple-system, sans-serif;
             --sidebar-w: 260px;
             --sidebar-collapsed: 72px;
+        }
+
+        [data-theme="dark"] {
+            color-scheme: dark;
+            --bg: #131211;
+            --bg-card: #1c1a19;
+            --bg-sidebar: #0a0a0a;
+            --bg-hover: #242120;
+            --text: #ebe7e2;
+            --text-secondary: #a39d96;
+            --text-muted: #746e67;
+            --text-sidebar: #e8e8e8;
+            --text-sidebar-muted: #737373;
+            --text-on-accent: #ffffff;
+            --accent: #d97757;
+            --accent-strong: #e28b6d;
+            --accent-light: #33251f;
+            --border: #2b2825;
+            --border-light: #221f1d;
+            --focus-ring: rgba(217, 119, 87, 0.35);
+            --ok: #6cbf90;         --ok-bg: #182b1f;      --ok-border: #2c4a37;
+            --warn: #d9a94e;       --warn-bg: #2b2312;    --warn-border: #4a3d1f;
+            --danger: #e0796c;     --danger-bg: #321b17;  --danger-border: #55302a;
+            --info: #82aecf;       --info-bg: #16222b;    --info-border: #2b4356;
         }
 
         body {
@@ -405,10 +465,10 @@
             justify-content: space-between;
             border: 1px solid;
         }
-        .flash-msg.success { background: #f0faf0; color: #1a6b1a; border-color: #c8e6c8; }
-        .flash-msg.danger { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
-        .flash-msg.warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
-        .flash-msg.info { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+        .flash-msg.success { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
+        .flash-msg.danger { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
+        .flash-msg.warning { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+        .flash-msg.info { background: var(--info-bg); color: var(--info); border-color: var(--info-border); }
         .flash-close {
             background: none;
             border: none;
@@ -488,7 +548,7 @@
         [class*="text-indigo-200"],
         [class*="text-emerald-200"],
         [class*="text-gray-400"] {
-            color: #999 !important;
+            color: var(--text-muted) !important;
         }
 
         /* Cards: remove shadows, use thin borders */
@@ -545,6 +605,7 @@
         [class*="from-indigo-600"], [class*="to-purple-600"] {
             background: var(--text) !important;
             border-color: var(--text) !important;
+            color: var(--bg-card) !important;
         }
 
         .text-indigo-600, .text-indigo-700,
@@ -562,10 +623,10 @@
 
         /* Ring colors */
         .ring-indigo-500\/20, [class*="ring-indigo"] {
-            --tw-ring-color: rgba(196, 93, 62, 0.2) !important;
+            --tw-ring-color: var(--focus-ring) !important;
         }
         .focus\:ring-indigo-500:focus {
-            --tw-ring-color: rgba(196, 93, 62, 0.3) !important;
+            --tw-ring-color: var(--focus-ring) !important;
         }
         .focus\:border-indigo-500:focus {
             border-color: var(--accent) !important;
@@ -573,32 +634,32 @@
 
         /* Badge pills: editorial style */
         .rounded-full[class*="bg-green-"] {
-            background: #f0faf0 !important;
-            color: #1a6b1a !important;
+            background: var(--ok-bg) !important;
+            color: var(--ok) !important;
         }
         .rounded-full[class*="bg-red-"] {
-            background: #fef2f2 !important;
-            color: #991b1b !important;
+            background: var(--danger-bg) !important;
+            color: var(--danger) !important;
         }
         .rounded-full[class*="bg-yellow-"] {
-            background: #fffbeb !important;
-            color: #92400e !important;
+            background: var(--warn-bg) !important;
+            color: var(--warn) !important;
         }
         .rounded-full[class*="bg-blue-"] {
-            background: #eff6ff !important;
-            color: #1e40af !important;
+            background: var(--info-bg) !important;
+            color: var(--info) !important;
         }
         .rounded-full[class*="bg-purple-"] {
-            background: #f5f0ff !important;
-            color: #6b21a8 !important;
+            background: var(--accent-light) !important;
+            color: var(--accent) !important;
         }
         .rounded-full[class*="bg-orange-"] {
-            background: #fff7ed !important;
-            color: #c2410c !important;
+            background: var(--warn-bg) !important;
+            color: var(--warn) !important;
         }
         .rounded-full[class*="bg-pink-"] {
-            background: #fdf2f8 !important;
-            color: #be185d !important;
+            background: var(--danger-bg) !important;
+            color: var(--danger) !important;
         }
         .rounded-full[class*="bg-gray-100"] {
             background: var(--bg) !important;
@@ -641,11 +702,14 @@
             font-family: var(--font-body) !important;
             border-radius: 6px !important;
             border-color: var(--border) !important;
+            background-color: var(--bg-card) !important;
+            color: var(--text) !important;
         }
+        input::placeholder, textarea::placeholder { color: var(--text-muted) !important; }
         input:focus, textarea:focus, select:focus {
-            border-color: var(--text) !important;
+            border-color: var(--accent) !important;
             box-shadow: none !important;
-            outline: 2px solid rgba(26, 26, 26, 0.1) !important;
+            outline: 2px solid var(--focus-ring) !important;
             outline-offset: 1px !important;
         }
 
@@ -659,7 +723,7 @@
         .bg-white.text-emerald-700,
         a[class*="bg-white"][class*="text-emerald"],
         a[class*="bg-white"][class*="text-gray-900"] {
-            background: #fff !important;
+            background: var(--bg-card) !important;
             color: var(--text) !important;
             border: 1px solid var(--border) !important;
         }
@@ -695,11 +759,82 @@
             .max-w-7xl, .max-w-6xl { max-width: 1920px !important; }
         }
 
-        /* Alerts */
-        .bg-green-50 { background: #f0faf0 !important; }
-        .border-green-200 { border-color: #c8e6c8 !important; }
-        .bg-amber-50, .bg-yellow-50 { background: #fffbeb !important; }
-        .border-amber-200, .border-yellow-200 { border-color: #fde68a !important; }
+        /* ============================================================
+           УНИФИКАЦИЯ ПАЛИТРЫ — все Tailwind-цвета сводятся к токенам.
+           Работает в обеих темах: серые → нейтральные токены,
+           green/emerald → --ok, red/rose → --danger,
+           yellow/amber/orange → --warn, blue/sky → --info,
+           indigo/purple/violet → акцент/редакторские кнопки.
+           ============================================================ */
+
+        /* Нейтральные тексты */
+        .text-gray-900, .text-gray-800, .text-gray-700 { color: var(--text) !important; }
+        .text-gray-600, .text-gray-500 { color: var(--text-secondary) !important; }
+        .text-gray-400, .text-gray-300 { color: var(--text-muted) !important; }
+        .text-black { color: var(--text) !important; }
+
+        /* Нейтральные поверхности и границы */
+        .bg-gray-100, .bg-gray-200 { background-color: var(--bg-hover) !important; }
+        .border-gray-300 { border-color: var(--border) !important; }
+        .divide-gray-200 > :not([hidden]) ~ :not([hidden]),
+        .divide-gray-100 > :not([hidden]) ~ :not([hidden]) { border-color: var(--border) !important; }
+        .hover\:bg-gray-50:hover, .hover\:bg-gray-100:hover { background-color: var(--bg-hover) !important; }
+        .hover\:text-gray-900:hover, .hover\:text-gray-700:hover { color: var(--text) !important; }
+
+        /* Успех: green/emerald → --ok */
+        .text-green-600, .text-green-700, .text-green-800, .text-green-500,
+        .text-emerald-600, .text-emerald-700, .text-emerald-800 { color: var(--ok) !important; }
+        .bg-green-50, .bg-emerald-50 { background: var(--ok-bg) !important; }
+        .bg-green-100, .bg-emerald-100 { background: var(--ok-bg) !important; }
+        .border-green-200, .border-green-300, .border-emerald-200 { border-color: var(--ok-border) !important; }
+        .bg-green-500, .bg-green-600, .bg-emerald-500, .bg-emerald-600 { background: var(--ok) !important; }
+        .hover\:bg-green-700:hover, .hover\:bg-emerald-700:hover { background: var(--ok) !important; filter: brightness(0.92); }
+
+        /* Опасность: red/rose → --danger */
+        .text-red-500, .text-red-600, .text-red-700, .text-red-800 { color: var(--danger) !important; }
+        .bg-red-50 { background: var(--danger-bg) !important; }
+        .bg-red-100 { background: var(--danger-bg) !important; }
+        .border-red-200, .border-red-300 { border-color: var(--danger-border) !important; }
+        .bg-red-500, .bg-red-600 { background: var(--danger) !important; }
+        .hover\:bg-red-700:hover { background: var(--danger) !important; filter: brightness(0.92); }
+
+        /* Предупреждение: yellow/amber/orange → --warn */
+        .text-yellow-600, .text-yellow-700, .text-yellow-800,
+        .text-amber-600, .text-amber-700, .text-amber-800,
+        .text-orange-600, .text-orange-700 { color: var(--warn) !important; }
+        .bg-amber-50, .bg-yellow-50, .bg-orange-50 { background: var(--warn-bg) !important; }
+        .bg-yellow-100, .bg-amber-100, .bg-orange-100 { background: var(--warn-bg) !important; }
+        .border-amber-200, .border-yellow-200, .border-yellow-300, .border-orange-200 { border-color: var(--warn-border) !important; }
+        .bg-yellow-500, .bg-amber-500, .bg-yellow-600, .bg-amber-600 { background: var(--warn) !important; }
+
+        /* Информация: blue/sky (не кнопки) → --info */
+        .text-blue-600, .text-blue-700, .text-blue-800, .text-sky-700 { color: var(--info) !important; }
+        .bg-blue-50, .bg-sky-50 { background: var(--info-bg) !important; }
+        .bg-blue-100, .bg-sky-100 { background: var(--info-bg) !important; }
+        .border-blue-200, .border-blue-300, .border-sky-200 { border-color: var(--info-border) !important; }
+
+        /* Синие/фиолетовые КНОПКИ → редакторские тёмные (как indigo) */
+        .bg-blue-600, .bg-blue-700, .hover\:bg-blue-700:hover,
+        .bg-purple-600, .bg-purple-700, .hover\:bg-purple-700:hover,
+        .bg-violet-600, .hover\:bg-violet-700:hover {
+            background: var(--text) !important;
+            border-color: var(--text) !important;
+            color: var(--bg-card) !important;
+        }
+        .text-purple-600, .text-purple-700, .text-violet-600 { color: var(--accent) !important; }
+        .bg-purple-100, .bg-purple-50, .bg-violet-100 { background: var(--accent-light) !important; }
+
+        /* Инверсные поверхности (тёмные хедеры/оверлеи) */
+        .bg-gray-800, .bg-gray-900 { background-color: var(--bg-sidebar) !important; }
+        .bg-gray-500.bg-opacity-75, .bg-black.bg-opacity-50 { background-color: rgba(0, 0, 0, 0.55) !important; }
+
+        /* Тонкости тёмной темы */
+        [data-theme="dark"] [class*="bg-gradient-to-r"] {
+            border: 1px solid var(--border) !important;  /* чёрный hero отделяем от тёмного фона */
+        }
+        [data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+        [data-theme="dark"] ::-webkit-scrollbar-thumb { background: #35312e; border-radius: 6px; }
+        [data-theme="dark"] ::-webkit-scrollbar-track { background: transparent; }
 
         /* Tab/filter pills override */
         [class*="backdrop-blur"] {
@@ -819,8 +954,8 @@
             padding: 2px 8px;
             border-radius: 12px;
         }
-        .sh-stat-trend--up { color: #16a34a; background: #f0fdf4; }
-        .sh-stat-trend--down { color: #dc2626; background: #fef2f2; }
+        .sh-stat-trend--up { color: var(--ok); background: var(--ok-bg); }
+        .sh-stat-trend--down { color: var(--danger); background: var(--danger-bg); }
         .sh-stat-trend--flat { color: var(--text-muted); background: var(--bg); }
         .sh-stat-value {
             font-size: 28px;
@@ -905,12 +1040,12 @@
             flex-shrink: 0;
         }
         .sh-badge--gray  { background: var(--bg); color: var(--text-secondary); }
-        .sh-badge--green { background: #f0fdf4; color: #15803d; }
-        .sh-badge--red   { background: #fef2f2; color: #b91c1c; }
-        .sh-badge--yellow { background: #fefce8; color: #a16207; }
-        .sh-badge--blue  { background: #eff6ff; color: #1d4ed8; }
-        .sh-badge--purple { background: #faf5ff; color: #7e22ce; }
-        .sh-badge--orange { background: #fff7ed; color: #c2410c; }
+        .sh-badge--green { background: var(--ok-bg); color: var(--ok); }
+        .sh-badge--red   { background: var(--danger-bg); color: var(--danger); }
+        .sh-badge--yellow { background: var(--warn-bg); color: var(--warn); }
+        .sh-badge--blue  { background: var(--info-bg); color: var(--info); }
+        .sh-badge--purple { background: var(--accent-light); color: var(--accent); }
+        .sh-badge--orange { background: var(--warn-bg); color: var(--warn); }
 
         /* ── Button ── */
         .sh-btn {
@@ -2126,6 +2261,12 @@
                             class="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
                             x-cloak></span>
                     </a>
+                    <a href="#" @click.prevent="window.toggleTheme()" role="menuitem">
+                        <svg class="theme-when-light" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+                        <svg class="theme-when-dark" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                        <span class="theme-when-light">Тёмная тема</span>
+                        <span class="theme-when-dark">Светлая тема</span>
+                    </a>
                     <div class="sidebar-dropdown-divider"></div>
                     <a href="{{ url_for('logout') }}" class="danger">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
@@ -2203,6 +2344,25 @@
     </div>
 
     <!-- Notification sound (Web Audio API chime) -->
+    <script>
+    /* Переключение темы: атрибут на <html> + запоминание выбора */
+    window.toggleTheme = function () {
+        var current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        var next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        try { localStorage.setItem('sh-theme', next); } catch (e) {}
+    };
+    /* Пока пользователь не выбрал тему сам — следуем за системной */
+    (function () {
+        var stored = null;
+        try { stored = localStorage.getItem('sh-theme'); } catch (e) {}
+        if (!stored && window.matchMedia) {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
+                document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+            });
+        }
+    })();
+    </script>
     <script>
     window._notifChime = {
         _ctx: null,
@@ -2490,6 +2650,7 @@
 </div>
 {% endif %}
 
+{% block extra_scripts %}{% endblock %}
 </body>
 
 </html>

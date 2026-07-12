@@ -179,6 +179,21 @@
                             </div>
                         </div>
 
+                        <div class="flex items-center justify-between gap-5 px-4 py-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border)">
+                            <div>
+                                <p class="text-sm font-medium" style="color:var(--text)">Одна модель для AI-помощника</p>
+                                <p class="text-xs mt-0.5" style="color:var(--text-muted)" x-text="ai.singleModel ? 'Все задачи выполняет выбранная модель' : 'DeepSeek V4 Flash используется только для простых read-only шагов; изменения выполняет выбранная модель'"></p>
+                            </div>
+                            <button type="button" @click="ai.singleModel = !ai.singleModel"
+                                :aria-pressed="ai.singleModel"
+                                :class="ai.singleModel ? 'bg-green-600' : 'bg-gray-300'"
+                                class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full transition-colors"
+                                aria-label="Использовать одну модель">
+                                <span :class="ai.singleModel ? 'translate-x-5' : 'translate-x-0'"
+                                    class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition mt-0.5 ml-0.5"></span>
+                            </button>
+                        </div>
+
                         <!-- Row 2: API Key + Base URL -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
                             <div>
@@ -344,7 +359,7 @@ function profilePage() {
 
         // AI settings
         ai: {
-            provider: 'cloudru',
+            provider: 'deepseek',
             model: '',
             customModel: '',
             apiKey: '',
@@ -356,6 +371,7 @@ function profilePage() {
             testMessage: '',
             availableModels: [],
             modelDescription: '',
+            singleModel: true,
             get effectiveModel() {
                 return this.model === '__custom__' ? this.customModel : this.model;
             },
@@ -370,9 +386,10 @@ function profilePage() {
                 const res = await fetch('/api/profile/ai-settings');
                 if (!res.ok) return;
                 const data = await res.json();
-                this.ai.provider = data.provider || 'cloudru';
+                this.ai.provider = data.provider || 'deepseek';
                 this.ai.apiKey = data.api_key || '';
                 this.ai.apiBaseUrl = data.api_base_url || '';
+                this.ai.singleModel = data.agent_single_model !== false;
                 // Загрузим модели, потом проверим есть ли текущая модель в списке
                 await this.loadModels();
                 const savedModel = data.model || '';
@@ -444,6 +461,7 @@ function profilePage() {
                         model: this.ai.effectiveModel,
                         api_key: this.ai.apiKey,
                         api_base_url: this.ai.apiBaseUrl,
+                        agent_single_model: this.ai.singleModel,
                     }),
                 });
                 const data = await res.json();
