@@ -1338,6 +1338,7 @@ def products_list():
         filter_rating_min = request.args.get('rating_min', '', type=str).strip()
         filter_rating_max = request.args.get('rating_max', '', type=str).strip()
         filter_quality_weak = request.args.get('quality_weak', '').strip() in ['1', 'true', 'True', 'on']
+        filter_supplier = request.args.get('supplier_id', type=int)
 
         # Сортировка
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
@@ -1439,6 +1440,18 @@ def products_list():
                 (Product.quality_score < 50) | (Product.nm_rating < 6)
             )
 
+        # Фильтр по поставщику (карточки, созданные из каталога поставщика)
+        if filter_supplier:
+            query = query.filter(
+                db.exists().where(
+                    db.and_(
+                        ImportedProduct.product_id == Product.id,
+                        ImportedProduct.seller_id == current_user.seller.id,
+                        ImportedProduct.supplier_id == filter_supplier,
+                    )
+                )
+            )
+
         # Сортировка
         sort_column = {
             'updated_at': Product.updated_at,
@@ -1517,6 +1530,30 @@ def products_list():
         except Exception as e:
             app.logger.debug(f"Enrichment availability check failed: {e}")
 
+        # Поставщики для фильтра + бейджи «поставщик» для карточек текущей страницы
+        suppliers_for_filter = []
+        product_supplier_map = {}
+        try:
+            suppliers_for_filter = (
+                db.session.query(Supplier.id, Supplier.name)
+                .join(ImportedProduct, ImportedProduct.supplier_id == Supplier.id)
+                .filter(
+                    ImportedProduct.seller_id == current_user.seller.id,
+                    ImportedProduct.product_id.isnot(None),
+                )
+                .distinct().order_by(Supplier.name).all()
+            )
+            page_ids = [p.id for p in products]
+            if page_ids:
+                product_supplier_map = dict(
+                    db.session.query(ImportedProduct.product_id, Supplier.name)
+                    .join(Supplier, Supplier.id == ImportedProduct.supplier_id)
+                    .filter(ImportedProduct.product_id.in_(page_ids))
+                    .all()
+                )
+        except Exception as e:
+            app.logger.debug(f"Supplier filter data failed: {e}")
+
         return render_template(
             'products.html',
             products=products,
@@ -1542,6 +1579,9 @@ def products_list():
             filter_quality_weak=filter_quality_weak,
             enrichment_map=enrichment_map,
             disabled_products=disabled_products,
+            suppliers_for_filter=suppliers_for_filter,
+            product_supplier_map=product_supplier_map,
+            filter_supplier=filter_supplier,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -6085,6 +6125,9 @@ register_card_quality_routes(app)
 # ============= РОУТЫ ОБОГАЩЕНИЯ КАРТОЧЕК ДАННЫМИ ПОСТАВЩИКА =============
 from routes.enrichment import register_enrichment_routes
 register_enrichment_routes(app)
+
+from routes.supplier_updates import register_supplier_updates_routes
+register_supplier_updates_routes(app)
 
 # ============= РОУТЫ ПОСТАВЩИКОВ (АДМИН + КАТАЛОГ ПРОДАВЦА) =============
 from routes.suppliers import register_supplier_routes

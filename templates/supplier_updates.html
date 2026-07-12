@@ -1,0 +1,294 @@
+{% extends "base.html" %}
+{% block title %}Обновление карточек — Seller Hub{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 py-6" x-data="supplierUpdates()">
+
+  <div class="sh-page-header"><div class="sh-page-header-content">
+    <div>
+      <h1 class="sh-page-title">Обновление карточек от поставщика</h1>
+      <p class="sh-page-subtitle">
+        Карточки, связанные с каталогами поставщиков. Когда у поставщика появляются новые
+        фото — дозагрузите их на Wildberries в один клик.
+      </p>
+    </div>
+  </div></div>
+
+  {# ── Чипы поставщиков ── #}
+  <div class="flex flex-wrap gap-2 mb-4">
+    <a href="{{ url_for('supplier_updates_page', only_new=1 if only_new else 0, search=search or none) }}"
+       class="px-4 py-2 rounded-xl text-sm border transition-colors
+              {% if not supplier_id %}text-white{% endif %}"
+       style="{% if not supplier_id %}background:var(--accent);border-color:var(--accent)
+              {% else %}background:var(--bg);border-color:var(--border);color:var(--text){% endif %}">
+      Все поставщики
+    </a>
+    {% for c in chips %}
+    <a href="{{ url_for('supplier_updates_page', supplier_id=c.supplier_id, only_new=1 if only_new else 0, search=search or none) }}"
+       class="px-4 py-2 rounded-xl text-sm border transition-colors flex items-center gap-2
+              {% if supplier_id == c.supplier_id %}text-white{% endif %}"
+       style="{% if supplier_id == c.supplier_id %}background:var(--accent);border-color:var(--accent)
+              {% else %}background:var(--bg);border-color:var(--border);color:var(--text){% endif %}">
+      <span>{{ c.name }}</span>
+      <span class="text-xs px-1.5 py-0.5 rounded-md"
+            style="background:{% if c.with_new %}#f59e0b{% else %}var(--border){% endif %};color:{% if c.with_new %}#fff{% else %}var(--text-muted){% endif %}">
+        {% if c.with_new %}+{{ c.with_new }}{% else %}{{ c.total }}{% endif %}
+      </span>
+    </a>
+    {% endfor %}
+  </div>
+
+  {# ── Фильтры ── #}
+  <form method="GET" class="flex flex-wrap items-center gap-3 mb-4">
+    {% if supplier_id %}<input type="hidden" name="supplier_id" value="{{ supplier_id }}">{% endif %}
+    <label class="flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
+      <input type="checkbox" name="only_new" value="1" {% if only_new %}checked{% endif %}
+             onchange="this.form.submit()" class="w-4 h-4 rounded border-gray-300">
+      Только с новыми фото у поставщика
+    </label>
+    <input type="text" name="search" value="{{ search or '' }}" placeholder="Поиск: название, артикул, nm ID"
+           class="px-3 py-2 rounded-xl text-sm w-72"
+           style="background:var(--bg);border:1px solid var(--border);color:var(--text)">
+    <button type="submit" class="sh-btn sh-btn--white sh-btn--md">Найти</button>
+    <span class="text-sm ml-auto" style="color:var(--text-muted)">Найдено: {{ total }}</span>
+  </form>
+
+  {# ── Прогресс активной задачи ── #}
+  <div x-show="job.uid" x-cloak class="mb-4 rounded-xl border p-4"
+       style="background:var(--bg);border-color:var(--border)">
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-sm font-medium" style="color:var(--text)">
+        <span x-show="job.status === 'running' || job.status === 'pending'">Дозагрузка фото выполняется…</span>
+        <span x-show="job.status === 'completed'" class="text-green-600">Дозагрузка завершена</span>
+        <span x-show="job.status === 'cancelled'" class="text-yellow-600">Задача отменена</span>
+        <span x-show="job.status === 'failed'" class="text-red-600">Задача завершилась с ошибкой</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-sm" style="color:var(--text-secondary)"
+              x-text="job.processed + ' / ' + job.total + ' (успешно: ' + job.succeeded + ', ошибок: ' + job.failed + ')'"></span>
+        <button x-show="job.status === 'running' || job.status === 'pending'" @click="cancelJob()"
+                class="text-sm px-3 py-1 rounded-lg border" style="color:#dc2626;border-color:#fca5a5">Отменить</button>
+      </div>
+    </div>
+    <div class="w-full h-2 rounded-full overflow-hidden" style="background:var(--border)">
+      <div class="h-2 rounded-full transition-all" style="background:var(--accent)"
+           :style="'width:' + (job.total ? Math.round(job.processed * 100 / job.total) : 0) + '%'"></div>
+    </div>
+  </div>
+
+  {% if not rows %}
+    <div class="sh-empty">
+      {% if only_new %}
+        Нет карточек с новыми фото у поставщика. Снимите фильтр, чтобы увидеть все связанные карточки.
+      {% else %}
+        Нет карточек, связанных с каталогами поставщиков.
+      {% endif %}
+    </div>
+  {% else %}
+
+  <div class="sh-table-wrap rounded-xl border overflow-hidden" style="border-color:var(--border)">
+    <div class="overflow-x-auto">
+    <table class="min-w-full divide-y" style="border-color:var(--border)">
+      <thead style="background:var(--bg)">
+        <tr>
+          <th class="px-4 py-3 text-left">
+            <input type="checkbox" id="selectAll" @change="toggleAll($event)"
+                   class="w-4 h-4 rounded border-gray-300">
+          </th>
+          <th class="px-4 py-3 text-left text-xs font-medium uppercase" style="color:var(--text-muted)">Карточка</th>
+          <th class="px-4 py-3 text-left text-xs font-medium uppercase" style="color:var(--text-muted)">Поставщик</th>
+          <th class="px-4 py-3 text-left text-xs font-medium uppercase" style="color:var(--text-muted)">Фото: WB → поставщик</th>
+          <th class="px-4 py-3 text-left text-xs font-medium uppercase" style="color:var(--text-muted)">Действия</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y" style="border-color:var(--border)">
+        {% for r in rows %}
+        <tr>
+          <td class="px-4 py-3">
+            <input type="checkbox" class="upd-checkbox w-4 h-4 rounded border-gray-300"
+                   value="{{ r.product.id }}" @change="updateSelection()">
+          </td>
+          <td class="px-4 py-3">
+            <div class="flex items-center gap-3">
+              {% if r.product.nm_id %}
+              <img src="{{ wb_photo_url(r.product.nm_id, 1, 'tm') }}" loading="lazy" alt=""
+                   class="w-10 h-12 rounded-md object-cover flex-shrink-0"
+                   style="background:var(--border)" onerror="this.style.visibility='hidden'">
+              {% endif %}
+              <div class="min-w-0">
+                <div class="text-sm font-medium truncate max-w-md" style="color:var(--text)">{{ r.product.title }}</div>
+                <div class="text-xs" style="color:var(--text-muted)">
+                  {{ r.product.vendor_code }} · nm {{ r.product.nm_id }}
+                </div>
+              </div>
+            </div>
+          </td>
+          <td class="px-4 py-3">
+            <span class="text-xs px-2 py-1 rounded-md" style="background:var(--bg);border:1px solid var(--border);color:var(--text-secondary)">
+              {{ r.supplier_name }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-sm whitespace-nowrap">
+            <span style="color:var(--text-secondary)">{{ r.wb_count }}</span>
+            <span style="color:var(--text-muted)"> → </span>
+            <span class="font-semibold" style="color:var(--text)">{{ r.supplier_count }}</span>
+            {% if r.delta > 0 %}
+            <span class="ml-2 text-xs font-semibold px-1.5 py-0.5 rounded-md" style="background:#dcfce7;color:#15803d">+{{ r.delta }}</span>
+            {% elif r.delta < 0 %}
+            <span class="ml-2 text-xs px-1.5 py-0.5 rounded-md" style="background:var(--border);color:var(--text-muted)">{{ r.delta }}</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 whitespace-nowrap">
+            <button @click="startJob([{{ r.product.id }}])"
+                    class="text-sm font-medium" style="color:var(--accent)"
+                    :disabled="job.status === 'running' || job.status === 'pending'">Дозагрузить фото</button>
+            <a href="{{ url_for('product_enrich', product_id=r.product.id) }}"
+               class="text-sm ml-3" style="color:var(--text-muted)">Обогатить</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  {# ── Пагинация ── #}
+  {% if total_pages > 1 %}
+  <div class="flex items-center justify-center gap-2 mt-4">
+    {% if page > 1 %}
+    <a href="{{ url_for('supplier_updates_page', page=page-1, supplier_id=supplier_id or none, only_new=1 if only_new else 0, search=search or none) }}"
+       class="sh-btn sh-btn--white sh-btn--md">← Назад</a>
+    {% endif %}
+    <span class="text-sm px-3" style="color:var(--text-secondary)">Стр. {{ page }} из {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('supplier_updates_page', page=page+1, supplier_id=supplier_id or none, only_new=1 if only_new else 0, search=search or none) }}"
+       class="sh-btn sh-btn--white sh-btn--md">Вперёд →</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ── Sticky bulk bar ── #}
+  <div x-show="selected.length > 0" x-cloak
+       class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-4 px-6 py-3 rounded-2xl shadow-xl border"
+       style="background:var(--bg-sidebar, #111827);border-color:var(--border)">
+    <span class="text-sm text-white" x-text="'Выбрано: ' + selected.length"></span>
+    <button @click="startJob(selected)"
+            :disabled="job.status === 'running' || job.status === 'pending'"
+            class="px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-50"
+            style="background:var(--accent)">
+      📸 Дозагрузить фото
+    </button>
+    <button @click="startAllByFilter()"
+            :disabled="job.status === 'running' || job.status === 'pending'"
+            class="px-4 py-2 rounded-xl text-sm text-white/80 border border-white/20 disabled:opacity-50">
+      Все по фильтру ({{ total }})
+    </button>
+    <button @click="clearSelection()" class="text-sm text-white/60">Сбросить</button>
+  </div>
+
+  {% endif %}
+</div>
+
+<script>
+function supplierUpdates() {
+  return {
+    selected: [],
+    job: {
+      uid: {{ ("'" ~ active_job.job_uid ~ "'") if active_job else 'null' }},
+      status: {{ ("'" ~ active_job.status ~ "'") if active_job else "''" }},
+      total: {{ active_job.total if active_job else 0 }},
+      processed: {{ active_job.processed if active_job else 0 }},
+      succeeded: {{ active_job.succeeded if active_job else 0 }},
+      failed: {{ active_job.failed_count if active_job else 0 }},
+    },
+    pollTimer: null,
+
+    init() {
+      if (this.job.uid && (this.job.status === 'running' || this.job.status === 'pending')) {
+        this.startPolling();
+      }
+    },
+
+    updateSelection() {
+      this.selected = Array.from(document.querySelectorAll('.upd-checkbox:checked')).map(cb => parseInt(cb.value));
+    },
+    toggleAll(e) {
+      document.querySelectorAll('.upd-checkbox').forEach(cb => cb.checked = e.target.checked);
+      this.updateSelection();
+    },
+    clearSelection() {
+      document.querySelectorAll('.upd-checkbox').forEach(cb => cb.checked = false);
+      const master = document.getElementById('selectAll');
+      if (master) master.checked = false;
+      this.selected = [];
+    },
+
+    async startJob(productIds) {
+      await this._start({ product_ids: productIds });
+    },
+    async startAllByFilter() {
+      if (!confirm('Дозагрузить фото для ВСЕХ {{ total }} карточек по текущему фильтру?')) return;
+      await this._start({
+        select_all: true,
+        supplier_id: {{ supplier_id or 'null' }},
+        only_new: {{ 'true' if only_new else 'false' }},
+        search: {{ ("'" ~ (search | e) ~ "'") if search else "''" }},
+      });
+    },
+    async _start(body) {
+      try {
+        const res = await fetch('/api/supplier-updates/photos/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          if (data.job_uid) { this.job.uid = data.job_uid; this.job.status = 'running'; this.startPolling(); }
+          window.showToast && showToast('warning', 'Дозагрузка фото', data.error || 'Не удалось запустить');
+          return;
+        }
+        this.job = { uid: data.job_uid, status: 'pending', total: data.total, processed: 0, succeeded: 0, failed: 0 };
+        this.clearSelection();
+        this.startPolling();
+        window.showToast && showToast('info', 'Дозагрузка фото', 'Задача запущена: ' + data.total + ' карточек');
+      } catch (e) {
+        window.showToast && showToast('danger', 'Дозагрузка фото', 'Ошибка сети');
+      }
+    },
+
+    startPolling() {
+      if (this.pollTimer) clearInterval(this.pollTimer);
+      this.pollTimer = setInterval(() => this.poll(), 2000);
+    },
+    async poll() {
+      if (!this.job.uid) return;
+      try {
+        const res = await fetch('/api/supplier-updates/jobs/' + this.job.uid + '/status');
+        const data = await res.json();
+        if (!data.success) return;
+        this.job.status = data.status;
+        this.job.total = data.total;
+        this.job.processed = data.processed;
+        this.job.succeeded = data.succeeded;
+        this.job.failed = data.failed;
+        if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+          clearInterval(this.pollTimer);
+          this.pollTimer = null;
+          if (data.status === 'completed') {
+            window.showToast && showToast('success', 'Дозагрузка фото',
+              'Готово: ' + data.succeeded + ' обновлено' + (data.failed ? ', ошибок: ' + data.failed : ''));
+            setTimeout(() => window.location.reload(), 1500);
+          }
+        }
+      } catch (e) { /* сеть мигнула — продолжаем поллинг */ }
+    },
+    async cancelJob() {
+      if (!this.job.uid) return;
+      try {
+        await fetch('/api/supplier-updates/jobs/' + this.job.uid + '/cancel', { method: 'POST' });
+      } catch (e) {}
+    },
+  };
+}
+</script>
+{% endblock %}
