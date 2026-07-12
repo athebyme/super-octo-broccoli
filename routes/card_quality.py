@@ -149,7 +149,13 @@ def register_card_quality_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'Нет профиля продавца'}), 403
         try:
-            data = compute_quality_summary(current_user.seller.id)
+            # Агрегат по всем карточкам продавца — кешируем на 60с
+            # (виджет дашборда дергается при каждом заходе)
+            from services.ttl_cache import cache
+            seller_id = current_user.seller.id
+            data = cache.get_or_load(
+                f'cq-summary:{seller_id}', 60,
+                lambda: compute_quality_summary(seller_id))
             return jsonify({'success': True, 'data': data})
         except Exception as e:
             logger.exception('Ошибка в api_card_quality_summary: %s', e)

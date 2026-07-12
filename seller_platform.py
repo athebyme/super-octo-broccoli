@@ -122,70 +122,14 @@ app.jinja_env.filters['basename'] = lambda value: Path(value).name if value else
 
 # Helper функции для работы с WB фотографиями
 def wb_photo_url(nm_id: int, photo_index: int = 1, size: str = 'big') -> str:
+    """URL фотографии товара WB.
+
+    Делегирует services/wb_media.py: проверенная таблица корзин + разовая
+    проба CDN с вечным кешем для новых vol (таблица WB прирастает, любая
+    захардкоженная формула со временем начинает отдавать 404).
     """
-    Формирует URL фотографии товара Wildberries
-
-    Args:
-        nm_id: Артикул WB (nmID)
-        photo_index: Номер фотографии (1, 2, 3, ...)
-        size: Размер фотографии ('big', 'c246x328', 'c516x688', 'tm')
-
-    Returns:
-        Полный URL фотографии
-
-    Формат URL: https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nmId}/images/{size}/{index}.webp
-    """
-    if not nm_id:
-        return ''
-
-    vol = nm_id // 100000
-    part = nm_id // 1000
-
-    # Определяем номер корзины по vol (актуально на 2025)
-    if vol <= 143:
-        basket = '01'
-    elif vol <= 287:
-        basket = '02'
-    elif vol <= 431:
-        basket = '03'
-    elif vol <= 719:
-        basket = '04'
-    elif vol <= 1007:
-        basket = '05'
-    elif vol <= 1061:
-        basket = '06'
-    elif vol <= 1115:
-        basket = '07'
-    elif vol <= 1169:
-        basket = '08'
-    elif vol <= 1313:
-        basket = '09'
-    elif vol <= 1601:
-        basket = '10'
-    elif vol <= 1655:
-        basket = '11'
-    elif vol <= 1919:
-        basket = '12'
-    elif vol <= 2045:
-        basket = '13'
-    elif vol <= 2189:
-        basket = '14'
-    elif vol <= 2405:
-        basket = '15'
-    elif vol <= 2621:
-        basket = '16'
-    elif vol <= 2837:
-        basket = '17'
-    elif vol <= 3053:
-        basket = '18'
-    elif vol <= 3269:
-        basket = '19'
-    elif vol <= 3485:
-        basket = '20'
-    else:
-        basket = '21'
-
-    return f"https://basket-{basket}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/images/{size}/{photo_index}.webp"
+    from services.wb_media import wb_photo_url as _wb_photo_url
+    return _wb_photo_url(nm_id, photo_index, size)
 
 
 # Добавляем встроенные функции Python в контекст Jinja2
@@ -1488,20 +1432,41 @@ def products_list():
         active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
         disabled_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=False).count()
 
-        # Получаем уникальные бренды и категории для фильтров
-        brands = db.session.query(Product.brand).filter(
-            Product.seller_id == current_user.seller.id,
-            Product.brand.isnot(None),
-            Product.brand != ''
-        ).distinct().order_by(Product.brand).all()
-        brands = [b[0] for b in brands]
+        # Уникальные бренды/категории/поставщики для фильтров: три DISTINCT-скана
+        # по каталогу на каждый показ страницы — кешируем бандл на 120с
+        # (staleness выпадающих списков безвредна)
+        from services.ttl_cache import cache as _ttl_cache
 
-        categories = db.session.query(Product.object_name).filter(
-            Product.seller_id == current_user.seller.id,
-            Product.object_name.isnot(None),
-            Product.object_name != ''
-        ).distinct().order_by(Product.object_name).all()
-        categories = [c[0] for c in categories]
+        def _load_filter_lists():
+            _brands = [b[0] for b in db.session.query(Product.brand).filter(
+                Product.seller_id == current_user.seller.id,
+                Product.brand.isnot(None),
+                Product.brand != ''
+            ).distinct().order_by(Product.brand).all()]
+            _categories = [c[0] for c in db.session.query(Product.object_name).filter(
+                Product.seller_id == current_user.seller.id,
+                Product.object_name.isnot(None),
+                Product.object_name != ''
+            ).distinct().order_by(Product.object_name).all()]
+            try:
+                _suppliers = [tuple(r) for r in (
+                    db.session.query(Supplier.id, Supplier.name)
+                    .join(ImportedProduct, ImportedProduct.supplier_id == Supplier.id)
+                    .filter(
+                        ImportedProduct.seller_id == current_user.seller.id,
+                        ImportedProduct.product_id.isnot(None),
+                    )
+                    .distinct().order_by(Supplier.name).all()
+                )]
+            except Exception as e:
+                app.logger.debug(f"Supplier filter data failed: {e}")
+                _suppliers = []
+            return {'brands': _brands, 'categories': _categories, 'suppliers': _suppliers}
+
+        _filter_lists = _ttl_cache.get_or_load(
+            f'plist-filters:{current_user.seller.id}', 120, _load_filter_lists)
+        brands = _filter_lists['brands']
+        categories = _filter_lists['categories']
 
         # Получаем nm_id заблокированных и скрытых карточек для отметки в списке
         blocked_nm_ids = set()
@@ -1530,19 +1495,11 @@ def products_list():
         except Exception as e:
             app.logger.debug(f"Enrichment availability check failed: {e}")
 
-        # Поставщики для фильтра + бейджи «поставщик» для карточек текущей страницы
-        suppliers_for_filter = []
+        # Поставщики для фильтра — из кешированного бандла; бейджи «поставщик»
+        # для карточек текущей страницы — по page_ids (не кешируется)
+        suppliers_for_filter = _filter_lists['suppliers']
         product_supplier_map = {}
         try:
-            suppliers_for_filter = (
-                db.session.query(Supplier.id, Supplier.name)
-                .join(ImportedProduct, ImportedProduct.supplier_id == Supplier.id)
-                .filter(
-                    ImportedProduct.seller_id == current_user.seller.id,
-                    ImportedProduct.product_id.isnot(None),
-                )
-                .distinct().order_by(Supplier.name).all()
-            )
             page_ids = [p.id for p in products]
             if page_ids:
                 product_supplier_map = dict(
@@ -1552,7 +1509,7 @@ def products_list():
                     .all()
                 )
         except Exception as e:
-            app.logger.debug(f"Supplier filter data failed: {e}")
+            app.logger.debug(f"Supplier badge data failed: {e}")
 
         return render_template(
             'products.html',

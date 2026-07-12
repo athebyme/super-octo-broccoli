@@ -278,6 +278,14 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
                 logger.warning(f"[SupplierPhotos] notification failed: {e}")
 
         db.session.commit()
+
+        # Чипы поставщиков на странице хаба кешируются — сбрасываем после джобы
+        try:
+            from services.ttl_cache import cache
+            cache.invalidate(f'supdates-chips:{seller_id}')
+        except Exception:
+            pass
+
         logger.info(
             f"[SupplierPhotos] job {job_uid} done: ok={succeeded} fail={failed} skip={skipped}"
         )

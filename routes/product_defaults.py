@@ -39,6 +39,17 @@ def _file_type(filename):
     return 'photo'
 
 
+
+def _invalidate_defaults_cache():
+    """Сброс кеша get_min_photos/get_standard_media после записи ProductDefaults."""
+    try:
+        from models import invalidate_product_defaults_cache
+        if getattr(current_user, 'seller', None):
+            invalidate_product_defaults_cache(current_user.seller.id)
+    except Exception:
+        pass
+
+
 def register_product_defaults_routes(app):
 
     @app.route('/settings/product-defaults')
@@ -116,6 +127,8 @@ def register_product_defaults_routes(app):
                 pass
 
         db.session.commit()
+
+        _invalidate_defaults_cache()
         flash('Глобальные дефолты сохранены', 'success')
         return jsonify({'success': True})
 
@@ -168,6 +181,8 @@ def register_product_defaults_routes(app):
         rule.weight_kg = safe_float(request.form.get('weight_kg')) or None
 
         db.session.commit()
+
+        _invalidate_defaults_cache()
         flash(f'Правило для "{wb_category_name}" сохранено', 'success')
         return jsonify({'success': True, 'rule_id': rule.id})
 
@@ -186,6 +201,7 @@ def register_product_defaults_routes(app):
 
         db.session.delete(rule)
         db.session.commit()
+        _invalidate_defaults_cache()
         flash('Правило удалено', 'success')
         return jsonify({'success': True})
 
@@ -224,6 +240,7 @@ def register_product_defaults_routes(app):
                     clean_chars[key] = val
             rule.set_default_characteristics(clean_chars)
             db.session.commit()
+            _invalidate_defaults_cache()
             return jsonify({'success': True, 'count': len(clean_chars)})
         except Exception as e:
             logger.error(f"Ошибка сохранения характеристик: {e}")
@@ -264,6 +281,7 @@ def register_product_defaults_routes(app):
                     clean_chars[key] = val
             rule.set_default_characteristics(clean_chars)
             db.session.commit()
+            _invalidate_defaults_cache()
             return jsonify({'success': True, 'count': len(clean_chars)})
         except Exception as e:
             logger.error(f"Ошибка сохранения характеристик категории: {e}")
@@ -334,6 +352,7 @@ def register_product_defaults_routes(app):
         })
         rule.global_media = json.dumps(media_list, ensure_ascii=False)
         db.session.commit()
+        _invalidate_defaults_cache()
 
         logger.info(f"Seller {seller.id}: uploaded global media {unique_name} ({_file_type(file.filename)})")
 
@@ -366,6 +385,7 @@ def register_product_defaults_routes(app):
         media_list = [m for m in media_list if m.get('filename') != filename]
         rule.global_media = json.dumps(media_list, ensure_ascii=False)
         db.session.commit()
+        _invalidate_defaults_cache()
 
         # Удаляем файл с диска (защита от path traversal)
         safe_name = secure_filename(filename)
@@ -423,6 +443,7 @@ def register_product_defaults_routes(app):
 
         rule.global_media = json.dumps(media_list, ensure_ascii=False)
         db.session.commit()
+        _invalidate_defaults_cache()
 
         logger.info(f"Seller {seller.id}: updated media meta for {filename}")
         return jsonify({'success': True})

@@ -48,7 +48,12 @@ def register_supplier_updates_routes(app):
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 50, type=int), 200)
 
-        chips = get_supplier_chips(seller.id)
+        # Тяжёлые json_array_length-агрегаты по всем карточкам — кеш 60с;
+        # инвалидируется по завершении фото-джобы (run_photos_job)
+        from services.ttl_cache import cache
+        chips = cache.get_or_load(
+            f'supdates-chips:{seller.id}', 60,
+            lambda: get_supplier_chips(seller.id))
         rows, total = query_update_rows(
             seller.id, supplier_id=supplier_id, only_new=only_new,
             search=search, page=page, per_page=per_page,

@@ -15,6 +15,9 @@ def _app():
 class StandardMediaModelTest(unittest.TestCase):
     def setUp(self):
         self.app = _app(); self.ctx = self.app.app_context(); self.ctx.push(); db.create_all()
+        # get_min_photos/get_standard_media кешируются — изолируем тесты
+        from services.ttl_cache import cache
+        cache.clear()
 
     def tearDown(self):
         db.session.remove(); db.drop_all(); self.ctx.pop()
@@ -36,10 +39,12 @@ class StandardMediaModelTest(unittest.TestCase):
         self.assertNotIn('position', orig)
 
     def test_get_min_photos_default_and_value(self):
-        from models import get_min_photos
+        from models import get_min_photos, invalidate_product_defaults_cache
         self.assertEqual(get_min_photos(1), 4)  # нет правила → дефолт
         db.session.add(ProductDefaults(seller_id=1, rule_type='global', min_photos=6))
         db.session.commit()
+        # значение кешируется — запись обязана инвалидировать (как прод-роуты)
+        invalidate_product_defaults_cache(1)
         self.assertEqual(get_min_photos(1), 6)
 
     def test_get_standard_media_union_global_and_category(self):

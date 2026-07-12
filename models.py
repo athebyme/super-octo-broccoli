@@ -1003,24 +1003,49 @@ def normalize_media_item(item: dict) -> dict:
 
 
 def get_min_photos(seller_id: int) -> int:
-    """Порог «мало фото» из глобального правила продавца; дефолт 4."""
-    rule = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
-    val = rule.min_photos if rule else None
-    return int(val) if val is not None else 4
+    """Порог «мало фото» из глобального правила продавца; дефолт 4.
+
+    Кешируется на 60с (дергается в циклах по карточкам); инвалидация —
+    invalidate_product_defaults_cache() в роутах записи ProductDefaults.
+    """
+    from services.ttl_cache import cache
+
+    def _load():
+        rule = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
+        val = rule.min_photos if rule else None
+        return int(val) if val is not None else 4
+
+    return cache.get_or_load(f'min_photos:{seller_id}', 60, _load)
 
 
 def get_standard_media(seller_id: int, subject_id) -> list:
-    """Нормализованный union стандартных медиа: глобальное правило + правило категории subject_id."""
-    items = []
-    g = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
-    if g:
-        items.extend(g.get_global_media_list() or [])
-    if subject_id is not None:
-        c = ProductDefaults.query.filter_by(
-            seller_id=seller_id, rule_type='category', wb_subject_id=subject_id).first()
-        if c:
-            items.extend(c.get_global_media_list() or [])
-    return [normalize_media_item(m) for m in items]
+    """Нормализованный union стандартных медиа: глобальное правило + правило категории subject_id.
+
+    Кешируется на 60с (дергается в циклах по карточкам); значения — простые
+    dict'ы, безопасны для кеша. Инвалидация — invalidate_product_defaults_cache().
+    """
+    from services.ttl_cache import cache
+
+    def _load():
+        items = []
+        g = ProductDefaults.query.filter_by(seller_id=seller_id, rule_type='global').first()
+        if g:
+            items.extend(g.get_global_media_list() or [])
+        if subject_id is not None:
+            c = ProductDefaults.query.filter_by(
+                seller_id=seller_id, rule_type='category', wb_subject_id=subject_id).first()
+            if c:
+                items.extend(c.get_global_media_list() or [])
+        return [normalize_media_item(m) for m in items]
+
+    return cache.get_or_load(f'std_media:{seller_id}:{subject_id}', 60, _load)
+
+
+def invalidate_product_defaults_cache(seller_id: int):
+    """Сброс кеша стандартных медиа/минимума фото после записи ProductDefaults."""
+    from services.ttl_cache import cache
+    cache.invalidate(f'std_media:{seller_id}:')
+    cache.invalidate(f'min_photos:{seller_id}')
 
 
 class ImportedProduct(db.Model):
