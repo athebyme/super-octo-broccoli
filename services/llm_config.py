@@ -36,6 +36,8 @@ def get_central_llm_config():
             api_key_db_key = 'agent_anthropic_api_key'
         elif provider == 'gemini':
             api_key_db_key = 'agent_gemini_api_key'
+        elif provider == 'deepseek':
+            api_key_db_key = 'agent_deepseek_api_key'
         elif provider == 'cloudru':
             api_key_db_key = 'agent_llm_api_key'
         else:
@@ -56,6 +58,8 @@ def get_central_llm_config():
             model_db_key = 'agent_claude_model'
         elif provider == 'gemini':
             model_db_key = 'agent_gemini_model'
+        elif provider == 'deepseek':
+            model_db_key = 'agent_deepseek_model'
         elif provider == 'cloudru':
             model_db_key = 'agent_llm_model'
         else:

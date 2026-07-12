@@ -322,6 +322,7 @@ class AIProvider(Enum):
     CLOUDRU = "cloudru"  # Cloud.ru Foundation Models
     MIMO = "mimo"  # Xiaomi MiMo (OpenAI-совместимый API)
     OPENROUTER = "openrouter"  # OpenRouter — единый доступ к 300+ моделям
+    DEEPSEEK = "deepseek"  # DeepSeek Platform (OpenAI-совместимый API)
     CUSTOM = "custom"  # Любой OpenAI-совместимый API
 
 
@@ -428,6 +429,20 @@ OPENROUTER_MODELS = {
     "qwen/qwen3-235b-a22b": {
         "name": "Qwen3 235B",
         "description": "Мощная модель Alibaba",
+        "recommended": False
+    },
+}
+
+# Модели DeepSeek Platform (api.deepseek.com, нативный API)
+DEEPSEEK_MODELS = {
+    "deepseek-v4-pro": {
+        "name": "DeepSeek V4 Pro",
+        "description": "Флагман DeepSeek — глубокие рассуждения, максимальное качество",
+        "recommended": True
+    },
+    "deepseek-v4-flash": {
+        "name": "DeepSeek V4 Flash",
+        "description": "Быстрая и дешёвая, отлично для массового парсинга",
         "recommended": False
     },
 }
@@ -1543,12 +1558,16 @@ class AIConfig:
             'cloudru': AIProvider.CLOUDRU,
             'openai': AIProvider.OPENAI,
             'mimo': AIProvider.MIMO,
+            'deepseek': AIProvider.DEEPSEEK,
         }
         provider = _provider_map.get(central['provider'], AIProvider.CUSTOM)
 
         if provider == AIProvider.CLOUDRU:
             base_url = central['base_url'] or 'https://foundation-models.api.cloud.ru/v1'
             default_model = 'openai/gpt-oss-120b'
+        elif provider == AIProvider.DEEPSEEK:
+            base_url = central['base_url'] or 'https://api.deepseek.com/v1'
+            default_model = 'deepseek-v4-pro'
         elif provider == AIProvider.OPENROUTER:
             base_url = central['base_url'] or 'https://openrouter.ai/api/v1'
             default_model = 'google/gemini-2.5-flash-preview'
@@ -1600,10 +1619,17 @@ class AIConfig:
             central = None
 
         if central and central.get('api_key'):
-            # Центральный API-ключ имеет приоритет над provider_override, но model_override всё ещё уважается
+            # Центральный API-ключ имеет приоритет над provider_override, но model_override всё ещё уважается.
+            # Если продавец в профиле выбрал модель ТОГО ЖЕ провайдера, что и центральный, —
+            # уважаем его выбор модели (ключ остаётся центральным).
             c_provider, c_base, c_default_model = cls._central_provider_base_model(central)
 
-            c_model = model_override or central['model'] or c_default_model
+            c_model = model_override or None
+            if not c_model and ai_settings and \
+                    (getattr(ai_settings, 'ai_provider', '') or '') == central['provider']:
+                c_model = getattr(ai_settings, 'ai_model', '') or None
+            if not c_model:
+                c_model = central['model'] or c_default_model
 
             # temperature/max_tokens/timeout берём из per-seller настроек или дефолты
             _temp = temperature if temperature is not None else (
@@ -1655,6 +1681,9 @@ class AIConfig:
         elif provider == AIProvider.OPENROUTER:
             api_base = 'https://openrouter.ai/api/v1'
             default_model = 'google/gemini-2.5-flash-preview'
+        elif provider == AIProvider.DEEPSEEK:
+            api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.deepseek.com/v1'
+            default_model = 'deepseek-v4-pro'
         else:  # CUSTOM
             api_base = getattr(ai_settings, 'ai_api_base_url', '') or 'https://api.openai.com/v1'
             default_model = 'gpt-4o-mini'
@@ -1691,7 +1720,12 @@ class AIConfig:
         if central and central.get('api_key'):
             c_provider, c_base, c_default_model = cls._central_provider_base_model(central)
 
-            c_model = central['model'] or c_default_model
+            # Модель продавца уважаем только при совпадении провайдера с центральным
+            c_model = None
+            if (getattr(settings, 'ai_provider', '') or '') == central['provider']:
+                c_model = getattr(settings, 'ai_model', '') or None
+            if not c_model:
+                c_model = central['model'] or c_default_model
 
             # Возвращаем конфиг из центральных настроек
             # temperature/max_tokens/timeout берём из per-seller (или дефолты)
@@ -1742,6 +1776,9 @@ class AIConfig:
         elif provider == AIProvider.OPENROUTER:
             api_base = "https://openrouter.ai/api/v1"
             default_model = "google/gemini-2.5-flash-preview"
+        elif provider == AIProvider.DEEPSEEK:
+            api_base = settings.ai_api_base_url or "https://api.deepseek.com/v1"
+            default_model = "deepseek-v4-pro"
         elif provider == AIProvider.CUSTOM:
             api_base = settings.ai_api_base_url or "https://api.openai.com/v1"
             default_model = "gpt-4o-mini"
@@ -4375,9 +4412,11 @@ def get_available_models(provider: str) -> Dict[str, Dict]:
         return MIMO_MODELS
     elif provider == 'openrouter':
         return OPENROUTER_MODELS
+    elif provider == 'deepseek':
+        return DEEPSEEK_MODELS
     else:
         # Для custom возвращаем объединенный список
-        return {**CLOUDRU_MODELS, **OPENAI_MODELS, **MIMO_MODELS, **OPENROUTER_MODELS}
+        return {**CLOUDRU_MODELS, **OPENAI_MODELS, **MIMO_MODELS, **OPENROUTER_MODELS, **DEEPSEEK_MODELS}
 
 
 def get_default_instructions() -> Dict[str, Dict]:

@@ -535,6 +535,26 @@ class OpenRouterLLM(OpenAICompatLLM):
         logger.info(f"OpenRouter LLM initialized: {self.model}")
 
 
+class DeepSeekLLM(OpenAICompatLLM):
+    """
+    DeepSeek Platform — нативный API (deepseek-v4-pro / deepseek-v4-flash).
+
+    OpenAI-совместимый формат. https://api-docs.deepseek.com
+    """
+
+    def __init__(self, config: AgentConfig = None):
+        cfg = config or AgentConfig
+        if not cfg.DEEPSEEK_API_KEY:
+            raise LLMProviderError("DEEPSEEK_API_KEY не задан")
+        super().__init__(
+            config=cfg,
+            api_key=cfg.DEEPSEEK_API_KEY,
+            base_url=cfg.DEEPSEEK_BASE_URL,
+            model=cfg.DEEPSEEK_MODEL,
+        )
+        logger.info(f"DeepSeek LLM initialized: {self.model}")
+
+
 # ── Фабрика ───────────────────────────────────────────────────────
 
 def _create_by_provider(provider: str, config: AgentConfig,
@@ -562,6 +582,11 @@ def _create_by_provider(provider: str, config: AgentConfig,
         if model_override:
             llm.model = model_override
         return llm
+    elif provider == 'deepseek':
+        llm = DeepSeekLLM(config)
+        if model_override:
+            llm.model = model_override
+        return llm
     elif provider == 'openai_compat':
         llm = OpenAICompatLLM(config)
         if model_override:
@@ -570,7 +595,7 @@ def _create_by_provider(provider: str, config: AgentConfig,
     else:
         raise ValueError(
             f"Unknown LLM provider: {provider}. "
-            f"Use 'claude', 'gemini', 'cloudru', 'openrouter', or 'openai_compat'."
+            f"Use 'claude', 'gemini', 'cloudru', 'openrouter', 'deepseek', or 'openai_compat'."
         )
 
 

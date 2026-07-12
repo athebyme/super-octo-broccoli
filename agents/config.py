@@ -116,6 +116,11 @@ _FIELD_DEFS = {
     'OPENROUTER_API_KEY':  ('OPENROUTER_API_KEY', '', str),
     'OPENROUTER_MODEL':    ('OPENROUTER_MODEL', 'deepseek/deepseek-v3.2', str),
 
+    # DeepSeek Platform — нативный API (api.deepseek.com)
+    'DEEPSEEK_API_KEY':  ('DEEPSEEK_API_KEY', '', str),
+    'DEEPSEEK_BASE_URL': ('DEEPSEEK_BASE_URL', 'https://api.deepseek.com/v1', str),
+    'DEEPSEEK_MODEL':    ('DEEPSEEK_MODEL', 'deepseek-v4-pro', str),
+
     # Универсальный OpenAI-совместимый провайдер (vLLM, Ollama, LM Studio, etc.)
     'OPENAI_COMPAT_API_KEY':  ('OPENAI_COMPAT_API_KEY', '', str),
     'OPENAI_COMPAT_BASE_URL': ('OPENAI_COMPAT_BASE_URL', 'http://localhost:8000/v1', str),

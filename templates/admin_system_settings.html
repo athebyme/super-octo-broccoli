@@ -97,7 +97,7 @@
                                     class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
                                 <option value="">По умолчанию (env)</option>
                                 {% set current_provider = llm_config.get('agent_llm_provider', '') %}
-                                {% for val, label in [('cloudru', 'Cloud.ru (DeepSeek/Qwen)'), ('openrouter', 'OpenRouter'), ('claude', 'Anthropic Claude'), ('gemini', 'Google Gemini'), ('openai_compat', 'OpenAI-совместимый')] %}
+                                {% for val, label in [('deepseek', 'DeepSeek (нативный API)'), ('cloudru', 'Cloud.ru (DeepSeek/Qwen)'), ('openrouter', 'OpenRouter'), ('claude', 'Anthropic Claude'), ('gemini', 'Google Gemini'), ('openai_compat', 'OpenAI-совместимый')] %}
                                 <option value="{{ val }}" {% if current_provider == val %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
@@ -122,7 +122,7 @@
                                     class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
                                 <option value="">Отключён</option>
                                 {% set current_fallback = llm_config.get('agent_fallback_provider', '') %}
-                                {% for val, label in [('claude', 'Anthropic Claude'), ('openrouter', 'OpenRouter'), ('gemini', 'Google Gemini'), ('cloudru', 'Cloud.ru')] %}
+                                {% for val, label in [('claude', 'Anthropic Claude'), ('openrouter', 'OpenRouter'), ('gemini', 'Google Gemini'), ('deepseek', 'DeepSeek'), ('cloudru', 'Cloud.ru')] %}
                                 <option value="{{ val }}" {% if current_fallback == val %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
@@ -147,7 +147,7 @@
                                     class="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
                                 <option value="">Отключён (статические названия)</option>
                                 {% set current_namer = llm_config.get('agent_step_namer_provider', '') %}
-                                {% for val, label in [('gemini', 'Google Gemini (рекомендуется)'), ('openrouter', 'OpenRouter'), ('cloudru', 'Cloud.ru'), ('claude', 'Anthropic Claude')] %}
+                                {% for val, label in [('gemini', 'Google Gemini (рекомендуется)'), ('openrouter', 'OpenRouter'), ('deepseek', 'DeepSeek'), ('cloudru', 'Cloud.ru'), ('claude', 'Anthropic Claude')] %}
                                 <option value="{{ val }}" {% if current_namer == val %}selected{% endif %}>{{ label }}</option>
                                 {% endfor %}
                             </select>
@@ -167,6 +167,7 @@
                     <h3 class="text-sm font-semibold text-gray-800 mb-3">API-ключи провайдеров</h3>
                     <div class="space-y-4">
                         {% for key_name, key_label, key_placeholder in [
+                            ('agent_deepseek_api_key', 'DeepSeek', 'sk-...'),
                             ('agent_openrouter_api_key', 'OpenRouter', 'sk-or-...'),
                             ('agent_anthropic_api_key', 'Anthropic', 'sk-ant-...'),
                             ('agent_gemini_api_key', 'Google Gemini', 'AIza...'),

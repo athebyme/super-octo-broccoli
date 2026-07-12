@@ -65,6 +65,8 @@ _LLM_CONFIG_KEYS = {
     'step_namer_model': 'STEP_NAMER_MODEL',
     'openrouter_api_key': 'OPENROUTER_API_KEY',
     'openrouter_model': 'OPENROUTER_MODEL',
+    'deepseek_api_key': 'DEEPSEEK_API_KEY',
+    'deepseek_model': 'DEEPSEEK_MODEL',
     'anthropic_api_key': 'ANTHROPIC_API_KEY',
     'claude_model': 'CLAUDE_MODEL',
     'gemini_api_key': 'GEMINI_API_KEY',

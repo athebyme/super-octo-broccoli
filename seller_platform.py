@@ -6611,6 +6611,7 @@ def api_profile_ai_test():
         default_urls = {
             'cloudru': 'https://foundation-models.api.cloud.ru/v1',
             'mimo': 'https://api.xiaomimimo.com/v1',
+            'deepseek': 'https://api.deepseek.com/v1',
         }
         config = AIConfig(
             provider=AIProvider(provider),
