@@ -88,3 +88,28 @@ class TestExtractPhotoUrls(unittest.TestCase):
         product = self.extract(row, mapping)
         self.assertEqual(product['photo_urls'],
                          [{'original': 'http://a/1.jpg'}, {'original': 'http://a/2.jpg'}])
+
+    def test_dedup_across_columns_preserves_order(self):
+        # sex-opt.ru: image/image1/image2 дублируют первые URL колонки images
+        row = ['EXT-1', 'Product Title',
+               'http://a/1.jpg', 'http://a/2.jpg',
+               'http://a/1.jpg,http://a/2.jpg,http://a/3.jpg,http://a/4.jpg']
+        mapping = {
+            'external_id': {'type': 'string', 'column': 0},
+            'title': {'type': 'string', 'column': 1},
+            'photo_urls': {'type': 'photo_urls', 'columns': [2, 3, 4], 'separator': ','},
+        }
+        product = self.extract(row, mapping)
+        self.assertEqual(product['photo_urls'],
+                         [{'original': 'http://a/1.jpg'}, {'original': 'http://a/2.jpg'},
+                          {'original': 'http://a/3.jpg'}, {'original': 'http://a/4.jpg'}])
+
+
+class TestSexoptMappingConfig(unittest.TestCase):
+    """Маппинг Андрея должен читать колонку images (все фото через запятую)."""
+
+    def test_photo_urls_includes_images_column_with_comma_separator(self):
+        from migrations.migrate_add_sexopt_supplier import SEXOPT_CSV_COLUMN_MAPPING
+        cfg = SEXOPT_CSV_COLUMN_MAPPING['photo_urls']
+        self.assertIn('images', cfg['columns'])
+        self.assertEqual(cfg.get('separator'), ',')

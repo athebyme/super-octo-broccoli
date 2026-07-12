@@ -55,10 +55,13 @@ SEXOPT_CSV_COLUMN_MAPPING = {
         "type": "stock_sum"
     },
 
-    # Фото (прямые URL — все колонки image, image1..imageN автоматически)
+    # Фото (прямые URL). Колонки image/image1/image2 содержат максимум 3 фото,
+    # ПОЛНЫЙ список лежит в колонке images через запятую (до 28 URL) —
+    # дубликаты между колонками парсер отбрасывает.
     "photo_urls": {
-        "columns": ["image", "image1", "image2"],
+        "columns": ["image", "image1", "image2", "images"],
         "columns_prefix": "image",
+        "separator": ",",
         "type": "photo_urls"
     },
 

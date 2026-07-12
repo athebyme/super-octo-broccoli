@@ -442,9 +442,12 @@ class SupplierCSVParser:
             if field_type == 'photo_urls':
                 # Сборка фото из нескольких колонок (прямые URL).
                 # Если в колонке несколько URL через разделитель — разбиваем.
+                # Колонки могут дублировать друг друга (sex-opt: image/image1/image2
+                # повторяют первые URL колонки images) — дедуп с сохранением порядка.
                 columns = config.get('columns', [])
                 sep = config.get('separator')
                 photos = []
+                seen_urls = set()
                 for col_idx in columns:
                     if isinstance(col_idx, int) and 0 <= col_idx < len(row):
                         cell = row[col_idx].strip()
@@ -453,7 +456,8 @@ class SupplierCSVParser:
                         parts = cell.split(sep) if sep else [cell]
                         for part in parts:
                             url = part.strip()
-                            if url and url.startswith('http'):
+                            if url and url.startswith('http') and url not in seen_urls:
+                                seen_urls.add(url)
                                 photos.append({'original': url})
                 product['photo_urls'] = photos
                 continue
