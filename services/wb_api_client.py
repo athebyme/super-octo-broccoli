@@ -50,8 +50,14 @@ class WBAuthException(WBAPIException):
 
 
 class WBRateLimitException(WBAPIException):
-    """Превышен лимит запросов"""
-    pass
+    """Превышен лимит запросов.
+
+    retry_after — секунды до повтора из заголовка X-Ratelimit-Retry (или None).
+    """
+
+    def __init__(self, message: str, retry_after: int = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class RateLimiter:
@@ -111,6 +117,14 @@ class WildberriesAPIClient:
     CONTENT_API_SANDBOX = "https://content-api-sandbox.wildberries.ru"
     STATISTICS_API_SANDBOX = "https://statistics-api-sandbox.wildberries.ru"
 
+    # Отдельные лимиты WB для конкретных методов (запросов/мин на аккаунт).
+    # Остальные методы Контента живут в общем пуле 100/мин (rate_limit клиента).
+    ENDPOINT_RATE_LIMITS = {
+        '/content/v2/cards/update': 10,
+        '/content/v2/cards/upload': 10,
+        '/content/v2/cards/upload/add': 10,
+    }
+
     def __init__(
         self,
         api_key: str,
@@ -134,8 +148,9 @@ class WildberriesAPIClient:
         self.timeout = timeout
         self.db_logger_callback = db_logger_callback
 
-        # Rate limiter
+        # Rate limiter (общий пул) + отдельные вёдра для методов с собственным лимитом
         self.rate_limiter = RateLimiter(max_requests=rate_limit, time_window=60)
+        self._endpoint_limiters = {}
 
         # Настройка сессии с connection pooling
         self.session = self._create_session(max_retries)
@@ -171,6 +186,17 @@ class WildberriesAPIClient:
         })
 
         return session
+
+    def _limiter_for_endpoint(self, endpoint: str):
+        """Отдельный RateLimiter для методов с собственным лимитом WB (или None)."""
+        limit = self.ENDPOINT_RATE_LIMITS.get(endpoint)
+        if limit is None:
+            return None
+        limiter = self._endpoint_limiters.get(endpoint)
+        if limiter is None:
+            limiter = RateLimiter(max_requests=limit, time_window=60)
+            self._endpoint_limiters[endpoint] = limiter
+        return limiter
 
     def _get_base_url(self, api_type: str) -> str:
         """Получить базовый URL для типа API"""
@@ -209,8 +235,11 @@ class WildberriesAPIClient:
             WBRateLimitException: Превышен лимит запросов
             WBAPIException: Общая ошибка API
         """
-        # Rate limiting
+        # Rate limiting: общий пул + персональный лимит метода (если задан)
         self.rate_limiter.wait_if_needed()
+        endpoint_limiter = self._limiter_for_endpoint(endpoint)
+        if endpoint_limiter is not None:
+            endpoint_limiter.wait_if_needed()
 
         # Формирование URL
         base_url = self._get_base_url(api_type)
@@ -269,7 +298,14 @@ class WildberriesAPIClient:
             if response.status_code == 401:
                 raise WBAuthException("Ошибка авторизации. Проверьте API ключ.")
             elif response.status_code == 429:
-                raise WBRateLimitException("Превышен лимит запросов к API.")
+                retry_after = None
+                try:
+                    retry_after = int(response.headers.get('X-Ratelimit-Retry', ''))
+                except (TypeError, ValueError):
+                    pass
+                suffix = f" Повтор через {retry_after}с." if retry_after else ""
+                raise WBRateLimitException(
+                    f"Превышен лимит запросов к API.{suffix}", retry_after=retry_after)
             elif response.status_code >= 400:
                 error_msg = f"API Error {response.status_code}"
                 try:
