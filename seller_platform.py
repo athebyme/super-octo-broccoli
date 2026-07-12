@@ -3158,25 +3158,44 @@ def products_bulk_edit():
                                              products=[p.to_dict() for p in products],
                                              edit_operations=edit_operations)
 
-                    for product in products:
-                        try:
-                            # Снимок ДО
-                            snapshot_before = _create_product_snapshot(product)
+                    # Батч: один cards/update на все карточки вместо запроса
+                    # на карточку (лимит WB — 10 запросов/мин, до 3000 в запросе)
+                    nm_map = {int(p.nm_id): p for p in products if p.nm_id}
+                    for p in products:
+                        if not p.nm_id:
+                            error_count += 1
+                            errors.append(f"Товар {p.vendor_code}: нет nm_id (не привязан к WB)")
 
-                            client.update_card(
-                                product.nm_id,
-                                {'brand': new_brand},
+                    brand_outcome = {'sent': [], 'missing': [], 'invalid': {}}
+                    brand_batch_error = None
+                    if nm_map:
+                        try:
+                            brand_outcome = client.update_cards_merged(
+                                {nm: {'brand': new_brand} for nm in nm_map},
                                 log_to_db=True,
-                                seller_id=current_user.seller.id
+                                seller_id=current_user.seller.id,
                             )
+                        except Exception as e:
+                            brand_batch_error = str(e)
+                            app.logger.error(f"Error in bulk brand batch: {e}")
+
+                    _sent = {int(x) for x in brand_outcome.get('sent') or []}
+                    _invalid = {int(k): v for k, v in (brand_outcome.get('invalid') or {}).items()}
+                    _missing = {int(x) for x in brand_outcome.get('missing') or []}
+                    _failed = {int(k): v for k, v in (brand_outcome.get('failed') or {}).items()}
+
+                    # Итерируем по товарам (не по nm_map): дубликаты nm_id
+                    # должны получить каждый свой результат и историю
+                    for product in products:
+                        if not product.nm_id:
+                            continue  # уже учтён как ошибка выше
+                        nm = int(product.nm_id)
+                        if nm in _sent:
+                            snapshot_before = _create_product_snapshot(product)
                             product.brand = new_brand
                             product.last_sync = datetime.utcnow()
-
-                            # Снимок ПОСЛЕ
                             snapshot_after = _create_product_snapshot(product)
-
-                            # Создаем запись истории
-                            card_history = CardEditHistory(
+                            db.session.add(CardEditHistory(
                                 product_id=product.id,
                                 seller_id=current_user.seller.id,
                                 bulk_edit_id=bulk_operation.id,
@@ -3186,13 +3205,14 @@ def products_bulk_edit():
                                 snapshot_after=snapshot_after,
                                 wb_synced=True,
                                 wb_sync_status='success'
-                            )
-                            db.session.add(card_history)
-
+                            ))
                             success_count += 1
-                        except Exception as e:
+                        else:
+                            reason = _invalid.get(nm) or _failed.get(nm) or (
+                                'карточка не найдена в WB' if nm in _missing
+                                else (brand_batch_error or 'не отправлена'))
                             error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
+                            error_msg = f"Товар {product.vendor_code}: {reason}"
                             errors.append(error_msg)
                             app.logger.error(f"Error in bulk operation: {error_msg}")
 
@@ -3556,63 +3576,77 @@ def products_bulk_edit():
                     formatted_value = str(new_value).strip()
                     app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
 
+                    # Батч: собираем новые списки характеристик по карточкам и
+                    # шлём одним cards/update (лимит WB — 10 запросов/мин)
+                    char_nm_updates = {}
+                    char_pending = []  # (nm_id, product, new_characteristics) — по товару,
+                                       # чтобы дубликаты nm_id получили каждый свой исход
                     for product in products_to_update:
                         try:
-                            snapshot_before = _create_product_snapshot(product)
-
-                            # Получаем текущие характеристики
                             current_characteristics = product.get_characteristics()
-
-                            # Проверяем, нет ли уже такой характеристики
                             char_exists = any(str(char.get('id')) == characteristic_id for char in current_characteristics)
-
-                            if not char_exists:
-                                # Добавляем новую характеристику
-                                current_characteristics.append({
-                                    'id': int(characteristic_id),
-                                    'value': formatted_value
-                                })
-
-                                # Логируем характеристики перед отправкой
-                                app.logger.info(f"Adding to nmID={product.nm_id}, total {len(current_characteristics)} characteristics")
-                                target_char = next((c for c in current_characteristics if str(c.get('id')) == characteristic_id), None)
-                                if target_char:
-                                    app.logger.info(f"Added characteristic: id={target_char['id']}, value={target_char['value']} (type: {type(target_char['value']).__name__})")
-
-                                # Обновляем через API
-                                client.update_card(
-                                    product.nm_id,
-                                    {'characteristics': current_characteristics},
-                                    log_to_db=True,
-                                    seller_id=current_user.seller.id
-                                )
-                                product.set_characteristics(current_characteristics)
-                                product.last_sync = datetime.utcnow()
-
-                                snapshot_after = _create_product_snapshot(product)
-
-                                card_history = CardEditHistory(
-                                    product_id=product.id,
-                                    seller_id=current_user.seller.id,
-                                    bulk_edit_id=bulk_operation.id,
-                                    action='update',
-                                    changed_fields=['characteristics'],
-                                    snapshot_before=snapshot_before,
-                                    snapshot_after=snapshot_after,
-                                    wb_synced=True,
-                                    wb_sync_status='success'
-                                )
-                                db.session.add(card_history)
-                                success_count += 1
-                            else:
+                            if char_exists:
                                 # Характеристика уже существует, пропускаем
                                 app.logger.info(f"Product {product.vendor_code} already has characteristic {characteristic_id}, skipping")
                                 success_count += 1  # Считаем успешным (характеристика уже есть)
-
+                                continue
+                            if not product.nm_id:
+                                error_count += 1
+                                errors.append(f"Товар {product.vendor_code}: нет nm_id (не привязан к WB)")
+                                continue
+                            current_characteristics.append({
+                                'id': int(characteristic_id),
+                                'value': formatted_value
+                            })
+                            char_nm_updates[int(product.nm_id)] = {'characteristics': current_characteristics}
+                            char_pending.append((int(product.nm_id), product, current_characteristics))
                         except Exception as e:
                             error_count += 1
-                            error_msg = f"Товар {product.vendor_code}: {str(e)}"
-                            errors.append(error_msg)
+                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+
+                    char_outcome = {'sent': [], 'missing': [], 'invalid': {}}
+                    char_batch_error = None
+                    if char_nm_updates:
+                        app.logger.info(f"Adding characteristic {characteristic_id} to {len(char_nm_updates)} cards in one batch")
+                        try:
+                            char_outcome = client.update_cards_merged(
+                                char_nm_updates,
+                                log_to_db=True,
+                                seller_id=current_user.seller.id,
+                            )
+                        except Exception as e:
+                            char_batch_error = str(e)
+                            app.logger.error(f"Error in bulk characteristic batch: {e}")
+
+                    _sent = {int(x) for x in char_outcome.get('sent') or []}
+                    _invalid = {int(k): v for k, v in (char_outcome.get('invalid') or {}).items()}
+                    _missing = {int(x) for x in char_outcome.get('missing') or []}
+                    _failed = {int(k): v for k, v in (char_outcome.get('failed') or {}).items()}
+
+                    for nm, product, new_characteristics in char_pending:
+                        if nm in _sent:
+                            snapshot_before = _create_product_snapshot(product)
+                            product.set_characteristics(new_characteristics)
+                            product.last_sync = datetime.utcnow()
+                            snapshot_after = _create_product_snapshot(product)
+                            db.session.add(CardEditHistory(
+                                product_id=product.id,
+                                seller_id=current_user.seller.id,
+                                bulk_edit_id=bulk_operation.id,
+                                action='update',
+                                changed_fields=['characteristics'],
+                                snapshot_before=snapshot_before,
+                                snapshot_after=snapshot_after,
+                                wb_synced=True,
+                                wb_sync_status='success'
+                            ))
+                            success_count += 1
+                        else:
+                            reason = _invalid.get(nm) or _failed.get(nm) or (
+                                'карточка не найдена в WB' if nm in _missing
+                                else (char_batch_error or 'не отправлена'))
+                            error_count += 1
+                            errors.append(f"Товар {product.vendor_code}: {reason}")
 
                     db.session.commit()
 

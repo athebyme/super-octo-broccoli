@@ -14,6 +14,7 @@ from services.card_quality_scorer import card_quality_detail, compute_quality_su
 from services import agent_service
 from services.wb_api_client import WildberriesAPIClient
 from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
+                                     apply_card_updates_bulk,
                                      collect_weak_dimensions, build_proposal_from_tasks)
 from services.supplier_enrichment import get_enrichment_service
 from services.standard_photos import compose_card_photo_urls
@@ -454,6 +455,9 @@ def register_card_quality_routes(app):
         wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
         es = get_enrichment_service()
         success, errors = 0, 0
+        # Собираем обновления по карточкам, применяем ОДНИМ батчем cards/update
+        # (лимит WB — 10 запросов/мин, до 3000 карточек в запросе)
+        items = []
         for pid, fields in selections.items():
             product = Product.query.filter_by(id=pid, seller_id=current_user.seller.id).first()
             if not product:
@@ -473,16 +477,20 @@ def register_card_quality_routes(app):
                     updates['dimensions'] = preview['dimensions']['supplier']
             if not updates:
                 continue
+            items.append((product, updates))
+
+        if items:
             try:
-                res = apply_card_updates(product, updates, current_user.seller, wb_client,
-                                         source='card-quality-bulk')
-                if res.get('success'):
-                    success += 1
-                else:
-                    errors += 1
+                results = apply_card_updates_bulk(items, current_user.seller, wb_client,
+                                                  source='card-quality-bulk')
+                for res in results.values():
+                    if res.get('success'):
+                        success += 1
+                    else:
+                        errors += 1
             except Exception as e:
-                logger.exception('bulk improve pid=%s: %s', pid, e)
-                errors += 1
+                logger.exception('bulk improve batch: %s', e)
+                errors += len(items)
 
         bulk.success_count = success
         bulk.error_count = errors

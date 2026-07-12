@@ -926,6 +926,165 @@ class WildberriesAPIClient:
             logger.error(f"❌ Unexpected error updating card nmID={nm_id}: {str(e)}")
             raise
 
+    def fetch_cards_by_nm_ids(
+        self,
+        nm_ids: List[int],
+        log_to_db: bool = False,
+        seller_id: int = None,
+        sweep_threshold: int = 100
+    ) -> Dict[int, Dict[str, Any]]:
+        """
+        Получить полные карточки по списку nmID: {nm_id: card}.
+
+        Адаптивно: до sweep_threshold — точечные запросы (1 запрос на карточку);
+        больше — курсорный обход всего каталога (100 карточек за запрос),
+        что при сотнях целей дешевле по бюджету Контент-API.
+        """
+        targets = {int(x) for x in nm_ids if x}
+        found: Dict[int, Dict[str, Any]] = {}
+        if not targets:
+            return found
+
+        if len(targets) <= sweep_threshold:
+            for nm in targets:
+                card = self.get_card_by_nm_id(nm, log_to_db=log_to_db, seller_id=seller_id)
+                if card:
+                    found[nm] = card
+            return found
+
+        cursor_updated_at = None
+        cursor_nm_id = None
+        prev_cursor = None
+        while True:
+            resp = self.get_cards_list(
+                limit=100,
+                cursor_updated_at=cursor_updated_at,
+                cursor_nm_id=cursor_nm_id,
+                log_to_db=log_to_db,
+                seller_id=seller_id,
+            )
+            cards = resp.get('cards', []) or []
+            for card in cards:
+                nm = card.get('nmID')
+                if nm in targets and nm not in found:
+                    found[nm] = card
+            cursor = resp.get('cursor', {}) or {}
+            if len(found) == len(targets) or not cards or cursor.get('total', 0) < 100:
+                break
+            cursor_updated_at = cursor.get('updatedAt')
+            cursor_nm_id = cursor.get('nmID')
+            if not cursor_updated_at or not cursor_nm_id:
+                break
+            # Защита от зацикливания: WB вернул тот же курсор, что и раньше
+            if (cursor_updated_at, cursor_nm_id) == prev_cursor:
+                logger.warning("fetch_cards_by_nm_ids: cursor stalled, aborting sweep")
+                break
+            prev_cursor = (cursor_updated_at, cursor_nm_id)
+        return found
+
+    def update_cards_merged(
+        self,
+        nm_updates: Dict[int, Dict[str, Any]],
+        log_to_db: bool = False,
+        seller_id: int = None,
+        chunk_size: int = 1000
+    ) -> Dict[str, Any]:
+        """
+        Пакетное редактирование: слить updates с полными карточками и отправить
+        чанками через cards/update (до 3000 карточек и 10 МБ на запрос у WB;
+        держим ≤chunk_size и ≤8 МБ). Экономит бюджет 8 запросов/мин: сотни
+        карточек уходят за 1-2 запроса вместо запроса на карточку.
+
+        Args:
+            nm_updates: {nm_id: {обновляемые поля как в update_card}}
+
+        Returns:
+            {'sent': [nm...], 'missing': [nm без карточки в WB],
+             'invalid': {nm: 'ошибка валидации'},
+             'failed': {nm: 'ошибка отправки'}, 'requests': N}
+
+        Ошибка чанка НЕ роняет вызов и НЕ теряет прогресс: чанк бисектится
+        до одиночных карточек, виновники попадают в 'failed', остальные
+        отправляются (одна плохая карточка из 1000 ≈ +2*log2(1000) запросов).
+        """
+        import json as _json
+        from services.wb_validators import (
+            prepare_card_for_update, validate_card_update,
+            clean_characteristics_for_update,
+        )
+
+        result = {'sent': [], 'missing': [], 'invalid': {}, 'failed': {}, 'requests': 0}
+        nm_updates = {int(k): v for k, v in (nm_updates or {}).items() if v}
+        if not nm_updates:
+            return result
+
+        cards_map = self.fetch_cards_by_nm_ids(
+            list(nm_updates), log_to_db=log_to_db, seller_id=seller_id)
+
+        prepared: List[Dict[str, Any]] = []
+        for nm, updates in nm_updates.items():
+            full_card = cards_map.get(nm)
+            if not full_card:
+                result['missing'].append(nm)
+                continue
+            upd = dict(updates)
+            if upd.get('characteristics'):
+                upd['characteristics'] = clean_characteristics_for_update(upd['characteristics'])
+            merged = prepare_card_for_update(full_card, upd)
+            is_valid, errors = validate_card_update(merged)
+            if not is_valid:
+                result['invalid'][nm] = '; '.join(errors)
+                logger.warning(f"Card nmID={nm} failed validation: {result['invalid'][nm]}")
+                continue
+            prepared.append(merged)
+
+        def _send_chunk(chunk: List[Dict[str, Any]]):
+            """Отправка чанка; при ошибке — бисекция, чтобы изолировать виновников."""
+            if not chunk:
+                return
+            try:
+                resp = self.update_cards_batch(
+                    chunk, log_to_db=log_to_db, seller_id=seller_id, validate=False)
+                # WB может ответить HTTP 200 с error:true в теле — это отказ
+                if isinstance(resp, dict) and resp.get('error'):
+                    raise WBAPIException(
+                        str(resp.get('errorText') or 'WB вернул ошибку в теле ответа'))
+                result['requests'] += 1
+                result['sent'].extend(c['nmID'] for c in chunk)
+            except Exception as e:
+                result['requests'] += 1
+                if len(chunk) == 1:
+                    result['failed'][chunk[0]['nmID']] = str(e)
+                    logger.error(f"Card nmID={chunk[0]['nmID']} rejected by WB: {e}")
+                    return
+                mid = len(chunk) // 2
+                logger.warning(
+                    f"Chunk of {len(chunk)} cards rejected ({e}); bisecting to isolate")
+                _send_chunk(chunk[:mid])
+                _send_chunk(chunk[mid:])
+
+        # Чанки по количеству и по объёму (~8 МБ, лимит WB — 10 МБ).
+        # Размер считаем в wire-формате: requests сериализует JSON с
+        # ensure_ascii=True, где кириллица занимает ~6 байт (\uXXXX).
+        max_bytes = 8 * 1024 * 1024
+        batch: List[Dict[str, Any]] = []
+        batch_bytes = 0
+        for card in prepared:
+            size = len(_json.dumps(card))
+            if batch and (len(batch) >= chunk_size or batch_bytes + size > max_bytes):
+                _send_chunk(batch)
+                batch, batch_bytes = [], 0
+            batch.append(card)
+            batch_bytes += size
+        _send_chunk(batch)
+
+        logger.info(
+            f"📦 Merged batch update: sent={len(result['sent'])} "
+            f"missing={len(result['missing'])} invalid={len(result['invalid'])} "
+            f"failed={len(result['failed'])} requests={result['requests']}"
+        )
+        return result
+
     def update_card_characteristics(
         self,
         nm_id: int,
@@ -3146,7 +3305,9 @@ class CachedWBAPIClient(WildberriesAPIClient):
         filter_nm_id: Optional[int] = None,
         cursor_updated_at: Optional[str] = None,
         cursor_nm_id: Optional[int] = None,
-        use_cache: bool = True
+        use_cache: bool = True,
+        log_to_db: bool = False,
+        seller_id: int = None
     ) -> Dict[str, Any]:
         """Получить карточки с кэшированием (поддержка cursor-based пагинации)"""
         if not use_cache:
@@ -3155,7 +3316,9 @@ class CachedWBAPIClient(WildberriesAPIClient):
                 offset=offset,
                 filter_nm_id=filter_nm_id,
                 cursor_updated_at=cursor_updated_at,
-                cursor_nm_id=cursor_nm_id
+                cursor_nm_id=cursor_nm_id,
+                log_to_db=log_to_db,
+                seller_id=seller_id
             )
 
         # Кэш-ключ теперь включает cursor параметры
