@@ -2,6 +2,7 @@
 Wildberries API Client с оптимизацией и кэшированием
 """
 import logging
+import threading as _threading
 import time
 from datetime import datetime, timedelta
 from functools import lru_cache, wraps
@@ -117,13 +118,27 @@ class WildberriesAPIClient:
     CONTENT_API_SANDBOX = "https://content-api-sandbox.wildberries.ru"
     STATISTICS_API_SANDBOX = "https://statistics-api-sandbox.wildberries.ru"
 
-    # Отдельные лимиты WB для конкретных методов (запросов/мин на аккаунт).
-    # Остальные методы Контента живут в общем пуле 100/мин (rate_limit клиента).
+    # Наши бюджеты держим ЧУТЬ НИЖЕ официальных лимитов WB — запас на
+    # параллельные обновления цен/остатков и на правило «4XX считается за 10».
+    # Отдельные лимиты WB для конкретных методов (у WB — по 10/мин каждый).
     ENDPOINT_RATE_LIMITS = {
-        '/content/v2/cards/update': 10,
-        '/content/v2/cards/upload': 10,
-        '/content/v2/cards/upload/add': 10,
+        '/content/v2/cards/update': 8,
+        '/content/v2/cards/upload': 8,
+        '/content/v2/cards/upload/add': 8,
     }
+
+    # Бюджеты по категориям API: (запросов, окно в секундах).
+    # WB: Контент 100/мин; Цены и скидки 10/6с; Маркетплейс 300/мин.
+    CATEGORY_RATE_LIMITS = {
+        'content': (80, 60),
+        'discounts': (8, 6),
+        'marketplace': (240, 60),
+    }
+
+    # Лимитеры общие для ВСЕХ инстансов клиента с одним токеном (в рамках
+    # процесса): параллельные джобы цен/остатков и фото делят один бюджет WB.
+    _shared_limiters: Dict[tuple, 'RateLimiter'] = {}
+    _shared_limiters_lock = _threading.Lock()
 
     def __init__(
         self,
@@ -148,9 +163,8 @@ class WildberriesAPIClient:
         self.timeout = timeout
         self.db_logger_callback = db_logger_callback
 
-        # Rate limiter (общий пул) + отдельные вёдра для методов с собственным лимитом
+        # Rate limiter (грубый пул инстанса) + общие вёдра категорий/методов
         self.rate_limiter = RateLimiter(max_requests=rate_limit, time_window=60)
-        self._endpoint_limiters = {}
 
         # Настройка сессии с connection pooling
         self.session = self._create_session(max_retries)
@@ -187,16 +201,31 @@ class WildberriesAPIClient:
 
         return session
 
+    @classmethod
+    def _shared_limiter(cls, key: tuple, max_requests: int, time_window: int) -> RateLimiter:
+        """Лимитер из общего реестра процесса (создаёт при первом обращении)."""
+        with cls._shared_limiters_lock:
+            limiter = cls._shared_limiters.get(key)
+            if limiter is None:
+                limiter = RateLimiter(max_requests=max_requests, time_window=time_window)
+                cls._shared_limiters[key] = limiter
+            return limiter
+
     def _limiter_for_endpoint(self, endpoint: str):
-        """Отдельный RateLimiter для методов с собственным лимитом WB (или None)."""
+        """Общий RateLimiter для методов с собственным лимитом WB (или None)."""
         limit = self.ENDPOINT_RATE_LIMITS.get(endpoint)
         if limit is None:
             return None
-        limiter = self._endpoint_limiters.get(endpoint)
-        if limiter is None:
-            limiter = RateLimiter(max_requests=limit, time_window=60)
-            self._endpoint_limiters[endpoint] = limiter
-        return limiter
+        return self._shared_limiter((self.api_key, 'endpoint', endpoint), limit, 60)
+
+    def _limiter_for_category(self, api_type: str):
+        """Общий RateLimiter категории API (content/discounts/marketplace) или None."""
+        cfg = self.CATEGORY_RATE_LIMITS.get(api_type)
+        if not cfg:
+            return None
+        max_requests, time_window = cfg
+        return self._shared_limiter(
+            (self.api_key, 'category', api_type), max_requests, time_window)
 
     def _get_base_url(self, api_type: str) -> str:
         """Получить базовый URL для типа API"""
@@ -235,8 +264,11 @@ class WildberriesAPIClient:
             WBRateLimitException: Превышен лимит запросов
             WBAPIException: Общая ошибка API
         """
-        # Rate limiting: общий пул + персональный лимит метода (если задан)
+        # Rate limiting: пул инстанса → бюджет категории → бюджет метода
         self.rate_limiter.wait_if_needed()
+        category_limiter = self._limiter_for_category(api_type)
+        if category_limiter is not None:
+            category_limiter.wait_if_needed()
         endpoint_limiter = self._limiter_for_endpoint(endpoint)
         if endpoint_limiter is not None:
             endpoint_limiter.wait_if_needed()
