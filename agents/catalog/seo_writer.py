@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 class SEOWriterAgent(BaseAgent):
     agent_name = 'seo-writer'
     max_iterations = 12
+    tool_allowlist = (
+        'get_product', 'update_product', 'get_imported_products',
+        'get_imported_product', 'update_imported_product',
+        'batch_update_imported_products', 'get_prohibited_words',
+        'check_text_prohibited',
+    )
 
     system_prompt = """SEO-эксперт для Wildberries.
 

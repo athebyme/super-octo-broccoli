@@ -10,7 +10,11 @@
 import json
 import logging
 
-from ..base_agent import BaseAgent
+from ..base_agent import BaseAgent, _build_usage
+from ..platform_client import (
+    ReferenceDataUnavailableError,
+    require_usable_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,10 @@ logger = logging.getLogger(__name__)
 class SizeNormalizerAgent(BaseAgent):
     agent_name = 'size-normalizer'
     max_iterations = 15
+    tool_allowlist = (
+        'get_product', 'get_imported_product', 'update_imported_product',
+        'batch_update_imported_products', 'get_category_characteristics',
+    )
 
     system_prompt = """Ты — эксперт по размерам и габаритам товаров для Wildberries.
 
@@ -51,6 +59,8 @@ class SizeNormalizerAgent(BaseAgent):
 6. Габариты из описания (длина, ширина, диаметр) сохраняй в characteristics, НЕ в sizes
 7. Для импортированных товаров ВСЕГДА используй update_imported_product
 8. НЕ выдумывай размеры — извлекай из описания/характеристик товара
+9. Если reference_status.usable=false, stale=true или available=false, не вызывай update tools.
+   Останови задачу и запроси синхронизацию схемы WB
 
 Таблица конвертации одежды (женская):
   XS=40-42, S=42-44, M=44-46, L=46-48, XL=48-50, XXL=50-52
@@ -64,15 +74,114 @@ class SizeNormalizerAgent(BaseAgent):
         """Автоматически разбивает большие батчи на чанки."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'normalize_single')
-        if task_type in ('normalize_batch',):
-            product_ids = (
-                input_data.get('product_ids')
-                or input_data.get('imported_product_ids')
-                or []
-            )
-            if len(product_ids) > self.max_batch_size:
+        try:
+            product_ids = []
+            if task_type in ('normalize_batch',):
+                product_ids = (
+                    input_data.get('product_ids')
+                    or input_data.get('imported_product_ids')
+                    or []
+                )
+            if task_type in {'normalize_single', 'normalize_batch'}:
+                if not self._preflight_characteristic_schemas(task, input_data):
+                    return self._cancelled_preflight_result()
+            if task_type == 'normalize_batch' and len(product_ids) > self.max_batch_size:
                 return self._run_chunked_batch(task, product_ids)
-        return self._execute_react(task)
+            return self._execute_react(task)
+        except ReferenceDataUnavailableError as exc:
+            total = len(input_data.get('product_ids') or input_data.get('imported_product_ids') or [])
+            return {
+                'status': 'needs_clarification',
+                'partial': True,
+                'reference_data_blocked': True,
+                'processed': 0,
+                'saved': 0,
+                'failed': total,
+                'message': str(exc),
+                'reference_status': exc.reference_status,
+                '_usage': _build_usage({}, mode='reference_preflight'),
+            }
+
+    @staticmethod
+    def _cancelled_preflight_result():
+        return {
+            'status': 'cancelled',
+            'processed': 0,
+            'saved': 0,
+            'message': 'Задача отменена пользователем',
+            '_usage': _build_usage({}, mode='reference_preflight'),
+        }
+
+    def _preflight_characteristic_schemas(self, task, input_data):
+        task_id = task.get('id')
+        if task_id and self._check_task_cancelled(task_id):
+            return False
+
+        subject_ids = set()
+        task_type = task.get('task_type', 'normalize_single')
+        if task_type == 'normalize_single':
+            imported_id = input_data.get('imported_product_id')
+            product_id = input_data.get('product_id')
+            if imported_id:
+                raw = self.platform.get_imported_product(imported_id)
+                product = raw.get('product', raw) if isinstance(raw, dict) else {}
+            elif product_id:
+                product = self.platform.get_product(task.get('seller_id'), product_id)
+            else:
+                product = {}
+            if product.get('wb_subject_id') or product.get('subject_id'):
+                subject_ids.add(product.get('wb_subject_id') or product.get('subject_id'))
+        else:
+            product_ids = input_data.get('product_ids') or input_data.get('imported_product_ids') or []
+            products = self._prefetch_products_brief(product_ids) if product_ids else []
+            subject_ids.update(p.get('wb_subject_id') for p in products if p.get('wb_subject_id'))
+            if len(products) != len(product_ids):
+                self._raise_reference_error('product_scope_incomplete')
+
+        if task_id and self._check_task_cancelled(task_id):
+            return False
+        if not subject_ids:
+            self._raise_reference_error('category_required')
+
+        for subject_id in sorted(subject_ids):
+            if task_id and self._check_task_cancelled(task_id):
+                return False
+            try:
+                payload = self.platform.get_category_characteristics(subject_id, False)
+                require_usable_reference(
+                    payload, f'wb_category_characteristics:{subject_id}',
+                )
+                if not payload.get('characteristics'):
+                    raise ReferenceDataUnavailableError(
+                        f'wb_category_characteristics:{subject_id}', payload,
+                    )
+            except ReferenceDataUnavailableError:
+                raise
+            except Exception as exc:
+                self._raise_reference_error('request_failed', subject_id, exc)
+        return not (task_id and self._check_task_cancelled(task_id))
+
+    @staticmethod
+    def _raise_reference_error(reason, subject_id=None, cause=None):
+        messages = {
+            'category_required': 'У товара нет категории WB. Сначала определите категорию.',
+            'product_scope_incomplete': 'Не удалось загрузить все выбранные товары для проверки схемы WB.',
+            'request_failed': 'Не удалось загрузить текущую схему характеристик WB.',
+        }
+        payload = {
+            'warning': messages.get(reason, messages['request_failed']),
+            'reference_status': {
+                'source': f'wb_category_characteristics:{subject_id or "unknown"}',
+                'usable': False,
+                'available': False,
+                'stale': False,
+                'reason': reason,
+            },
+        }
+        error = ReferenceDataUnavailableError('wb_category_characteristics', payload)
+        if cause:
+            raise error from cause
+        raise error
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

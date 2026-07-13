@@ -12,13 +12,15 @@ UI маршруты для дашборда агентов.
 import json
 import logging
 import uuid
+from datetime import datetime
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, abort, session
 from flask_login import login_required, current_user
 from werkzeug.security import generate_password_hash
 
-from models import db, ServiceAgent, AgentTask, AgentTaskStep
+from models import db, ServiceAgent, AgentTask, AgentTaskStep, AgentMessage
 from services import agent_service
+from services import agent_harness
 
 logger = logging.getLogger(__name__)
 
@@ -31,38 +33,155 @@ def register_agents_routes(app):
     @app.route('/agents')
     @login_required
     def agents_dashboard():
-        """Главная страница агентов."""
-        if not current_user.seller and not current_user.is_admin:
+        """Unified chat assistant."""
+        if not current_user.seller:
             flash('Нет доступа', 'danger')
             return redirect(url_for('dashboard'))
 
-        agents = agent_service.list_agents()
-        catalog = agent_service.get_agent_catalog()
-        seller_id = current_user.seller.id if current_user.seller else None
+        seller_id = current_user.seller.id
+        conversations = agent_harness.list_conversations(
+            seller_id, current_user.id, limit=40,
+        )
+        requested_id = request.args.get('conversation')
+        conversation = None
+        if requested_id:
+            conversation = agent_harness.get_conversation(
+                requested_id, seller_id, current_user.id,
+            )
+        if conversation is None and conversations:
+            conversation = conversations[0]
+        if conversation is None:
+            conversation = agent_harness.create_conversation(seller_id, current_user.id)
+            conversations = [conversation]
 
-        # Активные задачи
-        active_tasks, _ = agent_service.list_tasks(
-            seller_id=seller_id, status='active', limit=20
-        )
-        # Недавно завершённые
-        recent_tasks, _ = agent_service.list_tasks(
-            seller_id=seller_id, status='completed', limit=10
-        )
-        # Ошибки
-        failed_tasks, _ = agent_service.list_tasks(
-            seller_id=seller_id, status='failed', limit=10
+        initial_payload = agent_harness.conversation_payload(conversation)
+        return render_template(
+            'agents.html', conversations=conversations,
+            conversation_items=[item.to_dict() for item in conversations],
+            conversation=conversation, initial_payload=initial_payload,
+            runtime=agent_harness.runtime_state(),
+            model_policy=agent_harness.get_model_policy(seller_id),
         )
 
-        stats = agent_service.get_agent_stats(seller_id=seller_id, days=7)
+    # ── Unified chat API ───────────────────────────────────────────
 
-        return render_template('agents.html',
-            agents=agents,
-            catalog=catalog,
-            active_tasks=active_tasks,
-            recent_tasks=recent_tasks,
-            failed_tasks=failed_tasks,
-            stats=stats,
+    def _owned_conversation(conversation_id):
+        if not current_user.seller:
+            return None
+        return agent_harness.get_conversation(
+            conversation_id, current_user.seller.id, current_user.id,
         )
+
+    @app.route('/agents/api/conversations', methods=['POST'])
+    @login_required
+    def agents_api_create_conversation():
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        body = request.get_json(silent=True) or {}
+        conversation = agent_harness.create_conversation(
+            current_user.seller.id, current_user.id, body.get('title'),
+        )
+        return jsonify({'conversation': conversation.to_dict()}), 201
+
+    @app.route('/agents/api/conversations/<conversation_id>')
+    @login_required
+    def agents_api_conversation(conversation_id):
+        conversation = _owned_conversation(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Диалог не найден'}), 404
+        step_after = max(request.args.get('step_after', 0, type=int), 0)
+        return jsonify(agent_harness.conversation_payload(
+            conversation, step_after=step_after,
+        ))
+
+    @app.route('/agents/api/conversations/<conversation_id>/messages', methods=['POST'])
+    @login_required
+    def agents_api_send_message(conversation_id):
+        conversation = _owned_conversation(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Диалог не найден'}), 404
+        body = request.get_json(silent=True) or {}
+        try:
+            result = agent_harness.submit_turn(
+                conversation, body.get('message', ''), body.get('product_ids'),
+                body.get('page_context'), body.get('entity_kind'),
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({'error': str(exc)}), 409
+        return jsonify({
+            'conversation': conversation.to_dict(),
+            'messages': [
+                item.to_dict() for item in (
+                    result.get('user_message'), result.get('assistant_message'), result.get('run')
+                ) if item
+            ],
+        }), 201
+
+    @app.route('/agents/api/conversations/<conversation_id>/plans/<message_id>/approve', methods=['POST'])
+    @login_required
+    def agents_api_approve_plan(conversation_id, message_id):
+        conversation = _owned_conversation(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Диалог не найден'}), 404
+        try:
+            message = agent_harness.approve_plan(conversation, message_id)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({'error': str(exc)}), 503
+        return jsonify({'message': message.to_dict()})
+
+    @app.route('/agents/api/conversations/<conversation_id>/plans/<message_id>/reject', methods=['POST'])
+    @login_required
+    def agents_api_reject_plan(conversation_id, message_id):
+        conversation = _owned_conversation(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Диалог не найден'}), 404
+        try:
+            message = agent_harness.reject_plan(conversation, message_id)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        return jsonify({'message': message.to_dict()})
+
+    @app.route('/agents/api/tasks/<task_id>/cancel', methods=['POST'])
+    @login_required
+    def agents_api_cancel_run(task_id):
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        try:
+            task = agent_harness.cancel_run(task_id, current_user.seller.id)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        return jsonify({'task': task.to_dict()})
+
+    @app.route('/agents/api/tasks/<task_id>/rollback', methods=['POST'])
+    @login_required
+    def agents_api_rollback_run(task_id):
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        try:
+            result = agent_harness.rollback_task_tree(task_id, current_user.seller.id)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        except Exception:
+            logger.exception('Unified agent rollback failed for task %s', task_id)
+            return jsonify({'error': 'Не удалось откатить изменения'}), 500
+        return jsonify({'success': True, **result})
+
+    @app.route('/agents/api/proposals/<int:proposal_id>/<decision>', methods=['POST'])
+    @login_required
+    def agents_api_review_proposal(proposal_id, decision):
+        if not current_user.seller:
+            return jsonify({'error': 'Нет профиля продавца'}), 403
+        try:
+            proposal = agent_harness.review_proposal(
+                proposal_id, current_user.seller.id, current_user.id, decision,
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        return jsonify({'proposal': proposal.to_dict()})
 
     # ── Детали задачи ───────────────────────────────────────────────
 
@@ -117,6 +236,9 @@ def register_agents_routes(app):
         task = agent_service.get_task(task_id)
         if not task:
             return jsonify({'error': 'Not found'}), 404
+        seller_id = current_user.seller.id if current_user.seller else None
+        if not current_user.is_admin and (not seller_id or task.seller_id != seller_id):
+            return jsonify({'error': 'Access denied'}), 403
         steps = agent_service.get_task_steps(task_id, limit=50)
 
         # Если это pipeline-задача — добавляем статус подзадач
@@ -355,8 +477,6 @@ def register_agents_routes(app):
     @login_required
     def agent_task_rollback(task_id):
         """Откатить все изменения, сделанные задачей агента."""
-        from models import AgentChangeSnapshot, ImportedProduct
-
         task = agent_service.get_task(task_id)
         if not task:
             abort(404)
@@ -364,34 +484,24 @@ def register_agents_routes(app):
         if seller_id and task.seller_id != seller_id and not current_user.is_admin:
             abort(403)
 
-        snapshots = AgentChangeSnapshot.query.filter_by(
-            task_id=task_id,
-            is_rolled_back=False,
-        ).all()
-
-        if not snapshots:
-            flash('Нет изменений для отката (или уже откачено)', 'warning')
+        try:
+            result = agent_harness.rollback_task_tree(task_id, task.seller_id)
+        except ValueError as exc:
+            flash(str(exc), 'warning')
+            return redirect(url_for('agent_task_detail', task_id=task_id))
+        except Exception:
+            logger.exception('Rollback failed for task %s', task_id)
+            flash('Не удалось откатить изменения', 'danger')
             return redirect(url_for('agent_task_detail', task_id=task_id))
 
-        rolled_back = 0
-        for snap in snapshots:
-            product = ImportedProduct.query.get(snap.imported_product_id)
-            if not product:
-                continue
-
-            try:
-                prev = json.loads(snap.previous_values)
-                for field, old_value in prev.items():
-                    setattr(product, field, old_value)
-                product.updated_at = datetime.utcnow()
-                snap.is_rolled_back = True
-                snap.rolled_back_at = datetime.utcnow()
-                rolled_back += 1
-            except Exception as e:
-                logger.error(f"Rollback error for product {snap.imported_product_id}: {e}")
-
-        db.session.commit()
-        flash(f'Откачено изменений: {rolled_back} товаров', 'success')
+        if not result['snapshots']:
+            flash('Нет изменений для отката (или они уже откачены)', 'warning')
+        else:
+            flash(
+                f"Откат выполнен: {result['products']} товаров, "
+                f"{result['snapshots']} изменений",
+                'success',
+            )
         return redirect(url_for('agent_task_detail', task_id=task_id))
 
     @app.route('/agents/api/tasks/<task_id>/changes')

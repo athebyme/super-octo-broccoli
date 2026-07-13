@@ -44,56 +44,20 @@ class BrandCache:
 
     def sync_brands(self, wb_client) -> bool:
         """
-        Синхронизировать бренды из WB API.
+        Legacy global cache cannot be refreshed from a category-scoped API.
 
-        Загружает все бренды используя разные паттерны поиска.
+        Runtime callers must use the versioned MarketplaceBrand registry. This
+        explicit failure preserves any last-good in-memory data and prevents a
+        hidden all-category API fan-out.
         """
         if self.is_syncing:
             logger.info("Brand sync already in progress")
             return False
-
-        self.is_syncing = True
-        self.sync_error = None
-
-        try:
-            logger.info("Starting brand sync from WB API...")
-            all_brands = {}
-
-            # Паттерны для поиска - буквы алфавита + цифры
-            patterns = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ') + list('АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ') + list('0123456789')
-
-            for pattern in patterns:
-                try:
-                    result = wb_client.search_brands(pattern, top=100)
-                    brands = result.get('data', [])
-
-                    for brand in brands:
-                        brand_id = brand.get('id')
-                        brand_name = brand.get('name', '')
-                        if brand_id and brand_name:
-                            all_brands[brand_id] = brand_name
-
-                    # Небольшая пауза между запросами
-                    time.sleep(0.1)
-
-                except Exception as e:
-                    logger.warning(f"Failed to fetch brands for pattern '{pattern}': {e}")
-                    continue
-
-            # Обновляем кэш
-            self.brands = all_brands
-            self.brands_lower = {name.lower(): id for id, name in all_brands.items()}
-            self.last_sync = time.time()
-
-            logger.info(f"Brand sync complete: {len(self.brands)} brands cached")
-            return True
-
-        except Exception as e:
-            self.sync_error = str(e)
-            logger.error(f"Brand sync failed: {e}")
-            return False
-        finally:
-            self.is_syncing = False
+        self.sync_error = (
+            'category_scope_required: use the MarketplaceBrand registry sync'
+        )
+        logger.warning('Legacy BrandCache sync skipped: %s', self.sync_error)
+        return False
 
     def sync_if_needed(self, wb_client) -> bool:
         """Синхронизировать если кэш устарел"""

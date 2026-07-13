@@ -140,7 +140,10 @@ class BrandEngine:
                         brand_cache[a.brand_id]['name'],
                     )
 
-            for mb in MarketplaceBrand.query.all():
+            for mb in MarketplaceBrand.query.filter_by(
+                is_available=True,
+                status='verified',
+            ).all():
                 mp_brand_cache[(mb.brand_id, mb.marketplace_id)] = {
                     'id': mb.id,
                     'marketplace_brand_name': mb.marketplace_brand_name,
@@ -225,7 +228,12 @@ class BrandEngine:
 
         # Step 4: Marketplace API поиск
         if marketplace_client:
-            result = self._match_marketplace_api(raw_brand, marketplace_id, marketplace_client)
+            result = self._match_marketplace_api(
+                raw_brand,
+                marketplace_id,
+                marketplace_client,
+                category_id=category_id,
+            )
             if result:
                 if category_id and marketplace_id:
                     result.category_valid = self._check_category(result.marketplace_brand_id, category_id)
@@ -353,11 +361,15 @@ class BrandEngine:
         return None
 
     def _match_marketplace_api(self, raw_brand: str, marketplace_id: int,
-                                marketplace_client) -> Optional[BrandResolution]:
+                                marketplace_client,
+                                category_id: int = None) -> Optional[BrandResolution]:
         """Step 4: Поиск через API маркетплейса и сохранение результата."""
         try:
             # Используем validate_brand (WB-совместимый интерфейс)
-            api_result = marketplace_client.validate_brand(raw_brand)
+            api_result = marketplace_client.validate_brand(
+                raw_brand,
+                subject_id=category_id,
+            )
 
             if api_result.get('valid') and api_result.get('exact_match'):
                 match = api_result['exact_match']
@@ -445,6 +457,8 @@ class BrandEngine:
                         marketplace_brand_id=mp_ext_id,
                         status='verified',
                         verified_at=datetime.utcnow(),
+                        is_available=True,
+                        last_seen_at=datetime.utcnow(),
                     )
                     db.session.add(mp_brand)
                 else:
@@ -453,6 +467,8 @@ class BrandEngine:
                     if mp_brand.status == 'pending':
                         mp_brand.status = 'verified'
                         mp_brand.verified_at = datetime.utcnow()
+                    mp_brand.is_available = mp_brand.status == 'verified'
+                    mp_brand.last_seen_at = datetime.utcnow()
 
             # Добавляем raw_alias если отличается
             alias_norm = normalize_for_comparison(raw_alias)
@@ -668,7 +684,18 @@ class BrandEngine:
         Загружает бренды последовательно по включённым категориям,
         сохраняет в БД батчами по 200 штук.
         """
-        from models import db, Brand, BrandAlias, MarketplaceBrand, MarketplaceCategory
+        from models import (
+            db, Brand, BrandAlias, Marketplace, MarketplaceBrand,
+            MarketplaceCategory,
+        )
+
+        marketplace = Marketplace.query.get(marketplace_id)
+        if not marketplace:
+            return {'errors': 1, 'error': 'Marketplace not found'}
+        sync_started_at = datetime.utcnow()
+        marketplace.brands_sync_status = 'running'
+        marketplace.brands_sync_error = None
+        db.session.commit()
 
         progress = self._sync_progress.get(marketplace_id)
         if not progress:
@@ -679,7 +706,10 @@ class BrandEngine:
             progress.update(kwargs)
 
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
-        stats = {'created': 0, 'updated': 0, 'mp_created': 0, 'errors': 0, 'total_fetched': 0}
+        stats = {
+            'created': 0, 'updated': 0, 'mp_created': 0, 'mp_updated': 0,
+            'errors': 0, 'total_fetched': 0,
+        }
 
         # --- Phase 1: Получаем включённые категории ---
         update_progress(phase='categories', message='Загрузка списка категорий...')
@@ -687,6 +717,7 @@ class BrandEngine:
         enabled_cats = MarketplaceCategory.query.filter_by(
             marketplace_id=marketplace_id,
             is_enabled=True,
+            is_available=True,
         ).all()
 
         if not enabled_cats:
@@ -695,6 +726,9 @@ class BrandEngine:
                 status='done', phase='done',
                 message='Нет включённых категорий для синхронизации.',
             )
+            marketplace.brands_sync_status = 'failed'
+            marketplace.brands_sync_error = 'No enabled available categories'
+            db.session.commit()
             return stats
 
         subject_ids = [c.subject_id for c in enabled_cats if c.subject_id]
@@ -702,8 +736,7 @@ class BrandEngine:
         logger.info(f"Found {total_cats} enabled categories for brand sync")
 
         # --- Phase 2: Загрузка брендов по категориям ---
-        # WB API: GET /api/content/v1/brands требует subjectId (обязателен) + pattern + top
-        # Перебираем категории, для каждой делаем запросы с ключевыми буквами алфавита.
+        # WB API: GET /api/content/v1/brands использует subjectId + next cursor.
         update_progress(
             phase='fetching',
             categories_total=total_cats,
@@ -711,6 +744,8 @@ class BrandEngine:
         )
 
         all_brands = {}  # ext_id -> name
+        fetch_complete = False
+        fetch_errors = []
 
         def on_progress(done, total, brands_count):
             update_progress(
@@ -727,13 +762,16 @@ class BrandEngine:
                 progress_callback=on_progress,
             )
             data = result.get('data', [])
+            fetch_complete = result.get('complete') is True
+            fetch_errors = result.get('errors') or []
+            stats['errors'] += len(fetch_errors)
 
             # Диагностика
             sample = []
             if isinstance(data, list) and data:
                 sample = [{'id': b.get('id'), 'name': b.get('name')} for b in data[:3]]
             debug_info = {
-                'method': 'fetch_all_brands (per-category + key patterns)',
+                'method': 'fetch_all_brands (per-category cursor pagination)',
                 'total_brands': len(data) if isinstance(data, list) else 'N/A',
                 'sample': sample,
             }
@@ -758,6 +796,35 @@ class BrandEngine:
         stats['total_fetched'] = len(all_brands)
         logger.info(f"Fetched {len(all_brands)} unique brands from {total_cats} categories")
 
+        # Never merge a partial or empty upstream sweep into the last-good
+        # registry. This keeps usable bindings and freshness internally
+        # consistent while the next scheduled run retries the snapshot.
+        if not fetch_complete or fetch_errors or not all_brands:
+            if all_brands:
+                marketplace.brands_sync_status = 'partial'
+                marketplace.brands_sync_error = (
+                    f'Incomplete brand sweep; errors={stats["errors"]}'
+                )
+                progress_status = 'done'
+            else:
+                marketplace.brands_sync_status = 'failed'
+                marketplace.brands_sync_error = (
+                    str(fetch_errors[:3])[:2000]
+                    if fetch_errors else 'Brand sweep returned no usable data'
+                )
+                progress_status = 'error'
+            db.session.commit()
+            update_progress(
+                status=progress_status,
+                phase='done',
+                message=(
+                    f'Справочник не обновлён: найдено {stats["total_fetched"]}, '
+                    f'ошибок {stats["errors"]}'
+                ),
+                stats=stats,
+            )
+            return stats
+
         # --- Phase 3: Сохранение в БД батчами ---
         update_progress(
             phase='saving',
@@ -770,6 +837,39 @@ class BrandEngine:
         save_batch_size = 200
         saved = 0
 
+        # Prefetch the working set once. The old path performed up to four
+        # SELECTs for every upstream brand and dominated large syncs.
+        marketplace_bindings = MarketplaceBrand.query.filter_by(
+            marketplace_id=marketplace_id,
+        ).all()
+        bindings_by_external_id = {
+            str(binding.marketplace_brand_id): binding
+            for binding in marketplace_bindings
+            if binding.marketplace_brand_id is not None
+        }
+        bindings_by_brand_id = {
+            binding.brand_id: binding for binding in marketplace_bindings
+        }
+
+        normalized_names = {
+            normalize_for_comparison(name) for _, name in brand_items
+        }
+        brands_by_normalized_name = {}
+        aliases_by_normalized_name = set()
+        normalized_names_list = list(normalized_names)
+        for chunk_start in range(0, len(normalized_names_list), 500):
+            chunk = normalized_names_list[chunk_start:chunk_start + 500]
+            for brand in Brand.query.filter(
+                Brand.name_normalized.in_(chunk),
+            ).all():
+                brands_by_normalized_name[brand.name_normalized] = brand
+            aliases_by_normalized_name.update(
+                alias.alias_normalized
+                for alias in BrandAlias.query.filter(
+                    BrandAlias.alias_normalized.in_(chunk),
+                ).all()
+            )
+
         for batch_start in range(0, len(brand_items), save_batch_size):
             batch = brand_items[batch_start:batch_start + save_batch_size]
 
@@ -777,8 +877,28 @@ class BrandEngine:
                 try:
                     name_norm = normalize_for_comparison(name)
 
+                    # External WB ID is stable across a rename. Prefer it over
+                    # normalized display name so a rename updates, not duplicates.
+                    mp_brand = bindings_by_external_id.get(str(ext_id))
+                    if mp_brand:
+                        previous_status = mp_brand.status
+                        if mp_brand.status == 'pending':
+                            mp_brand.status = 'verified'
+                            mp_brand.verified_at = sync_started_at
+                        desired_available = mp_brand.status == 'verified'
+                        if (
+                            mp_brand.marketplace_brand_name != name
+                            or previous_status != mp_brand.status
+                            or mp_brand.is_available != desired_available
+                        ):
+                            stats['mp_updated'] += 1
+                        mp_brand.marketplace_brand_name = name
+                        mp_brand.last_seen_at = sync_started_at
+                        mp_brand.is_available = desired_available
+                        continue
+
                     # Глобальный бренд
-                    brand = Brand.query.filter_by(name_normalized=name_norm).first()
+                    brand = brands_by_normalized_name.get(name_norm)
                     if brand:
                         if brand.status == 'pending':
                             brand.status = 'verified'
@@ -792,9 +912,9 @@ class BrandEngine:
                         )
                         db.session.add(brand)
                         db.session.flush()
+                        brands_by_normalized_name[name_norm] = brand
 
-                        existing = BrandAlias.query.filter_by(alias_normalized=name_norm).first()
-                        if not existing:
+                        if name_norm not in aliases_by_normalized_name:
                             alias = BrandAlias(
                                 brand_id=brand.id,
                                 alias=name,
@@ -803,14 +923,12 @@ class BrandEngine:
                                 confidence=1.0,
                             )
                             db.session.add(alias)
+                            aliases_by_normalized_name.add(name_norm)
 
                         stats['created'] += 1
 
                     # Привязка к маркетплейсу
-                    mp_brand = MarketplaceBrand.query.filter_by(
-                        brand_id=brand.id,
-                        marketplace_id=marketplace_id,
-                    ).first()
+                    mp_brand = bindings_by_brand_id.get(brand.id)
 
                     if not mp_brand:
                         mp_brand = MarketplaceBrand(
@@ -819,17 +937,34 @@ class BrandEngine:
                             marketplace_brand_name=name,
                             marketplace_brand_id=ext_id,
                             status='verified',
-                            verified_at=datetime.utcnow(),
+                            verified_at=sync_started_at,
+                            is_available=True,
+                            last_seen_at=sync_started_at,
                         )
                         db.session.add(mp_brand)
+                        bindings_by_brand_id[brand.id] = mp_brand
+                        bindings_by_external_id[str(ext_id)] = mp_brand
                         stats['mp_created'] += 1
                     else:
-                        if not mp_brand.marketplace_brand_id:
-                            mp_brand.marketplace_brand_id = ext_id
-                        mp_brand.marketplace_brand_name = name
+                        previous_status = mp_brand.status
                         if mp_brand.status == 'pending':
                             mp_brand.status = 'verified'
-                            mp_brand.verified_at = datetime.utcnow()
+                            mp_brand.verified_at = sync_started_at
+                        desired_available = mp_brand.status == 'verified'
+                        changed = (
+                            not mp_brand.marketplace_brand_id
+                            or mp_brand.marketplace_brand_name != name
+                            or previous_status != mp_brand.status
+                            or mp_brand.is_available != desired_available
+                        )
+                        if not mp_brand.marketplace_brand_id:
+                            mp_brand.marketplace_brand_id = ext_id
+                            bindings_by_external_id[str(ext_id)] = mp_brand
+                        mp_brand.marketplace_brand_name = name
+                        mp_brand.last_seen_at = sync_started_at
+                        mp_brand.is_available = desired_available
+                        if changed:
+                            stats['mp_updated'] += 1
 
                 except Exception as e:
                     logger.warning(f"Failed to save brand '{name}': {e}")
@@ -851,8 +986,33 @@ class BrandEngine:
 
         self.invalidate_cache()
 
+        reference_changed = stats['mp_created'] + stats['mp_updated']
+        if reference_changed:
+            marketplace.brands_version = (marketplace.brands_version or 0) + 1
+        # An empty response is not a trustworthy complete snapshot. Keep the
+        # last-good bindings and freshness marker, and expose the failed sweep.
+        if fetch_complete and stats['total_fetched'] > 0 and stats['errors'] == 0:
+            marketplace.brands_sync_status = 'success'
+            marketplace.brands_sync_error = None
+            marketplace.brands_synced_at = sync_started_at
+        elif stats['total_fetched']:
+            marketplace.brands_sync_status = 'partial'
+            marketplace.brands_sync_error = (
+                f'Incomplete brand sweep; errors={stats["errors"]}'
+            )
+        else:
+            marketplace.brands_sync_status = 'failed'
+            marketplace.brands_sync_error = (
+                str(fetch_errors[:3])[:2000]
+                if fetch_errors else 'Brand sweep returned no usable data'
+            )
+        db.session.commit()
+
+        progress_status = (
+            'error' if marketplace.brands_sync_status == 'failed' else 'done'
+        )
         update_progress(
-            status='done',
+            status=progress_status,
             phase='done',
             message=f'Готово: найдено {stats["total_fetched"]}, '
                     f'создано {stats["created"]}, обновлено {stats["updated"]}, '
@@ -898,7 +1058,11 @@ class BrandEngine:
             return link.is_available if link else True
 
         try:
-            result = marketplace_client.search_brands(mp_brand.marketplace_brand_name, top=50)
+            result = marketplace_client.search_brands(
+                mp_brand.marketplace_brand_name,
+                top=50,
+                subject_id=category_id,
+            )
             wb_brands = result.get('data', [])
 
             brand_alnum = normalize_alphanumeric(mp_brand.marketplace_brand_name)
@@ -906,6 +1070,8 @@ class BrandEngine:
                 normalize_alphanumeric(wb.get('name', '')) == brand_alnum
                 for wb in wb_brands
             )
+            if not is_available and result.get('complete') is not True:
+                return link.is_available if link else None
 
             if link:
                 link.is_available = is_available
@@ -1044,18 +1210,45 @@ class BrandEngine:
 
         for mp_brand in mp_brands:
             try:
-                result = marketplace_client.validate_brand(mp_brand.marketplace_brand_name)
                 stats['checked'] += 1
+                links = mp_brand.category_links.all()
+                if not links:
+                    stats['errors'] += 1
+                    continue
 
-                if result.get('valid'):
-                    match = result.get('exact_match', {})
-                    if match.get('id') and not mp_brand.marketplace_brand_id:
-                        mp_brand.marketplace_brand_id = match['id']
+                any_valid = False
+                all_conclusive = True
+                matched_brand = None
+                for link in links:
+                    result = marketplace_client.validate_brand(
+                        mp_brand.marketplace_brand_name,
+                        subject_id=link.category_id,
+                    )
+                    if result.get('valid') and result.get('exact_match'):
+                        any_valid = True
+                        matched_brand = result['exact_match']
+                        link.is_available = True
+                        link.verified_at = datetime.utcnow()
+                    elif result.get('complete') is True:
+                        link.is_available = False
+                        link.verified_at = datetime.utcnow()
+                    else:
+                        all_conclusive = False
+
+                if any_valid:
+                    if matched_brand.get('id') and not mp_brand.marketplace_brand_id:
+                        mp_brand.marketplace_brand_id = matched_brand['id']
+                    mp_brand.status = 'verified'
                     mp_brand.verified_at = datetime.utcnow()
+                    mp_brand.is_available = True
+                    mp_brand.last_seen_at = datetime.utcnow()
                     stats['still_valid'] += 1
-                else:
+                elif all_conclusive:
                     mp_brand.status = 'needs_review'
+                    mp_brand.is_available = False
                     stats['invalidated'] += 1
+                else:
+                    stats['errors'] += 1
 
                 time.sleep(0.2)
 
@@ -1073,63 +1266,23 @@ class BrandEngine:
         return stats
 
     def auto_resolve_pending(self, marketplace_client, marketplace_id: int = None) -> dict:
-        """Попытка авто-резолва pending брендов."""
-        from models import db, Brand, MarketplaceBrand
+        """Legacy hook; the complete registry sync resolves exact pending names."""
+        from models import Brand
 
-        stats = {'checked': 0, 'resolved': 0, 'still_pending': 0, 'errors': 0}
-
-        pending_brands = Brand.query.filter_by(status='pending').limit(50).all()
-
-        for brand in pending_brands:
-            try:
-                stats['checked'] += 1
-                result = marketplace_client.validate_brand(brand.name)
-
-                if result.get('valid') and result.get('exact_match'):
-                    match = result['exact_match']
-                    mp_name = match.get('name', '')
-                    mp_ext_id = match.get('id')
-
-                    if mp_name and normalize_alphanumeric(mp_name) == normalize_alphanumeric(brand.name):
-                        brand.name = mp_name
-                        brand.name_normalized = normalize_for_comparison(mp_name)
-                    brand.status = 'verified'
-
-                    # Создаём MarketplaceBrand
-                    if marketplace_id:
-                        existing_mp = MarketplaceBrand.query.filter_by(
-                            brand_id=brand.id,
-                            marketplace_id=marketplace_id,
-                        ).first()
-                        if not existing_mp:
-                            mp_brand = MarketplaceBrand(
-                                brand_id=brand.id,
-                                marketplace_id=marketplace_id,
-                                marketplace_brand_name=mp_name or brand.name,
-                                marketplace_brand_id=mp_ext_id,
-                                status='verified',
-                                verified_at=datetime.utcnow(),
-                            )
-                            db.session.add(mp_brand)
-
-                    stats['resolved'] += 1
-                else:
-                    stats['still_pending'] += 1
-
-                time.sleep(0.3)
-
-            except Exception as e:
-                logger.warning(f"Auto-resolve failed for brand '{brand.name}': {e}")
-                stats['errors'] += 1
-
-        try:
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-
-        self.invalidate_cache()
-        logger.info(f"Auto-resolve pending complete: {stats}")
-        return stats
+        pending_count = Brand.query.filter_by(status='pending').limit(50).count()
+        logger.info(
+            'Pending brand auto-resolve skipped for %s rows: WB validation '
+            'requires a typed subject_id',
+            pending_count,
+        )
+        return {
+            'checked': 0,
+            'resolved': 0,
+            'still_pending': pending_count,
+            'errors': 0,
+            'skipped': pending_count,
+            'reason': 'category_scope_required',
+        }
 
     # ------------------------------------------------------------------
     # Stats

@@ -21,6 +21,55 @@ from .config import AgentConfig
 logger = logging.getLogger(__name__)
 
 
+class ReferenceDataUnavailableError(RuntimeError):
+    """Raised locally when an agent would otherwise use stale WB metadata."""
+
+    def __init__(self, resource: str, payload: dict):
+        self.resource = resource
+        self.payload = payload if isinstance(payload, dict) else {}
+        self.reference_status = self.payload.get('reference_status') or {}
+        message = (
+            self.payload.get('warning')
+            or self.reference_status.get('error')
+            or f'WB reference data is unavailable: {resource}'
+        )
+        super().__init__(str(message)[:500])
+
+
+def require_usable_reference(payload: dict, resource: str) -> dict:
+    """Validate the typed reference contract before an agent uses its data."""
+    status = payload.get('reference_status') if isinstance(payload, dict) else None
+    if not isinstance(status, dict) or status.get('usable') is not True:
+        raise ReferenceDataUnavailableError(resource, payload)
+    return payload
+
+
+def _validated_product_ids(product_ids, limit: int = 200) -> list[int]:
+    """Return the complete typed selection or fail instead of clipping it."""
+    if not isinstance(product_ids, (list, tuple)) or not product_ids:
+        raise ValueError('product_ids must be a non-empty list')
+    if len(product_ids) > limit:
+        raise ValueError(f'Maximum {limit} product_ids per request')
+    result = []
+    seen = set()
+    for index, raw in enumerate(product_ids):
+        if isinstance(raw, bool):
+            raise ValueError(f'product_ids[{index}] must be a positive integer')
+        if isinstance(raw, int):
+            product_id = raw
+        elif isinstance(raw, str) and raw.strip().isdigit() and int(raw) > 0:
+            product_id = int(raw)
+        else:
+            raise ValueError(f'product_ids[{index}] must be a positive integer')
+        if product_id <= 0:
+            raise ValueError(f'product_ids[{index}] must be a positive integer')
+        if product_id in seen:
+            raise ValueError(f'Duplicate product_id: {product_id}')
+        result.append(product_id)
+        seen.add(product_id)
+    return result
+
+
 class PlatformClient:
     """Клиент для Internal API v1."""
 
@@ -103,6 +152,12 @@ class PlatformClient:
             payload['total_steps'] = total_steps
         return self._request('POST', f'/tasks/{task_id}/progress', json=payload)
 
+    def update_checkpoint(self, task_id: str, checkpoint: dict) -> dict:
+        return self._request(
+            'POST', f'/tasks/{task_id}/checkpoint',
+            json={'checkpoint': checkpoint or {}},
+        )
+
     def complete_task(self, task_id: str, result: dict = None) -> dict:
         return self._request('POST', f'/tasks/{task_id}/complete',
                              json={'result': result or {}})
@@ -112,6 +167,11 @@ class PlatformClient:
         if result:
             payload['result'] = result
         return self._request('POST', f'/tasks/{task_id}/fail', json=payload)
+
+    def get_task_ai_config(self, task_id: str) -> dict:
+        """Получает seller AI profile для принадлежащей агенту задачи."""
+        data = self._request('GET', f'/tasks/{task_id}/ai-config')
+        return data.get('ai_config', {})
 
     # ── Шаги ───────────────────────────────────────────────────────
 
@@ -157,6 +217,69 @@ class PlatformClient:
         data = self._request('GET', f'/sellers/{seller_id}')
         return data.get('seller', {})
 
+    def get_product_defaults(self, seller_id: int,
+                             subject_id: int = None) -> dict:
+        params = {'subject_id': subject_id} if subject_id is not None else None
+        return self._request(
+            'GET', f'/sellers/{seller_id}/product-defaults', params=params,
+        )
+
+    def get_api_connection_status(self, seller_id: int) -> dict:
+        return self._request(
+            'GET', f'/sellers/{seller_id}/api-connection-status',
+        )
+
+    def get_api_logs(self, seller_id: int, limit: int = 20) -> dict:
+        return self._request(
+            'GET', f'/sellers/{seller_id}/api-logs',
+            params={'limit': min(max(int(limit), 1), 50)},
+        )
+
+    def resolve_supplier(self, seller_id: int, query: str) -> dict:
+        return self._request(
+            'GET', f'/sellers/{seller_id}/suppliers/resolve',
+            params={'q': query},
+        )
+
+    def get_ready_supplier_candidates(self, seller_id: int, supplier_id: int,
+                                      limit: int = 60) -> dict:
+        return self._request(
+            'GET',
+            f'/sellers/{seller_id}/suppliers/{supplier_id}/ready-candidates',
+            params={'limit': min(max(int(limit), 1), 100)},
+        )
+
+    def audit_supplier_imported_products(self, seller_id: int, supplier_id: int,
+                                         focus_limit: int = 100) -> dict:
+        return self._request(
+            'GET',
+            f'/sellers/{seller_id}/suppliers/{supplier_id}/imported-audit',
+            params={'focus_limit': min(max(int(focus_limit), 1), 200)},
+        )
+
+    def get_products_content_brief(self, seller_id: int, entity_kind: str,
+                                   product_ids: list[int]) -> dict:
+        product_ids = _validated_product_ids(product_ids)
+        return self._request(
+            'POST', f'/sellers/{seller_id}/products/content-brief',
+            json={
+                'entity_kind': entity_kind,
+                'product_ids': product_ids,
+            },
+        )
+
+    def audit_product_batch(self, seller_id: int, entity_kind: str,
+                            product_ids: list[int], focus_limit: int = 100) -> dict:
+        product_ids = _validated_product_ids(product_ids)
+        return self._request(
+            'POST', f'/sellers/{seller_id}/products/audit-batch',
+            json={
+                'entity_kind': entity_kind,
+                'product_ids': product_ids,
+                'focus_limit': min(max(int(focus_limit), 1), 200),
+            },
+        )
+
     def list_products(self, seller_id: int, page: int = 1,
                       per_page: int = 50, status: str = None) -> dict:
         params = f'?page={page}&per_page={per_page}'
@@ -168,17 +291,72 @@ class PlatformClient:
         data = self._request('GET', f'/sellers/{seller_id}/products/{product_id}')
         return data.get('product', {})
 
+    def query_products(self, seller_id: int, **filters) -> dict:
+        allowed = {
+            key: value for key, value in filters.items()
+            if key in {'active', 'stock_state', 'quality_max', 'limit'} and value is not None
+        }
+        return self._request(
+            'GET', f'/sellers/{seller_id}/products/query', params=allowed,
+        )
+
     def update_product(self, seller_id: int, product_id: int,
                        updates: dict) -> dict:
         return self._request('PATCH',
                              f'/sellers/{seller_id}/products/{product_id}',
                              json=updates)
 
+    def batch_update_products(self, seller_id: int,
+                              updates: list[dict]) -> dict:
+        """Update main WB cards in server-sized chunks without dropping items."""
+        if not isinstance(updates, list):
+            raise ValueError('updates must be a list')
+        if not updates:
+            return {
+                'ok': True, 'updated': 0, 'unchanged': 0,
+                'failed': 0, 'results': [],
+            }
+        product_ids = []
+        for index, item in enumerate(updates):
+            if not isinstance(item, dict):
+                raise ValueError(f'updates[{index}] must be an object')
+            product_ids.append(item.get('product_id'))
+        _validated_product_ids(product_ids, limit=max(len(product_ids), 1))
+
+        all_results = []
+        totals = {'updated': 0, 'unchanged': 0, 'failed': 0}
+        for index in range(0, len(updates), 50):
+            response = self._request(
+                'PATCH', f'/sellers/{seller_id}/products/batch',
+                json={'updates': updates[index:index + 50]},
+            )
+            all_results.extend(response.get('results') or [])
+            for key in totals:
+                totals[key] += int(response.get(key) or 0)
+        return {
+            'ok': totals['failed'] == 0,
+            **totals,
+            'results': all_results,
+        }
+
     def list_imported_products(self, seller_id: int, page: int = 1,
                                per_page: int = 50) -> dict:
         return self._request(
             'GET',
             f'/sellers/{seller_id}/imported-products?page={page}&per_page={per_page}'
+        )
+
+    def query_imported_products(self, seller_id: int, **filters) -> dict:
+        allowed = {
+            key: value for key, value in filters.items()
+            if key in {
+                'price_min', 'price_max', 'quantity_min', 'quantity_max',
+                'stock_state', 'missing_field', 'import_status', 'published',
+                'vendor_code', 'limit',
+            } and value is not None
+        }
+        return self._request(
+            'GET', f'/sellers/{seller_id}/imported-products/query', params=allowed,
         )
 
     def get_imported_product(self, product_id: int) -> dict:
@@ -188,10 +366,14 @@ class PlatformClient:
         return self._request('PATCH', f'/imported-products/{product_id}',
                              json=updates)
 
-    def get_imported_products_brief(self, product_ids: list) -> list:
+    def get_imported_products_brief(self, product_ids: list,
+                                    include_description: bool = False) -> list:
         """Получает краткие данные товаров пакетно (только id, title, brand, category)."""
         data = self._request('POST', '/imported-products/brief',
-                             json={'product_ids': product_ids})
+                             json={
+                                 'product_ids': product_ids,
+                                 'include_description': bool(include_description),
+                             })
         return data.get('products', [])
 
     def batch_update_imported_products(self, updates: list[dict]) -> dict:
@@ -219,7 +401,7 @@ class PlatformClient:
     # ── Справочник категорий ──────────────────────────────────────
 
     def search_categories(self, query: str, limit: int = 20) -> dict:
-        """Поиск категорий WB по локальному справочнику."""
+        """Поиск категорий WB с типизированным reference_status."""
         return self._request('GET', '/categories/search',
                              params={'q': query, 'limit': limit})
 
@@ -227,7 +409,7 @@ class PlatformClient:
 
     def get_category_characteristics(self, subject_id: int,
                                       required_only: bool = False) -> dict:
-        """Получает характеристики категории WB."""
+        """Получает схему WB с типизированным reference_status."""
         params = f'?required_only=true' if required_only else ''
         return self._request(
             'GET', f'/categories/{subject_id}/characteristics{params}'
@@ -237,7 +419,7 @@ class PlatformClient:
 
     def get_directory(self, directory_type: str, query: str = None,
                       limit: int = 50) -> dict:
-        """Получает справочник WB (colors, countries, kinds, seasons)."""
+        """Получает справочник WB с reference_status."""
         q = {'limit': limit}
         if query:
             q['q'] = query
@@ -263,15 +445,41 @@ class PlatformClient:
             payload['seller_id'] = seller_id
         return self._request('POST', '/prohibited-words/check', json=payload)
 
+    def check_prohibited_words_batch(self, items: list[dict],
+                                     seller_id: int) -> dict:
+        """Проверяет все тексты, разбивая их по лимиту internal API."""
+        if not isinstance(items, list):
+            raise ValueError('items must be a list')
+        if not items:
+            return {'results': [], 'count': 0}
+        results = []
+        for index in range(0, len(items), 50):
+            response = self._request(
+                'POST', '/prohibited-words/check-batch',
+                json={
+                    'seller_id': seller_id,
+                    'items': items[index:index + 50],
+                },
+            )
+            results.extend(response.get('results') or [])
+        return {'results': results, 'count': len(results)}
+
     # ── Бренды ─────────────────────────────────────────────────────
 
     def validate_brand(self, brand_name: str,
                        category_id: int = None) -> dict:
-        """Проверяет бренд по реестру."""
+        """Проверяет бренд и возвращает плоский typed result без HTTP envelope."""
         query = {'brand': brand_name}
         if category_id:
             query['category_id'] = category_id
-        return self._request('GET', '/brands/validate', params=query)
+        payload = self._request('GET', '/brands/validate', params=query)
+        result = payload.get('result') if isinstance(payload, dict) else None
+        if not isinstance(result, dict):
+            raise ValueError('Invalid brand validation response')
+        require_usable_reference(payload, 'wb_brands')
+        result = dict(result)
+        result['reference_status'] = payload['reference_status']
+        return result
 
     # ── Настройки ценообразования ──────────────────────────────────
 
@@ -314,4 +522,9 @@ class PlatformClient:
 
     def get_task_status(self, task_id: str) -> dict:
         """Получает статус задачи."""
+        if self._current_task_id and self._current_task_id != task_id:
+            return self._request(
+                'GET',
+                f'/tasks/{self._current_task_id}/subtasks/{task_id}',
+            )
         return self._request('GET', f'/tasks/{task_id}')

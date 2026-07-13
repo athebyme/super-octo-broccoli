@@ -26,16 +26,21 @@ from models import (
 )
 from services.card_improver import apply_card_updates
 from services.standard_photos import compose_card_photo_urls, WB_MAX_PHOTOS
-from services.wb_api_client import WildberriesAPIClient
+from services.wb_api_client import WildberriesAPIClient, normalize_cards_error_list
 
 logger = logging.getLogger(__name__)
 
 JOB_TYPE = 'supplier_photos_update'
+VERIFY_JOB_TYPE = 'supplier_updates_verify'
 
 # Пауза между карточками в фоновом job: ~40-50 req/мин к media/save —
 # запас в бюджете Контента (у нас 80/мин при лимите WB 100/мин), чтобы
 # параллельные обновления цен/остатков и действия пользователя не упирались.
 JOB_ITEM_PAUSE_SECONDS = 1.0
+
+# Пауза перед авто-проверкой после дозагрузки: media/save обрабатывается
+# WB асинхронно, мгновенная сверка почти всегда даст «ещё обрабатывается».
+VERIFY_DELAY_SECONDS = 20
 
 
 def _json_len(column):
@@ -160,6 +165,152 @@ def build_target_photo_set(supplier_product: SupplierProduct, product: Product,
     return composed if composed else supplier_urls[:WB_MAX_PHOTOS]
 
 
+def verify_cards_on_wb(seller, product_ids: List[int]) -> dict:
+    """Сверка «долетели ли обновления до WB» по списку карточек продавца.
+
+    Два источника истины WB:
+      1. /content/v2/cards/error/list — асинхронные ошибки обработки
+         (WB отвечает 200/202 на save, а реальные отказы видны только здесь);
+      2. фактическая карточка (fetch_cards_by_nm_ids) — сравниваем число фото
+         на WB с целевым набором поставщика.
+
+    Статусы per-card: ok | pending (WB ещё обрабатывает) | error (ошибки WB)
+    | not_found (карточка не найдена на WB).
+    Попутно обновляет Product.photos_json фактическими URL с WB, чтобы
+    счётчики дельты хаба отражали реальность.
+    """
+    products = (
+        Product.query
+        .filter(
+            Product.id.in_(product_ids),
+            Product.seller_id == seller.id,
+            Product.nm_id.isnot(None),
+        )
+        .all()
+    )
+    summary = {'ok': 0, 'pending': 0, 'error': 0, 'not_found': 0}
+    if not products:
+        return {'items': [], 'summary': summary}
+
+    client = WildberriesAPIClient(seller.wb_api_key)
+    cards = client.fetch_cards_by_nm_ids(
+        [int(p.nm_id) for p in products], seller_id=seller.id
+    )
+    wb_errors = client.get_cards_error_list(seller_id=seller.id)
+    errors_by_nm, errors_by_vendor = normalize_cards_error_list(wb_errors)
+
+    # Целевое число фото: пины продавца + галерея поставщика
+    imps = {
+        imp.product_id: imp
+        for imp in ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.product_id.in_([p.id for p in products]),
+            ImportedProduct.supplier_product_id.isnot(None),
+        ).all()
+    }
+
+    items = []
+    for p in products:
+        nm_id = int(p.nm_id)
+        entry = {
+            'product_id': p.id,
+            'nm_id': nm_id,
+            'title': (p.title or '')[:80],
+            'vendor_code': p.vendor_code,
+            'wb_photos': None,
+            'expected_photos': None,
+            'errors': [],
+        }
+
+        msgs = errors_by_nm.get(nm_id) or errors_by_vendor.get(str(p.vendor_code or ''))
+        card = cards.get(nm_id)
+
+        expected = None
+        imp = imps.get(p.id)
+        if imp:
+            sp = db.session.get(SupplierProduct, imp.supplier_product_id)
+            if sp:
+                expected = len(build_target_photo_set(sp, p, seller.id))
+        entry['expected_photos'] = expected
+
+        if msgs:
+            entry['status'] = 'error'
+            entry['errors'] = [str(m) for m in msgs[:5]]
+            summary['error'] += 1
+        elif not card:
+            entry['status'] = 'not_found'
+            summary['not_found'] += 1
+        else:
+            photos = card.get('photos') or []
+            entry['wb_photos'] = len(photos)
+            # Синхронизируем локальный набор фото с фактом WB — дельта хаба
+            # пересчитается честно. Пустой список не пишем: WB мог ещё
+            # не закончить обработку media/save.
+            if photos:
+                urls = []
+                for ph in photos:
+                    if isinstance(ph, dict):
+                        url = ph.get('big') or ph.get('c516x688') or ph.get('square')
+                    else:
+                        url = ph if isinstance(ph, str) else None
+                    if url:
+                        urls.append(url)
+                if urls:
+                    p.photos_json = json.dumps(urls, ensure_ascii=False)
+            if expected is not None and len(photos) < expected:
+                entry['status'] = 'pending'
+                summary['pending'] += 1
+            else:
+                entry['status'] = 'ok'
+                summary['ok'] += 1
+        items.append(entry)
+
+    db.session.commit()
+
+    # Дельты изменились — чипы пересчитаются на следующем показе
+    try:
+        from services.ttl_cache import cache
+        cache.invalidate(f'supdates-chips:{seller.id}')
+    except Exception:
+        pass
+
+    return {'items': items, 'summary': summary}
+
+
+def run_verify_job(flask_app, job_uid: str, seller_id: int,
+                   product_ids: List[int]) -> None:
+    """Тело фонового потока: сверка карточек с WB (error list + фото)."""
+    with flask_app.app_context():
+        job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+        if not job or job.status == 'cancelled':
+            return
+        job.status = 'running'
+        job.total = len(product_ids)
+        db.session.commit()
+
+        try:
+            seller = db.session.get(Seller, seller_id)
+            report = verify_cards_on_wb(seller, product_ids)
+
+            job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+            if job.status != 'cancelled':
+                job.status = 'completed'
+            job.processed = len(report['items'])
+            job.succeeded = report['summary']['ok']
+            job.failed_count = report['summary']['error']
+            job.set_result(report)
+            db.session.commit()
+            logger.info(f"[SupplierVerify] job {job_uid} done: {report['summary']}")
+        except Exception as e:
+            logger.error(f"[SupplierVerify] job {job_uid} failed: {e}", exc_info=True)
+            db.session.rollback()
+            job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+            if job:
+                job.status = 'failed'
+                job.error_message = str(e)[:500]
+                db.session.commit()
+
+
 def run_photos_job(flask_app, job_uid: str, seller_id: int,
                    product_ids: List[int]) -> None:
     """Тело фонового потока: последовательная дозагрузка фото по карточкам."""
@@ -178,6 +329,7 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
 
         succeeded = failed = skipped = 0
         item_errors = []
+        succeeded_ids = []
 
         for idx, pid in enumerate(product_ids):
             # Проверка отмены между карточками
@@ -215,6 +367,7 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
                 )
                 if result.get('success') and result.get('wb_sync'):
                     succeeded += 1
+                    succeeded_ids.append(pid)
                 else:
                     failed += 1
                     outcome_error = result.get('error') or 'не применилось'
@@ -289,3 +442,22 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
         logger.info(
             f"[SupplierPhotos] job {job_uid} done: ok={succeeded} fail={failed} skip={skipped}"
         )
+
+        # Авто-сверка с WB: media/save обрабатывается асинхронно, поэтому
+        # ждём и одним проходом проверяем, что фото реально применились и
+        # WB не вернул ошибок обработки. Результат — в result джобы ('verify').
+        if succeeded_ids and job.status == 'completed':
+            try:
+                time.sleep(VERIFY_DELAY_SECONDS)
+                report = verify_cards_on_wb(seller, succeeded_ids)
+                job = BackgroundJob.query.filter_by(job_uid=job_uid).first()
+                result = job.get_result() or {}
+                result['verify'] = report
+                job.set_result(result)
+                db.session.commit()
+                logger.info(
+                    f"[SupplierPhotos] job {job_uid} verify: {report['summary']}"
+                )
+            except Exception as e:
+                logger.warning(f"[SupplierPhotos] verify после джобы не удался: {e}")
+                db.session.rollback()

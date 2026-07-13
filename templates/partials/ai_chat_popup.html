@@ -1,0 +1,124 @@
+<div class="sh-ai-pop"
+     x-data="aiChatPopup()"
+     x-init="init()"
+     data-route="{{ request.endpoint|default('')|e }}"
+     data-chat-url="{{ url_for('agents_dashboard') }}"
+     {% if product is defined and product and product.id is defined %}data-product-id="{{ product.id }}"{% endif %}
+     {% if supplier is defined and supplier and supplier.id is defined %}data-supplier-id="{{ supplier.id }}"{% endif %}
+     {% if task is defined and task and task.id is defined %}data-task-id="{{ task.id }}"{% endif %}
+     @keydown.escape.window="closePanel()">
+    <section id="sh-ai-pop-panel"
+             class="sh-ai-pop-panel"
+             x-show="open"
+             x-cloak
+             x-transition:enter="sh-ai-pop-enter"
+             x-transition:leave="sh-ai-pop-leave"
+             role="dialog"
+             aria-modal="false"
+             aria-labelledby="sh-ai-pop-title">
+        <header class="sh-ai-pop-head">
+            <div class="sh-ai-pop-identity">
+                <span class="sh-ai-pop-avatar" aria-hidden="true">A</span>
+                <span>
+                    <strong id="sh-ai-pop-title">ИИ-помощник</strong>
+                    <small><i class="sh-ai-pop-status"></i> Готов к диалогу</small>
+                </span>
+            </div>
+            <div class="sh-ai-pop-head-actions">
+                <a class="sh-ai-pop-full" :href="fullChatHref" title="Открыть полный чат">
+                    <span>Полный чат</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M18 13v5a1 1 0 01-1 1H6a1 1 0 01-1-1V7a1 1 0 011-1h5"/></svg>
+                </a>
+                <button type="button" class="sh-ai-pop-icon" @click="closePanel()" title="Закрыть" aria-label="Закрыть ИИ-помощника">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="sh-ai-pop-context" x-show="contextAttached" x-cloak>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2"/></svg>
+            <span>
+                <small>Контекст страницы</small>
+                <strong x-text="contextLabel"></strong>
+            </span>
+            <button type="button" @click="contextAttached = false" title="Не прикладывать контекст" aria-label="Не прикладывать контекст страницы">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>
+            </button>
+        </div>
+
+        <div class="sh-ai-pop-messages" x-ref="messages" aria-live="polite">
+            <template x-if="messages.length === 0">
+                <div class="sh-ai-pop-welcome">
+                    <span class="sh-ai-pop-welcome-mark" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3zM18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z"/></svg>
+                    </span>
+                    <h2>Чем помочь?</h2>
+                    <p>Вижу текущий раздел и могу использовать его как контекст задачи.</p>
+                    <div class="sh-ai-pop-suggestions">
+                        <button type="button" @click="useSuggestion('Проанализируй текущую страницу и предложи следующие действия')">Предложить действия</button>
+                        <button type="button" @click="useSuggestion('Найди риски и точки роста в текущем разделе')">Найти точки роста</button>
+                    </div>
+                </div>
+            </template>
+
+            <template x-for="message in messages" :key="message.id">
+                <article class="sh-ai-pop-message" :class="message.role === 'user' ? 'is-user' : 'is-assistant'">
+                    <span class="sh-ai-pop-message-author" x-text="message.role === 'user' ? 'Вы' : 'ИИ-помощник'"></span>
+                    <div class="sh-ai-pop-bubble">
+                        <p x-text="displayContent(message)"></p>
+                        <span class="sh-ai-pop-plan-state"
+                              x-show="message.kind === 'plan' && message.metadata && message.metadata.status === 'pending_approval'">
+                            Требуется подтверждение
+                        </span>
+                        <a class="sh-ai-pop-message-link"
+                           x-show="message.kind === 'plan' || message.kind === 'run'"
+                           :href="fullChatHref">
+                            Открыть ход работы
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                        </a>
+                    </div>
+                </article>
+            </template>
+
+            <div class="sh-ai-pop-typing" x-show="sending" x-cloak role="status" aria-label="ИИ-помощник отвечает">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+
+        <div class="sh-ai-pop-error" x-show="error" x-cloak role="alert">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 4.7L2.9 17.5A1.7 1.7 0 004.4 20h15.2a1.7 1.7 0 001.5-2.5L13.7 4.7a2 2 0 00-3.4 0z"/></svg>
+            <span x-text="error"></span>
+        </div>
+
+        <form class="sh-ai-pop-composer" @submit.prevent="sendMessage()">
+            <textarea x-ref="composer"
+                      x-model="draft"
+                      @input="resizeComposer()"
+                      @keydown.enter="handleEnter($event)"
+                      rows="1"
+                      maxlength="4000"
+                      placeholder="Спросите или поручите задачу..."
+                      aria-label="Сообщение ИИ-помощнику"></textarea>
+            <button type="submit" :disabled="!draft.trim() || sending" title="Отправить" aria-label="Отправить сообщение">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+            <div class="sh-ai-pop-composer-meta">
+                <span>Enter — отправить</span>
+                <a :href="fullChatHref">История и управление</a>
+            </div>
+        </form>
+    </section>
+
+    <button type="button"
+            class="sh-ai-pop-trigger"
+            :class="open ? 'is-open' : ''"
+            @click="togglePanel()"
+            :aria-expanded="open"
+            aria-controls="sh-ai-pop-panel"
+            title="ИИ-помощник"
+            aria-label="Открыть ИИ-помощника">
+        <svg class="sh-ai-pop-trigger-chat" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a3 3 0 01-3 3H9l-5 3 1.5-4A7 7 0 014 13V8a3 3 0 013-3h10a3 3 0 013 3v7zM9 10h.01M12 10h.01M15 10h.01"/></svg>
+        <svg class="sh-ai-pop-trigger-close" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        <span class="sh-ai-pop-trigger-pulse" x-show="!open" aria-hidden="true"></span>
+    </button>
+</div>

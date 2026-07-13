@@ -30,6 +30,10 @@
 
   AGENT_POLL_INTERVAL  — интервал опроса задач, сек (default: 5)
   AGENT_HEARTBEAT_INTERVAL — интервал heartbeat, сек (default: 30)
+  AGENT_RUN_TOKEN_BUDGET — лимит input+output токенов на ReAct run (default: 30000)
+  AGENT_RUN_API_BUDGET — максимум LLM API-вызовов одного запуска (default: 24)
+  AGENT_OBSERVATION_MAX_CHARS — максимум символов одного tool result в контексте (default: 1200)
+  AGENT_STEP_NAMER_ENABLED — разрешить отдельные LLM-вызовы для названий шагов (default: 0)
   LOG_LEVEL            — уровень логирования (default: INFO)
 """
 import os
@@ -80,8 +84,8 @@ def _load_remote_config() -> dict:
             _remote_config = resp.json().get('config', {})
             if _remote_config:
                 _logger.info(
-                    f"Remote LLM config loaded: "
-                    f"{', '.join(f'{k}={v[:20]}...' if len(str(v)) > 20 else f'{k}={v}' for k, v in _remote_config.items())}"
+                    "Remote non-secret LLM config loaded: %s",
+                    ', '.join(sorted(_remote_config)),
                 )
     except Exception as e:
         _logger.debug(f"Remote config unavailable: {e}")
@@ -97,7 +101,7 @@ _FIELD_DEFS = {
     'AGENT_API_KEY':      ('AGENT_API_KEY', '', str),
 
     # LLM провайдер (основной)
-    'LLM_PROVIDER':       ('LLM_PROVIDER', 'cloudru', str),
+    'LLM_PROVIDER':       ('LLM_PROVIDER', 'deepseek', str),
 
     # Cloud.ru Foundation Models (OpenAI-compatible) — основной провайдер
     'CLOUDRU_API_KEY':    ('CLOUDRU_API_KEY', '', str),
@@ -137,6 +141,11 @@ _FIELD_DEFS = {
     # Рантайм
     'POLL_INTERVAL':      ('AGENT_POLL_INTERVAL', '5', int),
     'HEARTBEAT_INTERVAL': ('AGENT_HEARTBEAT_INTERVAL', '30', int),
+    'RUN_TOKEN_BUDGET':   ('AGENT_RUN_TOKEN_BUDGET', '30000', int),
+    'RUN_API_BUDGET':     ('AGENT_RUN_API_BUDGET', '24', int),
+    'OBSERVATION_MAX_CHARS': ('AGENT_OBSERVATION_MAX_CHARS', '1200', int),
+    'MAX_PRODUCTS_PER_RUN': ('AGENT_MAX_PRODUCTS_PER_RUN', '200', int),
+    'STEP_NAMER_ENABLED': ('AGENT_STEP_NAMER_ENABLED', '0', int),
     'LOG_LEVEL':          ('LOG_LEVEL', 'INFO', str),
 
     # LLM параметры
@@ -201,16 +210,6 @@ class AgentConfig(metaclass=_AgentConfigMeta):
             errors.append('AGENT_ID not set')
         if not _resolve('AGENT_API_KEY'):
             errors.append('AGENT_API_KEY not set')
-
-        provider = _resolve('LLM_PROVIDER')
-        if provider == 'gemini' and not _resolve('GEMINI_API_KEY'):
-            errors.append('GEMINI_API_KEY not set (provider=gemini)')
-        if provider == 'claude' and not _resolve('ANTHROPIC_API_KEY'):
-            errors.append('ANTHROPIC_API_KEY not set (provider=claude)')
-        if provider == 'cloudru' and not _resolve('CLOUDRU_API_KEY'):
-            errors.append('CLOUDRU_API_KEY not set (provider=cloudru)')
-        if provider == 'openai_compat' and not _resolve('OPENAI_COMPAT_BASE_URL'):
-            errors.append('OPENAI_COMPAT_BASE_URL not set (provider=openai_compat)')
 
         if errors:
             raise ValueError(f"Agent config errors: {'; '.join(errors)}")

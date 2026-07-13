@@ -3,6 +3,8 @@
 Marketplaces and integration routes
 """
 import json
+from datetime import datetime, timedelta
+from functools import wraps
 from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, current_app
 from flask_login import login_required, current_user
 
@@ -14,8 +16,14 @@ from services.ai_service import AIClient
 marketplaces_bp = Blueprint('marketplaces', __name__, url_prefix='/admin/marketplaces')
 
 def admin_required(f):
-    from seller_platform import admin_required as global_admin_required
-    return global_admin_required(f)
+    """Keep the blueprint importable when seller_platform.py is __main__."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            flash('У вас нет прав для доступа к этой странице', 'danger')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated
 
 # ==================== WEB UI ====================
 
@@ -72,7 +80,7 @@ def categories(marketplace_id):
         grouped[parent].append(cat)
 
     enabled_count = MarketplaceCategory.query.filter_by(
-        marketplace_id=marketplace_id, is_enabled=True
+        marketplace_id=marketplace_id, is_enabled=True, is_available=True,
     ).count()
 
     return render_template(
@@ -92,8 +100,19 @@ def category_detail(category_id):
     """View and edit characteristics for a category."""
     category = MarketplaceCategory.query.get_or_404(category_id)
     characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=category_id).order_by(MarketplaceCategoryCharacteristic.required.desc(), MarketplaceCategoryCharacteristic.name).all()
-    
-    return render_template('admin_marketplace_category_detail.html', category=category, characteristics=characteristics)
+    characteristic_allowlists = {
+        str(charc.id): MarketplaceService.characteristic_allowlist_values(
+            charc.dictionary_json,
+        )
+        for charc in characteristics
+    }
+
+    return render_template(
+        'admin_marketplace_category_detail.html',
+        category=category,
+        characteristics=characteristics,
+        characteristic_allowlists=characteristic_allowlists,
+    )
 
 
 @marketplaces_bp.route('/prompt_tester')
@@ -174,12 +193,22 @@ def toggle_category(category_id):
     category = MarketplaceCategory.query.get_or_404(category_id)
     data = request.json
     new_state = bool(data.get('is_enabled', not category.is_enabled))
+    if new_state and not category.is_available:
+        return jsonify({
+            "success": False,
+            "error": "Категория больше недоступна в актуальном справочнике WB",
+        }), 409
     category.is_enabled = new_state
     db.session.commit()
 
     synced = False
     sync_error = None
-    if new_state and (not category.characteristics_count or category.characteristics_count == 0):
+    schema_stale = (
+        not category.characteristics_synced_at
+        or category.characteristics_synced_at < datetime.utcnow() - timedelta(hours=48)
+        or category.characteristics_sync_status != 'success'
+    )
+    if new_state and schema_stale:
         result = MarketplaceService.sync_category_characteristics(category_id)
         if result.get('success'):
             synced = True
@@ -208,6 +237,8 @@ def toggle_category_group(marketplace_id):
         return jsonify({"success": False, "error": "parent_name required"}), 400
 
     query = MarketplaceCategory.query.filter_by(marketplace_id=marketplace_id)
+    if is_enabled:
+        query = query.filter(MarketplaceCategory.is_available.is_(True))
     if parent_name == '__none__':
         query = query.filter(MarketplaceCategory.parent_name.is_(None))
     else:
@@ -222,47 +253,71 @@ def toggle_category_group(marketplace_id):
 @login_required
 @admin_required
 def sync_enabled_categories(marketplace_id):
-    """Sync characteristics for all enabled categories that haven't been synced yet (or have 0 characteristics)."""
-    categories = MarketplaceCategory.query.filter_by(
-        marketplace_id=marketplace_id,
-        is_enabled=True,
-    ).all()
-
-    to_sync = [c for c in categories if not c.characteristics_count or c.characteristics_count == 0]
-
-    if not to_sync:
-        return jsonify({"success": True, "message": "Все включённые категории уже синхронизированы", "synced": 0, "total_enabled": len(categories)})
-
-    synced = 0
-    errors = []
-    for cat in to_sync:
-        result = MarketplaceService.sync_category_characteristics(cat.id)
-        if result.get('success'):
-            synced += 1
-        else:
-            errors.append(f"{cat.subject_name}: {result.get('error', '?')}")
-
-    return jsonify({
-        "success": True,
-        "synced": synced,
-        "failed": len(errors),
-        "errors": errors[:10],
-        "total_enabled": len(categories),
-    })
+    """Refresh a bounded batch of stale enabled category schemas."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        limit = int(payload.get('limit', 50))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "limit должен быть числом"}), 400
+    result = MarketplaceService.sync_stale_characteristics(
+        marketplace_id,
+        limit=limit,
+    )
+    return jsonify(result), (200 if result.get('success') else 207)
 
 
 @marketplaces_bp.route('/characteristics/<int:charc_id>/update', methods=['POST'])
 @login_required
 @admin_required
 def update_characteristic(charc_id):
-    """Update characteristic properties (is_enabled, custom_instruction)."""
+    """Update characteristic properties and its manual WB allowlist."""
     charc = MarketplaceCategoryCharacteristic.query.get_or_404(charc_id)
-    
-    data = request.json
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({
+            "success": False,
+            "error": "Ожидается JSON-объект",
+        }), 400
+
+    if 'dictionary_values' in data:
+        if len(data) != 1:
+            return jsonify({
+                "success": False,
+                "error": "Словарь сохраняется отдельным запросом",
+            }), 400
+        try:
+            result = MarketplaceService.save_characteristic_allowlist(
+                charc.id,
+                data['dictionary_values'],
+            )
+        except LookupError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 404
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        except Exception:
+            current_app.logger.exception(
+                'Failed to save WB characteristic allowlist charc_id=%s',
+                charc.id,
+            )
+            return jsonify({
+                "success": False,
+                "error": "Не удалось сохранить словарь",
+            }), 500
+        return jsonify(result)
+
     if 'is_enabled' in data:
+        if charc.required and not bool(data['is_enabled']):
+            return jsonify({
+                "success": False,
+                "error": "Обязательную характеристику WB нельзя отключить",
+            }), 409
         charc.is_enabled = bool(data['is_enabled'])
     if 'ai_instruction' in data:
         charc.ai_instruction = data['ai_instruction']
+        charc.ai_instruction_source = (
+            'custom' if str(data['ai_instruction'] or '').strip() else 'generated'
+        )
         
     db.session.commit()
     return jsonify({"success": True})
@@ -288,7 +343,7 @@ def test_prompt():
         return jsonify({"success": False, "error": "Selected item not found"})
 
     characteristics = MarketplaceCategoryCharacteristic.query.filter_by(
-        category_id=category_id, is_enabled=True
+        category_id=category_id, is_enabled=True, is_available=True,
     ).all()
 
     if not characteristics:

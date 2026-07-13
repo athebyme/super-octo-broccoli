@@ -133,7 +133,7 @@
                             x-data="{ charCount: {{ cat.characteristics_count or 0 }}, syncStatus: '' }">
                             <td class="px-4 py-3 text-center">
                                 <button @click="toggleCategory({{ cat.id }}, $data)"
-                                    :disabled="toggling[{{ cat.id }}]"
+                                    :disabled="toggling[{{ cat.id }}] || (!available[{{ cat.id }}] && !enabled[{{ cat.id }}])"
                                     class="relative inline-flex flex-shrink-0 h-5 w-9 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-indigo-500 disabled:opacity-50"
                                     :class="enabled[{{ cat.id }}] ? 'bg-indigo-600' : 'bg-gray-200'"
                                     role="switch" :aria-checked="enabled[{{ cat.id }}]">
@@ -144,6 +144,9 @@
                             <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 font-mono">{{ cat.subject_id }}</td>
                             <td class="px-6 py-3 text-sm font-medium text-gray-900">
                                 {{ cat.subject_name }}
+                                {% if not cat.is_available %}
+                                <span class="ml-2 text-xs text-red-600 font-normal">Недоступна в WB</span>
+                                {% endif %}
                                 <span x-show="syncStatus" x-text="syncStatus" x-cloak
                                     class="ml-2 text-xs text-green-600 font-normal"></span>
                             </td>
@@ -160,6 +163,9 @@
                             </td>
                             <td class="px-6 py-3 whitespace-nowrap text-xs text-gray-500">
                                 {{ cat.characteristics_synced_at.strftime('%d.%m.%Y %H:%M') if cat.characteristics_synced_at else 'Никогда' }}
+                                <span class="block {% if cat.characteristics_sync_status == 'failed' %}text-red-600{% endif %}">
+                                    {{ cat.characteristics_sync_status or 'not_synced' }} · v{{ cat.characteristics_version or 0 }}
+                                </span>
                             </td>
                             <td class="px-6 py-3 whitespace-nowrap text-right text-sm font-medium">
                                 <a href="{{ url_for('marketplaces.category_detail', category_id=cat.id) }}"
@@ -198,10 +204,18 @@ function categoriesManager(marketplaceId) {
             {% endfor %}
             {% endfor %}
         },
+        available: {
+            {% for parent_name, children in grouped_categories.items() %}
+            {% for cat in children %}
+            {{ cat.id }}: {{ 'true' if cat.is_available else 'false' }},
+            {% endfor %}
+            {% endfor %}
+        },
         toast: { show: false, message: '', type: 'success' },
 
         get enabledCount() {
-            return Object.values(this.enabled).filter(Boolean).length;
+            return Object.entries(this.enabled)
+                .filter(([id, enabled]) => enabled && this.available[id]).length;
         },
 
         async toggleCategory(catId, rowData) {

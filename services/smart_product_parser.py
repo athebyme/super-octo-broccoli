@@ -1058,13 +1058,19 @@ class SmartProductParser:
                             marketplace_brand_name=result.brand_marketplace_name,
                             marketplace_brand_id=result.brand_marketplace_id,
                             status='verified',
+                            verified_at=datetime.utcnow(),
+                            is_available=True,
+                            last_seen_at=datetime.utcnow(),
                         )
                         db.session.add(mp_brand)
-                    elif existing.status != 'verified':
+                    elif existing.status != 'rejected':
                         existing.status = 'verified'
                         existing.marketplace_brand_name = result.brand_marketplace_name
                         if result.brand_marketplace_id:
                             existing.marketplace_brand_id = result.brand_marketplace_id
+                        existing.verified_at = datetime.utcnow()
+                        existing.is_available = True
+                        existing.last_seen_at = datetime.utcnow()
 
             stats['products_updated'] += updated
             stats['brands'].append({

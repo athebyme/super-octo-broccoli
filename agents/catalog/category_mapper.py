@@ -10,7 +10,11 @@
 import json
 import logging
 
-from ..base_agent import BaseAgent
+from ..base_agent import BaseAgent, _build_usage
+from ..platform_client import (
+    ReferenceDataUnavailableError,
+    require_usable_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,11 @@ logger = logging.getLogger(__name__)
 class CategoryMapperAgent(BaseAgent):
     agent_name = 'category-mapper'
     max_iterations = 18
+    tool_allowlist = (
+        'get_product', 'update_product', 'get_imported_products',
+        'get_imported_product', 'update_imported_product',
+        'batch_update_imported_products', 'search_wb_categories',
+    )
 
     system_prompt = """Ты — эксперт по категориям маркетплейса Wildberries.
 
@@ -41,6 +50,8 @@ class CategoryMapperAgent(BaseAgent):
   это значит нужная категория существует в WB, но не включена в системе.
   НЕ записывай disabled-категорию. Верни в результате: {"error": "category_disabled",
   "subject_id": ..., "subject_name": ..., "message": "Категория найдена, но не включена. Включите в разделе Маркетплейсы → Категории."}
+- Если reference_status.usable=false, не пытайся подобрать категорию по памяти и не
+  вызывай update tools. Останови задачу и сообщи, что нужна синхронизация с WB.
 - confidence: 1.0 = точное совпадение, 0.8-0.9 = очень похоже, 0.5-0.7 = приблизительно.
   НЕ ставь confidence выше 0.5 если категория не соответствует типу товара.
 
@@ -50,17 +61,42 @@ class CategoryMapperAgent(BaseAgent):
         """Batch: tool-assisted с предзагрузкой и кэшированием категорий. Single: ReAct."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'map_single')
-        if task_type in ('map_batch',):
-            product_ids = (
-                input_data.get('product_ids')
-                or input_data.get('imported_product_ids')
-                or []
-            )
-            if len(product_ids) > 1:
-                return self._execute_tool_batch(
-                    task, product_ids, chunk_size=15, max_workers=2,
+        try:
+            if task_type in ('map_batch',):
+                product_ids = (
+                    input_data.get('product_ids')
+                    or input_data.get('imported_product_ids')
+                    or []
                 )
-        return self._execute_react(task)
+                if len(product_ids) > 1:
+                    return self._execute_tool_batch(
+                        task, product_ids, chunk_size=15, max_workers=2,
+                    )
+            # One local SQL-backed call prevents spending any LLM tokens when
+            # the shared category snapshot is stale or failed.
+            self._search_categories_fresh('товары', limit=1)
+            return self._execute_react(task)
+        except ReferenceDataUnavailableError as exc:
+            total = len(input_data.get('product_ids') or input_data.get('imported_product_ids') or [])
+            return self._reference_blocked_result(exc, total)
+
+    @staticmethod
+    def _reference_blocked_result(exc, total=0):
+        return {
+            'status': 'needs_clarification',
+            'partial': True,
+            'reference_data_blocked': True,
+            'processed': 0,
+            'saved': 0,
+            'failed': total,
+            'message': str(exc),
+            'reference_status': exc.reference_status,
+            '_usage': _build_usage({}, mode='reference_preflight'),
+        }
+
+    def _search_categories_fresh(self, query, limit=10):
+        response = self.platform.search_categories(query, limit=limit)
+        return require_usable_reference(response, 'wb_categories')
 
     def _prefetch_reference_data(self, products_data: list[dict]) -> dict:
         """Предзагрузка: поиск категорий для уникальных category поставщика."""
@@ -78,10 +114,19 @@ class CategoryMapperAgent(BaseAgent):
         cached_searches = {}
         for cat_query in unique_categories:
             try:
-                results = self.platform.search_categories(cat_query, limit=10)
+                results = self._search_categories_fresh(cat_query, limit=10)
                 cached_searches[cat_query] = results
+            except ReferenceDataUnavailableError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to prefetch category search '{cat_query}': {e}")
+
+        if not unique_categories:
+            probe = next((
+                ' '.join(str(p.get('title') or '').split()[:2])
+                for p in products_data if len(str(p.get('title') or '').strip()) >= 2
+            ), 'товары')
+            cached_searches[probe] = self._search_categories_fresh(probe, limit=10)
 
         return {'cached_category_searches': cached_searches}
 

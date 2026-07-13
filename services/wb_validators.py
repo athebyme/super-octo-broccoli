@@ -12,6 +12,12 @@ class WBValidationError(Exception):
     pass
 
 
+# Внутренний контекст для batch safety boundary. Эти поля удаляются клиентом
+# перед HTTP и никогда не являются частью WB wire-contract.
+WB_SUBJECT_CONTEXT_KEY = '_wb_subjectID'
+WB_CHARACTERISTICS_CHANGED_KEY = '_wb_characteristics_changed'
+
+
 def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """
     Валидация данных карточки товара перед отправкой в WB API
@@ -74,7 +80,7 @@ def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
                         errors.append(f"Вес имеет слишком много знаков после запятой ({decimal_places}, максимум 3)")
 
     # Валидация characteristics
-    if 'characteristics' in card_data and card_data['characteristics']:
+    if 'characteristics' in card_data:
         chars = card_data['characteristics']
         if not isinstance(chars, list):
             errors.append("Поле 'characteristics' должно быть массивом")
@@ -294,15 +300,73 @@ def prepare_card_for_update(
     Returns:
         Подготовленная карточка для отправки в API
     """
+    if not isinstance(full_card, dict) or not isinstance(updates, dict):
+        raise WBValidationError('full_card и updates должны быть объектами')
+
+    subject_context = (
+        full_card.get('subjectID')
+        or full_card.get(WB_SUBJECT_CONTEXT_KEY)
+    )
+    previous_changed_ids = full_card.get(WB_CHARACTERISTICS_CHANGED_KEY)
+    characteristics_changed_ids = (
+        list(previous_changed_ids)
+        if isinstance(previous_changed_ids, list) else []
+    )
+
     # Копируем полную карточку
     prepared = full_card.copy()
 
-    # Применяем обновления
+    # Legacy Product мог хранить {name: value}. Нельзя позволять wire-
+    # normalizer молча превратить такой объект в [], поэтому сначала точно
+    # маппим его по category schema/admin dictionaries. При отсутствии
+    # контекста или невалидном значении обновление блокируется.
+    if 'characteristics' in prepared and not isinstance(
+        prepared['characteristics'], list
+    ):
+        legacy_characteristics = prepared['characteristics']
+        if legacy_characteristics == {}:
+            prepared['characteristics'] = []
+        elif isinstance(legacy_characteristics, dict):
+            if subject_context is None:
+                raise WBValidationError(
+                    'subjectID обязателен для преобразования legacy characteristics'
+                )
+            from services.marketplace_validator import build_wb_characteristic_patch
+            prepared['characteristics'] = build_wb_characteristic_patch(
+                subject_context,
+                legacy_characteristics,
+            )
+        else:
+            raise WBValidationError(
+                "Поле полной карточки 'characteristics' должно быть массивом"
+            )
+
+    # Применяем обновления. characteristics — patch по charc_id: WB требует
+    # отправить полный массив, поэтому нельзя стирать остальные значения.
     for key, value in updates.items():
         if key == 'dimensions' and isinstance(value, dict) and isinstance(prepared.get('dimensions'), dict):
             merged_dimensions = dict(prepared.get('dimensions') or {})
             merged_dimensions.update(value)
             prepared[key] = merged_dimensions
+        elif key == 'characteristics':
+            if value == {}:
+                value = []
+            if not isinstance(value, list):
+                raise WBValidationError(
+                    "Поле 'characteristics' должно быть массивом; "
+                    'null и объект не могут заменить весь список'
+                )
+            from services.marketplace_validator import merge_wb_characteristics
+            prepared[key] = merge_wb_characteristics(
+                prepared.get('characteristics'), value)
+            characteristics_changed_ids = []
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    characteristics_changed_ids.append(int(item.get('id')))
+                except (TypeError, ValueError):
+                    continue
         else:
             prepared[key] = value
 
@@ -331,6 +395,13 @@ def prepare_card_for_update(
     from services.wb_content_payload import normalize_update_card_payload
 
     prepared = normalize_update_card_payload(prepared)
+
+    # Переносим subject context до batch boundary, где будет
+    # выполнена обязательная admin-dictionary validation. Клиент
+    # удаляет оба marker-поля до сети.
+    if subject_context is not None:
+        prepared[WB_SUBJECT_CONTEXT_KEY] = subject_context
+    prepared[WB_CHARACTERISTICS_CHANGED_KEY] = characteristics_changed_ids
 
     # Проверяем обязательные поля
     required_fields = ['nmID', 'vendorCode', 'sizes']
@@ -535,6 +606,7 @@ def prepare_batch_cards_safe(
     cards_to_update = []
     product_map = {}
     skipped_errors = []
+    characteristic_validation_cache = {}
 
     # Фильтруем продукты с валидным nm_id
     valid_products = []
@@ -582,10 +654,22 @@ def prepare_batch_cards_safe(
             if updates is None:
                 continue
 
-            for key, value in updates.items():
-                full_card[key] = value
+            if 'characteristics' in updates:
+                from services.marketplace_validator import (
+                    build_wb_characteristic_patch,
+                )
+                subject_id = (
+                    full_card.get('subjectID')
+                    or getattr(product, 'subject_id', None)
+                )
+                updates = dict(updates)
+                updates['characteristics'] = build_wb_characteristic_patch(
+                    subject_id,
+                    updates['characteristics'],
+                    validation_cache=characteristic_validation_cache,
+                )
 
-            card_ready = prepare_card_for_update(full_card, {})
+            card_ready = prepare_card_for_update(full_card, updates)
             cards_to_update.append(card_ready)
             product_map[product.nm_id] = product
 

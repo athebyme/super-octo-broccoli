@@ -1,704 +1,447 @@
 {% extends "base.html" %}
 
-{% block title %}Агенты — Seller Hub{% endblock %}
+{% block title %}ИИ-помощник — Seller Hub{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='agent-chat.css', v='20260713-4') }}">
+{% endblock %}
 
 {% block content %}
-<div class="sh-page" x-data="agentsDashboard()">
+<script id="agent-chat-initial" type="application/json">{{ initial_payload | tojson }}</script>
+<script id="agent-chat-conversations" type="application/json">{{ conversation_items | tojson }}</script>
+<script id="agent-chat-runtime" type="application/json">{{ runtime | tojson }}</script>
+<script id="agent-chat-model-policy" type="application/json">{{ model_policy | tojson }}</script>
 
-    <!-- Заголовок -->
-    <div class="sh-page-header">
-        <div class="sh-page-header-content">
-            <div>
-                <h1 class="sh-page-title">Сервисные агенты</h1>
-                <p class="sh-page-subtitle">AI-агенты автоматизируют рутинные задачи: категоризация, размеры, SEO, модерация</p>
-                <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">
-                    <span class="sh-badge sh-badge--sm" style="background:rgba(16,185,129,.15);color:#34d399">
-                        <span class="sh-badge-dot" style="color:#34d399"></span>
-                        Online: <span x-text="onlineCount" style="margin-left:4px">0</span>
-                    </span>
-                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
-                        Задач в работе: {{ active_tasks|length }}
-                    </span>
-                    <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
-                        Успешность (7д): {{ stats.success_rate }}%
-                    </span>
-                </div>
-            </div>
-            {% if current_user.is_admin %}
-            <div class="sh-page-actions">
-                <button @click="showCreateTask = true" class="sh-btn sh-btn--white sh-btn--md">
-                    <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg></span>
-                    Создать задачу
-                </button>
-                <button @click="showRegister = true" class="sh-btn sh-btn--white-outline sh-btn--md">
-                    <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg></span>
-                    Свой агент
-                </button>
-            </div>
-            {% endif %}
-        </div>
-    </div>
+<div class="agent-shell" x-data="unifiedAgentChat()" x-init="init()" @keydown.escape.window="closePanels()">
+    <div class="agent-mobile-backdrop" x-show="historyOpen || inspectorOpen" x-cloak @click="closePanels()"></div>
 
-    <!-- Статистика -->
-    <div class="sh-stat-grid sh-stat-grid--5">
-        <div class="sh-stat-card">
-            <span class="sh-stat-label">Всего задач (7д)</span>
-            <div class="sh-stat-value">{{ stats.total }}</div>
-        </div>
-        <div class="sh-stat-card">
-            <span class="sh-stat-label">Выполнено</span>
-            <div class="sh-stat-value" style="color:#16a34a">{{ stats.completed }}</div>
-        </div>
-        <div class="sh-stat-card">
-            <span class="sh-stat-label">Ошибки</span>
-            <div class="sh-stat-value" style="color:#dc2626">{{ stats.failed }}</div>
-        </div>
-        <div class="sh-stat-card">
-            <span class="sh-stat-label">В очереди</span>
-            <div class="sh-stat-value" style="color:#d97706">{{ stats.queued }}</div>
-        </div>
-        <div class="sh-stat-card">
-            <span class="sh-stat-label">Ср. время</span>
-            <div class="sh-stat-value">{{ stats.avg_duration_seconds }}с</div>
-        </div>
-    </div>
-
-    <!-- ═══ КАК НАЧАТЬ ═══ -->
-    <div class="mb-8 bg-white rounded-lg border border-gray-200 border-l-4 border-l-blue-500 p-5" x-data="{ showGuide: false }">
-        <div class="flex items-start justify-between">
-            <div class="flex items-start gap-3">
-                <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                    </svg>
-                </div>
+    <aside class="agent-history" :class="historyOpen ? 'is-open' : ''" aria-label="История диалогов">
+        <div class="agent-history-head">
+            <div class="agent-brand">
+                <span class="agent-brand-mark">A</span>
                 <div>
-                    <h3 class="text-sm font-semibold text-gray-900">Как работают агенты?</h3>
-                    <p class="text-sm text-gray-700 mt-1 leading-relaxed">
-                        Агенты — это AI-сервисы, которые автоматизируют рутину: категоризация, SEO, проверка карточек, импорт.
-                        Каждый агент работает автономно, берёт задачи из очереди и показывает ход выполнения в реальном времени.
-                    </p>
+                    <strong>ИИ-помощник</strong>
+                    <span>Seller Hub</span>
                 </div>
             </div>
-            <button @click="showGuide = !showGuide" class="text-sm text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap ml-4 mt-1"
-                    x-text="showGuide ? 'Скрыть' : 'Подробнее'"></button>
+            <button type="button" class="agent-icon-button agent-mobile-only" @click="historyOpen = false" title="Закрыть историю" aria-label="Закрыть историю">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
         </div>
 
-        <div x-show="showGuide" x-cloak x-transition class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div class="bg-gray-50 rounded-lg p-4">
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="w-5 h-5 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center justify-center">1</span>
-                    <span class="text-sm font-semibold text-gray-900">Активируйте агента</span>
-                </div>
-                <p class="text-sm text-gray-700 leading-relaxed">
-                    Нажмите «Активировать» на карточке нужного агента. Система зарегистрирует его и выдаст API-ключ.
-                    {% if not current_user.is_admin %}
-                    <span class="text-amber-600 font-medium">Доступно только администраторам.</span>
-                    {% endif %}
-                </p>
-            </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="w-5 h-5 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center justify-center">2</span>
-                    <span class="text-sm font-semibold text-gray-900">Запустите процесс</span>
-                </div>
-                <p class="text-sm text-gray-700 leading-relaxed">
-                    Запустите контейнер агента (Docker) с полученным API-ключом. Агент подключится к платформе и перейдёт в статус «Online».
-                </p>
-            </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="w-5 h-5 rounded-full bg-blue-500 text-white text-xs font-bold flex items-center justify-center">3</span>
-                    <span class="text-sm font-semibold text-gray-900">Создайте задачу</span>
-                </div>
-                <p class="text-sm text-gray-700 leading-relaxed">
-                    Задачи создаются автоматически (при импорте товаров) или вручную через API. Агент возьмёт задачу из очереди и выполнит её.
-                </p>
-            </div>
-        </div>
-    </div>
+        <button type="button" class="agent-new-chat" @click="newConversation()" :disabled="busy">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            Новый диалог
+        </button>
 
-    <!-- ═══ КАТАЛОГ АГЕНТОВ ═══ -->
-    {% macro agent_icon(icon, cls) %}
-        {% if icon == 'tag' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
-        {% elif icon == 'ruler' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-        {% elif icon == 'download' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-        {% elif icon == 'list' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
-        {% elif icon == 'pen' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-        {% elif icon == 'camera' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-        {% elif icon == 'badge' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-        {% elif icon == 'chart' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-        {% elif icon == 'shield' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-        {% elif icon == 'message' %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-        {% else %}
-        <svg class="{{ cls }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-        {% endif %}
-    {% endmacro %}
-
-    {% macro color_classes(color, part) %}
-        {# part: 'bg', 'text', 'border', 'bg_light' #}
-        {% if part == 'bg' %}
-            {% if color == 'blue' %}bg-blue-500{% elif color == 'violet' %}bg-violet-500{% elif color == 'emerald' %}bg-emerald-500{% elif color == 'amber' %}bg-amber-500{% elif color == 'red' %}bg-red-500{% elif color == 'pink' %}bg-pink-500{% elif color == 'cyan' %}bg-cyan-500{% elif color == 'indigo' %}bg-indigo-500{% else %}bg-gray-500{% endif %}
-        {% elif part == 'bg_light' %}
-            {% if color == 'blue' %}bg-blue-50{% elif color == 'violet' %}bg-violet-50{% elif color == 'emerald' %}bg-emerald-50{% elif color == 'amber' %}bg-amber-50{% elif color == 'red' %}bg-red-50{% elif color == 'pink' %}bg-pink-50{% elif color == 'cyan' %}bg-cyan-50{% elif color == 'indigo' %}bg-indigo-50{% else %}bg-gray-50{% endif %}
-        {% elif part == 'text' %}
-            {% if color == 'blue' %}text-blue-600{% elif color == 'violet' %}text-violet-600{% elif color == 'emerald' %}text-emerald-600{% elif color == 'amber' %}text-amber-600{% elif color == 'red' %}text-red-600{% elif color == 'pink' %}text-pink-600{% elif color == 'cyan' %}text-cyan-600{% elif color == 'indigo' %}text-indigo-600{% else %}text-gray-600{% endif %}
-        {% elif part == 'border' %}
-            {% if color == 'blue' %}border-blue-200{% elif color == 'violet' %}border-violet-200{% elif color == 'emerald' %}border-emerald-200{% elif color == 'amber' %}border-amber-200{% elif color == 'red' %}border-red-200{% elif color == 'pink' %}border-pink-200{% elif color == 'cyan' %}border-cyan-200{% elif color == 'indigo' %}border-indigo-200{% else %}border-gray-200{% endif %}
-        {% endif %}
-    {% endmacro %}
-
-    {% for cat_key, cat in catalog.items() %}
-    {% if cat.agents %}
-    <div class="mb-8">
-        <h2 class="text-base font-semibold text-gray-900 mb-4">{{ cat.label }}</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {% for agent in cat.agents %}
-            <div class="bg-white rounded-lg border border-gray-200 p-5 hover:shadow-md transition-all relative group">
-                <!-- Статус-индикатор -->
-                {% if agent.registered and agent.is_online %}
-                <div class="absolute top-4 right-4">
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700">
-                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        Online
+        <div class="agent-history-list">
+            <p class="agent-history-label">Недавние</p>
+            <template x-for="item in conversations" :key="item.id">
+                <button type="button" class="agent-history-item"
+                    :class="item.id === conversation.id ? 'is-active' : ''"
+                    @click="openConversation(item.id)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 01-8 8H6l-3 2 1-5a8 8 0 118-13 8 8 0 019 8z"/></svg>
+                    <span>
+                        <strong x-text="item.title || 'Новый диалог'"></strong>
+                        <small x-text="formatRelativeDate(item.last_message_at)"></small>
                     </span>
-                </div>
-                {% elif agent.registered %}
-                <div class="absolute top-4 right-4">
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
-                        <span class="w-1.5 h-1.5 rounded-full bg-gray-400"></span>
-                        Offline
-                    </span>
-                </div>
-                {% endif %}
-
-                <div class="flex items-start gap-3.5 mb-3">
-                    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 {{ color_classes(agent.color, 'bg_light') }} {{ color_classes(agent.color, 'text') }}">
-                        {{ agent_icon(agent.icon, 'w-5 h-5') }}
-                    </div>
-                    <div class="min-w-0 pr-16">
-                        <h3 class="font-semibold text-gray-900 text-sm">{{ agent.display_name }}</h3>
-                        <p class="text-[11px] text-gray-400 mt-0.5">{{ agent.name }}{% if agent.version %} &middot; v{{ agent.version }}{% endif %}</p>
-                    </div>
-                </div>
-
-                <p class="text-xs text-gray-500 mb-3 leading-relaxed">{{ agent.description }}</p>
-
-                <!-- Возможности -->
-                <div class="flex flex-wrap gap-1 mb-3">
-                    {% for cap in agent.capabilities[:6] %}
-                    <span class="px-1.5 py-0.5 rounded text-[10px] {{ color_classes(agent.color, 'bg_light') }} {{ color_classes(agent.color, 'text') }}">{{ cap }}</span>
-                    {% endfor %}
-                </div>
-
-                <!-- Сценарии -->
-                {% if agent.task_types_display %}
-                <div class="text-[10px] text-gray-400 mb-3">
-                    Сценарии: {{ agent.task_types_display | join(', ') }}
-                </div>
-                {% endif %}
-
-                <!-- Подсказка -->
-                {% if agent.hint %}
-                <div class="text-xs text-gray-700 bg-gray-50 rounded px-2.5 py-2 mb-3 leading-relaxed">
-                    <svg class="w-3 h-3 inline-block mr-0.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-                    {{ agent.hint }}
-                </div>
-                {% endif %}
-
-                <!-- Кнопка -->
-                {% if agent.registered %}
-                    {% if agent.last_heartbeat %}
-                    <div class="text-[10px] text-gray-400">
-                        Heartbeat: {{ agent.last_heartbeat.strftime('%d.%m %H:%M:%S') }}
-                    </div>
-                    {% else %}
-                    <div class="text-[10px] text-gray-400">
-                        Активирован, ожидает подключения
-                    </div>
-                    {% endif %}
-                    {% if current_user.is_admin and agent.id %}
-                    <form action="{{ url_for('agents_admin_regenerate_key', agent_id=agent.id) }}" method="POST" class="mt-1">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit"
-                                class="text-[10px] text-gray-400 hover:text-gray-600 underline underline-offset-2 transition-colors">
-                            Перегенерировать ключ
-                        </button>
-                    </form>
-                    {% endif %}
-                {% elif current_user.is_admin %}
-                <form action="{{ url_for('agents_admin_seed', agent_name=agent.name) }}" method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit"
-                            class="w-full mt-1 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors
-                                   {{ color_classes(agent.color, 'border') }} {{ color_classes(agent.color, 'text') }}
-                                   hover:{{ color_classes(agent.color, 'bg_light') }}">
-                        Активировать
-                    </button>
-                </form>
-                {% else %}
-                <div class="mt-1 px-3 py-1.5 text-xs text-center text-gray-400 bg-gray-50 rounded-md">
-                    Не активирован — обратитесь к администратору
-                </div>
-                {% endif %}
-            </div>
-            {% endfor %}
+                </button>
+            </template>
         </div>
-    </div>
-    {% endif %}
-    {% endfor %}
 
-    <!-- ═══ ЗАДАЧИ ═══ -->
+        <div class="agent-history-foot">
+            <a href="{{ url_for('profile_page') }}" class="agent-model-link">
+                <span class="agent-status-dot" :class="runtime.online ? 'is-online' : 'is-offline'"></span>
+                <span>
+                    <strong x-text="friendlyModel(modelPolicy.primary_model)"></strong>
+                    <small x-text="modelPolicy.single_model ? 'Одна модель' : 'Pro + Flash'"></small>
+                </span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+            </a>
+        </div>
+    </aside>
 
-    <!-- Табы задач -->
-    <div class="mb-6 border-b border-gray-200">
-        <nav class="flex gap-4" aria-label="Tabs">
-            <button @click="activeTab = 'active'" :class="activeTab === 'active' ? 'border-brand text-brand' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
-                    class="pb-3 px-1 border-b-2 text-sm font-medium transition-colors flex items-center gap-2"
-                    role="tab" :aria-selected="activeTab === 'active'">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                </svg>
-                Активные
-                {% if active_tasks %}<span class="ml-1 px-1.5 py-0.5 rounded-full text-xs bg-brand/10 text-brand">{{ active_tasks|length }}</span>{% endif %}
-            </button>
-            <button @click="activeTab = 'completed'" :class="activeTab === 'completed' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
-                    class="pb-3 px-1 border-b-2 text-sm font-medium transition-colors flex items-center gap-2"
-                    role="tab" :aria-selected="activeTab === 'completed'">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                </svg>
-                Завершённые
-            </button>
-            <button @click="activeTab = 'failed'" :class="activeTab === 'failed' ? 'border-red-500 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
-                    class="pb-3 px-1 border-b-2 text-sm font-medium transition-colors flex items-center gap-2"
-                    role="tab" :aria-selected="activeTab === 'failed'">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                </svg>
-                Ошибки
-                {% if failed_tasks %}<span class="ml-1 px-1.5 py-0.5 rounded-full text-xs bg-red-100 text-red-700">{{ failed_tasks|length }}</span>{% endif %}
-            </button>
-        </nav>
-    </div>
+    <section class="agent-chat" aria-label="Диалог с ИИ-помощником">
+        <header class="agent-chat-head">
+            <div class="agent-head-left">
+                <button type="button" class="agent-icon-button agent-mobile-only" @click="historyOpen = true" title="Открыть историю" aria-label="Открыть историю">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                </button>
+                <div class="agent-title-block">
+                    <h1 x-text="conversation.title || 'Новый диалог'"></h1>
+                    <div class="agent-runtime-line">
+                        <span class="agent-status-dot" :class="runtime.online ? 'is-online' : 'is-offline'"></span>
+                        <span x-text="runtime.online ? 'Готов к работе' : 'Исполнитель не подключён'"></span>
+                        <template x-if="run && ['queued', 'running'].includes(run.status)">
+                            <span class="agent-runtime-current" x-text="statusLabel(run.status)"></span>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            <div class="agent-head-actions">
+                <button type="button" class="agent-icon-button" @click="inspectorOpen = !inspectorOpen" :class="inspectorOpen ? 'is-active' : ''" title="Ход работы" aria-label="Показать ход работы">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-7"/></svg>
+                </button>
+            </div>
+        </header>
 
-    <!-- Активные задачи -->
-    <div x-show="activeTab === 'active'" x-cloak role="tabpanel" aria-label="Активные задачи" aria-live="polite">
-        {% if active_tasks %}
-        <div class="space-y-3">
-            {% for task in active_tasks %}
-            <a href="{{ url_for('agent_task_detail', task_id=task.id) }}"
-               class="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-all group">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-3">
-                        <div class="relative">
-                            {% if task.status == 'running' %}
-                            <div class="w-8 h-8 rounded-full border-2 border-brand border-t-transparent animate-spin"></div>
-                            {% else %}
-                            <div class="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
-                                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                                </svg>
+        <div class="agent-error" :class="errorKind === 'success' ? 'is-success' : ''" x-show="error" x-cloak role="alert">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 4.7L2.9 17.5A1.7 1.7 0 004.4 20h15.2a1.7 1.7 0 001.5-2.5L13.7 4.7a2 2 0 00-3.4 0z"/></svg>
+            <span x-text="error"></span>
+            <button type="button" @click="error = ''" aria-label="Закрыть">Закрыть</button>
+        </div>
+
+        <div class="agent-messages" x-ref="messages" @scroll.passive="trackScroll()">
+            <div class="agent-message-column">
+                <template x-if="messages.length === 0">
+                    <div class="agent-welcome">
+                        <div class="agent-welcome-mark">
+                            <span></span><span></span><span></span>
+                        </div>
+                        <h2>Что нужно сделать?</h2>
+                        <p>Опишите цель обычным языком. Я найду данные и настройки, соберу план и не изменю ничего важного без подтверждения.</p>
+                        <div class="agent-suggestions">
+                            <button type="button" @click="useSuggestion('Проведи аудит карточек и найди основные проблемы')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l2 2 4-4m5-3a11 11 0 01-8-3 11 11 0 01-8 3v5c0 5 3.4 9.6 8 11 4.6-1.4 8-6 8-11V6z"/></svg>
+                                <span><strong>Аудит карточек</strong><small>Ошибки, модерация и рейтинг</small></span>
+                            </button>
+                            <button type="button" @click="useSuggestion('Улучши SEO заголовки и описания товаров')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11a2.8 2.8 0 00-4-4L4 16v4zM13 7l4 4"/></svg>
+                                <span><strong>Улучшить SEO</strong><small>Заголовки, описания и проверка</small></span>
+                            </button>
+                            <button type="button" @click="useSuggestion('Проверь цены и маржинальность товаров')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg>
+                                <span><strong>Проверить цены</strong><small>Маржа и ценовые аномалии</small></span>
+                            </button>
+                            <button type="button" @click="useSuggestion('Подготовь выбранные товары к публикации на WB')">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l4 5-4 2-4-2 4-5zM8 8l-3 4 3 7h8l3-7-3-4M12 10v9"/></svg>
+                                <span><strong>Подготовить к WB</strong><small>Категории, поля, SEO и проверка</small></span>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+
+                <template x-for="message in messages" :key="message.id">
+                    <article class="agent-message" :class="'is-' + message.role + ' is-' + message.kind">
+                        <template x-if="message.role === 'assistant'">
+                            <div class="agent-avatar">A</div>
+                        </template>
+                        <div class="agent-message-body">
+                            <div class="agent-message-meta">
+                                <strong x-text="message.role === 'user' ? 'Вы' : 'ИИ-помощник'"></strong>
+                                <time x-text="formatTime(message.created_at)"></time>
                             </div>
-                            {% endif %}
-                        </div>
-                        <div>
-                            <h3 class="font-medium text-gray-900 text-sm group-hover:text-brand transition-colors">{{ task.title }}</h3>
-                            <p class="text-xs text-gray-500">
-                                {{ task.agent.display_name if task.agent else 'Неизвестный агент' }}
-                                &middot; {{ task.task_type }}
-                                &middot; {{ task.created_at.strftime('%H:%M') if task.created_at else '' }}
-                            </p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-4">
-                        {% if task.status == 'running' and task.current_step_label %}
-                        <span class="text-xs text-gray-500 max-w-[200px] truncate hidden lg:inline">{{ task.current_step_label }}</span>
-                        {% endif %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium
-                            {% if task.status == 'running' %}bg-brand/10 text-brand{% else %}bg-amber-100 text-amber-700{% endif %}">
-                            {% if task.status == 'running' %}Выполняется{% else %}В очереди{% endif %}
-                        </span>
-                    </div>
-                </div>
-                {% if task.status == 'running' and task.total_steps > 0 %}
-                <div class="mt-2">
-                    <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
-                        <span>Прогресс</span>
-                        <span>{{ task.completed_steps }} / {{ task.total_steps }}</span>
-                    </div>
-                    <div class="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <div class="h-full bg-brand rounded-full transition-all duration-500"
-                             style="width: {{ task.progress_percent }}%"></div>
-                    </div>
-                </div>
-                {% endif %}
-            </a>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="bg-white rounded-lg border border-gray-200 p-12 text-center">
-            <svg class="w-16 h-16 mx-auto text-gray-200 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-            </svg>
-            <p class="text-gray-500 text-sm">Нет активных задач</p>
-            <p class="text-gray-400 text-xs mt-1 max-w-md mx-auto">Активируйте агентов выше и запустите их контейнеры. Задачи создаются автоматически при импорте товаров или через Internal API.</p>
-        </div>
-        {% endif %}
-    </div>
 
-    <!-- Завершённые задачи -->
-    <div x-show="activeTab === 'completed'" x-cloak>
-        {% if recent_tasks %}
-        <div class="space-y-2">
-            {% for task in recent_tasks %}
-            <a href="{{ url_for('agent_task_detail', task_id=task.id) }}"
-               class="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-all group">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-emerald-50 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                            </svg>
+                            <template x-if="message.kind === 'text' || message.kind === 'clarification' || message.kind === 'status'">
+                                <div class="agent-text" x-text="message.content"></div>
+                            </template>
+
+                            <template x-if="message.kind === 'plan'">
+                                <div class="agent-plan">
+                                    <div class="agent-plan-head">
+                                        <div>
+                                            <span class="agent-kicker">План работы</span>
+                                            <h3 x-text="message.metadata.title"></h3>
+                                        </div>
+                                        <span class="agent-risk" :class="message.metadata.risk === 'read' ? 'is-read' : 'is-write'"
+                                            x-text="message.metadata.risk === 'read' ? 'Только анализ' : 'Изменит данные'"></span>
+                                    </div>
+                                    <p class="agent-plan-summary" x-text="message.content"></p>
+                                    <ol class="agent-plan-steps">
+                                        <template x-for="(step, index) in message.metadata.steps || []" :key="index">
+                                            <li>
+                                                <span x-text="index + 1"></span>
+                                                <div><strong x-text="step.label"></strong><small x-text="skillLabel(step.agent)"></small></div>
+                                            </li>
+                                        </template>
+                                    </ol>
+                                    <div class="agent-impact">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+                                        <span><strong>Область:</strong> <span x-text="message.metadata.scope_label"></span></span>
+                                    </div>
+                                    <div class="agent-plan-actions" x-show="['pending_approval', 'runtime_unavailable'].includes(message.metadata.status)">
+                                        <button type="button" class="agent-button is-primary" @click="approvePlan(message)" :disabled="busy || !runtime.online">Подтвердить и запустить</button>
+                                        <button type="button" class="agent-button" @click="rejectPlan(message)" :disabled="busy">Отменить</button>
+                                        <span x-show="!runtime.online">Подключите runtime агента</span>
+                                    </div>
+                                    <div class="agent-plan-state" x-show="message.metadata.status === 'rejected'">План отменён, данные не изменялись.</div>
+                                </div>
+                            </template>
+
+                            <template x-if="message.kind === 'run'">
+                                <div class="agent-run-card">
+                                    <div class="agent-run-row">
+                                        <span class="agent-run-icon" :class="'is-' + (message.metadata.status || 'queued')">
+                                            <svg x-show="message.metadata.status === 'completed'" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg>
+                                            <svg x-show="message.metadata.status === 'failed'" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
+                                            <svg x-show="!['completed','failed'].includes(message.metadata.status)" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2l2.8 2.8M18.4 5.6l-2.8 2.8m-7.2 7.2l-2.8 2.8"/></svg>
+                                        </span>
+                                        <div>
+                                            <strong x-text="statusLabel(message.metadata.status)"></strong>
+                                            <p x-text="message.content"></p>
+                                        </div>
+                                        <span class="agent-duration" x-show="message.metadata.duration_seconds" x-text="formatDuration(message.metadata.duration_seconds)"></span>
+                                    </div>
+                                    <div class="agent-progress" x-show="['queued','running'].includes(message.metadata.status)">
+                                        <span :style="`width:${message.metadata.progress_percent || 4}%`"></span>
+                                    </div>
+                                    <div class="agent-artifacts" x-show="runArtifacts(message).length">
+                                        <template x-for="(artifact, artifactIndex) in runArtifacts(message)" :key="`${artifact.entity_kind || artifact.type}-${artifact.id}-${artifactIndex}`">
+                                            <div>
+                                                <template x-if="artifact.type === 'collection'">
+                                                    <article class="agent-artifact agent-collection">
+                                                        <button type="button" class="agent-artifact-head agent-collection-toggle" @click="toggleArtifact(artifact)" :aria-expanded="artifactIsExpanded(artifact)">
+                                                            <span class="agent-artifact-icon">
+                                                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                                                            </span>
+                                                            <span class="agent-collection-copy">
+                                                                <small x-text="collectionEyebrow(artifact)"></small>
+                                                                <strong x-text="artifact.title"></strong>
+                                                                <span class="agent-collection-summary" x-text="collectionSummary(artifact)"></span>
+                                                            </span>
+                                                            <svg class="agent-artifact-arrow" :class="artifactIsExpanded(artifact) ? 'is-open' : ''" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                                                        </button>
+                                                        <div class="agent-collection-body" x-show="artifactIsExpanded(artifact)" x-collapse>
+                                                            <div class="agent-collection-tools">
+                                                                <button type="button" @click="toggleAllArtifactItems(artifact)" :disabled="!artifact.items.length" x-text="artifactAllItemsSelected(artifact) ? 'Снять выбор' : 'Выбрать показанные'"></button>
+                                                                <span x-text="`${artifactSelectedIds(artifact).length} выбрано`"></span>
+                                                            </div>
+                                                            <div class="agent-collection-list">
+                                                                <template x-for="item in artifact.items" :key="item.id">
+                                                                    <div class="agent-collection-item" :class="artifactItemSelected(artifact, item.id) ? 'is-selected' : ''">
+                                                                        <input type="checkbox" :checked="artifactItemSelected(artifact, item.id)" @change="toggleArtifactItem(artifact, item.id)" :aria-label="`Выбрать карточку ${item.title}`">
+                                                                        <a :href="item.url">
+                                                                            <strong x-text="item.title"></strong>
+                                                                            <small>
+                                                                                <span x-text="`#${item.id}`"></span>
+                                                                                <span x-show="item.price !== null && item.price !== undefined && item.price !== ''" x-text="formatMoney(item.price)"></span>
+                                                                                <span x-show="item.supplier_quantity !== null && item.supplier_quantity !== undefined" x-text="`Остаток: ${item.supplier_quantity}`"></span>
+                                                                                <span x-show="Number(item.risk_score || 0) > 0" x-text="`Риск: ${item.risk_score}`"></span>
+                                                                                <span x-show="(item.change_fields || []).length" x-text="`${item.change_fields.length} изм.`"></span>
+                                                                            </small>
+                                                                            <span class="agent-collection-tags" x-show="(item.issue_labels || []).length || (item.change_fields || []).length">
+                                                                                <template x-for="label in (item.issue_labels || []).slice(0, 2)" :key="`issue-${item.id}-${label}`">
+                                                                                    <span class="is-issue" x-text="label"></span>
+                                                                                </template>
+                                                                                <template x-for="field in (item.change_fields || []).slice(0, 3)" :key="`change-${item.id}-${field}`">
+                                                                                    <span class="is-change" x-text="fieldLabel(field)"></span>
+                                                                                </template>
+                                                                            </span>
+                                                                        </a>
+                                                                    </div>
+                                                                </template>
+                                                            </div>
+                                                            <p class="agent-collection-note" x-show="artifact.truncated" x-text="collectionTruncatedNote(artifact)"></p>
+                                                            <div class="agent-collection-actions" x-show="artifact.items.length">
+                                                                <span class="agent-collection-actions-copy" x-text="artifactSelectedIds(artifact).length ? `Выбрано: ${artifactSelectedIds(artifact).length}` : 'Выберите карточки для следующего действия'"></span>
+                                                                <button type="button" class="agent-button" @click="queueArtifactAction(artifact, 'audit')" :disabled="!artifactSelectedIds(artifact).length">
+                                                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 9l2 2 4-4M8 15h8"/></svg>
+                                                                    Аудит
+                                                                </button>
+                                                                <button type="button" class="agent-button" :class="artifact.entity_kind === 'product' ? 'is-primary' : ''" @click="queueArtifactAction(artifact, 'content')" :disabled="!artifactSelectedIds(artifact).length">
+                                                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.5-1 10-10a2.1 2.1 0 00-3-3l-10 10L4 20zM13.5 8.5l3 3"/></svg>
+                                                                    Улучшить контент
+                                                                </button>
+                                                                <button type="button" class="agent-button is-primary" x-show="artifact.entity_kind === 'imported_product'" @click="queueArtifactAction(artifact, 'prepare')" :disabled="!artifactSelectedIds(artifact).length">
+                                                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>
+                                                                    Подготовить к WB
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </article>
+                                                </template>
+                                                <template x-if="artifact.type !== 'collection'">
+                                                    <article class="agent-artifact">
+                                                        <a :href="artifact.url" class="agent-artifact-head">
+                                                            <span class="agent-artifact-icon">
+                                                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h8l4 4v14H7zM15 3v5h5M10 13h6M10 17h4"/></svg>
+                                                            </span>
+                                                            <span><small x-text="artifact.type === 'change' ? 'Изменение карточки' : 'Карточка товара'"></small><strong x-text="artifact.title"></strong></span>
+                                                            <svg class="agent-artifact-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                                                        </a>
+                                                        <div class="agent-artifact-list" x-show="(artifact.issues || []).length">
+                                                            <template x-for="issue in (artifact.issues || []).slice(0, 3)" :key="issue">
+                                                                <p><span></span><span x-text="issue"></span></p>
+                                                            </template>
+                                                        </div>
+                                                        <div class="agent-artifact-diff" x-show="artifact.changes && Object.keys(artifact.changes).length">
+                                                            <template x-for="change in artifactChanges(artifact)" :key="change.field">
+                                                                <div>
+                                                                    <strong x-text="fieldLabel(change.field)"></strong>
+                                                                    <p class="is-before" x-text="compactValue(change.old)"></p>
+                                                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                                                                    <p class="is-after" x-text="compactValue(change.new)"></p>
+                                                                </div>
+                                                            </template>
+                                                        </div>
+                                                    </article>
+                                                </template>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    <div class="agent-run-actions">
+                                        <button type="button" class="agent-button" x-show="['queued','running'].includes(message.metadata.status)" @click="cancelRun(message.task_id)" :disabled="busy">Остановить</button>
+                                        <button type="button" class="agent-button is-undo" x-show="message.metadata.undo_count > 0 && !['queued','running'].includes(message.metadata.status)" @click="requestUndo(message.task_id)" :disabled="busy">
+                                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7l-5 5 5 5M4 12h10a6 6 0 010 12"/></svg>
+                                            Откатить изменения
+                                        </button>
+                                        <button type="button" class="agent-link-button" @click="inspectorOpen = true">Ход работы</button>
+                                    </div>
+                                    <div class="agent-review-alert" x-show="pendingProposalCountFor(message) > 0" @click="inspectorOpen = true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 4.7L2.9 17.5A1.7 1.7 0 004.4 20h15.2a1.7 1.7 0 001.5-2.5L13.7 4.7a2 2 0 00-3.4 0z"/></svg>
+                                        <span x-text="`Требует ручной проверки: ${pendingProposalCountFor(message)}`"></span>
+                                    </div>
+                                </div>
+                            </template>
                         </div>
-                        <div>
-                            <h3 class="font-medium text-gray-900 text-sm group-hover:text-brand transition-colors">{{ task.title }}</h3>
-                            <p class="text-xs text-gray-500">
-                                {{ task.agent.display_name if task.agent else '' }} &middot;
-                                {{ task.completed_at.strftime('%d.%m %H:%M') if task.completed_at else '' }} &middot;
-                                {{ task.duration_seconds }}с
-                            </p>
-                        </div>
-                    </div>
-                    <svg class="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                    </svg>
+                    </article>
+                </template>
+
+                <div class="agent-typing" x-show="sending" x-cloak>
+                    <div class="agent-avatar">A</div>
+                    <span></span><span></span><span></span>
                 </div>
-            </a>
-            {% endfor %}
+            </div>
         </div>
-        {% else %}
-        <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
-            <p class="text-gray-500 text-sm">Нет завершённых задач за последнее время</p>
-        </div>
-        {% endif %}
-    </div>
 
-    <!-- Ошибки -->
-    <div x-show="activeTab === 'failed'" x-cloak>
-        {% if failed_tasks %}
-        <div class="space-y-2">
-            {% for task in failed_tasks %}
-            <a href="{{ url_for('agent_task_detail', task_id=task.id) }}"
-               class="block bg-white rounded-lg border border-red-100 p-4 hover:shadow-md transition-all group">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center">
-                            <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                            </svg>
-                        </div>
-                        <div>
-                            <h3 class="font-medium text-gray-900 text-sm group-hover:text-brand transition-colors">{{ task.title }}</h3>
-                            <p class="text-xs text-red-500 mt-0.5">{{ task.error_message[:100] if task.error_message else 'Неизвестная ошибка' }}</p>
-                            <p class="text-xs text-gray-400 mt-0.5">
-                                {{ task.agent.display_name if task.agent else '' }} &middot;
-                                {{ task.completed_at.strftime('%d.%m %H:%M') if task.completed_at else '' }}
-                            </p>
-                        </div>
-                    </div>
-                    <svg class="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                    </svg>
+        <footer class="agent-composer-zone">
+            <div class="agent-scope-popover" x-show="scopeOpen" x-cloak @click.outside="scopeOpen = false">
+                <div class="agent-scope-title">
+                    <strong>Контекст товаров</strong>
+                    <button type="button" class="agent-icon-button" @click="scopeOpen = false" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
                 </div>
-            </a>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="bg-white rounded-lg border border-gray-200 p-8 text-center">
-            <p class="text-gray-500 text-sm">Нет ошибок — отлично!</p>
-        </div>
-        {% endif %}
-    </div>
+                <label class="agent-radio-row">
+                    <input type="radio" value="all" x-model="scopeMode">
+                    <span><strong>Весь каталог</strong><small>Помощник сам найдёт подходящие товары</small></span>
+                </label>
+                <label class="agent-radio-row">
+                    <input type="radio" value="selected" x-model="scopeMode">
+                    <span><strong>Выбранные товары</strong><small>Укажите внутренние ID через запятую</small></span>
+                </label>
+                <textarea x-show="scopeMode === 'selected'" x-model="productIdsInput" rows="2" placeholder="Например: 124, 381, 907"></textarea>
+                <button type="button" class="agent-button is-primary" @click="applyScope()">Применить</button>
+            </div>
 
-    <!-- ═══ МОДАЛКА CREDENTIALS (после активации / перегенерации ключа) ═══ -->
-    {% set creds = session.pop('agent_credentials', None) %}
-    {% if creds %}
-    <div x-data="{ showCreds: true }" x-show="showCreds" x-cloak class="fixed inset-0 z-[60] overflow-y-auto" aria-modal="true">
-        <div class="flex items-center justify-center min-h-screen p-4">
-            <div class="fixed inset-0 bg-black/60" @click.stop></div>
-            <div class="relative bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 z-10">
-                <div class="flex items-center gap-3 mb-4">
-                    <div class="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                        </svg>
-                    </div>
-                    <div>
-                        <h3 class="text-lg font-semibold text-gray-900">
-                            {% if creds.get('regenerated') %}Ключ перегенерирован{% else %}{{ creds.display_name }} активирован{% endif %}
-                        </h3>
-                        <p class="text-xs text-gray-500">Сохраните данные ниже — ключ показывается только один раз</p>
-                    </div>
-                </div>
-
-                <div class="bg-gray-900 rounded-lg p-4 mb-4 font-mono text-sm">
-                    <div class="flex items-center justify-between mb-3">
-                        <span class="text-gray-400 text-xs uppercase tracking-wider">Добавьте в .env</span>
-                        <button @click="
-                            const text = `{{ creds.env_id_var }}={{ creds.agent_id }}\n{{ creds.env_key_var }}={{ creds.agent_key }}`;
-                            navigator.clipboard.writeText(text);
-                            $el.textContent = 'Скопировано!';
-                            setTimeout(() => $el.textContent = 'Копировать', 2000);
-                        " class="px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white text-xs rounded transition-colors">
-                            Копировать
-                        </button>
-                    </div>
-                    <div class="space-y-1 text-green-400">
-                        <div><span class="text-gray-500"># {{ creds.display_name }}</span></div>
-                        <div>{{ creds.env_id_var }}=<span class="text-white select-all">{{ creds.agent_id }}</span></div>
-                        <div>{{ creds.env_key_var }}=<span class="text-white select-all">{{ creds.agent_key }}</span></div>
-                    </div>
-                </div>
-
-                <div class="bg-blue-50 rounded-lg p-3 mb-4">
-                    <div class="flex items-start gap-2">
-                        <svg class="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                        <div class="text-xs text-blue-800 leading-relaxed">
-                            <p class="font-medium mb-1">Запуск:</p>
-                            <code class="bg-blue-100 px-1.5 py-0.5 rounded text-[11px]">docker compose --profile agents up -d agent-{{ creds.agent_name }}</code>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="flex justify-end">
-                    <button @click="showCreds = false"
-                            class="px-4 py-2 text-sm bg-[#0a0a0a] text-white rounded-md hover:bg-[#1a1a1a] transition-colors font-medium">
-                        Готово, я сохранил
+            <div class="agent-composer" :class="focused ? 'is-focused' : ''">
+                <textarea x-ref="composer" x-model="draft" rows="1" maxlength="4000"
+                    placeholder="Опишите задачу..."
+                    @focus="focused = true" @blur="focused = false"
+                    @input="resizeComposer()"
+                    @keydown.enter="handleEnter($event)"></textarea>
+                <div class="agent-composer-tools">
+                    <button type="button" class="agent-scope-button" @click="scopeOpen = !scopeOpen" :class="productIds.length ? 'has-selection' : ''">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 11-3-6.2M20 4v6h-6"/></svg>
+                        <span x-text="productIds.length ? `${productIds.length} товаров` : 'Весь каталог'"></span>
                     </button>
+                    <div class="agent-composer-right">
+                        <span class="agent-char-count" x-show="draft.length > 3400" x-text="`${draft.length}/4000`"></span>
+                        <button type="button" class="agent-send" @click="sendMessage()" :disabled="!draft.trim() || busy" title="Отправить" aria-label="Отправить">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
-    {% endif %}
+            <p class="agent-composer-note">Изменения запускаются только после подтверждения и сохраняются для отката.</p>
+        </footer>
+    </section>
 
-    <!-- Модалка создания задачи -->
-    <div x-show="showCreateTask" x-cloak @keydown.escape.window="showCreateTask = false" class="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-label="Создать задачу">
-        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div x-show="showCreateTask" @click="showCreateTask = false"
-                 x-transition:enter="ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-                 class="fixed inset-0 bg-black/50 transition-opacity"></div>
-            <div x-show="showCreateTask"
-                 x-transition:enter="ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100"
-                 class="inline-block align-bottom bg-white rounded-lg px-6 pt-5 pb-6 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                <h3 class="text-lg font-semibold text-gray-900 mb-1">Создать задачу</h3>
-                <p class="text-xs text-gray-500 mb-4">Задача будет отправлена выбранному агенту</p>
-                <form action="{{ url_for('agent_task_create') }}" method="POST" class="space-y-4" x-data="createTaskForm()">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Агент</label>
-                        <select name="agent_id" required x-model="selectedAgent" @change="updateTaskTypes()"
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand">
-                            <option value="">-- Выберите агента --</option>
-                            <template x-for="agent in agents" :key="agent.id">
-                                <option :value="agent.id" x-text="agent.display_name + (agent.is_online ? ' (Online)' : ' (Offline)')"></option>
-                            </template>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Тип задачи</label>
-                        <select name="task_type" required x-model="selectedTaskType"
-                                class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand">
-                            <option value="">-- Выберите тип --</option>
-                            <template x-for="tt in taskTypes" :key="tt.value">
-                                <option :value="tt.value" x-text="tt.label"></option>
-                            </template>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Название задачи</label>
-                        <input type="text" name="title" required placeholder="Описание задачи..."
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand">
-                    </div>
-                    <div x-data="{ showAdvanced: false }">
-                        <button type="button" @click="showAdvanced = !showAdvanced" :aria-expanded="showAdvanced" class="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                            <svg class="w-3 h-3 transition-transform" :class="showAdvanced ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-                            </svg>
-                            Дополнительные данные (JSON)
-                        </button>
-                        <div x-show="showAdvanced" x-cloak class="mt-2">
-                            <textarea name="input_data" rows="3" placeholder='{"product_id": 123, "seller_id": 1}' aria-label="Входные данные в формате JSON"
-                                      class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:ring-1 focus:ring-brand focus:border-brand"></textarea>
-                        </div>
-                    </div>
-                    <div class="flex justify-end gap-3 pt-2">
-                        <button type="button" @click="showCreateTask = false"
-                                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors">Отмена</button>
-                        <button type="submit"
-                                class="px-4 py-2 text-sm bg-[#0a0a0a] text-white rounded-md hover:bg-[#1a1a1a] transition-colors flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                            </svg>
-                            Создать
-                        </button>
-                    </div>
-                </form>
+    <aside class="agent-inspector" :class="inspectorOpen ? 'is-open' : ''" aria-label="Ход выполнения">
+        <div class="agent-inspector-head">
+            <div><span class="agent-kicker">Текущий запуск</span><h2>Ход работы</h2></div>
+            <button type="button" class="agent-icon-button" @click="inspectorOpen = false" title="Закрыть" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+
+        <template x-if="!run">
+            <div class="agent-inspector-empty">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg>
+                <strong>Запусков пока нет</strong>
+                <p>План, прогресс и результаты появятся здесь после постановки задачи.</p>
             </div>
-        </div>
-    </div>
+        </template>
 
-    <!-- Модалка ручной регистрации агента -->
-    {% if current_user.is_admin %}
-    <div x-show="showRegister" x-cloak @keydown.escape.window="showRegister = false" class="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-label="Регистрация агента">
-        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div x-show="showRegister" @click="showRegister = false"
-                 x-transition:enter="ease-out duration-200" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-                 class="fixed inset-0 bg-black/50 transition-opacity"></div>
-            <div x-show="showRegister"
-                 x-transition:enter="ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100"
-                 class="inline-block align-bottom bg-white rounded-lg px-6 pt-5 pb-6 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                <h3 class="text-lg font-semibold text-gray-900 mb-4">Свой агент</h3>
-                <p class="text-xs text-gray-500 mb-4">Для кастомных агентов, не входящих в каталог</p>
-                <form action="{{ url_for('agents_admin_register') }}" method="POST" class="space-y-4">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Системное имя</label>
-                            <input type="text" name="name" required placeholder="my-custom-agent"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand">
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Отображаемое имя</label>
-                            <input type="text" name="display_name" required placeholder="Мой агент"
-                                   class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand">
-                        </div>
+        <template x-if="run">
+            <div class="agent-inspector-content">
+                <section class="agent-run-summary">
+                    <div class="agent-run-summary-head"><strong x-text="run.title"></strong><span :class="'is-' + run.status" x-text="statusLabel(run.status)"></span></div>
+                    <div class="agent-progress is-large"><span :style="`width:${run.progress_percent || (run.status === 'completed' ? 100 : 4)}%`"></span></div>
+                    <p x-text="run.current_step_label || 'Ожидание следующего шага'"></p>
+                    <div class="agent-run-facts">
+                        <span><small>Время</small><strong x-text="formatDuration(run.duration_seconds || 0)"></strong></span>
+                        <span><small>Шаги</small><strong x-text="`${run.completed_steps || 0}/${run.total_steps || '—'}`"></strong></span>
+                        <span x-show="hasRunUsage(run)"><small>LLM</small><strong x-text="runModelSummary(run)"></strong></span>
+                        <span x-show="hasRunUsage(run)"><small>Токены</small><strong x-text="runTokenSummary(run)"></strong></span>
                     </div>
-                    <div class="grid grid-cols-3 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Тип</label>
-                            <select name="agent_type" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
-                                <option value="external">External (Go)</option>
-                                <option value="internal">Internal (Py)</option>
-                            </select>
+                </section>
+
+                <section class="agent-inspector-section" x-show="subtasks.length">
+                    <h3>План</h3>
+                    <ol class="agent-task-list">
+                        <template x-for="(task, index) in subtasks" :key="task.id">
+                            <li :class="'is-' + task.status">
+                                <span><svg viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg></span>
+                                <div><strong x-text="task.title"></strong><small x-text="statusLabel(task.status)"></small></div>
+                            </li>
+                        </template>
+                    </ol>
+                </section>
+
+                <section class="agent-inspector-section agent-proposals" x-show="proposals.length">
+                    <h3>Ручная проверка</h3>
+                    <template x-for="proposal in proposals" :key="proposal.id">
+                        <div class="agent-proposal" :class="'is-' + proposal.status">
+                            <div class="agent-proposal-head">
+                                <span><strong x-text="proposal.product_title || `Товар #${proposal.product_id}`"></strong><small x-text="proposal.status === 'pending' ? 'Решение не принято' : proposal.status === 'applied' ? 'Применено пользователем' : 'Отклонено'"></small></span>
+                                <span x-text="proposal.status === 'pending' ? 'Проверить' : statusProposal(proposal.status)"></span>
+                            </div>
+                            <template x-for="change in proposalChanges(proposal)" :key="change.field">
+                                <div class="agent-proposal-change">
+                                    <small x-text="fieldLabel(change.field)"></small>
+                                    <div><del x-text="formatValue(change.old)"></del><svg viewBox="0 0 24 24"><path d="M5 12h14M15 8l4 4-4 4"/></svg><strong x-text="formatValue(change.new)"></strong></div>
+                                </div>
+                            </template>
+                            <div class="agent-proposal-actions" x-show="proposal.status === 'pending'">
+                                <button type="button" class="agent-button is-primary" @click="reviewProposal(proposal.id, 'apply')" :disabled="busy">Применить</button>
+                                <button type="button" class="agent-button" @click="reviewProposal(proposal.id, 'reject')" :disabled="busy">Отклонить</button>
+                            </div>
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Категория</label>
-                            <select name="category" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
-                                <option value="catalog">Каталог</option>
-                                <option value="content">Контент</option>
-                                <option value="pricing">Цены</option>
-                                <option value="compliance">Модерация</option>
-                                <option value="analytics">Аналитика</option>
-                                <option value="general">Общий</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Цвет</label>
-                            <select name="color" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
-                                <option value="blue">Синий</option>
-                                <option value="violet">Фиолетовый</option>
-                                <option value="emerald">Зелёный</option>
-                                <option value="amber">Жёлтый</option>
-                                <option value="red">Красный</option>
-                                <option value="cyan">Голубой</option>
-                                <option value="pink">Розовый</option>
-                                <option value="indigo">Индиго</option>
-                            </select>
-                        </div>
+                    </template>
+                </section>
+
+                <section class="agent-inspector-section">
+                    <h3>События</h3>
+                    <div class="agent-event-list" x-show="runSteps.length">
+                        <template x-for="step in visibleSteps" :key="step.id">
+                            <div class="agent-event" :class="'is-' + step.step_type">
+                                <span></span>
+                                <div><strong x-text="safeStepTitle(step)"></strong><small x-text="step.duration_ms ? `${step.duration_ms} мс` : formatTime(step.created_at)"></small></div>
+                            </div>
+                        </template>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">URL эндпоинта</label>
-                        <input type="text" name="endpoint_url" placeholder="http://my-agent:8080"
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Описание</label>
-                        <textarea name="description" rows="2" placeholder="Что делает этот агент..."
-                                  class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-brand focus:border-brand"></textarea>
-                    </div>
-                    <input type="hidden" name="icon" value="cpu">
-                    <div class="flex justify-end gap-3 pt-2">
-                        <button type="button" @click="showRegister = false"
-                                class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors">Отмена</button>
-                        <button type="submit"
-                                class="px-4 py-2 text-sm bg-[#0a0a0a] text-white rounded-md hover:bg-[#1a1a1a] transition-colors">Зарегистрировать</button>
-                    </div>
-                </form>
+                    <p class="agent-event-empty" x-show="!runSteps.length">События появятся после начала выполнения.</p>
+                </section>
+
+                <section class="agent-inspector-section agent-safety">
+                    <h3>Защита данных</h3>
+                    <div><svg viewBox="0 0 24 24"><path d="M9 11l2 2 4-4m5-3a11 11 0 01-8-3 11 11 0 01-8 3v5c0 5 3.4 9.6 8 11 4.6-1.4 8-6 8-11V6z"/></svg><span><strong>Снимки изменений</strong><small>Можно вернуть значения до запуска</small></span></div>
+                    <div><svg viewBox="0 0 24 24"><path d="M12 3v18M6 8h8a3 3 0 010 6H9a3 3 0 000 6h9"/></svg><span><strong>Лимит токенов</strong><small>Run остановится по заданному бюджету</small></span></div>
+                    <div><svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16"/></svg><span><strong>Изоляция продавца</strong><small>Инструменты видят только ваши данные</small></span></div>
+                </section>
             </div>
+        </template>
+    </aside>
+
+    <div class="agent-confirm" x-show="undoTaskId" x-cloak role="dialog" aria-modal="true" aria-labelledby="undo-title">
+        <div class="agent-confirm-backdrop" @click="undoTaskId = null"></div>
+        <div class="agent-confirm-panel">
+            <div class="agent-confirm-icon"><svg viewBox="0 0 24 24"><path d="M9 7l-5 5 5 5M4 12h10a6 6 0 010 12"/></svg></div>
+            <h2 id="undo-title">Откатить изменения?</h2>
+            <p>Все значения, изменённые этим запуском и его шагами, будут возвращены к предыдущему состоянию.</p>
+            <div><button type="button" class="agent-button" @click="undoTaskId = null">Не откатывать</button><button type="button" class="agent-button is-danger" @click="confirmUndo()" :disabled="busy">Откатить</button></div>
         </div>
     </div>
-    {% endif %}
-
 </div>
+{% endblock %}
 
-<script>
-function agentsDashboard() {
-    return {
-        activeTab: 'active',
-        showRegister: false,
-        showCreateTask: false,
-        onlineCount: {{ agents|selectattr('status', 'eq', 'online')|list|length }},
-
-        init() {
-            this._pollInterval = setInterval(() => this.pollActiveTasks(), 5000);
-        },
-
-        destroy() {
-            clearInterval(this._pollInterval);
-        },
-
-        async pollActiveTasks() {
-            try {
-                const resp = await fetch('/agents/api/agents');
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this.onlineCount = data.agents.filter(a => a.is_online).length;
-                }
-            } catch (e) { /* ignore */ }
-        }
-    }
-}
-
-function createTaskForm() {
-    return {
-        selectedAgent: '',
-        selectedTaskType: '',
-        agents: [],
-        taskTypes: [],
-        taskTypeMap: {},
-
-        init() {
-            // Fetch agents with their task types
-            fetch('/agents/api/agents')
-                .then(r => r.json())
-                .then(data => {
-                    this.agents = data.agents || [];
-                    this.agents.forEach(a => {
-                        try { this.taskTypeMap[a.id] = JSON.parse(a.task_types || '[]'); }
-                        catch(e) { this.taskTypeMap[a.id] = []; }
-                    });
-                });
-        },
-
-        updateTaskTypes() {
-            const types = this.taskTypeMap[this.selectedAgent] || [];
-            this.taskTypes = types.map(t => ({ value: t, label: t }));
-            this.selectedTaskType = '';
-        }
-    };
-}
-</script>
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='agent-chat.js', v='20260713-4') }}"></script>
 {% endblock %}

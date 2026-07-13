@@ -18,10 +18,112 @@ import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from .config import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+
+# Official DeepSeek API prices, USD per 1M tokens, checked 2026-07-13.
+# Keep estimates explicitly separate from provider-reported cost_usd.
+# https://api-docs.deepseek.com/quick_start/pricing/
+DEEPSEEK_PRICING_USD_PER_MILLION = {
+    'deepseek-v4-flash': {
+        'cache_hit_input': 0.0028,
+        'cache_miss_input': 0.14,
+        'output': 0.28,
+    },
+    'deepseek-v4-pro': {
+        'cache_hit_input': 0.003625,
+        'cache_miss_input': 0.435,
+        'output': 0.87,
+    },
+}
+
+
+def _field(value: Any, name: str, default=None):
+    """Reads SDK response fields from either objects or dictionaries."""
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _extract_openai_usage(usage: Any, model: str = '') -> dict:
+    """Normalizes OpenAI-compatible usage, including provider cache metrics."""
+    if not usage:
+        return {}
+
+    input_tokens = int(_field(usage, 'prompt_tokens', 0) or 0)
+    output_tokens = int(_field(usage, 'completion_tokens', 0) or 0)
+    normalized = {
+        'input_tokens': input_tokens,
+        'output_tokens': output_tokens,
+        'api_requests': 1,
+    }
+    if str(model or '').strip():
+        normalized['model'] = str(model).strip()
+
+    # DeepSeek exposes top-level hit/miss fields. OpenAI-compatible proxies may
+    # expose only prompt_tokens_details.cached_tokens, so support both shapes.
+    cache_hit_tokens = _field(usage, 'prompt_cache_hit_tokens')
+    cache_miss_tokens = _field(usage, 'prompt_cache_miss_tokens')
+    prompt_details = _field(usage, 'prompt_tokens_details')
+    if cache_hit_tokens is None and prompt_details is not None:
+        cache_hit_tokens = _field(prompt_details, 'cached_tokens')
+    if cache_hit_tokens is not None:
+        cache_hit_tokens = int(cache_hit_tokens or 0)
+        normalized['cache_hit_tokens'] = cache_hit_tokens
+        if cache_miss_tokens is None:
+            cache_miss_tokens = max(input_tokens - cache_hit_tokens, 0)
+    if cache_miss_tokens is not None:
+        normalized['cache_miss_tokens'] = int(cache_miss_tokens or 0)
+
+    completion_details = _field(usage, 'completion_tokens_details')
+    reasoning_tokens = _field(completion_details, 'reasoning_tokens')
+    if reasoning_tokens is not None:
+        normalized['reasoning_tokens'] = int(reasoning_tokens or 0)
+
+    provider_cost = _field(usage, 'cost')
+    if provider_cost is None:
+        provider_cost = _field(usage, 'total_cost')
+    if provider_cost is not None:
+        normalized['cost_usd'] = float(provider_cost or 0)
+
+    prices = DEEPSEEK_PRICING_USD_PER_MILLION.get(str(model).lower())
+    if prices:
+        hit_tokens = int(normalized.get('cache_hit_tokens') or 0)
+        miss_tokens = normalized.get('cache_miss_tokens')
+        if miss_tokens is None:
+            miss_tokens = max(input_tokens - hit_tokens, 0)
+        estimated_cost = (
+            hit_tokens * prices['cache_hit_input']
+            + int(miss_tokens) * prices['cache_miss_input']
+            + output_tokens * prices['output']
+        ) / 1_000_000
+        normalized['estimated_cost_usd'] = round(estimated_cost, 12)
+
+    if 'cache_hit_tokens' in normalized:
+        normalized['cache_hit'] = normalized['cache_hit_tokens'] > 0
+        normalized['cache_hit_rate'] = (
+            round(normalized['cache_hit_tokens'] / input_tokens, 6)
+            if input_tokens else 0.0
+        )
+    return normalized
+
+
+def _safe_base_url_for_log(value: str) -> str:
+    """Удаляет userinfo/query/fragment перед записью URL в лог или ошибку."""
+    try:
+        parsed = urlsplit(value or '')
+        hostname = parsed.hostname or ''
+        if parsed.port:
+            hostname = f'{hostname}:{parsed.port}'
+        return urlunsplit((parsed.scheme, hostname, parsed.path, '', ''))
+    except Exception:
+        return '[configured URL]'
 
 
 # ── Retry-декоратор для LLM-вызовов ──────────────────────────────
@@ -102,6 +204,23 @@ class BaseLLM(ABC):
                           schema: dict) -> dict:
         """Возвращает JSON по заданной схеме."""
         ...
+
+    def structured_output_with_usage(self, system: str, prompt: str,
+                                     schema: dict) -> dict:
+        """Compatibility wrapper for providers without structured usage data."""
+        return {
+            'data': self.structured_output(system, prompt, schema),
+            'usage': {'api_requests': 1},
+        }
+
+    def chat_with_usage(self, system: str, messages: list[dict],
+                        temperature: float = None,
+                        max_tokens: int = None) -> dict:
+        """Compatibility wrapper for providers whose chat API returns text only."""
+        return {
+            'text': self.chat(system, messages, temperature, max_tokens),
+            'usage': {'api_requests': 1},
+        }
 
 
 def _extract_json_from_text(text: str) -> dict:
@@ -192,11 +311,12 @@ class ClaudeLLM(BaseLLM):
                 })
 
         # Извлекаем usage из ответа Claude
-        usage = {}
+        usage = {'api_requests': 1}
         if hasattr(resp, 'usage') and resp.usage:
             usage = {
                 'input_tokens': getattr(resp.usage, 'input_tokens', 0),
                 'output_tokens': getattr(resp.usage, 'output_tokens', 0),
+                'api_requests': 1,
             }
 
         return {
@@ -309,12 +429,13 @@ class GeminiLLM(BaseLLM):
         stop_reason = 'tool_use' if tool_calls else 'end_turn'
 
         # Извлекаем usage из ответа Gemini
-        usage = {}
+        usage = {'api_requests': 1}
         if hasattr(resp, 'usage_metadata') and resp.usage_metadata:
             um = resp.usage_metadata
             usage = {
                 'input_tokens': getattr(um, 'prompt_token_count', 0) or 0,
                 'output_tokens': getattr(um, 'candidates_token_count', 0) or 0,
+                'api_requests': 1,
             }
 
         return {
@@ -371,9 +492,25 @@ class OpenAICompatLLM(BaseLLM):
         self.api_key = api_key or self.cfg.OPENAI_COMPAT_API_KEY or 'not-needed'
         self.base_url = base_url or self.cfg.OPENAI_COMPAT_BASE_URL
         self.model = model or self.cfg.OPENAI_COMPAT_MODEL
+        self.thinking = None
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        logger.info(f"OpenAI-compat LLM initialized: {self.model} @ {self.base_url}")
+        logger.info(
+            "OpenAI-compat LLM initialized: %s @ %s",
+            self.model, _safe_base_url_for_log(self.base_url),
+        )
+
+    def _thinking_request_kwargs(self) -> dict:
+        if not getattr(self, 'supports_thinking_toggle', False):
+            return {}
+        thinking = getattr(self, 'thinking', None)
+        if thinking is None:
+            return {}
+        return {
+            'extra_body': {
+                'thinking': {'type': 'enabled' if thinking else 'disabled'},
+            },
+        }
 
     def _check_api_error(self, error: Exception):
         """Проверяет, не вернул ли API HTML вместо JSON (типичная ошибка Cloud.ru 404)."""
@@ -382,18 +519,26 @@ class OpenAICompatLLM(BaseLLM):
         if any(marker in err_str for marker in ['<!DOCTYPE', '<html', '<!doctype', 'Ошибка 404', 'Page not found']):
             raise LLMProviderError(
                 f"LLM API вернул HTML вместо JSON. "
-                f"Проверьте CLOUDRU_BASE_URL ({self.base_url}) и CLOUDRU_MODEL ({self.model}). "
+                f"Проверьте CLOUDRU_BASE_URL ({_safe_base_url_for_log(self.base_url)}) "
+                f"и CLOUDRU_MODEL ({self.model}). "
                 f"Текущий URL может быть некорректным — API возвращает веб-страницу с ошибкой 404."
             ) from error
         if 'Connection error' in err_str or 'connection' in err_str.lower():
             raise LLMProviderError(
-                f"Не удалось подключиться к LLM API: {self.base_url}. "
+                f"Не удалось подключиться к LLM API: {_safe_base_url_for_log(self.base_url)}. "
                 f"Проверьте CLOUDRU_BASE_URL и доступность сервера."
             ) from error
 
-    @llm_retry()
     def chat(self, system: str, messages: list[dict],
              temperature: float = None, max_tokens: int = None) -> str:
+        return self.chat_with_usage(
+            system, messages, temperature=temperature, max_tokens=max_tokens,
+        )['text']
+
+    @llm_retry()
+    def chat_with_usage(self, system: str, messages: list[dict],
+                        temperature: float = None,
+                        max_tokens: int = None) -> dict:
         oai_messages = [{'role': 'system', 'content': system}]
         oai_messages.extend(messages)
 
@@ -403,11 +548,15 @@ class OpenAICompatLLM(BaseLLM):
                 messages=oai_messages,
                 temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
                 max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+                **self._thinking_request_kwargs(),
             )
         except Exception as e:
             self._check_api_error(e)
             raise
-        return resp.choices[0].message.content or ''
+        return {
+            'text': resp.choices[0].message.content or '',
+            'usage': _extract_openai_usage(getattr(resp, 'usage', None), self.model),
+        }
 
     @llm_retry()
     def chat_with_tools(self, system: str, messages: list[dict],
@@ -436,6 +585,7 @@ class OpenAICompatLLM(BaseLLM):
                 tools=oai_tools if oai_tools else None,
                 temperature=temperature if temperature is not None else self.cfg.TEMPERATURE,
                 max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+                **self._thinking_request_kwargs(),
             )
         except Exception as e:
             self._check_api_error(e)
@@ -461,13 +611,7 @@ class OpenAICompatLLM(BaseLLM):
 
         stop_reason = 'tool_use' if tool_calls else 'end_turn'
 
-        # Извлекаем usage из ответа OpenAI-совместимого API
-        usage = {}
-        if hasattr(resp, 'usage') and resp.usage:
-            usage = {
-                'input_tokens': getattr(resp.usage, 'prompt_tokens', 0) or 0,
-                'output_tokens': getattr(resp.usage, 'completion_tokens', 0) or 0,
-            }
+        usage = _extract_openai_usage(getattr(resp, 'usage', None), self.model)
 
         return {
             'text': text,
@@ -478,14 +622,50 @@ class OpenAICompatLLM(BaseLLM):
 
     def structured_output(self, system: str, prompt: str,
                           schema: dict) -> dict:
-        schema_str = json.dumps(schema, ensure_ascii=False, indent=2)
-        full_prompt = (
-            f"{prompt}\n\n"
-            f"Ответь СТРОГО в JSON формате по схеме:\n```json\n{schema_str}\n```\n"
-            f"Без комментариев, только валидный JSON."
+        return self.structured_output_with_usage(system, prompt, schema)['data']
+
+    @llm_retry()
+    def structured_output_with_usage(self, system: str, prompt: str,
+                                     schema: dict) -> dict:
+        """Structured call with a stable cacheable prefix and raw usage metrics."""
+        schema_str = json.dumps(
+            schema, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
         )
-        text = self.chat(system, [{'role': 'user', 'content': full_prompt}])
-        return _extract_json_from_text(text)
+        structured_system = (
+            f"{system}\n\n"
+            "СТАБИЛЬНЫЙ КОНТРАКТ JSON-ОТВЕТА:\n"
+            f"{schema_str}\n"
+            "Ответь строго валидным JSON по этой схеме, без markdown и комментариев."
+        )
+        messages = [
+            {'role': 'system', 'content': structured_system},
+            {'role': 'user', 'content': prompt},
+        ]
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.cfg.TEMPERATURE,
+                max_tokens=self.cfg.MAX_TOKENS,
+                **self._thinking_request_kwargs(),
+            )
+        except Exception as e:
+            self._check_api_error(e)
+            raise
+
+        text = resp.choices[0].message.content or ''
+        usage = _extract_openai_usage(getattr(resp, 'usage', None), self.model)
+        try:
+            data = _extract_json_from_text(text)
+        except Exception as exc:
+            # Callers with a deterministic fallback can still account for the
+            # completed provider request when the model returned invalid JSON.
+            exc.llm_usage = usage
+            raise
+        return {
+            'data': data,
+            'usage': usage,
+        }
 
 
 class CloudRuLLM(OpenAICompatLLM):
@@ -542,6 +722,8 @@ class DeepSeekLLM(OpenAICompatLLM):
     OpenAI-совместимый формат. https://api-docs.deepseek.com
     """
 
+    supports_thinking_toggle = True
+
     def __init__(self, config: AgentConfig = None):
         cfg = config or AgentConfig
         if not cfg.DEEPSEEK_API_KEY:
@@ -552,10 +734,85 @@ class DeepSeekLLM(OpenAICompatLLM):
             base_url=cfg.DEEPSEEK_BASE_URL,
             model=cfg.DEEPSEEK_MODEL,
         )
+        self.thinking = getattr(cfg, 'DEEPSEEK_THINKING', None)
         logger.info(f"DeepSeek LLM initialized: {self.model}")
 
 
 # ── Фабрика ───────────────────────────────────────────────────────
+
+class _ConfigOverride:
+    """Read-only config proxy для task-scoped provider credentials."""
+
+    def __init__(self, base, **overrides):
+        self._base = base
+        self._overrides = overrides
+
+    def __getattr__(self, name):
+        if name in self._overrides:
+            return self._overrides[name]
+        return getattr(self._base, name)
+
+
+def create_llm_from_profile(profile: dict, config: AgentConfig = None) -> BaseLLM:
+    """Создаёт LLM из task profile, не записывая credentials в логи."""
+    base = config or AgentConfig
+    profile = profile or {}
+    provider = str(profile.get('provider') or 'deepseek').strip().lower()
+    model = str(profile.get('model') or '').strip()
+    api_key = profile.get('key') or ''
+    base_url = str(profile.get('base_url') or '').strip()
+
+    if provider == 'deepseek':
+        cfg = _ConfigOverride(
+            base,
+            DEEPSEEK_API_KEY=api_key or base.DEEPSEEK_API_KEY,
+            DEEPSEEK_BASE_URL=base_url or base.DEEPSEEK_BASE_URL,
+            DEEPSEEK_MODEL=model or 'deepseek-v4-pro',
+            DEEPSEEK_THINKING=profile.get('thinking') if 'thinking' in profile else None,
+        )
+        return DeepSeekLLM(cfg)
+    if provider == 'cloudru':
+        cfg = _ConfigOverride(
+            base,
+            CLOUDRU_API_KEY=api_key or base.CLOUDRU_API_KEY,
+            CLOUDRU_BASE_URL=base_url or base.CLOUDRU_BASE_URL,
+            CLOUDRU_MODEL=model or base.CLOUDRU_MODEL,
+        )
+        return CloudRuLLM(cfg)
+    if provider == 'openrouter':
+        cfg = _ConfigOverride(
+            base,
+            OPENROUTER_API_KEY=api_key or base.OPENROUTER_API_KEY,
+            OPENROUTER_MODEL=model or base.OPENROUTER_MODEL,
+        )
+        return OpenRouterLLM(cfg)
+    if provider == 'claude':
+        cfg = _ConfigOverride(
+            base,
+            ANTHROPIC_API_KEY=api_key or base.ANTHROPIC_API_KEY,
+            CLAUDE_MODEL=model or base.CLAUDE_MODEL,
+        )
+        return ClaudeLLM(cfg)
+    if provider == 'gemini':
+        cfg = _ConfigOverride(
+            base,
+            GEMINI_API_KEY=api_key or base.GEMINI_API_KEY,
+            GEMINI_MODEL=model or base.GEMINI_MODEL,
+        )
+        return GeminiLLM(cfg)
+    if provider in ('openai', 'custom', 'openai_compat'):
+        default_url = (
+            'https://api.openai.com/v1'
+            if provider == 'openai' else base.OPENAI_COMPAT_BASE_URL
+        )
+        return OpenAICompatLLM(
+            config=base,
+            api_key=api_key or base.OPENAI_COMPAT_API_KEY,
+            base_url=base_url or default_url,
+            model=model or base.OPENAI_COMPAT_MODEL,
+        )
+
+    raise ValueError(f"Unknown task LLM provider: {provider}")
 
 def _create_by_provider(provider: str, config: AgentConfig,
                         model_override: str = None) -> BaseLLM:

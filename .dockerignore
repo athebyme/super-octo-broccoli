@@ -1,5 +1,10 @@
 __pycache__/
 .venv/
+venv/
+.git/
+.claude/
+.skills/
+.playwright-mcp/
 .env
 *.pyc
 *.pyo
@@ -10,4 +15,5 @@ data/
 *.csv
 .idea/
 *.log
-
+/*.png
+semgrep_report.json

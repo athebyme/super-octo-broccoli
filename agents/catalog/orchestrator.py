@@ -150,10 +150,6 @@ def resolve_agents_from_text(text: str, is_batch: bool = False) -> list[dict]:
                 })
                 seen.add(agent_name)
 
-    # Если ничего не нашли — pipeline full_prepare по умолчанию
-    if not agents:
-        return PIPELINES['full_prepare']['steps']
-
     return agents
 
 
@@ -257,6 +253,15 @@ class OrchestratorAgent(BaseAgent):
         elif task_type == 'smart':
             user_text = input_data.get('text', '')
             steps = resolve_agents_from_text(user_text, len(product_ids) > 1)
+            if not steps:
+                return {
+                    'status': 'needs_clarification',
+                    'message': (
+                        'Запрос неоднозначен. Уточните действие: аудит, SEO, '
+                        'категории, бренды, размеры, цены или отзывы.'
+                    ),
+                    'executed_steps': 0,
+                }
             pseudo_pipeline = {'label': f'Умный запрос: {user_text[:50]}', 'steps': steps}
             return self._execute_pipeline(task, pseudo_pipeline, product_ids, seller_id)
 
@@ -281,6 +286,7 @@ class OrchestratorAgent(BaseAgent):
         Экономит токены: 0 LLM-вызовов для оркестрации.
         """
         task_id = task['id']
+        parent_input = self.parse_input_data(task)
         steps = pipeline['steps']
         label = pipeline['label']
         total = len(steps)
@@ -311,6 +317,9 @@ class OrchestratorAgent(BaseAgent):
                     'seller_id': seller_id,
                     'product_ids': product_ids,
                     'imported_product_ids': product_ids,
+                    'model_policy': parent_input.get('model_policy', {}),
+                    'conversation_id': parent_input.get('conversation_id'),
+                    'plan_id': parent_input.get('plan_id'),
                 }
                 resp = self.platform.create_subtask(
                     agent_name=agent_name,

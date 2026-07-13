@@ -5,7 +5,11 @@
 import json
 import logging
 
-from ..base_agent import BaseAgent
+from ..base_agent import BaseAgent, _build_usage
+from ..platform_client import (
+    ReferenceDataUnavailableError,
+    require_usable_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +17,12 @@ logger = logging.getLogger(__name__)
 class CharacteristicsFillerAgent(BaseAgent):
     agent_name = 'characteristics-filler'
     max_iterations = 15
+    tool_allowlist = (
+        'get_product', 'update_product', 'get_imported_products',
+        'get_imported_product', 'update_imported_product',
+        'batch_update_imported_products', 'get_category_characteristics',
+        'get_directory',
+    )
 
     system_prompt = """Ты — эксперт по характеристикам карточек Wildberries.
 
@@ -32,6 +42,8 @@ class CharacteristicsFillerAgent(BaseAgent):
 ЗАПРЕЩЕНО:
 - Выдумывать значения — если данных нет, пропускай
 - Оставлять characteristics пустым если в описании есть хоть какие-то данные
+- Использовать схему, если reference_status.usable=false, stale=true или available=false.
+  В этом случае не вызывай update tools: останови задачу и запроси синхронизацию с WB
 
 ОБЯЗАТЕЛЬНО вызови update_imported_product с заполненными характеристиками.
 
@@ -41,17 +53,49 @@ class CharacteristicsFillerAgent(BaseAgent):
         """Batch: tool-assisted с предзагрузкой характеристик категорий. Single: ReAct."""
         input_data = self.parse_input_data(task)
         task_type = task.get('task_type', 'fill_single')
-        if task_type in ('fill_batch',):
-            product_ids = (
-                input_data.get('product_ids')
-                or input_data.get('imported_product_ids')
-                or []
-            )
-            if len(product_ids) > 1:
-                return self._execute_tool_batch(
-                    task, product_ids, chunk_size=15, max_workers=2,
+        try:
+            if task_type in ('fill_batch',):
+                product_ids = (
+                    input_data.get('product_ids')
+                    or input_data.get('imported_product_ids')
+                    or []
                 )
-        return self._execute_react(task)
+                if len(product_ids) > 1:
+                    return self._execute_tool_batch(
+                        task, product_ids, chunk_size=15, max_workers=2,
+                    )
+            return self._execute_react(task)
+        except ReferenceDataUnavailableError as exc:
+            total = len(input_data.get('product_ids') or input_data.get('imported_product_ids') or [])
+            return self._reference_blocked_result(exc, total)
+
+    @staticmethod
+    def _reference_blocked_result(exc, total=0):
+        return {
+            'status': 'needs_clarification',
+            'partial': True,
+            'reference_data_blocked': True,
+            'processed': 0,
+            'saved': 0,
+            'failed': total,
+            'message': str(exc),
+            'reference_status': exc.reference_status,
+            '_usage': _build_usage({}, mode='reference_preflight'),
+        }
+
+    @staticmethod
+    def _missing_category_error(subject_id=None):
+        payload = {
+            'warning': 'У товара нет доступной категории WB. Сначала определите категорию.',
+            'reference_status': {
+                'source': f'wb_category_characteristics:{subject_id or "unknown"}',
+                'usable': False,
+                'available': False,
+                'stale': False,
+                'reason': 'category_required',
+            },
+        }
+        return ReferenceDataUnavailableError('wb_category_characteristics', payload)
 
     def _prefetch_reference_data(self, products_data: list[dict]) -> dict:
         """Предзагрузка характеристик для каждой уникальной категории."""
@@ -62,10 +106,11 @@ class CharacteristicsFillerAgent(BaseAgent):
                 subject_ids.add(sid)
 
         chars_by_subject = {}
+        if any(not p.get('wb_subject_id') for p in products_data):
+            raise self._missing_category_error()
         for sid in subject_ids:
             chars = self._prefetch_category_chars(sid)
-            if chars:
-                chars_by_subject[sid] = chars
+            chars_by_subject[sid] = chars
 
         return {'chars_by_subject': chars_by_subject}
 
@@ -312,13 +357,35 @@ class CharacteristicsFillerAgent(BaseAgent):
     def _prefetch_category_chars(self, subject_id: int) -> list:
         """Предзагрузка характеристик категории."""
         if not subject_id:
-            return []
+            raise self._missing_category_error(subject_id)
         try:
             data = self.platform.get_category_characteristics(subject_id, False)
-            return data.get('characteristics', data) if isinstance(data, dict) else data
+            require_usable_reference(
+                data, f'wb_category_characteristics:{subject_id}',
+            )
+            characteristics = data.get('characteristics')
+            if not isinstance(characteristics, list) or not characteristics:
+                raise ReferenceDataUnavailableError(
+                    f'wb_category_characteristics:{subject_id}', data,
+                )
+            return characteristics
+        except ReferenceDataUnavailableError:
+            raise
         except Exception as e:
             logger.warning(f"Failed to prefetch chars for subject {subject_id}: {e}")
-            return []
+            raise ReferenceDataUnavailableError(
+                f'wb_category_characteristics:{subject_id}',
+                {
+                    'warning': 'Не удалось загрузить текущую схему характеристик WB.',
+                    'reference_status': {
+                        'source': f'wb_category_characteristics:{subject_id}',
+                        'usable': False,
+                        'available': False,
+                        'stale': False,
+                        'reason': 'request_failed',
+                    },
+                },
+            ) from e
 
     def _prefetch_products_brief(self, product_ids: list) -> list:
         """Предзагрузка кратких данных товаров для встраивания в промпт."""

@@ -22,19 +22,45 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Optional
 
 from .config import AgentConfig
-from .llm import BaseLLM, create_llm, create_fallback_llm, create_step_namer_llm
+from .llm import (
+    BaseLLM, create_llm, create_fallback_llm, create_step_namer_llm,
+    create_llm_from_profile,
+)
 from .platform_client import PlatformClient
 from .tools import ToolRegistry, create_platform_tools
 
 logger = logging.getLogger(__name__)
 
+
+class _UnavailableLLM(BaseLLM):
+    """Lets the runtime boot before a seller-scoped provider is selected."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def _raise(self):
+        raise RuntimeError(
+            'AI-модель не настроена. Добавьте API-ключ в профиле продавца. '
+            f'Причина: {self.reason}'
+        )
+
+    def chat(self, system, messages, temperature=None, max_tokens=None):
+        self._raise()
+
+    def chat_with_tools(self, system, messages, tools, temperature=None, max_tokens=None):
+        self._raise()
+
+    def structured_output(self, system, prompt, schema):
+        self._raise()
+
 # Файл liveness для Docker healthcheck
 LIVENESS_FILE = Path('/tmp/agent-alive')
+LIVENESS_INTERVAL_SECONDS = 30
 
 # Примерный лимит символов контекста перед сжатием
 # (грубая оценка: ~4 символа ≈ 1 токен, лимит ~80k токенов → ~300k символов,
@@ -49,6 +75,28 @@ MAX_ERROR_LENGTH = 500
 
 # Интервал проверки отмены задачи (каждые N итераций ReAct)
 CANCEL_CHECK_INTERVAL = 3
+
+PRIMARY_ORCHESTRATION_TASK_TYPES = frozenset({
+    'plan_request', 'smart', 'custom', 'pipeline',
+})
+
+
+def select_task_llm_profile(task_type: str, profile: dict) -> dict:
+    """Use Pro for orchestration and Flash for execution unless one-model mode is on."""
+    selected = dict(profile or {})
+    selected.setdefault('provider', 'deepseek')
+    selected.setdefault('model', 'deepseek-v4-pro')
+    if selected.get('single_model', False) or task_type in PRIMARY_ORCHESTRATION_TASK_TYPES:
+        return selected
+
+    original_provider = str(selected.get('provider') or '').lower()
+    selected['provider'] = 'deepseek'
+    selected['model'] = 'deepseek-v4-flash'
+    selected['thinking'] = False
+    selected['base_url'] = None
+    if original_provider != 'deepseek':
+        selected['key'] = None
+    return selected
 
 
 # ── Креативные названия шагов ──────────────────────────────────────
@@ -69,6 +117,9 @@ TOOL_LABELS = {
     'check_text_prohibited': ('Сканирую текст на запреты', 'Текст проверен'),
     'validate_brand': ('Валидирую бренд в WB', 'Бренд проверен'),
     'get_seller_info': ('Загружаю данные продавца', 'Данные продавца получены'),
+    'get_product_defaults': ('Читаю системные настройки товаров', 'Настройки товаров получены'),
+    'get_api_connection_status': ('Проверяю подключение WB API', 'Статус подключения получен'),
+    'get_api_logs': ('Проверяю журнал WB API', 'Журнал API получен'),
     'get_pricing_settings': ('Читаю настройки цен', 'Настройки цен получены'),
     'create_subtask': ('Создаю подзадачу для агента', 'Подзадача создана'),
     'get_subtask_status': ('Проверяю статус подзадачи', 'Статус получен'),
@@ -242,6 +293,83 @@ def _extract_json(text: str) -> dict:
     return {'message': text[:3000]}
 
 
+_USAGE_COUNTER_KEYS = (
+    'input_tokens', 'output_tokens', 'cache_hit_tokens',
+    'cache_miss_tokens', 'reasoning_tokens', 'api_requests',
+)
+_USAGE_COST_KEYS = ('cost_usd', 'estimated_cost_usd')
+
+
+def _merge_usage(total: dict, usage: dict) -> dict:
+    """Adds raw usage counters without double-counting derived fields."""
+    if not isinstance(usage, dict):
+        return total
+    for key in _USAGE_COUNTER_KEYS:
+        if key in usage and usage[key] is not None:
+            total[key] = int(total.get(key, 0) or 0) + int(usage[key] or 0)
+    for key in _USAGE_COST_KEYS:
+        if key in usage and usage[key] is not None:
+            total[key] = float(total.get(key, 0) or 0) + float(usage[key] or 0)
+
+    model_usage = usage.get('models')
+    if isinstance(model_usage, dict):
+        sources = model_usage.items()
+    elif str(usage.get('model') or '').strip():
+        sources = ((str(usage['model']).strip(), usage),)
+    else:
+        sources = ()
+    for model, counters in sources:
+        if not isinstance(counters, dict) or not str(model).strip():
+            continue
+        bucket = total.setdefault('models', {}).setdefault(str(model).strip(), {})
+        for key in _USAGE_COUNTER_KEYS:
+            if key in counters and counters[key] is not None:
+                bucket[key] = int(bucket.get(key, 0) or 0) + int(counters[key] or 0)
+        for key in _USAGE_COST_KEYS:
+            if key in counters and counters[key] is not None:
+                bucket[key] = float(bucket.get(key, 0) or 0) + float(counters[key] or 0)
+    return total
+
+
+def _build_usage(total: dict, **metadata) -> dict:
+    """Builds the public additive usage shape while preserving legacy fields."""
+    total = total or {}
+    input_tokens = int(total.get('input_tokens', 0) or 0)
+    output_tokens = int(total.get('output_tokens', 0) or 0)
+    result = {
+        'input_tokens': input_tokens,
+        'output_tokens': output_tokens,
+        'total_tokens': input_tokens + output_tokens,
+    }
+    for key in ('cache_hit_tokens', 'cache_miss_tokens', 'reasoning_tokens', 'api_requests'):
+        if key in total:
+            result[key] = int(total.get(key, 0) or 0)
+    for key in _USAGE_COST_KEYS:
+        if key in total:
+            result[key] = round(float(total.get(key, 0) or 0), 12)
+    if 'cache_hit_tokens' in result:
+        result['cache_hit'] = result['cache_hit_tokens'] > 0
+        result['cache_hit_rate'] = (
+            round(result['cache_hit_tokens'] / input_tokens, 6)
+            if input_tokens else 0.0
+        )
+    models = total.get('models')
+    if not isinstance(models, dict) or not models:
+        raw_model = str(total.get('model') or '').strip()
+        models = {raw_model: total} if raw_model else {}
+    if models:
+        result['models'] = {
+            model: _build_usage({
+                key: value for key, value in counters.items()
+                if key not in {'model', 'models'}
+            })
+            for model, counters in sorted(models.items())
+            if isinstance(counters, dict)
+        }
+    result.update(metadata)
+    return result
+
+
 class BaseAgent(ABC):
     """
     Базовый агент с ReAct-циклом.
@@ -259,6 +387,7 @@ class BaseAgent(ABC):
     max_tool_retries: int = 2
     use_fallback_llm: bool = False  # True → использовать Claude/Sonnet для сложных задач
     max_batch_size: int = 10  # макс. товаров в одном промпте (чтобы не переполнить контекст)
+    tool_allowlist: Optional[tuple[str, ...]] = None
 
     def __init__(self, config: AgentConfig = None):
         self.config = config or AgentConfig
@@ -267,25 +396,34 @@ class BaseAgent(ABC):
         self.platform = PlatformClient(self.config)
 
         # Выбор LLM: fallback (Claude) для сложных агентов, иначе основной (Cloud.ru)
-        if self.use_fallback_llm:
-            fallback = create_fallback_llm(self.config)
-            if fallback:
-                self.llm: BaseLLM = fallback
-                logger.info(f"Agent [{self.agent_name}] using fallback LLM")
-            else:
-                self.llm: BaseLLM = create_llm(self.config)
-                logger.info(f"Agent [{self.agent_name}] fallback not configured, using default LLM")
-        else:
-            self.llm: BaseLLM = create_llm(self.config)
-
-        # Step namer LLM (быстрая модель для генерации названий шагов)
-        self._step_namer: Optional[BaseLLM] = None
         try:
-            self._step_namer = create_step_namer_llm(self.config)
-            if self._step_namer:
-                logger.info(f"Agent [{self.agent_name}] step namer LLM configured")
-        except Exception as e:
-            logger.debug(f"Step namer LLM not available: {e}")
+            if self.use_fallback_llm:
+                fallback = create_fallback_llm(self.config)
+                if fallback:
+                    self.llm: BaseLLM = fallback
+                    logger.info(f"Agent [{self.agent_name}] using fallback LLM")
+                else:
+                    self.llm = create_llm(self.config)
+                    logger.info(f"Agent [{self.agent_name}] fallback not configured, using default LLM")
+            else:
+                self.llm = create_llm(self.config)
+        except Exception as exc:
+            logger.warning(
+                "Agent [%s] starts without a global LLM; seller profile will be used per task",
+                self.agent_name,
+            )
+            self.llm = _UnavailableLLM(_sanitize_error(str(exc)))
+        self._default_llm = self.llm
+
+        # Step namer делает отдельный LLM-вызов, поэтому включается только явно.
+        self._step_namer: Optional[BaseLLM] = None
+        if bool(getattr(self.config, 'STEP_NAMER_ENABLED', False)):
+            try:
+                self._step_namer = create_step_namer_llm(self.config)
+                if self._step_namer:
+                    logger.info(f"Agent [{self.agent_name}] step namer LLM configured")
+            except Exception as e:
+                logger.debug(f"Step namer LLM not available: {e}")
 
         # Инструменты
         self._tools = create_platform_tools(self.platform)
@@ -295,9 +433,13 @@ class BaseAgent(ABC):
         # Удаляем инструменты, запрещённые для данного агента
         for tool_name in getattr(self, 'excluded_tools', ()):
             self._tools.remove(tool_name)
+        if self.tool_allowlist is not None:
+            self._tools = self._tools.restricted(self.tool_allowlist)
 
         self._running = False
         self._heartbeat_thread: Optional[threading.Thread] = None
+        self._liveness_thread: Optional[threading.Thread] = None
+        self._runtime_stop_event = threading.Event()
 
         # Трекинг провалов задач — bounded LRU для предотвращения утечки памяти
         self._task_failures = _BoundedFailureTracker(maxsize=1000)
@@ -340,10 +482,27 @@ class BaseAgent(ABC):
         total_processed = 0
         total_saved = 0
         all_results = []
-        total_input_tokens = 0
-        total_output_tokens = 0
+        usage_totals = {}
+        api_budget = max(0, int(getattr(
+            self, '_run_api_budget_override', getattr(self.config, 'RUN_API_BUDGET', 24),
+        )))
 
         for chunk_idx, chunk_ids in enumerate(chunks):
+            if self._check_task_cancelled(task_id):
+                return {
+                    'status': 'cancelled',
+                    'processed': total_processed,
+                    'saved': total_saved,
+                    'results': all_results,
+                    'message': 'Задача отменена пользователем',
+                    '_usage': _build_usage(
+                        usage_totals, react_iterations=chunk_idx,
+                        api_budget=api_budget,
+                    ),
+                }
+            used_requests = int(usage_totals.get('api_requests') or 0)
+            if api_budget and used_requests >= api_budget:
+                break
             self.platform.log_thinking(
                 task_id,
                 f'Чанк {chunk_idx + 1}/{len(chunks)}',
@@ -361,12 +520,26 @@ class BaseAgent(ABC):
                 'task_type': task_type,
             }
 
-            chunk_result = self._execute_react(chunk_task)
+            chunk_result = self._execute_react(
+                chunk_task,
+                api_budget_override=(api_budget - used_requests) if api_budget else None,
+            )
 
             # Собираем статистику
             usage = chunk_result.pop('_usage', {})
-            total_input_tokens += usage.get('input_tokens', 0)
-            total_output_tokens += usage.get('output_tokens', 0)
+            _merge_usage(usage_totals, usage)
+            if chunk_result.get('status') == 'cancelled':
+                return {
+                    'status': 'cancelled',
+                    'processed': total_processed,
+                    'saved': total_saved,
+                    'results': all_results,
+                    'message': 'Задача отменена пользователем',
+                    '_usage': _build_usage(
+                        usage_totals, react_iterations=chunk_idx + 1,
+                        api_budget=api_budget,
+                    ),
+                }
 
             total_processed += chunk_result.get('processed', chunk_result.get('saved', 0))
             total_saved += chunk_result.get('saved', chunk_result.get('processed', 0))
@@ -380,13 +553,64 @@ class BaseAgent(ABC):
             'results': all_results,
             'chunks': len(chunks),
             'message': f'Обработано {total_processed} товаров ({len(chunks)} чанков)',
-            '_usage': {
-                'input_tokens': total_input_tokens,
-                'output_tokens': total_output_tokens,
-                'total_tokens': total_input_tokens + total_output_tokens,
-                'react_iterations': len(chunks),
-            },
+            '_usage': _build_usage(
+                usage_totals, react_iterations=len(chunks), api_budget=api_budget,
+            ),
         }
+
+    def _run_cancel_aware_chunks(
+        self,
+        chunks: list[list[int]],
+        max_workers: int,
+        process_chunk,
+        is_cancelled,
+        error_label: str,
+    ) -> None:
+        """Run at most ``max_workers`` chunks ahead and stop scheduling on cancel."""
+        if not chunks:
+            return
+        worker_count = min(max(1, max_workers), len(chunks))
+        if worker_count == 1:
+            for index, chunk_ids in enumerate(chunks):
+                if is_cancelled():
+                    break
+                try:
+                    process_chunk(index, chunk_ids)
+                except Exception as exc:
+                    logger.error('%s: %s', error_label, exc)
+            return
+
+        next_index = 0
+        futures = {}
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            while next_index < len(chunks) and len(futures) < worker_count:
+                if is_cancelled():
+                    break
+                future = executor.submit(
+                    process_chunk, next_index, chunks[next_index],
+                )
+                futures[future] = next_index
+                next_index += 1
+
+            while futures:
+                done, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+                for future in done:
+                    futures.pop(future, None)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        logger.error('%s: %s', error_label, exc)
+
+                if is_cancelled():
+                    for future in futures:
+                        future.cancel()
+                    continue
+                while next_index < len(chunks) and len(futures) < worker_count:
+                    future = executor.submit(
+                        process_chunk, next_index, chunks[next_index],
+                    )
+                    futures[future] = next_index
+                    next_index += 1
 
     # ── Structured Batch Mode ─────────────────────────────────────
 
@@ -405,6 +629,23 @@ class BaseAgent(ABC):
         """
         task_id = task['id']
         total = len(product_ids)
+        usage_totals = {}
+        cancel_event = threading.Event()
+
+        def _is_cancelled() -> bool:
+            if cancel_event.is_set():
+                return True
+            if self._check_task_cancelled(task_id):
+                cancel_event.set()
+                return True
+            return False
+
+        if _is_cancelled():
+            return {
+                'status': 'cancelled', 'processed': 0, 'saved': 0,
+                'failed': 0, 'message': 'Задача отменена пользователем',
+                '_usage': _build_usage(usage_totals, mode='structured_batch'),
+            }
 
         self.platform.log_thinking(
             task_id, 'Structured Batch Mode',
@@ -415,10 +656,18 @@ class BaseAgent(ABC):
 
         # 1. Предзагрузка всех товаров
         all_products = self._prefetch_for_structured_batch(product_ids)
+        if _is_cancelled():
+            return {
+                'status': 'cancelled', 'processed': 0, 'saved': 0,
+                'failed': 0, 'message': 'Задача отменена пользователем',
+                '_usage': _build_usage(usage_totals, mode='structured_batch'),
+            }
         if not all_products:
             return {
+                'status': 'failed',
                 'processed': 0, 'saved': 0, 'failed': total,
                 'message': 'Не удалось загрузить данные товаров',
+                '_usage': _build_usage(usage_totals, mode='structured_batch'),
             }
 
         # Индекс для быстрого поиска
@@ -427,6 +676,11 @@ class BaseAgent(ABC):
         # 2. Разбиваем на чанки
         chunks = [product_ids[i:i + chunk_size]
                   for i in range(0, total, chunk_size)]
+        api_budget = max(0, int(getattr(
+            self, '_run_api_budget_override', getattr(self.config, 'RUN_API_BUDGET', 24),
+        )))
+        if api_budget:
+            chunks = chunks[:api_budget]
 
         # 3. Обработка чанков (параллельно или последовательно)
         progress_lock = threading.Lock()
@@ -435,13 +689,53 @@ class BaseAgent(ABC):
         failed_count = 0
         all_results = []
         all_errors = []
-        total_input_tokens = 0
-        total_output_tokens = 0
+        completed_chunks = set()
+        base_checkpoint = task.get('checkpoint')
+        if not isinstance(base_checkpoint, dict):
+            base_checkpoint = {}
+
+        def _checkpoint_locked() -> None:
+            checkpoint = dict(base_checkpoint)
+            checkpoint['structured_batch'] = {
+                'completed_chunks': sorted(completed_chunks),
+                'processed': processed_count,
+                'saved': saved_count,
+                'failed': failed_count,
+                'total_chunks': len(chunks),
+            }
+            checkpoint['usage'] = _build_usage(
+                usage_totals, mode='structured_batch',
+                chunks=len(completed_chunks), api_budget=api_budget,
+            )
+            try:
+                self.platform.update_checkpoint(task_id, checkpoint)
+            except Exception as exc:
+                logger.debug(
+                    'Structured batch checkpoint rejected for %s: %s',
+                    task_id[:8], exc,
+                )
+
+        def _record_chunk_failure(
+            chunk_idx: int, chunk_size_value: int, message: str,
+        ) -> dict:
+            nonlocal failed_count
+            error = {'chunk': chunk_idx, 'error': message[:200]}
+            with progress_lock:
+                failed_count += chunk_size_value
+                all_errors.append(error)
+                completed_chunks.add(chunk_idx)
+                _checkpoint_locked()
+            return {
+                'status': 'failed', 'processed': 0, 'saved': 0,
+                'errors': [error],
+            }
 
         def _process_chunk(chunk_idx: int, chunk_ids: list[int]) -> dict:
             """Обрабатывает один чанк: LLM structured_output → batch save."""
             nonlocal processed_count, saved_count, failed_count
-            nonlocal total_input_tokens, total_output_tokens
+
+            if _is_cancelled():
+                return {'status': 'cancelled', 'processed': 0, 'saved': 0}
 
             chunk_products = [products_by_id[pid] for pid in chunk_ids
                               if pid in products_by_id]
@@ -458,13 +752,47 @@ class BaseAgent(ABC):
             try:
                 prompt = self.build_structured_prompt(chunk_products)
                 schema = self.batch_result_schema()
+                if _is_cancelled():
+                    return {'status': 'cancelled', 'processed': 0, 'saved': 0}
                 t0 = time.time()
-                llm_result = self.llm.structured_output(
-                    system=self.system_prompt,
-                    prompt=prompt,
-                    schema=schema,
+                structured_call = getattr(
+                    self.llm, 'structured_output_with_usage', None,
                 )
+                if callable(structured_call):
+                    structured = structured_call(
+                        system=self.system_prompt,
+                        prompt=prompt,
+                        schema=schema,
+                    )
+                else:
+                    structured = {
+                        'data': self.llm.structured_output(
+                            system=self.system_prompt,
+                            prompt=prompt,
+                            schema=schema,
+                        ),
+                        'usage': {},
+                    }
+                with progress_lock:
+                    _merge_usage(usage_totals, structured.get('usage') or {})
+                llm_result = structured['data']
                 duration_ms = int((time.time() - t0) * 1000)
+
+                if _is_cancelled():
+                    with progress_lock:
+                        _checkpoint_locked()
+                    return {'status': 'cancelled', 'processed': 0, 'saved': 0}
+
+                if isinstance(llm_result, list):
+                    results = llm_result
+                elif isinstance(llm_result, dict) and isinstance(
+                    llm_result.get('results'), list,
+                ):
+                    results = llm_result['results']
+                else:
+                    raise ValueError(
+                        'Модель вернула невалидный structured result',
+                    )
 
                 self.platform.log_action(
                     task_id,
@@ -473,59 +801,51 @@ class BaseAgent(ABC):
                     duration_ms=duration_ms,
                 )
             except Exception as e:
+                with progress_lock:
+                    _merge_usage(
+                        usage_totals, getattr(e, 'llm_usage', None) or {},
+                    )
                 err_msg = f'Чанк {chunk_idx + 1}: LLM ошибка — {str(e)[:200]}'
                 logger.warning(f"Structured batch chunk {chunk_idx} failed: {e}")
                 self.platform.log_error(task_id, f'Ошибка чанка {chunk_idx + 1}', err_msg)
-
-                # Fallback: пробуем ReAct для этого чанка
-                try:
-                    self.platform.log_thinking(
-                        task_id, f'Fallback на ReAct (чанк {chunk_idx + 1})',
-                        'Structured output не удался, переключаюсь на ReAct',
-                    )
-                    chunk_task = {
-                        **task,
-                        'input_data': json.dumps({
-                            'product_ids': chunk_ids,
-                            'imported_product_ids': chunk_ids,
-                            'seller_id': task.get('seller_id'),
-                        }),
-                    }
-                    react_result = self._execute_react(chunk_task)
-                    chunk_saved = react_result.get('saved', react_result.get('processed', 0))
+                if _is_cancelled():
                     with progress_lock:
-                        processed_count += len(chunk_ids)
-                        saved_count += chunk_saved
-                    return react_result
-                except Exception as e2:
-                    logger.error(f"ReAct fallback also failed for chunk {chunk_idx}: {e2}")
-                    with progress_lock:
-                        failed_count += len(chunk_ids)
-                    return {'processed': 0, 'saved': 0,
-                            'errors': [{'chunk': chunk_idx, 'error': str(e)[:200]}]}
+                        _checkpoint_locked()
+                    return {'status': 'cancelled', 'processed': 0, 'saved': 0}
+                return _record_chunk_failure(chunk_idx, len(chunk_products), str(e))
 
-            # Извлекаем результаты
-            results = llm_result.get('results', [])
-            if isinstance(llm_result, list):
-                results = llm_result
+            if _is_cancelled():
+                with progress_lock:
+                    _checkpoint_locked()
+                return {'status': 'cancelled', 'processed': 0, 'saved': 0}
 
             # Пост-обработка (проверка стоп-слов и т.п.)
             try:
                 results = self._postprocess_structured_results(results)
             except Exception as e:
                 logger.warning(f"Post-processing error in chunk {chunk_idx}: {e}")
+                return _record_chunk_failure(chunk_idx, len(chunk_products), str(e))
+
+            if _is_cancelled():
+                with progress_lock:
+                    _checkpoint_locked()
+                return {'status': 'cancelled', 'processed': 0, 'saved': 0}
 
             # Маппинг в формат batch update
             try:
                 updates = self._map_structured_result_to_updates(results)
             except Exception as e:
                 logger.warning(f"Mapping error in chunk {chunk_idx}: {e}")
-                updates = []
+                return _record_chunk_failure(chunk_idx, len(chunk_products), str(e))
 
             # Batch save
             chunk_saved = 0
             chunk_errors = []
             if updates:
+                if _is_cancelled():
+                    with progress_lock:
+                        _checkpoint_locked()
+                    return {'status': 'cancelled', 'processed': 0, 'saved': 0}
                 try:
                     save_resp = self.platform.batch_update_imported_products(updates)
                     chunk_saved = save_resp.get('updated', 0)
@@ -543,6 +863,7 @@ class BaseAgent(ABC):
                 failed_count += len(chunk_errors)
                 all_results.extend(results)
                 all_errors.extend(chunk_errors)
+                completed_chunks.add(chunk_idx)
                 self.platform.update_progress(
                     task_id,
                     completed_steps=processed_count,
@@ -551,6 +872,7 @@ class BaseAgent(ABC):
                         f'обработано {processed_count}/{total}'
                     ),
                 )
+                _checkpoint_locked()
 
             return {
                 'processed': len(chunk_products),
@@ -558,48 +880,50 @@ class BaseAgent(ABC):
                 'errors': chunk_errors,
             }
 
-        # Запускаем обработку
-        if max_workers <= 1 or len(chunks) <= 1:
-            # Последовательная обработка
-            for idx, chunk_ids in enumerate(chunks):
-                _process_chunk(idx, chunk_ids)
-        else:
-            # Параллельная обработка
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
-                futures = {
-                    executor.submit(_process_chunk, idx, chunk_ids): idx
-                    for idx, chunk_ids in enumerate(chunks)
-                }
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logger.error(f"Chunk future error: {e}")
-
-        self.platform.log_result(
-            task_id, 'Batch завершён',
-            f'Обработано: {processed_count}, сохранено: {saved_count}, '
-            f'ошибок: {failed_count}',
+        self._run_cancel_aware_chunks(
+            chunks, max_workers, _process_chunk, _is_cancelled,
+            'Structured batch chunk error',
         )
 
+        if _is_cancelled():
+            status = 'cancelled'
+            message = 'Задача отменена пользователем'
+        elif failed_count and not processed_count:
+            status = 'failed'
+            message = 'Не удалось обработать structured batch.'
+        elif failed_count:
+            status = 'partial'
+            message = (
+                f'Обработано {processed_count} товаров. '
+                f'Не обработано: {failed_count}.'
+            )
+        else:
+            status = 'completed'
+            message = (
+                f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
+                f'Сохранено: {saved_count}.'
+            )
+
+        if status != 'cancelled':
+            self.platform.log_result(
+                task_id, 'Batch завершён',
+                f'Обработано: {processed_count}, сохранено: {saved_count}, '
+                f'ошибок: {failed_count}',
+            )
+
         return {
+            'status': status,
             'processed': processed_count,
             'saved': saved_count,
             'failed': failed_count,
             'results': all_results,
             'errors': all_errors if all_errors else None,
             'chunks': len(chunks),
-            'message': (
-                f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
-                f'Сохранено: {saved_count}.'
+            'message': message,
+            '_usage': _build_usage(
+                usage_totals, mode='structured_batch', chunks=len(completed_chunks),
+                api_budget=api_budget,
             ),
-            '_usage': {
-                'input_tokens': total_input_tokens,
-                'output_tokens': total_output_tokens,
-                'total_tokens': total_input_tokens + total_output_tokens,
-                'mode': 'structured_batch',
-                'chunks': len(chunks),
-            },
         }
 
     # ── Overridable hooks для Structured Batch ────────────────────
@@ -679,6 +1003,22 @@ class BaseAgent(ABC):
         total = len(product_ids)
         seller_id = task.get('seller_id')
         task_type = task.get('task_type', 'batch')
+        cancel_event = threading.Event()
+
+        def _is_cancelled() -> bool:
+            if cancel_event.is_set():
+                return True
+            if self._check_task_cancelled(task_id):
+                cancel_event.set()
+                return True
+            return False
+
+        if _is_cancelled():
+            return {
+                'status': 'cancelled', 'processed': 0, 'saved': 0,
+                'failed': 0, 'message': 'Задача отменена пользователем',
+                '_usage': _build_usage({}, mode='tool_batch'),
+            }
 
         self.platform.log_thinking(
             task_id, 'Tool-Assisted Batch Mode',
@@ -689,20 +1029,50 @@ class BaseAgent(ABC):
 
         # 1. Предзагрузка данных товаров
         all_products = self._prefetch_for_structured_batch(product_ids)
+        if _is_cancelled():
+            return {
+                'status': 'cancelled', 'processed': 0, 'saved': 0,
+                'failed': 0, 'message': 'Задача отменена пользователем',
+                '_usage': _build_usage({}, mode='tool_batch'),
+            }
         if not all_products:
             return {
+                'status': 'failed',
                 'processed': 0, 'saved': 0, 'failed': total,
                 'message': 'Не удалось загрузить данные товаров',
+                '_usage': _build_usage({}, mode='tool_batch'),
             }
 
         # 2. Кэширование справочных данных
+        if _is_cancelled():
+            return {
+                'status': 'cancelled', 'processed': 0, 'saved': 0,
+                'failed': 0, 'message': 'Задача отменена пользователем',
+                '_usage': _build_usage({}, mode='tool_batch'),
+            }
         self.platform.log_thinking(task_id, 'Кэширование справочников', '')
         reference_data = self._prefetch_reference_data(all_products)
+        if _is_cancelled():
+            return {
+                'status': 'cancelled', 'processed': 0, 'saved': 0,
+                'failed': 0, 'message': 'Задача отменена пользователем',
+                '_usage': _build_usage({}, mode='tool_batch'),
+            }
 
         # 3. Разбиваем на чанки
         products_by_id = {p['id']: p for p in all_products}
         chunks = [product_ids[i:i + chunk_size]
                   for i in range(0, total, chunk_size)]
+        api_budget = max(0, int(getattr(
+            self, '_run_api_budget_override', getattr(self.config, 'RUN_API_BUDGET', 24),
+        )))
+        if api_budget:
+            # A tool-calling chunk normally needs one action response and one
+            # final response. Do not start work that cannot fit the run budget.
+            chunks = chunks[:max(1, api_budget // 2)]
+        per_chunk_api_budget = (
+            max(2, api_budget // max(len(chunks), 1)) if api_budget else 0
+        )
 
         # 4. Создаём урезанный toolset (без get_product/get_imported_product)
         batch_tools = ToolRegistry()
@@ -722,12 +1092,38 @@ class BaseAgent(ABC):
         failed_count = 0
         all_results = []
         all_errors = []
-        total_input_tokens = 0
-        total_output_tokens = 0
+        usage_totals = {}
+        completed_chunks = set()
+        base_checkpoint = task.get('checkpoint')
+        if not isinstance(base_checkpoint, dict):
+            base_checkpoint = {}
+
+        def _checkpoint_locked() -> None:
+            checkpoint = dict(base_checkpoint)
+            checkpoint['tool_batch'] = {
+                'completed_chunks': sorted(completed_chunks),
+                'processed': processed_count,
+                'saved': saved_count,
+                'failed': failed_count,
+                'total_chunks': len(chunks),
+            }
+            checkpoint['usage'] = _build_usage(
+                usage_totals, mode='tool_batch',
+                chunks=len(completed_chunks), api_budget=api_budget,
+            )
+            try:
+                self.platform.update_checkpoint(task_id, checkpoint)
+            except Exception as exc:
+                logger.debug(
+                    'Tool batch checkpoint rejected for %s: %s',
+                    task_id[:8], exc,
+                )
 
         def _process_tool_chunk(chunk_idx: int, chunk_ids: list[int]) -> dict:
             nonlocal processed_count, saved_count, failed_count
-            nonlocal total_input_tokens, total_output_tokens
+
+            if _is_cancelled():
+                return {'status': 'cancelled', 'processed': 0, 'saved': 0}
 
             chunk_products = [products_by_id[pid] for pid in chunk_ids
                               if pid in products_by_id]
@@ -742,6 +1138,8 @@ class BaseAgent(ABC):
 
             # Строим промпт с предзагруженными данными
             prompt = self._build_tool_batch_prompt(chunk_products, reference_data)
+            if _is_cancelled():
+                return {'status': 'cancelled', 'processed': 0, 'saved': 0}
 
             # Создаём виртуальную задачу для чанка
             chunk_task = {
@@ -762,13 +1160,17 @@ class BaseAgent(ABC):
                 chunk_task,
                 tools_override=batch_tools,
                 max_iterations_override=dynamic_max_iter,
+                api_budget_override=per_chunk_api_budget,
             )
 
             usage = chunk_result.pop('_usage', {})
 
             with progress_lock:
-                total_input_tokens += usage.get('input_tokens', 0)
-                total_output_tokens += usage.get('output_tokens', 0)
+                _merge_usage(usage_totals, usage)
+                if chunk_result.get('status') == 'cancelled':
+                    cancel_event.set()
+                    _checkpoint_locked()
+                    return chunk_result
                 chunk_processed = chunk_result.get('processed',
                                                    chunk_result.get('saved', len(chunk_products)))
                 chunk_saved = chunk_result.get('saved', chunk_result.get('processed', 0))
@@ -779,6 +1181,7 @@ class BaseAgent(ABC):
                 if isinstance(chunk_results, list):
                     all_results.extend(chunk_results)
 
+                completed_chunks.add(chunk_idx)
                 self.platform.update_progress(
                     task_id,
                     completed_steps=processed_count,
@@ -787,43 +1190,33 @@ class BaseAgent(ABC):
                         f'обработано {processed_count}/{total}'
                     ),
                 )
+                _checkpoint_locked()
 
             return chunk_result
 
-        # Запускаем обработку
-        if max_workers <= 1 or len(chunks) <= 1:
-            for idx, chunk_ids in enumerate(chunks):
-                _process_tool_chunk(idx, chunk_ids)
-        else:
-            with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
-                futures = {
-                    executor.submit(_process_tool_chunk, idx, chunk_ids): idx
-                    for idx, chunk_ids in enumerate(chunks)
-                }
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logger.error(f"Tool batch chunk error: {e}")
+        self._run_cancel_aware_chunks(
+            chunks, max_workers, _process_tool_chunk, _is_cancelled,
+            'Tool batch chunk error',
+        )
+
+        cancelled = _is_cancelled()
 
         return {
+            'status': 'cancelled' if cancelled else 'completed',
             'processed': processed_count,
             'saved': saved_count,
             'failed': failed_count,
             'results': all_results,
             'errors': all_errors if all_errors else None,
             'chunks': len(chunks),
-            'message': (
+            'message': 'Задача отменена пользователем' if cancelled else (
                 f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
                 f'Сохранено: {saved_count}.'
             ),
-            '_usage': {
-                'input_tokens': total_input_tokens,
-                'output_tokens': total_output_tokens,
-                'total_tokens': total_input_tokens + total_output_tokens,
-                'mode': 'tool_batch',
-                'chunks': len(chunks),
-            },
+            '_usage': _build_usage(
+                usage_totals, mode='tool_batch', chunks=len(completed_chunks),
+                api_budget=api_budget,
+            ),
         }
 
     # ── Overridable hooks для Tool-Assisted Batch ─────────────────
@@ -960,6 +1353,7 @@ class BaseAgent(ABC):
     def stop(self):
         """Останавливает агента."""
         self._running = False
+        self._runtime_stop_event.set()
 
     def _poll_and_execute(self):
         """Один цикл: получить задачу → выполнить."""
@@ -993,6 +1387,7 @@ class BaseAgent(ABC):
         try:
             # Берём задачу в работу
             self.platform.start_task(task_id)
+            self._configure_task_llm(task)
             self.platform.log_thinking(task_id, 'Анализирую задачу',
                                        f"Тип: {task.get('task_type')}")
 
@@ -1002,6 +1397,14 @@ class BaseAgent(ABC):
             # Если задача была отменена во время выполнения
             if isinstance(result, dict) and result.get('status') == 'cancelled':
                 logger.info(f"Task {task_id[:8]} cancelled during execution")
+                return
+            if isinstance(result, dict) and result.get('status') == 'failed':
+                error_msg = _sanitize_error(
+                    result.get('message') or 'Задача не выполнена',
+                )
+                self.platform.fail_task(task_id, error_msg, result=result)
+                self.platform.log_error(task_id, 'Задача не выполнена', error_msg)
+                logger.info(f"Task {task_id[:8]} reported a failed result")
                 return
 
             # Постобработка
@@ -1029,7 +1432,63 @@ class BaseAgent(ABC):
             except Exception:
                 pass
         finally:
+            self.llm = self._default_llm
             self.platform.set_task_id(None)
+
+    def _configure_task_llm(self, task: dict):
+        """Выбирает seller model для задачи, безопасно откатываясь к default."""
+        self.llm = self._default_llm
+        self._task_ai_profile = None
+        try:
+            primary = self.platform.get_task_ai_config(task['id'])
+        except Exception as e:
+            logger.warning(
+                "Task AI profile unavailable for %s: %s",
+                task.get('id', '')[:8], _sanitize_error(str(e)),
+            )
+            return
+
+        selected = select_task_llm_profile(task.get('task_type', ''), primary)
+        self._task_ai_profile = primary
+        active_profile = selected
+        try:
+            self.llm = create_llm_from_profile(selected, self.config)
+        except Exception as e:
+            if selected != primary:
+                logger.warning(
+                    "Fast task model unavailable for %s; using primary model",
+                    task.get('id', '')[:8],
+                )
+                try:
+                    self.llm = create_llm_from_profile(primary, self.config)
+                    active_profile = primary
+                except Exception as primary_error:
+                    logger.warning(
+                        "Primary task model unavailable for %s: %s",
+                        task.get('id', '')[:8],
+                        _sanitize_error(str(primary_error)),
+                    )
+                    self.llm = self._default_llm
+                    return
+            else:
+                logger.warning(
+                    "Task model unavailable for %s: %s",
+                    task.get('id', '')[:8], _sanitize_error(str(e)),
+                )
+                self.llm = self._default_llm
+                return
+
+        profile_role = (
+            'orchestration primary' if task.get('task_type') in PRIMARY_ORCHESTRATION_TASK_TYPES
+            else 'execution'
+        )
+        logger.info(
+            "Task %s configured %s LLM provider=%s model=%s",
+            task.get('id', '')[:8],
+            profile_role,
+            active_profile.get('provider', 'deepseek'),
+            active_profile.get('model', 'deepseek-v4-pro'),
+        )
 
     # ── ReAct цикл ─────────────────────────────────────────────────
 
@@ -1044,7 +1503,8 @@ class BaseAgent(ABC):
 
     def _execute_react(self, task: dict,
                        tools_override: ToolRegistry = None,
-                       max_iterations_override: int = None) -> dict:
+                       max_iterations_override: int = None,
+                       api_budget_override: int = None) -> dict:
         """
         ReAct (Reason-Act) цикл:
         1. LLM получает задачу + инструменты
@@ -1068,10 +1528,37 @@ class BaseAgent(ABC):
         total_steps = 0
         total_input_tokens = 0
         total_output_tokens = 0
+        usage_totals = {}
+        token_budget = max(0, int(getattr(self.config, 'RUN_TOKEN_BUDGET', 0)))
+        configured_api_budget = getattr(
+            self, '_run_api_budget_override', getattr(self.config, 'RUN_API_BUDGET', 24),
+        )
+        api_budget = max(0, int(
+            api_budget_override if api_budget_override is not None else configured_api_budget
+        ))
 
         for iteration in range(effective_max_iterations):
-            # Cancel propagation: проверяем отмену каждые N итераций
-            if iteration > 0 and iteration % CANCEL_CHECK_INTERVAL == 0:
+            tokens_used = total_input_tokens + total_output_tokens
+            if token_budget and tokens_used >= token_budget:
+                return self._token_budget_partial(
+                    total_input_tokens, total_output_tokens, iteration,
+                    usage=usage_totals,
+                )
+            if api_budget and int(usage_totals.get('api_requests') or 0) >= api_budget:
+                return {
+                    'status': 'partial',
+                    'message': (
+                        f'Достигнут лимит LLM API-вызовов ({api_budget}). '
+                        'Возвращён частичный результат без дополнительного запроса.'
+                    ),
+                    '_usage': _build_usage(
+                        usage_totals, react_iterations=iteration,
+                        api_budget=api_budget, api_budget_exhausted=True,
+                    ),
+                }
+
+            # Check before the first LLM call and periodically thereafter.
+            if iteration % CANCEL_CHECK_INTERVAL == 0:
                 if self._check_task_cancelled(task_id):
                     logger.info(f"Task {task_id[:8]}: cancelled by user, stopping ReAct")
                     self.platform.log_decision(
@@ -1088,15 +1575,44 @@ class BaseAgent(ABC):
             t0 = time.time()
 
             # Вызов LLM
+            remaining_tokens = token_budget - tokens_used if token_budget else None
+            max_tokens = None
+            if remaining_tokens is not None:
+                configured_max = int(getattr(self.config, 'MAX_TOKENS', remaining_tokens))
+                max_tokens = max(1, min(configured_max, remaining_tokens))
             if tool_schemas:
-                response = self.llm.chat_with_tools(
+                llm_kwargs = dict(
                     system=self.system_prompt,
                     messages=messages,
                     tools=tool_schemas,
                 )
+                if max_tokens is not None:
+                    llm_kwargs['max_tokens'] = max_tokens
+                response = self.llm.chat_with_tools(**llm_kwargs)
             else:
-                text = self.llm.chat(self.system_prompt, messages)
-                response = {'text': text, 'tool_calls': [], 'stop_reason': 'end_turn'}
+                chat_with_usage = getattr(self.llm, 'chat_with_usage', None)
+                if callable(chat_with_usage):
+                    chat_kwargs = {
+                        'system': self.system_prompt,
+                        'messages': messages,
+                    }
+                    if max_tokens is not None:
+                        chat_kwargs['max_tokens'] = max_tokens
+                    chat_response = chat_with_usage(**chat_kwargs)
+                    response = {
+                        'text': chat_response.get('text', ''),
+                        'tool_calls': [],
+                        'stop_reason': 'end_turn',
+                        'usage': chat_response.get('usage') or {},
+                    }
+                elif max_tokens is None:
+                    text = self.llm.chat(self.system_prompt, messages)
+                    response = {'text': text, 'tool_calls': [], 'stop_reason': 'end_turn'}
+                else:
+                    text = self.llm.chat(
+                        self.system_prompt, messages, max_tokens=max_tokens,
+                    )
+                    response = {'text': text, 'tool_calls': [], 'stop_reason': 'end_turn'}
 
             duration_ms = int((time.time() - t0) * 1000)
 
@@ -1104,6 +1620,22 @@ class BaseAgent(ABC):
             usage = response.get('usage', {})
             total_input_tokens += usage.get('input_tokens', 0)
             total_output_tokens += usage.get('output_tokens', 0)
+            _merge_usage(usage_totals, usage)
+
+            # An in-flight model call cannot be interrupted. Never execute tools
+            # from its response after the task has been cancelled.
+            if self._check_task_cancelled(task_id):
+                logger.info(
+                    f"Task {task_id[:8]}: cancelled after LLM response, "
+                    "discarding pending actions",
+                )
+                return {
+                    'status': 'cancelled',
+                    'message': 'Задача отменена пользователем',
+                    '_usage': _build_usage(
+                        usage_totals, react_iterations=iteration + 1,
+                    ),
+                }
 
             # Логируем рассуждения с креативным названием
             if response['text']:
@@ -1112,7 +1644,7 @@ class BaseAgent(ABC):
                 self.platform.log_thinking(
                     task_id,
                     step_label,
-                    response['text'][:1000],
+                    'Модель выбрала следующий проверяемый шаг.',
                     duration_ms=duration_ms,
                 )
                 self.platform.update_progress(
@@ -1123,12 +1655,9 @@ class BaseAgent(ABC):
             # Если нет tool calls — финальный ответ
             if not response['tool_calls']:
                 result = _extract_json(response['text'])
-                result['_usage'] = {
-                    'input_tokens': total_input_tokens,
-                    'output_tokens': total_output_tokens,
-                    'total_tokens': total_input_tokens + total_output_tokens,
-                    'react_iterations': iteration + 1,
-                }
+                result['_usage'] = _build_usage(
+                    usage_totals, react_iterations=iteration + 1,
+                )
                 return result
 
             # Выполняем tool calls
@@ -1180,6 +1709,15 @@ class BaseAgent(ABC):
                 'content': self._format_tool_results(tool_results),
             })
 
+            if token_budget and total_input_tokens + total_output_tokens >= token_budget:
+                return self._token_budget_partial(
+                    total_input_tokens,
+                    total_output_tokens,
+                    iteration + 1,
+                    response.get('text'),
+                    usage=usage_totals,
+                )
+
         # Достигнут лимит итераций — пробуем извлечь частичный результат
         logger.warning(f"Task {task_id[:8]}: max iterations reached ({effective_max_iterations})")
         self.platform.log_decision(
@@ -1199,12 +1737,10 @@ class BaseAgent(ABC):
                             f'Достигнут лимит шагов ({effective_max_iterations}). '
                             f'Результат может быть неполным.'
                         )
-                        partial['_usage'] = {
-                            'input_tokens': total_input_tokens,
-                            'output_tokens': total_output_tokens,
-                            'total_tokens': total_input_tokens + total_output_tokens,
-                            'react_iterations': effective_max_iterations,
-                        }
+                        partial['_usage'] = _build_usage(
+                            usage_totals,
+                            react_iterations=effective_max_iterations,
+                        )
                         return partial
                     break
 
@@ -1214,13 +1750,45 @@ class BaseAgent(ABC):
                 f'Агент выполнил максимум шагов ({effective_max_iterations}) '
                 f'и не успел завершить задачу. Попробуйте выбрать меньше товаров.'
             ),
-            '_usage': {
-                'input_tokens': total_input_tokens,
-                'output_tokens': total_output_tokens,
-                'total_tokens': total_input_tokens + total_output_tokens,
-                'react_iterations': effective_max_iterations,
-            },
+            '_usage': _build_usage(
+                usage_totals, react_iterations=effective_max_iterations,
+            ),
         }
+
+    def _token_budget_partial(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        react_iterations: int,
+        partial_text: str = None,
+        usage: dict = None,
+    ) -> dict:
+        """Возвращает накопленный результат без ещё одного LLM-вызова."""
+        budget = max(0, int(getattr(self.config, 'RUN_TOKEN_BUDGET', 0)))
+        if partial_text:
+            result = _extract_json(partial_text)
+        else:
+            result = {}
+
+        result['status'] = 'partial'
+        result.setdefault(
+            'message',
+            f'Достигнут лимит токенов задачи ({budget}). Возвращён частичный результат.',
+        )
+        result['_note'] = (
+            f'Достигнут лимит токенов задачи ({budget}); '
+            'дополнительный вызов модели не выполнялся.'
+        )
+        usage = dict(usage or {})
+        usage['input_tokens'] = input_tokens
+        usage['output_tokens'] = output_tokens
+        result['_usage'] = _build_usage(
+            usage,
+            react_iterations=react_iterations,
+            token_budget=budget,
+            budget_exhausted=True,
+        )
+        return result
 
     def _format_assistant_message(self, response: dict) -> str:
         """Форматирует ответ ассистента для контекста."""
@@ -1237,24 +1805,35 @@ class BaseAgent(ABC):
     def _format_tool_results(self, results: list) -> str:
         """Форматирует результаты инструментов для LLM."""
         parts = []
+        config = getattr(self, 'config', None)
+        max_chars = max(
+            0, int(getattr(config, 'OBSERVATION_MAX_CHARS', 1200)),
+        )
         for r in results:
             # Ограничиваем размер результатов для экономии контекста
             result_text = r['result']
-            if len(result_text) > 1200:
-                result_text = result_text[:1200] + '\n... (обрезано)'
+            if max_chars and len(result_text) > max_chars:
+                result_text = result_text[:max_chars] + '\n... (обрезано)'
             parts.append(f"[Tool Result: {r['name']}]\n{result_text}")
         return '\n\n'.join(parts)
 
     # ── Heartbeat ──────────────────────────────────────────────────
 
     def _start_heartbeat(self):
-        """Запускает фоновый heartbeat + обновляет liveness-файл."""
+        """Запускает сетевой heartbeat и независимый local liveness."""
         config_reload_counter = 0
         config_reload_every = 10  # каждые N heartbeat-ов (~5 мин при 30с интервале)
+        self._runtime_stop_event.clear()
+
+        def _keep_alive():
+            # Platform readiness is not process liveness. This loop must not do I/O.
+            while self._running and not self._runtime_stop_event.is_set():
+                _touch_liveness()
+                self._runtime_stop_event.wait(LIVENESS_INTERVAL_SECONDS)
 
         def _beat():
             nonlocal config_reload_counter
-            while self._running:
+            while self._running and not self._runtime_stop_event.is_set():
                 try:
                     self.platform.heartbeat('online')
                 except Exception as e:
@@ -1266,14 +1845,18 @@ class BaseAgent(ABC):
                     config_reload_counter = 0
                     self.config.reload_remote_config()
 
-                _touch_liveness()
-                time.sleep(self.config.HEARTBEAT_INTERVAL)
+                self._runtime_stop_event.wait(self.config.HEARTBEAT_INTERVAL)
 
+        self._liveness_thread = threading.Thread(target=_keep_alive, daemon=True)
         self._heartbeat_thread = threading.Thread(target=_beat, daemon=True)
+        self._liveness_thread.start()
         self._heartbeat_thread.start()
 
     def _stop_heartbeat(self):
-        """Graceful stop для heartbeat thread."""
+        """Graceful stop для heartbeat и local liveness threads."""
+        self._runtime_stop_event.set()
+        if self._liveness_thread and self._liveness_thread.is_alive():
+            self._liveness_thread.join(timeout=5)
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             self._heartbeat_thread.join(timeout=5)
 

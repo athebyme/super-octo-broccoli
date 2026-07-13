@@ -158,9 +158,9 @@ class TestModelCatalog(unittest.TestCase):
         self.assertIn('deepseek-v4-pro', models)
         self.assertIn('deepseek-v4-flash', models)
 
-    def test_internal_api_exposes_deepseek_keys(self):
+    def test_internal_runtime_config_exposes_model_but_not_credentials(self):
         from routes.internal_api import _LLM_CONFIG_KEYS
-        self.assertEqual(_LLM_CONFIG_KEYS.get('deepseek_api_key'), 'DEEPSEEK_API_KEY')
+        self.assertNotIn('deepseek_api_key', _LLM_CONFIG_KEYS)
         self.assertEqual(_LLM_CONFIG_KEYS.get('deepseek_model'), 'DEEPSEEK_MODEL')
 
 

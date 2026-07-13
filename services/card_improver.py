@@ -86,8 +86,19 @@ def _apply_local_wb_fields(product, wb_updates: Dict[str, Any]) -> List[str]:
         product.description = wb_updates['description']
         applied.append('description')
     if 'characteristics' in wb_updates:
+        from services.marketplace_validator import merge_wb_characteristics
+        try:
+            existing = json.loads(product.characteristics_json or '[]')
+        except (json.JSONDecodeError, TypeError):
+            existing = []
         product.characteristics_json = json.dumps(
-            wb_updates['characteristics'], ensure_ascii=False)
+            merge_wb_characteristics(
+                existing,
+                wb_updates['characteristics'],
+                subject_id=getattr(product, 'subject_id', None),
+            ),
+            ensure_ascii=False,
+        )
         applied.append('characteristics')
     if 'dimensions' in wb_updates:
         product.dimensions_json = json.dumps(
@@ -115,11 +126,27 @@ def apply_card_updates_bulk(
     """
     per_product = []
     nm_updates: Dict[int, Dict[str, Any]] = {}
+    characteristic_validation_cache = {}
     for product, updates in items:
         clean = _clean_updates(updates)
+        validation_error = None
+        if clean.get('characteristics'):
+            from services.marketplace_validator import (
+                WBCharacteristicValidationError,
+                build_wb_characteristic_patch,
+            )
+            try:
+                clean = dict(clean)
+                clean['characteristics'] = build_wb_characteristic_patch(
+                    getattr(product, 'subject_id', None),
+                    clean['characteristics'],
+                    validation_cache=characteristic_validation_cache,
+                )
+            except WBCharacteristicValidationError as exc:
+                validation_error = str(exc)
         wb_updates = _build_wb_updates(clean)
-        per_product.append((product, clean, wb_updates))
-        if wb_updates and getattr(product, 'nm_id', None):
+        per_product.append((product, clean, wb_updates, validation_error))
+        if not validation_error and wb_updates and getattr(product, 'nm_id', None):
             nm_updates[int(product.nm_id)] = wb_updates
 
     batch = {'sent': [], 'missing': [], 'invalid': {}, 'failed': {}, 'requests': 0}
@@ -137,8 +164,15 @@ def apply_card_updates_bulk(
     failed_send = {int(k): v for k, v in (batch.get('failed') or {}).items()}
 
     results: Dict[int, Dict[str, Any]] = {}
-    for product, clean, wb_updates in per_product:
+    for product, clean, wb_updates, validation_error in per_product:
         old_quality: Optional[float] = getattr(product, 'quality_score', None)
+        if validation_error:
+            results[product.id] = {
+                'success': False, 'fields_applied': [],
+                'old_quality': old_quality, 'new_quality': old_quality,
+                'wb_sync': False, 'error': validation_error,
+            }
+            continue
         if not clean:
             results[product.id] = {
                 'success': False, 'fields_applied': [],
@@ -265,6 +299,27 @@ def apply_card_updates(
 
     # Фильтруем по белому списку; пропускаем None, '', [], {}
     clean: Dict[str, Any] = _clean_updates(updates)
+
+    if clean.get('characteristics'):
+        from services.marketplace_validator import (
+            WBCharacteristicValidationError,
+            build_wb_characteristic_patch,
+        )
+        try:
+            clean = dict(clean)
+            clean['characteristics'] = build_wb_characteristic_patch(
+                getattr(product, 'subject_id', None),
+                clean['characteristics'],
+            )
+        except WBCharacteristicValidationError as exc:
+            return {
+                'success': False,
+                'fields_applied': [],
+                'old_quality': old_quality,
+                'new_quality': old_quality,
+                'wb_sync': False,
+                'error': str(exc),
+            }
 
     # Нет допустимых полей — ранний выход без WB-вызова и без истории
     if not clean:

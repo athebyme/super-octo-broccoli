@@ -349,6 +349,14 @@ def api_verify(brand_id):
     brand = Brand.query.get_or_404(brand_id)
     data = request.get_json() or {}
     marketplace_id = data.get('marketplace_id')
+    subject_id = data.get('subject_id') or data.get('category_id')
+    try:
+        subject_id = int(subject_id)
+    except (TypeError, ValueError):
+        return jsonify({
+            'success': False,
+            'error': 'subject_id категории WB обязателен для проверки бренда',
+        }), 400
 
     # Если маркетплейс не указан — берём WB по умолчанию
     if not marketplace_id:
@@ -368,7 +376,10 @@ def api_verify(brand_id):
     try:
         from services.wb_api_client import WildberriesAPIClient
         with WildberriesAPIClient(seller.wb_api_key) as wb_client:
-            result = wb_client.validate_brand(brand.name)
+            result = wb_client.validate_brand(
+                brand.name,
+                subject_id=subject_id,
+            )
 
             # Если API вернул ошибку (например, WB pattern validation)
             if result.get('error'):
@@ -387,12 +398,30 @@ def api_verify(brand_id):
                 # Создаём/обновляем MarketplaceBrand
                 from services.brand_engine import get_brand_engine
                 engine = get_brand_engine()
-                engine.ensure_marketplace_brand(
+                marketplace_brand_id = engine.ensure_marketplace_brand(
                     brand_id=brand.id,
                     marketplace_id=marketplace_id,
                     marketplace_name=match.get('name', brand.name),
                     marketplace_ext_id=match.get('id'),
                 )
+                mp_brand = MarketplaceBrand.query.get(marketplace_brand_id)
+                if mp_brand:
+                    mp_brand.status = 'verified'
+                    mp_brand.verified_at = datetime.utcnow()
+                    mp_brand.is_available = True
+                    mp_brand.last_seen_at = datetime.utcnow()
+                    link = BrandCategoryLink.query.filter_by(
+                        marketplace_brand_id=mp_brand.id,
+                        category_id=subject_id,
+                    ).first()
+                    if not link:
+                        link = BrandCategoryLink(
+                            marketplace_brand_id=mp_brand.id,
+                            category_id=subject_id,
+                        )
+                        db.session.add(link)
+                    link.is_available = True
+                    link.verified_at = datetime.utcnow()
 
                 db.session.commit()
                 engine.invalidate_cache()
@@ -633,22 +662,18 @@ def api_test_wb_brands():
     Диагностический эндпоинт: делает один запрос к WB API и возвращает raw ответ.
 
     Параметры (query string):
-      pattern    — строка поиска (по умолчанию "Nike")
-      top        — макс результатов (по умолчанию 10)
-      locale     — язык (по умолчанию "ru")
       subject_id — ID предмета/категории (по умолчанию первый из включённых)
+      next       — cursor следующей страницы (опционально)
       endpoint   — путь API (по умолчанию "/api/content/v1/brands")
 
     Пример:
-      /admin/brands/api/test-wb-brands?pattern=Nike&top=10
+      /admin/brands/api/test-wb-brands?subject_id=105
     """
     import traceback
     from models import Seller, MarketplaceCategory
     from services.wb_api_client import WildberriesAPIClient
 
-    pattern = request.args.get('pattern', 'Nike')
-    top = request.args.get('top', 10, type=int)
-    locale = request.args.get('locale', 'ru')
+    next_cursor = request.args.get('next', type=int)
     endpoint = request.args.get('endpoint', '/api/content/v1/brands')
     subject_id = request.args.get('subject_id', type=int)
 
@@ -667,9 +692,11 @@ def api_test_wb_brands():
         return jsonify({'success': False, 'error': 'Нет WB API ключей'}), 400
 
     api_key = seller.wb_api_key
-    params = {'pattern': pattern, 'top': top, 'locale': locale}
+    params = {}
     if subject_id:
         params['subjectId'] = subject_id
+    if next_cursor:
+        params['next'] = next_cursor
 
     result = {
         'api_key_prefix': api_key[:15] + '...' if len(api_key) > 15 else '(empty)',
@@ -686,8 +713,9 @@ def api_test_wb_brands():
             result['base_url'] = base_url
             result['full_url'] = full_url
 
-            # RAW запрос через session (без raise на ошибках)
-            response = client.session.get(full_url, params=params, timeout=30)
+            response = client._make_request(
+                'GET', 'content', endpoint, params=params,
+            )
 
             result['status_code'] = response.status_code
             result['response_url'] = response.url

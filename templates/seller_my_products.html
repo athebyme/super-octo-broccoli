@@ -99,36 +99,123 @@
 
     <!-- Stats -->
     <div class="my-stat-strip mb-6">
-        <a href="?status=" class="my-stat-card {{ 'active' if not status else '' }}">
+        <a href="{{ url_for('seller_my_products', **status_link_args) }}" class="my-stat-card {{ 'active' if not status else '' }}">
             <p class="my-stat-label">В работе</p>
             <p class="my-stat-value">{{ stats.total - stats.imported }}</p>
         </a>
-        <a href="?status=pending" class="my-stat-card {{ 'active' if status == 'pending' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='pending', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'pending' else '' }}">
             <p class="my-stat-label">Ожидают</p>
             <p class="my-stat-value">{{ stats.pending }}</p>
         </a>
-        <a href="?status=validated" class="my-stat-card {{ 'active' if status == 'validated' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='validated', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'validated' else '' }}">
             <p class="my-stat-label">Готово к WB</p>
             <p class="my-stat-value">{{ stats.validated }}</p>
         </a>
-        <a href="?status=imported" class="my-stat-card {{ 'active' if status == 'imported' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='imported', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'imported' else '' }}">
             <p class="my-stat-label">На WB</p>
             <p class="my-stat-value">{{ stats.imported }}</p>
         </a>
-        <a href="?status=failed" class="my-stat-card {{ 'active' if status == 'failed' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='failed', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'failed' else '' }}">
             <p class="my-stat-label">Ошибки</p>
             <p class="my-stat-value">{{ stats.failed }}</p>
         </a>
     </div>
 
-    <!-- Search -->
-    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex gap-3 items-end">
-        <div class="flex-1">
-            <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, бренду, ID..."
-                   class="w-full rounded-md border-gray-300 text-sm border px-3 py-2">
-        </div>
+    <!-- Search & Filters -->
+    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
         <input type="hidden" name="status" value="{{ status }}">
-        <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
+        <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
+            <div class="flex-1">
+                <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, бренду, ID..."
+                       class="w-full rounded-md border-gray-300 text-sm border px-3 py-2" aria-label="Поиск товаров">
+            </div>
+            <div class="flex gap-2 items-center flex-shrink-0">
+                <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
+                {% if active_filters or search %}
+                <a href="{{ url_for('seller_my_products', status=status) if status else url_for('seller_my_products') }}"
+                   class="px-3 py-2 border border-gray-300 text-gray-600 rounded-md text-sm font-medium hover:bg-gray-50">
+                    Сбросить{% if active_filters %} ({{ active_filters }}){% endif %}
+                </a>
+                {% endif %}
+            </div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-3">
+            <div>
+                <label for="filter-supplier" class="block text-xs text-gray-500 mb-1">Поставщик</label>
+                <select id="filter-supplier" name="supplier" onchange="this.form.submit()"
+                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                    <option value="">Все</option>
+                    {% for s_id, s_name, s_count in suppliers_list %}
+                    <option value="{{ s_id }}" {{ 'selected' if supplier_filter == s_id|string else '' }}>{{ s_name }} ({{ s_count }})</option>
+                    {% endfor %}
+                    {% if no_supplier_count %}
+                    <option value="none" {{ 'selected' if supplier_filter == 'none' else '' }}>Без поставщика ({{ no_supplier_count }})</option>
+                    {% endif %}
+                </select>
+            </div>
+            <div>
+                <label for="filter-brand" class="block text-xs text-gray-500 mb-1">Бренд</label>
+                <select id="filter-brand" name="brand" onchange="this.form.submit()"
+                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                    <option value="">Все</option>
+                    {% for b in brands_list %}
+                    <option value="{{ b }}" {{ 'selected' if brand_filter == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                    <option value="none" {{ 'selected' if brand_filter == 'none' else '' }}>Без бренда</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-wb-category" class="block text-xs text-gray-500 mb-1">Категория WB</label>
+                <select id="filter-wb-category" name="wb_category" onchange="this.form.submit()"
+                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                    <option value="">Все</option>
+                    {% for c in wb_categories_list %}
+                    <option value="{{ c }}" {{ 'selected' if wb_category_filter == c else '' }}>{{ c }}</option>
+                    {% endfor %}
+                    <option value="none" {{ 'selected' if wb_category_filter == 'none' else '' }}>Не определена</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-photos" class="block text-xs text-gray-500 mb-1">Фото</label>
+                <select id="filter-photos" name="has_photos" onchange="this.form.submit()"
+                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                    <option value="">Не важно</option>
+                    <option value="yes" {{ 'selected' if has_photos == 'yes' else '' }}>Есть фото</option>
+                    <option value="no" {{ 'selected' if has_photos == 'no' else '' }}>Без фото</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-stock" class="block text-xs text-gray-500 mb-1">Остаток</label>
+                <select id="filter-stock" name="stock" onchange="this.form.submit()"
+                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                    <option value="">Не важно</option>
+                    <option value="in_stock" {{ 'selected' if stock == 'in_stock' else '' }}>В наличии</option>
+                    <option value="out_of_stock" {{ 'selected' if stock == 'out_of_stock' else '' }}>Нет в наличии</option>
+                    <option value="unknown" {{ 'selected' if stock == 'unknown' else '' }}>Неизвестно</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-sort" class="block text-xs text-gray-500 mb-1">Сортировка</label>
+                <select id="filter-sort" name="sort" onchange="this.form.submit()"
+                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                    <option value="">Сначала новые</option>
+                    <option value="oldest" {{ 'selected' if sort == 'oldest' else '' }}>Сначала старые</option>
+                    <option value="price_asc" {{ 'selected' if sort == 'price_asc' else '' }}>Цена: по возрастанию</option>
+                    <option value="price_desc" {{ 'selected' if sort == 'price_desc' else '' }}>Цена: по убыванию</option>
+                    <option value="title" {{ 'selected' if sort == 'title' else '' }}>По названию</option>
+                </select>
+            </div>
+            <div class="col-span-2 md:col-span-3 lg:col-span-2">
+                <span class="block text-xs text-gray-500 mb-1">Закупочная цена, &#8381;</span>
+                <div class="flex gap-2 items-center">
+                    <input type="number" name="price_min" value="{{ price_min }}" placeholder="от" min="0" step="any"
+                           class="w-full rounded-md border-gray-300 text-sm border px-2 py-2" aria-label="Цена от">
+                    <span class="text-gray-400 text-sm">—</span>
+                    <input type="number" name="price_max" value="{{ price_max }}" placeholder="до" min="0" step="any"
+                           class="w-full rounded-md border-gray-300 text-sm border px-2 py-2" aria-label="Цена до">
+                </div>
+            </div>
+        </div>
     </form>
 
     <!-- Bulk actions bar -->
@@ -653,8 +740,14 @@
         </table>
         {% else %}
         <div class="text-center py-12">
+            {% if active_filters or search %}
+            <p class="text-gray-500">Ничего не найдено по заданным фильтрам</p>
+            <a href="{{ url_for('seller_my_products', status=status) if status else url_for('seller_my_products') }}"
+               class="text-gray-900 text-sm hover:underline mt-2 inline-block">Сбросить фильтры</a>
+            {% else %}
             <p class="text-gray-500">Нет импортированных товаров</p>
             <a href="{{ url_for('supplier_catalog') }}" class="text-gray-900 text-sm hover:underline mt-2 inline-block">Перейти в каталог поставщиков &rarr;</a>
+            {% endif %}
         </div>
         {% endif %}
     </div>
@@ -668,19 +761,19 @@
         </p>
         <nav class="flex gap-1">
             {% if pagination.has_prev %}
-            <a href="?page={{ pagination.prev_num }}&search={{ search }}&status={{ status }}"
+            <a href="{{ url_for('seller_my_products', page=pagination.prev_num, **page_args) }}"
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&laquo;</a>
             {% endif %}
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
-                <a href="?page={{ p }}&search={{ search }}&status={{ status }}"
+                <a href="{{ url_for('seller_my_products', page=p, **page_args) }}"
                    class="px-3 py-2 text-sm border rounded-md {{ 'bg-[#1a1a1a] text-white border-[#1a1a1a]' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
                 {% else %}
                 <span class="px-2 py-2 text-gray-400">...</span>
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
-            <a href="?page={{ pagination.next_num }}&search={{ search }}&status={{ status }}"
+            <a href="{{ url_for('seller_my_products', page=pagination.next_num, **page_args) }}"
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>

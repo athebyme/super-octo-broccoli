@@ -15,6 +15,10 @@ from ..base_agent import BaseAgent
 class PhotoOptimizerAgent(BaseAgent):
     agent_name = 'photo-optimizer'
     max_iterations = 20
+    tool_allowlist = (
+        'get_products', 'get_product', 'get_imported_products',
+        'get_imported_product',
+    )
 
     system_prompt = """Ты — эксперт по фотографиям товаров для маркетплейса Wildberries.
 

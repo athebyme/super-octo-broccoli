@@ -10,6 +10,7 @@ from ..base_agent import BaseAgent
 class ReviewAnalystAgent(BaseAgent):
     agent_name = 'review-analyst'
     max_iterations = 10
+    tool_allowlist = ('get_products', 'get_product', 'get_imported_product')
 
     system_prompt = """Ты — аналитик отзывов для маркетплейса Wildberries.
 

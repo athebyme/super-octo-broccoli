@@ -4512,23 +4512,35 @@ def revert_bulk_edit(bulk_id):
                         errors.append(f"Товар {product.vendor_code}: нет sizes (требуется синхронизация)")
                         continue
 
-                    # Применяем snapshot_before к полной карточке из БД
+                    # Формируем typed updates, чтобы rollback характеристик шёл
+                    # через ту же обязательную category/admin-dictionary
+                    # validation, что и обычное редактирование.
+                    restore_updates = {}
                     for field in change.changed_fields:
                         if field not in snapshot_to_restore:
                             continue
                         if field == 'vendor_code':
-                            full_card['vendorCode'] = snapshot_to_restore[field]
+                            restore_updates['vendorCode'] = snapshot_to_restore[field]
                         elif field == 'characteristics':
+                            from services.marketplace_validator import (
+                                build_wb_characteristic_patch,
+                            )
                             chars = snapshot_to_restore[field]
-                            full_card['characteristics'] = clean_characteristics_for_update(chars) if chars else chars
+                            restored_chars = build_wb_characteristic_patch(
+                                product.subject_id,
+                                chars,
+                            )
+                            restore_updates['characteristics'] = (
+                                clean_characteristics_for_update(restored_chars)
+                            )
                         elif field in ['title', 'description', 'brand']:
-                            full_card[field] = snapshot_to_restore[field]
+                            restore_updates[field] = snapshot_to_restore[field]
                         reverted_fields.append(field)
 
                     if not reverted_fields:
                         continue
 
-                    card_ready = prepare_card_for_update(full_card, {})
+                    card_ready = prepare_card_for_update(full_card, restore_updates)
                     cards_to_update.append(card_ready)
                     change_map[product.nm_id] = (change, product, reverted_fields, snapshot_to_restore)
 
@@ -6242,12 +6254,15 @@ def _run_startup_migrations():
         ('service_agents', 'task_types', "TEXT DEFAULT '[]'"),
         ('service_agents', 'icon', "TEXT DEFAULT 'cpu'"),
         ('service_agents', 'color', "TEXT DEFAULT 'blue'"),
+        ('agent_tasks', 'checkpoint_json', "TEXT DEFAULT '{}'"),
         # Supplier proxy & image generation
         ('suppliers', 'ai_proxy_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_enabled', "BOOLEAN DEFAULT 0 NOT NULL"),
         ('suppliers', 'image_gen_provider', "VARCHAR(50) DEFAULT 'openrouter'"),
         # Content factory AI model selection
         ('content_factories', 'ai_model', 'VARCHAR(100)'),
+        # Unified agent model routing: one primary model by default.
+        ('auto_import_settings', 'agent_single_model', 'BOOLEAN DEFAULT 0 NOT NULL'),
         # Competitor monitor proxy
         ('competitor_monitor_settings', 'proxy_url', 'VARCHAR(500)'),
         # WB marketplace prices sync
@@ -6581,16 +6596,18 @@ def api_profile_ai_settings_get():
     settings = AutoImportSettings.query.filter_by(seller_id=current_user.seller.id).first()
     if not settings:
         return jsonify({
-            'provider': 'cloudru',
-            'model': 'openai/gpt-oss-120b',
+            'provider': 'deepseek',
+            'model': 'deepseek-v4-pro',
             'api_key': '',
-            'api_base_url': 'https://foundation-models.api.cloud.ru/v1',
+            'api_base_url': 'https://api.deepseek.com/v1',
+            'agent_single_model': False,
         })
     return jsonify({
-        'provider': settings.ai_provider or 'cloudru',
-        'model': settings.ai_model or 'openai/gpt-oss-120b',
+        'provider': settings.ai_provider or 'deepseek',
+        'model': settings.ai_model or 'deepseek-v4-pro',
         'api_key': settings.ai_api_key or '',
         'api_base_url': settings.ai_api_base_url or '',
+        'agent_single_model': bool(settings.agent_single_model),
     })
 
 
@@ -6607,11 +6624,12 @@ def api_profile_ai_settings_save():
             settings = AutoImportSettings(seller_id=current_user.seller.id)
             db.session.add(settings)
 
-        provider = body.get('provider', 'cloudru')
+        provider = body.get('provider', 'deepseek')
         settings.ai_provider = provider
-        settings.ai_model = body.get('model', '')
+        settings.ai_model = body.get('model', '') or 'deepseek-v4-pro'
         settings.ai_api_key = body.get('api_key', '')
         settings.ai_api_base_url = body.get('api_base_url', '')
+        settings.agent_single_model = bool(body.get('agent_single_model', False))
 
         # Enable AI if key is provided
         if settings.ai_api_key:
@@ -6633,7 +6651,7 @@ def api_profile_ai_test():
     try:
         import time
         body = request.get_json(silent=True) or {}
-        provider = body.get('provider', 'cloudru')
+        provider = body.get('provider', 'deepseek')
         api_key = body.get('api_key', '')
         api_base_url = body.get('api_base_url', '')
         model = body.get('model', '')
@@ -6651,7 +6669,7 @@ def api_profile_ai_test():
             provider=AIProvider(provider),
             api_key=api_key,
             api_base_url=api_base_url or default_urls.get(provider, 'https://api.openai.com/v1'),
-            model=model or 'openai/gpt-oss-120b',
+            model=model or 'deepseek-v4-pro',
         )
         config.timeout = 30
 

@@ -11,6 +11,10 @@ class CardDoctorAgent(BaseAgent):
     agent_name = 'card-doctor'
     max_iterations = 20
     use_fallback_llm = True  # модерация требует точных рассуждений → Claude
+    tool_allowlist = (
+        'get_products', 'get_product', 'get_imported_product',
+        'get_prohibited_words', 'check_text_prohibited', 'validate_brand',
+    )
 
     system_prompt = """Ты — эксперт по модерации карточек Wildberries.
 

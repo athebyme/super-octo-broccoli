@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 class BrandResolverAgent(BaseAgent):
     agent_name = 'brand-resolver'
     max_iterations = 12
+    tool_allowlist = (
+        'get_product', 'update_product', 'get_imported_products',
+        'get_imported_product', 'update_imported_product',
+        'batch_update_imported_products', 'validate_brand',
+    )
     # Brand resolver НЕ должен сам искать категории — это задача category-mapper
     excluded_tools = ('search_wb_categories',)
 
@@ -70,6 +75,14 @@ class BrandResolverAgent(BaseAgent):
 
     # ── Structured Batch hooks ─────────────────────────────────
 
+    def _prefetch_for_structured_batch(self, product_ids: list[int]) -> list[dict]:
+        products = super()._prefetch_for_structured_batch(product_ids)
+        self._structured_subject_by_product = {
+            product.get('id'): product.get('wb_subject_id')
+            for product in products
+        }
+        return products
+
     def build_structured_prompt(self, products_data: list[dict]) -> str:
         products_json = json.dumps(products_data, ensure_ascii=False, indent=2)
         return (
@@ -109,13 +122,38 @@ class BrandResolverAgent(BaseAgent):
                 item['brand'] = 'Нет бренда'
                 continue
             try:
-                check = self.platform.validate_brand(brand)
-                if check.get('found') and check.get('canonical_name'):
-                    item['brand'] = check['canonical_name']
-                elif not check.get('found'):
+                product_id = item.get('product_id')
+                category_id = getattr(
+                    self, '_structured_subject_by_product', {},
+                ).get(product_id)
+                if not category_id:
+                    item['brand'] = None
+                    item['error'] = 'category_scope_required'
+                    continue
+                check = self.platform.validate_brand(
+                    brand,
+                    category_id=category_id,
+                )
+                status = check.get('status')
+                canonical_name = (
+                    check.get('marketplace_brand_name')
+                    or check.get('brand_name')
+                )
+                if (
+                    status == 'found'
+                    and check.get('category_available') is True
+                    and canonical_name
+                ):
+                    item['brand'] = canonical_name
+                elif status == 'found':
+                    item['brand'] = None
+                    item['error'] = 'brand_not_verified_for_category'
+                elif status in ('not_found', 'suggestions'):
                     item['brand'] = 'Нет бренда'
             except Exception as e:
                 logger.warning(f"Brand validation failed for '{brand}': {e}")
+                item['brand'] = None
+                item['error'] = 'brand_reference_unavailable'
         return results
 
     def _map_structured_result_to_updates(self, results: list[dict]) -> list[dict]:

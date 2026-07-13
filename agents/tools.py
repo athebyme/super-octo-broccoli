@@ -7,9 +7,22 @@
 """
 import json
 import logging
+from copy import deepcopy
 from typing import Callable
 
 logger = logging.getLogger(__name__)
+
+SYSTEM_CONTEXT_TOOL_ALLOWLIST = (
+    'get_seller_info',
+    'get_product_defaults',
+    'get_api_connection_status',
+    'get_api_logs',
+    'resolve_supplier',
+    'get_ready_supplier_candidates',
+    'get_prohibited_words',
+    'check_text_prohibited',
+    'get_pricing_settings',
+)
 
 
 # ── Реестр инструментов ────────────────────────────────────────────
@@ -45,6 +58,23 @@ class ToolRegistry:
         self._tools.pop(name, None)
         self._handlers.pop(name, None)
 
+    def copy(self) -> 'ToolRegistry':
+        """Возвращает независимую копию реестра с теми же handlers."""
+        clone = ToolRegistry()
+        clone._tools = deepcopy(self._tools)
+        clone._handlers = self._handlers.copy()
+        return clone
+
+    def restricted(self, allowed_names) -> 'ToolRegistry':
+        """Возвращает независимый реестр только с разрешёнными tools."""
+        allowed = set(allowed_names or ())
+        clone = ToolRegistry()
+        for name, schema in self._tools.items():
+            if name in allowed:
+                clone._tools[name] = deepcopy(schema)
+                clone._handlers[name] = self._handlers[name]
+        return clone
+
     def get_tool_schemas(self) -> list[dict]:
         """Возвращает схемы всех инструментов для LLM."""
         return list(self._tools.values())
@@ -53,7 +83,9 @@ class ToolRegistry:
         """Выполняет инструмент по имени с валидацией аргументов."""
         handler = self._handlers.get(name)
         if not handler:
-            return json.dumps({'error': f'Unknown tool: {name}'})
+            return json.dumps(
+                {'error': f'Unknown tool: {name}'}, separators=(',', ':'),
+            )
 
         # Валидация аргументов по схеме
         schema = self._tools.get(name, {}).get('input_schema', {})
@@ -63,10 +95,13 @@ class ToolRegistry:
         # Проверяем обязательные аргументы
         missing = [f for f in required if f not in arguments]
         if missing:
-            return json.dumps({
-                'error': f'Missing required arguments: {", ".join(missing)}',
-                'tool': name,
-            })
+            return json.dumps(
+                {
+                    'error': f'Missing required arguments: {", ".join(missing)}',
+                    'tool': name,
+                },
+                separators=(',', ':'),
+            )
 
         # Фильтруем неизвестные аргументы (защита от LLM-галлюцинаций)
         if properties:
@@ -89,15 +124,22 @@ class ToolRegistry:
         try:
             result = handler(**filtered_args)
             if isinstance(result, dict) or isinstance(result, list):
-                return json.dumps(result, ensure_ascii=False, indent=2)
+                return json.dumps(
+                    result, ensure_ascii=False, separators=(',', ':'),
+                )
             return str(result)
         except TypeError as e:
             # Логируем с деталями для дебага
             logger.error(f"Tool {name} type error: {e} (args: {list(filtered_args.keys())})")
-            return json.dumps({'error': f'Invalid arguments for {name}: {e}'})
+            return json.dumps(
+                {'error': f'Invalid arguments for {name}: {e}'},
+                ensure_ascii=False, separators=(',', ':'),
+            )
         except Exception as e:
             logger.error(f"Tool {name} error: {e}")
-            return json.dumps({'error': str(e)})
+            return json.dumps(
+                {'error': str(e)}, ensure_ascii=False, separators=(',', ':'),
+            )
 
 
 # ── Стандартные инструменты платформы ──────────────────────────────
@@ -190,7 +232,7 @@ def create_platform_tools(platform_client) -> ToolRegistry:
         name='update_imported_product',
         description=(
             'Обновить данные импортированного товара: категорию WB, бренд, характеристики и др. '
-            'ЗАЩИТА ЦЕН: платформа запрещает установку цены ниже закупочной + минимальная наценка (по умолчанию 20%).'
+            'Цены и остатки НЕ изменяются: такие поля сохраняются как предложение для ручной проверки.'
         ),
         parameters={
             'properties': {
@@ -205,9 +247,10 @@ def create_platform_tools(platform_client) -> ToolRegistry:
                 'sizes': {'type': 'string', 'description': 'JSON размеров'},
                 'gender': {'type': 'string', 'description': 'Пол (мужской/женский/унисекс)'},
                 'country': {'type': 'string', 'description': 'Страна производства'},
-                'calculated_price': {'type': 'number', 'description': 'Рассчитанная цена (защита: не ниже закупка + min_profit%)'},
-                'calculated_discount_price': {'type': 'number', 'description': 'Цена со скидкой SPP (защита: не ниже закупка + min_profit%)'},
-                'calculated_price_before_discount': {'type': 'number', 'description': 'Цена до скидки (защита: не ниже закупка + min_profit%)'},
+                'calculated_price': {'type': 'number', 'description': 'Предложение цены; требует ручного подтверждения'},
+                'calculated_discount_price': {'type': 'number', 'description': 'Предложение цены со скидкой; требует ручного подтверждения'},
+                'calculated_price_before_discount': {'type': 'number', 'description': 'Предложение цены до скидки; требует ручного подтверждения'},
+                'supplier_quantity': {'type': 'integer', 'description': 'Предложение остатка; требует ручного подтверждения'},
             },
             'required': ['product_id'],
         },
@@ -221,7 +264,7 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             'Пакетное обновление нескольких импортированных товаров за один вызов (до 50 шт). '
             'Каждый элемент массива updates содержит product_id и обновляемые поля. '
             'Ошибка в одном товаре не блокирует остальные. '
-            'ЗАЩИТА ЦЕН: цена не может быть ниже закупочной + минимальная наценка.'
+            'Цены и остатки сохраняются как предложения и требуют ручной проверки.'
         ),
         parameters={
             'properties': {
@@ -254,7 +297,9 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             'все конечные категории этого раздела. '
             'СОВЕТ: если по точному запросу ничего нет — ищи по parent_name раздела (например "Товары для взрослых"), '
             'чтобы увидеть ВСЕ доступные leaf-категории в разделе. '
-            'Если вернулся warning и is_enabled=false — категория не включена в системе.'
+            'Если вернулся warning и is_enabled=false — категория не включена в системе. '
+            'Всегда проверяй reference_status.usable: при false не выбирай '
+            'и не записывай категорию, а сообщи о необходимости синхронизации.'
         ),
         parameters={
             'properties': {
@@ -281,6 +326,95 @@ def create_platform_tools(platform_client) -> ToolRegistry:
         handler=lambda seller_id: platform_client.get_seller(seller_id),
     )
 
+    registry.register(
+        name='get_product_defaults',
+        description=(
+            'Получить активные системные defaults продавца: габариты, вес, '
+            'характеристики и минимальное число фото. Не возвращает media paths.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+                'subject_id': {
+                    'type': 'integer',
+                    'description': 'ID категории WB для global+category defaults (опционально)',
+                },
+            },
+            'required': ['seller_id'],
+        },
+        handler=lambda seller_id, subject_id=None:
+            platform_client.get_product_defaults(
+                int(seller_id), int(subject_id) if subject_id is not None else None,
+            ),
+    )
+
+    registry.register(
+        name='get_api_connection_status',
+        description=(
+            'Проверить статус подключения WB API. Возвращает только has_key, '
+            'маску и статус; секретный ключ недоступен.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+            },
+            'required': ['seller_id'],
+        },
+        handler=lambda seller_id:
+            platform_client.get_api_connection_status(int(seller_id)),
+    )
+
+    registry.register(
+        name='get_api_logs',
+        description=(
+            'Получить последние sanitized metadata вызовов WB API без request/response bodies. '
+            'Максимум 50 записей.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+                'limit': {'type': 'integer', 'description': 'Число записей, 1-50'},
+            },
+            'required': ['seller_id'],
+        },
+        handler=lambda seller_id, limit=20:
+            platform_client.get_api_logs(int(seller_id), min(max(int(limit), 1), 50)),
+    )
+
+    registry.register(
+        name='resolve_supplier',
+        description='Найти подключённого поставщика продавца по имени или коду.',
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+                'query': {'type': 'string', 'description': 'Имя или код поставщика'},
+            },
+            'required': ['seller_id', 'query'],
+        },
+        handler=lambda seller_id, query:
+            platform_client.resolve_supplier(int(seller_id), query),
+    )
+
+    registry.register(
+        name='get_ready_supplier_candidates',
+        description=(
+            'Получить компактный pre-ranked список неопубликованных карточек '
+            'поставщика, прошедших проверку готовности WB.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+                'supplier_id': {'type': 'integer', 'description': 'ID поставщика'},
+                'limit': {'type': 'integer', 'description': 'Размер пула, максимум 100'},
+            },
+            'required': ['seller_id', 'supplier_id'],
+        },
+        handler=lambda seller_id, supplier_id, limit=60:
+            platform_client.get_ready_supplier_candidates(
+                int(seller_id), int(supplier_id), min(max(int(limit), 1), 100),
+            ),
+    )
+
     # ── Характеристики категории ────────────────────────────────
 
     registry.register(
@@ -288,7 +422,9 @@ def create_platform_tools(platform_client) -> ToolRegistry:
         description=(
             'Получить ВСЕ характеристики категории WB по subject_id. '
             'Возвращает: название, тип (Число/Строка), единицу измерения, допустимые значения из словаря. '
-            'Всегда возвращает полный список — заполняй МАКСИМУМ характеристик из описания товара.'
+            'Заполняй данные только при reference_status.usable=true. '
+            'При false, stale или available=false не выдумывай схему и не вызывай update tools; '
+            'верни запрос на повторную синхронизацию.'
         ),
         parameters={
             'properties': {
@@ -307,12 +443,13 @@ def create_platform_tools(platform_client) -> ToolRegistry:
         description=(
             'Получить справочник WB: colors (цвета), countries (страны), kinds (пол), seasons (сезоны). '
             'Используй для заполнения характеристик значениями из реального справочника WB. '
-            'Можно фильтровать по подстроке.'
+            'Можно фильтровать по подстроке. Не используй items, если reference_status.usable=false.'
         ),
         parameters={
             'properties': {
                 'directory_type': {
                     'type': 'string',
+                    'enum': ['colors', 'countries', 'kinds', 'seasons', 'vat'],
                     'description': 'Тип справочника: colors, countries, kinds, seasons',
                 },
                 'query': {'type': 'string', 'description': 'Поисковый запрос для фильтрации (опционально)'},
@@ -373,7 +510,8 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             'Проверить бренд по реестру WB. '
             'Если передан category_id — дополнительно проверяет доступность бренда в категории. '
             'Без category_id — проверяет только наличие бренда в реестре (category_available=null). '
-            'Возвращает: найден ли бренд, каноническое написание, похожие варианты.'
+            'Возвращает плоский объект: status=found|suggestions|not_found, '
+            'brand_name, marketplace_brand_name, category_available и suggestions.'
         ),
         parameters={
             'properties': {

@@ -75,6 +75,64 @@
     </div>
   </div>
 
+  {# ── Проверка обработки на WB ── #}
+  <div x-show="verifyJob.status === 'running' || verifyJob.status === 'pending'" x-cloak
+       class="mb-4 rounded-xl border p-4 flex items-center gap-3"
+       style="background:var(--bg);border-color:var(--border)">
+    <svg class="animate-spin h-4 w-4" style="color:var(--accent)" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+    <span class="text-sm" style="color:var(--text)">Сверяем карточки с WB: фактические фото и ошибки обработки…</span>
+  </div>
+
+  <template x-if="verify">
+    <div class="mb-4 rounded-xl border p-4" style="background:var(--bg);border-color:var(--border)">
+      <div class="flex items-center justify-between mb-3">
+        <div class="text-sm font-medium" style="color:var(--text)">Проверка обработки на WB</div>
+        <div class="flex items-center gap-3">
+          <button @click="window.location.reload()" class="text-sm" style="color:var(--accent)">Обновить страницу</button>
+          <button @click="verify = null" class="text-sm" style="color:var(--text-muted)">Скрыть</button>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-2 text-xs">
+        <span class="px-2 py-1 rounded-md" style="background:var(--ok-bg);color:var(--ok)"
+              x-text="'Обработано: ' + verify.summary.ok"></span>
+        <span class="px-2 py-1 rounded-md" x-show="verify.summary.pending"
+              style="background:var(--warn-bg, #fffbeb);color:var(--warn, #92400e)"
+              x-text="'Ещё обрабатывается: ' + verify.summary.pending"></span>
+        <span class="px-2 py-1 rounded-md" x-show="verify.summary.error"
+              style="background:var(--danger-bg, #fef2f2);color:var(--danger, #991b1b)"
+              x-text="'Ошибки WB: ' + verify.summary.error"></span>
+        <span class="px-2 py-1 rounded-md" x-show="verify.summary.not_found"
+              style="background:var(--border);color:var(--text-muted)"
+              x-text="'Не найдено: ' + verify.summary.not_found"></span>
+      </div>
+      <template x-if="verifyProblems().length > 0">
+        <div class="space-y-1 max-h-64 overflow-y-auto">
+          <template x-for="it in verifyProblems()" :key="it.product_id">
+            <div class="flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-xs"
+                 :style="it.status === 'error' ? 'background:var(--danger-bg, #fef2f2)' : 'background:var(--bg-hover, rgba(0,0,0,0.03))'">
+              <div class="min-w-0">
+                <span class="font-medium" style="color:var(--text)" x-text="it.title || ('nm ' + it.nm_id)"></span>
+                <span class="ml-2" style="color:var(--text-muted)" x-text="'nm ' + it.nm_id"></span>
+                <template x-if="it.errors && it.errors.length">
+                  <p class="mt-0.5" style="color:var(--danger, #991b1b)" x-text="it.errors.join('; ')"></p>
+                </template>
+              </div>
+              <div class="flex-shrink-0 text-right" style="color:var(--text-secondary)">
+                <span x-show="it.status === 'pending'"
+                      x-text="'фото ' + (it.wb_photos ?? '—') + ' из ' + (it.expected_photos ?? '—')"></span>
+                <span x-show="it.status === 'error'">ошибка WB</span>
+                <span x-show="it.status === 'not_found'">нет на WB</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+      <p x-show="verifyProblems().length === 0" class="text-xs" style="color:var(--text-secondary)">
+        Все проверенные карточки обработаны WB: фото на месте, ошибок нет.
+      </p>
+    </div>
+  </template>
+
   {% if not rows %}
     <div class="sh-empty">
       {% if only_new %}
@@ -182,6 +240,11 @@
             class="px-4 py-2 rounded-xl text-sm text-white/80 border border-white/20 disabled:opacity-50">
       Все по фильтру ({{ total }})
     </button>
+    <button @click="startVerify(selected)"
+            :disabled="verifyJob.status === 'running' || verifyJob.status === 'pending'"
+            class="px-4 py-2 rounded-xl text-sm text-white/80 border border-white/20 disabled:opacity-50">
+      Проверить на WB
+    </button>
     <button @click="clearSelection()" class="text-sm text-white/60">Сбросить</button>
   </div>
 
@@ -201,6 +264,11 @@ function supplierUpdates() {
       failed: {{ active_job.failed_count if active_job else 0 }},
     },
     pollTimer: null,
+    verifyJob: { uid: null, status: '' },
+    verifyTimer: null,
+    verify: null,
+    _completedToastShown: false,
+    _verifyWaitTicks: 0,
 
     init() {
       if (this.job.uid && (this.job.status === 'running' || this.job.status === 'pending')) {
@@ -271,16 +339,78 @@ function supplierUpdates() {
         this.job.processed = data.processed;
         this.job.succeeded = data.succeeded;
         this.job.failed = data.failed;
-        if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+        if (['failed', 'cancelled'].includes(data.status)) {
           clearInterval(this.pollTimer);
           this.pollTimer = null;
-          if (data.status === 'completed') {
+          return;
+        }
+        if (data.status === 'completed') {
+          if (!this._completedToastShown) {
+            this._completedToastShown = true;
             window.showToast && showToast('success', 'Дозагрузка фото',
-              'Готово: ' + data.succeeded + ' обновлено' + (data.failed ? ', ошибок: ' + data.failed : ''));
-            setTimeout(() => window.location.reload(), 1500);
+              'Готово: ' + data.succeeded + ' обновлено' + (data.failed ? ', ошибок: ' + data.failed : '')
+              + (data.succeeded ? '. Запущена проверка обработки на WB…' : ''));
+          }
+          // После дозагрузки джоба сама сверяет карточки с WB —
+          // продолжаем поллинг, пока в result не появится verify (макс ~3 мин)
+          const verifyReport = data.result && data.result.verify;
+          if (verifyReport) {
+            this.verify = verifyReport;
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
+            return;
+          }
+          if (!data.succeeded || ++this._verifyWaitTicks > 90) {
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
+            if (data.succeeded) setTimeout(() => window.location.reload(), 1000);
           }
         }
       } catch (e) { /* сеть мигнула — продолжаем поллинг */ }
+    },
+
+    async startVerify(productIds) {
+      if (!productIds || !productIds.length) return;
+      try {
+        const res = await fetch('/api/supplier-updates/verify/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product_ids: productIds }),
+        });
+        const data = await res.json();
+        if (!data.success) {
+          window.showToast && showToast('warning', 'Проверка на WB', data.error || 'Не удалось запустить');
+          return;
+        }
+        this.verify = null;
+        this.verifyJob = { uid: data.job_uid, status: 'running' };
+        if (this.verifyTimer) clearInterval(this.verifyTimer);
+        this.verifyTimer = setInterval(() => this.pollVerify(), 2000);
+      } catch (e) {
+        window.showToast && showToast('danger', 'Проверка на WB', 'Ошибка сети');
+      }
+    },
+    async pollVerify() {
+      if (!this.verifyJob.uid) return;
+      try {
+        const res = await fetch('/api/supplier-updates/jobs/' + this.verifyJob.uid + '/status');
+        const data = await res.json();
+        if (!data.success) return;
+        this.verifyJob.status = data.status;
+        if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+          clearInterval(this.verifyTimer);
+          this.verifyTimer = null;
+          if (data.status === 'completed' && data.result) {
+            this.verify = data.result;
+          } else if (data.status === 'failed') {
+            window.showToast && showToast('danger', 'Проверка на WB', 'Не удалось выполнить проверку');
+          }
+        }
+      } catch (e) { /* сеть мигнула — продолжаем поллинг */ }
+    },
+    verifyProblems() {
+      if (!this.verify || !this.verify.items) return [];
+      return this.verify.items.filter(it => it.status !== 'ok');
     },
     async cancelJob() {
       if (!this.job.uid) return;

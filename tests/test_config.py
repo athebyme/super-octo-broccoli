@@ -62,6 +62,37 @@ class TestConfigResolve:
         with pytest.raises(AttributeError):
             _resolve('NONEXISTENT_FIELD')
 
+    def test_run_token_budget_has_safe_default(self):
+        original = os.environ.pop('AGENT_RUN_TOKEN_BUDGET', None)
+        try:
+            assert _resolve('RUN_TOKEN_BUDGET') == 30000
+        finally:
+            if original is not None:
+                os.environ['AGENT_RUN_TOKEN_BUDGET'] = original
+
+    def test_runtime_token_optimization_env_overrides(self):
+        originals = {
+            key: os.environ.get(key)
+            for key in (
+                'AGENT_RUN_TOKEN_BUDGET',
+                'AGENT_OBSERVATION_MAX_CHARS',
+                'AGENT_STEP_NAMER_ENABLED',
+            )
+        }
+        os.environ['AGENT_RUN_TOKEN_BUDGET'] = '12000'
+        os.environ['AGENT_OBSERVATION_MAX_CHARS'] = '640'
+        os.environ['AGENT_STEP_NAMER_ENABLED'] = '1'
+        try:
+            assert _resolve('RUN_TOKEN_BUDGET') == 12000
+            assert _resolve('OBSERVATION_MAX_CHARS') == 640
+            assert _resolve('STEP_NAMER_ENABLED') == 1
+        finally:
+            for key, value in originals.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
 
 class TestConfigValidation:
     def test_validate_missing_agent_id(self):

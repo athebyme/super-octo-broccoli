@@ -84,6 +84,7 @@ class WBProductImporter:
         self._category_sizes_cache = {}   # subject_id → bool
         self._chars_config_cache = {}     # subject_id → list
         self._brand_cache = {}            # (raw_brand, subject_id) → resolved_name
+        self._wb_validation_cache = {}    # admin schema/directories per subject
 
     def import_product_to_wb(self, imported_product: ImportedProduct) -> Tuple[bool, Optional[str], Optional[Product]]:
         """
@@ -1969,8 +1970,8 @@ class WBProductImporter:
         if not group:
             return defaults
 
-        # Общие для всех категорий взрослых
-        defaults.setdefault('Пол', 'Унисекс')
+        # Пол нельзя выводить из одной только adult-категории. Старый fallback
+        # «Унисекс» создавал неподтверждённый факт в карточках поставщика.
 
         if group == 'sex_toys':
             defaults['Комплектация'] = 'Изделие'
@@ -2201,11 +2202,17 @@ class WBProductImporter:
                 f"Товар {imported_product.external_id}: используем {len(raw_wb_characteristics)} "
                 f"характеристик уже в формате WB"
             )
-            return [
+            raw_patch = [
                 {'id': int(ch['id']), 'value': ch.get('value')}
                 for ch in raw_wb_characteristics
                 if ch.get('id') and ch.get('value') not in (None, '', [])
             ]
+            from services.marketplace_validator import build_wb_characteristic_patch
+            return build_wb_characteristic_patch(
+                imported_product.wb_subject_id,
+                raw_patch,
+                validation_cache=self._get_wb_validation_cache(),
+            )
 
         # Получаем конфигурацию характеристик WB (кешируем per subject_id)
         sid = imported_product.wb_subject_id
@@ -2535,8 +2542,25 @@ class WBProductImporter:
 
         result_characteristics = normalized_characteristics
 
-        logger.info(f"Товар {imported_product.external_id}: подготовлено {len(result_characteristics)} характеристик для WB")
+        from services.marketplace_validator import build_wb_characteristic_patch
+        result_characteristics = build_wb_characteristic_patch(
+            imported_product.wb_subject_id,
+            result_characteristics,
+            validation_cache=self._get_wb_validation_cache(),
+        )
+        logger.info(
+            f"Товар {imported_product.external_id}: подготовлено "
+            f"{len(result_characteristics)} характеристик для WB после проверки admin-словарей"
+        )
         return result_characteristics
+
+    def _get_wb_validation_cache(self) -> Dict[str, Any]:
+        """Локальный cache строгой admin-валидации для batch importer-а."""
+        cache = getattr(self, '_wb_validation_cache', None)
+        if cache is None:
+            cache = {}
+            self._wb_validation_cache = cache
+        return cache
 
     def _validate_characteristics_coverage(
         self,
@@ -2622,6 +2646,8 @@ class WBProductImporter:
         charc_type = wb_char.get('charcType', 1)  # 1=строки, 4=число
         unit_name = wb_char.get('unitName', '')
         dictionary = wb_char.get('dictionary', [])
+        if not isinstance(dictionary, list):
+            dictionary = []
         char_name = wb_char.get('name', '')
 
         # Если значение уже список - обрабатываем каждый элемент
@@ -2636,7 +2662,7 @@ class WBProductImporter:
         charc_type: int (1=массив строк, 4=число) или str для legacy
 
         Для справочных характеристик (с dictionary): если значение не найдено
-        в справочнике — возвращает None (WB отклонит карточку с невалидным значением).
+        в справочнике — прерывает подготовку карточки до вызова WB.
         """
         import re
 
@@ -2670,36 +2696,24 @@ class WBProductImporter:
             logger.warning(f"Числовая характеристика '{char_name}': не удалось извлечь число из '{str_value}', пропускаем")
             return None
 
-        # Для словарных значений - ищем точное или частичное совпадение
+        # Для словарных значений допустимо только точное совпадение без
+        # substring/fuzzy автоподстановки перед side effect.
         if dictionary:
-            str_value_lower = str_value.lower()
-
             # Сначала ищем точное совпадение
             for dict_item in dictionary:
                 if isinstance(dict_item, dict):
-                    dict_value = dict_item.get('value', '')
+                    dict_value = dict_item.get('value') or dict_item.get('name') or ''
                 else:
                     dict_value = str(dict_item)
 
-                if dict_value.lower() == str_value_lower:
+                dict_value = str(dict_value).strip()
+                if dict_value.casefold() == str_value.casefold():
                     return dict_value
 
-            # Ищем частичное совпадение
-            for dict_item in dictionary:
-                if isinstance(dict_item, dict):
-                    dict_value = dict_item.get('value', '')
-                else:
-                    dict_value = str(dict_item)
-
-                if str_value_lower in dict_value.lower() or dict_value.lower() in str_value_lower:
-                    return dict_value
-
-            # Значение не найдено в справочнике — WB отклонит карточку
-            logger.warning(
-                f"Характеристика '{char_name}': значение '{str_value}' не найдено в справочнике "
-                f"({len(dictionary)} записей), пропускаем"
+            raise ValueError(
+                f"Характеристика «{char_name}»: значение «{str_value}» "
+                "отсутствует в синхронизированном словаре WB"
             )
-            return None
 
         # Возвращаем как есть (нет справочника — свободный ввод)
         return str_value

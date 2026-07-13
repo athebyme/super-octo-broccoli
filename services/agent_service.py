@@ -177,7 +177,7 @@ AGENT_CATALOG = [
     # ── Оркестрация ──
     {
         'name': 'orchestrator',
-        'display_name': 'AI-помощник',
+        'display_name': 'ИИ-помощник',
         'description': 'Умный оркестратор: разбивает задачу на шаги и делегирует специализированным агентам. Поддерживает готовые pipeline (подготовка к WB, SEO, аудит) и свободные текстовые запросы.',
         'category': 'catalog',
         'icon': 'cpu',
@@ -189,7 +189,7 @@ AGENT_CATALOG = [
             'smart': 'Умный запрос',
             'custom': 'Свой набор агентов',
         },
-        'hint': 'Главная точка входа: опишите что нужно сделать или выберите готовый pipeline. AI-помощник сам подберёт нужных агентов и выполнит задачу.',
+        'hint': 'Главная точка входа: опишите что нужно сделать или выберите готовый pipeline. ИИ-помощник сам подберёт нужные навыки и выполнит задачу.',
     },
 
     # ── Аналитика ──
@@ -334,7 +334,7 @@ def register_agent(
 
 def heartbeat(agent_id: str, status: str = 'online', error: str = None) -> Optional[ServiceAgent]:
     """Обновляет heartbeat агента."""
-    agent = ServiceAgent.query.get(agent_id)
+    agent = db.session.get(ServiceAgent, agent_id)
     if not agent:
         return None
 
@@ -346,7 +346,7 @@ def heartbeat(agent_id: str, status: str = 'online', error: str = None) -> Optio
 
 
 def get_agent(agent_id: str) -> Optional[ServiceAgent]:
-    return ServiceAgent.query.get(agent_id)
+    return db.session.get(ServiceAgent, agent_id)
 
 
 def get_agent_by_name(name: str) -> Optional[ServiceAgent]:
@@ -412,7 +412,7 @@ def mark_stale_agents(timeout_seconds: int = 120):
 
 def _auto_title(agent_id: str, task_type: str, input_data: dict) -> str:
     """Генерирует человекочитаемое название задачи."""
-    agent = ServiceAgent.query.get(agent_id)
+    agent = db.session.get(ServiceAgent, agent_id)
     agent_label = agent.display_name if agent else 'Агент'
 
     # Считаем кол-во товаров
@@ -480,7 +480,7 @@ def create_task(
 
 def start_task(task_id: str) -> Optional[AgentTask]:
     """Помечает задачу как запущенную."""
-    task = AgentTask.query.get(task_id)
+    task = db.session.get(AgentTask, task_id)
     if not task or task.status != 'queued':
         return None
     task.status = 'running'
@@ -496,7 +496,7 @@ def update_task_progress(
     total_steps: int = None,
 ) -> Optional[AgentTask]:
     """Обновляет прогресс задачи."""
-    task = AgentTask.query.get(task_id)
+    task = db.session.get(AgentTask, task_id)
     if not task:
         return None
     task.completed_steps = completed_steps
@@ -509,9 +509,20 @@ def update_task_progress(
     return task
 
 
+def update_task_checkpoint(task_id: str, checkpoint: dict) -> Optional[AgentTask]:
+    """Persist a durable skill-boundary checkpoint for crash resume."""
+    task = db.session.get(AgentTask, task_id)
+    if not task or task.status not in ('queued', 'running'):
+        return None
+    task.checkpoint_json = json.dumps(checkpoint or {}, ensure_ascii=False)
+    task.updated_at = datetime.utcnow()
+    db.session.commit()
+    return task
+
+
 def complete_task(task_id: str, result_data: dict = None) -> Optional[AgentTask]:
     """Завершает задачу успешно."""
-    task = AgentTask.query.get(task_id)
+    task = db.session.get(AgentTask, task_id)
     if not task:
         return None
     task.status = 'completed'
@@ -528,7 +539,7 @@ def complete_task(task_id: str, result_data: dict = None) -> Optional[AgentTask]
 
 def fail_task(task_id: str, error_message: str, result_data: dict = None) -> Optional[AgentTask]:
     """Помечает задачу как проваленную."""
-    task = AgentTask.query.get(task_id)
+    task = db.session.get(AgentTask, task_id)
     if not task:
         return None
     task.status = 'failed'
@@ -544,7 +555,7 @@ def fail_task(task_id: str, error_message: str, result_data: dict = None) -> Opt
 
 def cancel_task(task_id: str) -> Optional[AgentTask]:
     """Отменяет задачу."""
-    task = AgentTask.query.get(task_id)
+    task = db.session.get(AgentTask, task_id)
     if not task or task.status in ('completed', 'failed', 'cancelled'):
         return None
     task.status = 'cancelled'
@@ -554,7 +565,7 @@ def cancel_task(task_id: str) -> Optional[AgentTask]:
 
 
 def get_task(task_id: str) -> Optional[AgentTask]:
-    return AgentTask.query.get(task_id)
+    return db.session.get(AgentTask, task_id)
 
 
 def list_tasks(
@@ -606,7 +617,7 @@ def add_task_step(
     metadata: dict = None,
 ) -> Optional[AgentTaskStep]:
     """Добавляет шаг выполнения задачи."""
-    task = AgentTask.query.get(task_id)
+    task = db.session.get(AgentTask, task_id)
     if not task:
         return None
 

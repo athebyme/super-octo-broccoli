@@ -36,14 +36,18 @@ class EnrichmentService:
         """
         Находит ImportedProduct для данного WB-продукта.
         Перебирает стратегии по убыванию надёжности.
-        Данные поставщика общие: если не нашли у текущего продавца,
-        ищем у всех (поставщик один, продавцов много).
+
+        ImportedProduct seller-scoped: совпадение по внешнему артикулу не
+        даёт права читать импорт или менять связь другого продавца.
 
         Returns:
             ImportedProduct или None
         """
         from models import ImportedProduct
         from services.pricing_engine import extract_supplier_product_id
+
+        if getattr(product, 'seller_id', seller_id) != seller_id:
+            return None
 
         # 1. Прямая FK-связь (самый надёжный)
         imp = ImportedProduct.query.filter_by(
@@ -54,22 +58,12 @@ class EnrichmentService:
             logger.debug(f"[Enrich] Match by product_id FK (seller): product={product.id} → imp={imp.id}")
             return imp
 
-        # 1b. FK без ограничения seller_id — для ручных привязок импортов от других продавцов
-        imp = ImportedProduct.query.filter_by(product_id=product.id).first()
-        if imp:
-            logger.debug(f"[Enrich] Match by product_id FK (any seller): product={product.id} → imp={imp.id}")
-            return imp
-
         # 2. По supplier_vendor_code карточки
         if product.supplier_vendor_code:
             imp = ImportedProduct.query.filter_by(
                 external_vendor_code=product.supplier_vendor_code,
                 seller_id=seller_id
             ).first()
-            if not imp:
-                imp = ImportedProduct.query.filter_by(
-                    external_vendor_code=product.supplier_vendor_code
-                ).first()
             if imp:
                 logger.debug(f"[Enrich] Match by supplier_vendor_code: {product.supplier_vendor_code}")
                 return imp
@@ -95,16 +89,10 @@ class EnrichmentService:
                 unique_ids = [x for x in candidate_ids if not (x in seen or seen.add(x))]
 
                 for ext_id in unique_ids:
-                    # Сначала ищем у текущего продавца
                     imp = ImportedProduct.query.filter_by(
                         external_id=ext_id,
                         seller_id=seller_id
                     ).first()
-                    if not imp:
-                        # Данные поставщика общие — ищем у любого продавца
-                        imp = ImportedProduct.query.filter_by(
-                            external_id=ext_id
-                        ).first()
                     if imp:
                         logger.debug(
                             f"[Enrich] Match by vendor_code pattern: "
@@ -121,10 +109,6 @@ class EnrichmentService:
                 imp = ImportedProduct.query.filter_by(
                     supplier_product_id=sp.id, seller_id=seller_id
                 ).first()
-                if not imp:
-                    imp = ImportedProduct.query.filter_by(
-                        supplier_product_id=sp.id
-                    ).first()
                 if imp:
                     logger.debug(f"[Enrich] Match via SupplierProduct: sp={sp.id} → imp={imp.id}")
                     return imp
@@ -144,9 +128,12 @@ class EnrichmentService:
         seller_suppliers = SellerSupplier.query.filter_by(seller_id=seller_id).all()
         supplier_ids = [ss.supplier_id for ss in seller_suppliers] if seller_suppliers else []
 
-        base_query = SupplierProduct.query
-        if supplier_ids:
-            base_query = base_query.filter(SupplierProduct.supplier_id.in_(supplier_ids))
+        if not supplier_ids:
+            return None
+
+        base_query = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id.in_(supplier_ids)
+        )
 
         # По vendor_code
         if product.vendor_code:
@@ -211,6 +198,7 @@ class EnrichmentService:
         # Оптимизация: сначала ищем по FK за один запрос
         fk_matches = ImportedProduct.query.filter(
             ImportedProduct.product_id.in_(product_ids),
+            ImportedProduct.seller_id == seller_id,
         ).all()
         fk_map = {}
         for imp in fk_matches:
@@ -232,7 +220,7 @@ class EnrichmentService:
                     'photo_count': photo_count,
                     'has_description': bool(imp.description),
                     'has_title': bool(imp.ai_seo_title or imp.title),
-                    'has_characteristics': bool(imp.characteristics and imp.characteristics not in ('{}', '[]', 'null')),
+                    'has_characteristics': self._build_supplier_characteristic_source(imp)['has_data'],
                 }
             else:
                 result[pid] = {
@@ -247,7 +235,10 @@ class EnrichmentService:
         # Для карточек без FK-связи — пытаемся найти по vendor_code (дорого, но точечно)
         missing = [pid for pid in product_ids if not result[pid]['available']]
         if missing and len(missing) <= 50:  # Ограничиваем для производительности
-            products = Product.query.filter(Product.id.in_(missing)).all()
+            products = Product.query.filter(
+                Product.id.in_(missing),
+                Product.seller_id == seller_id,
+            ).all()
             for product in products:
                 imp = self.find_supplier_data(product, seller_id)
                 if imp:
@@ -263,7 +254,7 @@ class EnrichmentService:
                         'photo_count': photo_count,
                         'has_description': bool(imp.description),
                         'has_title': bool(imp.ai_seo_title or imp.title),
-                        'has_characteristics': bool(imp.characteristics and imp.characteristics not in ('{}', '[]', 'null')),
+                        'has_characteristics': self._build_supplier_characteristic_source(imp)['has_data'],
                     }
 
         return result
@@ -283,18 +274,60 @@ class EnrichmentService:
         from services.photo_cache import get_photo_cache
 
         # Текущие поля карточки
-        current_chars = json.loads(product.characteristics_json or '[]')
-        current_dims = json.loads(product.dimensions_json or '{}')
-        current_photos_raw = json.loads(product.photos_json or '[]')
+        current_chars = self._safe_json_loads(
+            product.characteristics_json, [])
+        if isinstance(current_chars, dict):
+            current_chars = [
+                {'name': str(name), 'value': value}
+                for name, value in current_chars.items()
+            ]
+        elif not isinstance(current_chars, list):
+            current_chars = []
+        else:
+            current_chars = [
+                item for item in current_chars if isinstance(item, dict)
+            ]
+
+        current_dims = self._safe_json_loads(product.dimensions_json, {})
+        if not isinstance(current_dims, dict):
+            current_dims = {}
+
+        current_photos_raw = self._safe_json_loads(product.photos_json, [])
+        if not isinstance(current_photos_raw, list):
+            current_photos_raw = []
 
         # Данные поставщика
         sup_title = imp.ai_seo_title or imp.title
         sup_brand = imp.ai_detected_brand or imp.brand
+        supplier_characteristics = self._build_supplier_characteristic_source(imp)
         sup_chars_raw = imp.characteristics or '{}'
         sup_dims_raw = imp.ai_dimensions or '{}'
 
-        # Парсим характеристики поставщика в удобный формат
-        supplier_chars_parsed = self._parse_supplier_chars(sup_chars_raw)
+        characteristic_validation = {
+            'valid': True,
+            'error': None,
+            'normalized': [],
+        }
+        if supplier_characteristics['has_data']:
+            from services.marketplace_validator import (
+                WBCharacteristicValidationError,
+            )
+            try:
+                characteristic_validation['normalized'] = self._map_characteristics(
+                    imp,
+                    product.subject_id,
+                    source=supplier_characteristics,
+                )
+            except WBCharacteristicValidationError as exc:
+                characteristic_validation.update({
+                    'valid': False,
+                    'error': str(exc),
+                    'normalized': [],
+                })
+
+        # Preview и apply читают один и тот же источник: общие
+        # characteristics плюс отдельные materials/gender поставщика.
+        supplier_chars_parsed = supplier_characteristics['parsed']
 
         # Фото поставщика
         supplier_photos = self._get_supplier_photo_list(imp)
@@ -323,7 +356,8 @@ class EnrichmentService:
                 'current': current_chars,
                 'supplier_raw': sup_chars_raw,
                 'supplier_parsed': supplier_chars_parsed,
-                'has_change': bool(supplier_chars_parsed),
+                'has_change': supplier_characteristics['has_data'],
+                'validation': characteristic_validation,
             },
             'dimensions': {
                 'current': current_dims,
@@ -357,17 +391,22 @@ class EnrichmentService:
             return default
 
     @staticmethod
-    def _parse_supplier_chars(chars_raw: str) -> List[Dict]:
+    def _parse_supplier_chars(chars_raw: Any) -> List[Dict]:
         """
         Парсит характеристики поставщика в список [{name, value}].
-        Принимает JSON строку — dict или list.
+        Принимает JSON строку или уже разобраные dict/list.
         """
-        if not chars_raw or chars_raw in ('{}', '[]', 'null'):
+        if not chars_raw:
             return []
-        try:
-            data = json.loads(chars_raw)
-        except (json.JSONDecodeError, TypeError):
-            return []
+        if isinstance(chars_raw, str):
+            if chars_raw in ('{}', '[]', 'null'):
+                return []
+            try:
+                data = json.loads(chars_raw)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        else:
+            data = chars_raw
 
         result = []
         if isinstance(data, dict):
@@ -384,6 +423,93 @@ class EnrichmentService:
                         value = ', '.join(str(x) for x in value)
                     result.append({'name': str(name), 'value': str(value)})
         return result
+
+    @staticmethod
+    def _decode_supplier_json_value(raw: Any) -> Any:
+        """Decode a JSON-backed supplier field without hiding plain legacy text."""
+        if not isinstance(raw, str):
+            return raw
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return raw
+
+    @staticmethod
+    def _has_supplier_value(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple, dict, set)):
+            return bool(value)
+        return True
+
+    @staticmethod
+    def _preview_value(value: Any) -> str:
+        if isinstance(value, list):
+            return ', '.join(str(item) for item in value)
+        return str(value) if value is not None else ''
+
+    @classmethod
+    def _upsert_preview_characteristic(
+        cls,
+        parsed: List[Dict[str, Any]],
+        name: str,
+        value: Any,
+    ) -> None:
+        """Upsert only by an exact case-insensitive label; no fuzzy matching."""
+        exact_name = name.strip().casefold()
+        display_value = cls._preview_value(value)
+        for item in parsed:
+            if str(item.get('name', '')).strip().casefold() == exact_name:
+                item['value'] = display_value
+                return
+        parsed.append({'name': name, 'value': display_value})
+
+    @classmethod
+    def _build_supplier_characteristic_source(cls, imp) -> Dict[str, Any]:
+        """Build the shared preview/apply source from all ImportedProduct fields."""
+        raw_values = getattr(imp, 'characteristics', None)
+        raw_values_present = False
+        if isinstance(raw_values, str):
+            stripped = raw_values.strip()
+            raw_values_present = bool(
+                stripped and stripped not in ('{}', '[]', 'null'))
+            try:
+                values = json.loads(stripped) if stripped else {}
+            except (json.JSONDecodeError, TypeError):
+                # Не скрываем повреждённые данные: strict builder ниже вернёт
+                # invalid_payload и остановит write до WB.
+                values = raw_values
+        elif isinstance(raw_values, (dict, list)):
+            values = raw_values
+            raw_values_present = bool(raw_values)
+        else:
+            values = {}
+
+        materials = cls._decode_supplier_json_value(
+            getattr(imp, 'materials', None))
+        gender = getattr(imp, 'gender', None)
+        if isinstance(gender, str):
+            gender = gender.strip() or None
+
+        parsed = cls._parse_supplier_chars(values)
+        if cls._has_supplier_value(materials):
+            cls._upsert_preview_characteristic(
+                parsed, 'Материал изделия', materials)
+        if cls._has_supplier_value(gender):
+            cls._upsert_preview_characteristic(parsed, 'Пол', gender)
+
+        return {
+            'values': values,
+            'materials': materials,
+            'gender': gender,
+            'parsed': parsed,
+            'has_data': bool(parsed) or raw_values_present,
+        }
 
     def _trigger_photo_cache(self, imp):
         """Ставит все фото ImportedProduct в очередь фоновой загрузки"""
@@ -481,6 +607,20 @@ class EnrichmentService:
         """
         from models import db, CardEditHistory
 
+        seller_id = getattr(seller, 'id', None)
+        if (
+            seller_id is None
+            or getattr(product, 'seller_id', seller_id) != seller_id
+            or getattr(imp, 'seller_id', seller_id) != seller_id
+        ):
+            return {
+                'success': False,
+                'fields_applied': [],
+                'photos': {'skipped': True},
+                'error': 'Access denied: seller scope mismatch',
+                'wb_sync': False,
+            }
+
         snapshot_before = _create_product_snapshot(product)
         wb_updates = {}
         fields_applied = []
@@ -503,8 +643,29 @@ class EnrichmentService:
             wb_updates['description'] = imp.description[:5000]
             fields_applied.append('description')
 
-        if 'characteristics' in fields and imp.characteristics:
-            mapped_chars = self._map_characteristics(imp, product.subject_id)
+        if 'characteristics' in fields:
+            supplier_characteristics = self._build_supplier_characteristic_source(imp)
+        else:
+            supplier_characteristics = None
+
+        if supplier_characteristics and supplier_characteristics['has_data']:
+            from services.marketplace_validator import (
+                WBCharacteristicValidationError,
+            )
+            try:
+                mapped_chars = self._map_characteristics(
+                    imp,
+                    product.subject_id,
+                    source=supplier_characteristics,
+                )
+            except WBCharacteristicValidationError as exc:
+                return {
+                    'success': False,
+                    'fields_applied': [],
+                    'photos': {'skipped': True},
+                    'error': str(exc),
+                    'wb_sync': False,
+                }
             if mapped_chars:
                 wb_updates['characteristics'] = mapped_chars
                 fields_applied.append('characteristics')
@@ -541,7 +702,19 @@ class EnrichmentService:
                 if 'description' in wb_updates:
                     product.description = wb_updates['description']
                 if 'characteristics' in wb_updates:
-                    product.characteristics_json = json.dumps(wb_updates['characteristics'], ensure_ascii=False)
+                    from services.marketplace_validator import merge_wb_characteristics
+                    try:
+                        current = json.loads(product.characteristics_json or '[]')
+                    except (json.JSONDecodeError, TypeError):
+                        current = []
+                    product.characteristics_json = json.dumps(
+                        merge_wb_characteristics(
+                            current,
+                            wb_updates['characteristics'],
+                            subject_id=product.subject_id,
+                        ),
+                        ensure_ascii=False,
+                    )
                 if 'dimensions' in wb_updates:
                     product.dimensions_json = json.dumps(wb_updates['dimensions'], ensure_ascii=False)
 
@@ -590,63 +763,32 @@ class EnrichmentService:
             'wb_sync': wb_sync_success,
         }
 
-    def _map_characteristics(self, imp, subject_id: int) -> List[Dict]:
+    def _map_characteristics(
+        self,
+        imp,
+        subject_id: int,
+        source: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict]:
         """
         Преобразует characteristics из ImportedProduct в формат WB API.
         WB ожидает: [{"id": <int>, "value": <str|list>}]
 
-        Стратегия:
-        1. Если уже в формате [{id, value}] — используем как есть
-        2. Если dict {name: value} — пытаемся смаппить через существующие
-           характеристики карточки (по совпадению имён)
-        3. Для AI-полей (ai_dimensions, ai_materials и пр.) — мержим отдельно
+        Оба поддерживаемых формата — [{id, value}] и {name: value} — проходят
+        обязательную category-scoped проверку по admin schema/dictionaries.
         """
-        if not imp.characteristics:
+        source = source or self._build_supplier_characteristic_source(imp)
+        if not source['has_data']:
             return []
 
-        try:
-            raw = json.loads(imp.characteristics)
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-        if isinstance(raw, list):
-            valid = [c for c in raw if isinstance(c, dict) and 'id' in c]
-            return valid
-
-        if isinstance(raw, dict):
-            # Пытаемся смаппить по имени характеристики → id
-            # через существующие характеристики карточки
-            from models import Product
-            product = None
-            if imp.product_id:
-                product = Product.query.get(imp.product_id)
-
-            existing_chars = []
-            if product and product.characteristics_json:
-                try:
-                    existing_chars = json.loads(product.characteristics_json)
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            # Строим маппинг name → id из существующих характеристик
-            name_to_id = {}
-            for ch in existing_chars:
-                if isinstance(ch, dict) and 'name' in ch and 'id' in ch:
-                    name_to_id[ch['name'].lower().strip()] = ch['id']
-
-            result = []
-            for name, value in raw.items():
-                name_lower = name.lower().strip()
-                char_id = name_to_id.get(name_lower)
-                if char_id is not None:
-                    if isinstance(value, list):
-                        result.append({'id': char_id, 'value': value})
-                    else:
-                        result.append({'id': char_id, 'value': str(value)})
-
-            return result
-
-        return []
+        from services.marketplace_validator import (
+            build_wb_supplier_characteristic_patch,
+        )
+        return build_wb_supplier_characteristic_patch(
+            subject_id,
+            source['values'],
+            materials=source['materials'],
+            gender=source['gender'],
+        )
 
     def apply_selective_photos(
         self,
@@ -674,6 +816,18 @@ class EnrichmentService:
         from models import db, CardEditHistory
         from services.photo_cache import get_photo_cache
 
+        seller_id = getattr(seller, 'id', None)
+        if (
+            seller_id is None
+            or getattr(product, 'seller_id', seller_id) != seller_id
+            or getattr(imp, 'seller_id', seller_id) != seller_id
+        ):
+            return {
+                'success': False,
+                'uploaded': 0,
+                'error': 'Access denied: seller scope mismatch',
+            }
+
         if not imp.photo_urls:
             return {'success': False, 'error': 'Нет фото у поставщика'}
 
@@ -692,7 +846,9 @@ class EnrichmentService:
             return {'success': False, 'error': 'Нет валидных фото по указанным индексам'}
 
         # Проверка стратегии
-        current_photos = json.loads(product.photos_json or '[]')
+        current_photos = self._safe_json_loads(product.photos_json, [])
+        if not isinstance(current_photos, list):
+            current_photos = []
         if strategy == 'only_if_empty' and current_photos:
             return {'success': True, 'uploaded': 0, 'skipped': True, 'reason': 'already_has_photos'}
 
@@ -790,7 +946,9 @@ class EnrichmentService:
             return {'skipped': True, 'reason': 'selective_mode'}
 
         # Проверка стратегии
-        current_photos = json.loads(product.photos_json or '[]')
+        current_photos = self._safe_json_loads(product.photos_json, [])
+        if not isinstance(current_photos, list):
+            current_photos = []
         if strategy == 'only_if_empty' and current_photos:
             logger.info(f"[Enrich] Photos skipped (strategy=only_if_empty, has {len(current_photos)} photos)")
             return {'skipped': True, 'reason': 'already_has_photos'}
@@ -1136,8 +1294,11 @@ class EnrichmentService:
             skipped = 0
 
             for i, product_id in enumerate(product_ids):
-                product = Product.query.get(product_id)
-                if not product or product.seller_id != seller_id:
+                product = Product.query.filter_by(
+                    id=product_id,
+                    seller_id=seller_id,
+                ).first()
+                if not product:
                     skipped += 1
                     results.append({'product_id': product_id, 'status': 'skipped', 'reason': 'not_found'})
                     job.processed = i + 1
@@ -1235,6 +1396,16 @@ class EnrichmentService:
 
 def _create_product_snapshot(product) -> Dict:
     """Снапшот состояния карточки для истории (повторяет логику из seller_platform.py)"""
+    characteristics = EnrichmentService._safe_json_loads(
+        product.characteristics_json, [])
+    if not isinstance(characteristics, (list, dict)):
+        characteristics = []
+
+    dimensions = EnrichmentService._safe_json_loads(
+        product.dimensions_json, {})
+    if not isinstance(dimensions, dict):
+        dimensions = {}
+
     return {
         'nm_id': product.nm_id,
         'vendor_code': product.vendor_code,
@@ -1245,8 +1416,8 @@ def _create_product_snapshot(product) -> Dict:
         'price': float(product.price) if product.price else None,
         'discount_price': float(product.discount_price) if product.discount_price else None,
         'quantity': product.quantity,
-        'characteristics': json.loads(product.characteristics_json) if product.characteristics_json else [],
-        'dimensions': json.loads(product.dimensions_json) if product.dimensions_json else {},
+        'characteristics': characteristics,
+        'dimensions': dimensions,
         'photos_json': product.photos_json,
         'is_active': product.is_active,
     }

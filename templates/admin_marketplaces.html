@@ -109,14 +109,20 @@
                     {% if mp.categories_synced_at %}
                     <div class="flex justify-between items-center text-xs">
                         <span class="text-gray-400">Синхр. категорий:</span>
-                        <span class="text-gray-500">{{ mp.categories_synced_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        <span class="text-gray-500">{{ mp.categories_synced_at.strftime('%d.%m.%Y %H:%M') }} · v{{ mp.categories_version or 0 }} · {{ mp.categories_sync_status or 'unknown' }}</span>
                     </div>
+                    {% endif %}
+                    {% if mp.categories_sync_error %}
+                    <p class="text-xs text-red-600 break-words">{{ mp.categories_sync_error }}</p>
                     {% endif %}
                     {% if mp.directories_synced_at %}
                     <div class="flex justify-between items-center text-xs">
                         <span class="text-gray-400">Синхр. справочников:</span>
-                        <span class="text-gray-500">{{ mp.directories_synced_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        <span class="text-gray-500">{{ mp.directories_synced_at.strftime('%d.%m.%Y %H:%M') }} · v{{ mp.directories_version or 0 }} · {{ mp.directories_sync_status or 'unknown' }}</span>
                     </div>
+                    {% endif %}
+                    {% if mp.directories_sync_error %}
+                    <p class="text-xs text-red-600 break-words">{{ mp.directories_sync_error }}</p>
                     {% endif %}
                 </div>
 

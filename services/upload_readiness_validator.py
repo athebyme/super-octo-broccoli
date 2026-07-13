@@ -404,12 +404,15 @@ def _find_barcode_conflicts(product, barcodes: list) -> list:
     """
     Ищет конфликты баркодов с уже существующими товарами.
     Проверяет:
-    1. ImportedProduct с import_status='completed' и совпадающими баркодами
+    1. ImportedProduct с import_status='imported' и совпадающими баркодами
     2. Product записи с совпадающими баркодами в sizes_json
+
+    SQL LIKE по баркоду — только префильтр (сужает выборку), фактическое
+    совпадение подтверждается разбором JSON и пересечением множеств.
 
     Returns: список кортежей (barcode, nm_id) для конфликтных баркодов
     """
-    from models import ImportedProduct, Product
+    from models import db, ImportedProduct, Product
 
     if not barcodes:
         return []
@@ -425,21 +428,24 @@ def _find_barcode_conflicts(product, barcodes: list) -> list:
     if not seller_id:
         return []
 
-    # 1. Проверяем ImportedProduct с completed статусом
+    # 1. Проверяем уже загруженные на WB ImportedProduct
     try:
-        completed_products = ImportedProduct.query.filter(
+        like_filters = [ImportedProduct.barcodes.like(f'%{bc}%') for bc in barcode_set]
+        imported_q = ImportedProduct.query.filter(
             ImportedProduct.seller_id == seller_id,
-            ImportedProduct.import_status == 'completed',
+            ImportedProduct.import_status == 'imported',
+            ImportedProduct.wb_nm_id.isnot(None),
             ImportedProduct.barcodes.isnot(None),
+            db.or_(*like_filters),
         )
         if product_id:
-            completed_products = completed_products.filter(ImportedProduct.id != product_id)
+            imported_q = imported_q.filter(ImportedProduct.id != product_id)
 
-        for cp in completed_products.all():
+        for cp in imported_q.all():
             try:
                 cp_barcodes = set(str(b) for b in json.loads(cp.barcodes) if b)
                 overlap = barcode_set & cp_barcodes
-                if overlap and cp.wb_nm_id:
+                if overlap:
                     for bc in overlap:
                         conflicts.append((bc, cp.wb_nm_id))
                     # Удаляем найденные из набора чтобы не дублировать
@@ -454,9 +460,11 @@ def _find_barcode_conflicts(product, barcodes: list) -> list:
 
     # 2. Проверяем Product записи (sizes_json содержит skus с баркодами)
     try:
+        like_filters = [Product.sizes_json.like(f'%{bc}%') for bc in barcode_set]
         products = Product.query.filter(
             Product.seller_id == seller_id,
             Product.sizes_json.isnot(None),
+            db.or_(*like_filters),
         ).all()
 
         for p in products:

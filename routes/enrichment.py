@@ -8,7 +8,7 @@ import logging
 from flask import render_template, request, redirect, url_for, flash, jsonify, abort, Response, send_file
 from flask_login import login_required, current_user
 
-from models import db, Product, ImportedProduct, EnrichmentJob, SupplierProduct
+from models import Product, ImportedProduct, EnrichmentJob
 from services.supplier_enrichment import get_enrichment_service
 
 logger = logging.getLogger(__name__)
@@ -29,9 +29,11 @@ def register_enrichment_routes(app):
             flash('У вас нет профиля продавца', 'danger')
             return redirect(url_for('dashboard'))
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            abort(403)
+        seller_id = current_user.seller.id
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=seller_id,
+        ).first_or_404()
 
         # Пробуем найти данные поставщика автоматически
         service = get_enrichment_service()
@@ -40,12 +42,12 @@ def register_enrichment_routes(app):
         # Пользователь может явно указать supplier_id через ?supplier_id=X
         manual_supplier_id = request.args.get('supplier_id', type=int)
         if manual_supplier_id:
-            manual_imp = ImportedProduct.query.filter_by(id=manual_supplier_id).first()
+            manual_imp = ImportedProduct.query.filter_by(
+                id=manual_supplier_id,
+                seller_id=seller_id,
+            ).first()
             if manual_imp:
                 imp = manual_imp
-                if imp.product_id is None:
-                    imp.product_id = product.id
-                    db.session.commit()
 
         preview = service.build_preview(product, imp) if imp else None
 
@@ -56,7 +58,7 @@ def register_enrichment_routes(app):
         # Сигнал шаблону, что данных мало
         low_data = imp and not any([
             imp.photo_urls, imp.description, imp.characteristics,
-            imp.ai_seo_title, imp.ai_dimensions
+            imp.materials, imp.gender, imp.ai_seo_title, imp.ai_dimensions
         ])
 
         # Текущие фото WB для передачи в шаблон
@@ -86,9 +88,10 @@ def register_enrichment_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'No seller profile'}), 403
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         service = get_enrichment_service()
         imp = service.find_supplier_data(product, current_user.seller.id)
@@ -109,9 +112,10 @@ def register_enrichment_routes(app):
         if not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'WB API key not configured'}), 400
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         data = request.get_json(silent=True) or {}
         fields = data.get('fields', [])
@@ -129,9 +133,13 @@ def register_enrichment_routes(app):
 
         service = get_enrichment_service()
 
-        # Находим ImportedProduct — данные поставщика общие, не фильтруем по seller_id
+        # ImportedProduct всегда принадлежит текущему seller. Числовой ID без
+        # tenant scope нельзя использовать ни для чтения, ни для привязки.
         if supplier_id:
-            imp = ImportedProduct.query.filter_by(id=supplier_id).first()
+            imp = ImportedProduct.query.filter_by(
+                id=supplier_id,
+                seller_id=current_user.seller.id,
+            ).first()
         else:
             imp = service.find_supplier_data(product, current_user.seller.id)
 
@@ -153,6 +161,12 @@ def register_enrichment_routes(app):
                     product, imp, fields, 'selective',
                     current_user.seller, wb_client
                 )
+
+                # Fail closed до отдельного photo side effect. Иначе crafted
+                # request мог получить success по фото после того, как
+                # характеристики были отклонены обязательным WB-словарём.
+                if text_result.get('error'):
+                    return jsonify(text_result)
 
                 # Отдельно применяем выбранные фото
                 photo_result = service.apply_selective_photos(
@@ -189,9 +203,10 @@ def register_enrichment_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'No seller profile'}), 403
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         service = get_enrichment_service()
         imp = service.find_supplier_data(product, current_user.seller.id)
@@ -213,7 +228,13 @@ def register_enrichment_routes(app):
         from PIL import Image as _Image
         from services.photo_cache import get_photo_cache
 
-        imp = ImportedProduct.query.get_or_404(imported_product_id)
+        if not current_user.seller:
+            abort(403)
+
+        imp = ImportedProduct.query.filter_by(
+            id=imported_product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         if not imp.photo_urls:
             abort(404)
@@ -317,6 +338,7 @@ def register_enrichment_routes(app):
 
         # Поиск по external_id (точное), external_vendor_code (точное) или title (ilike)
         query = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == current_user.seller.id,
             or_(
                 ImportedProduct.external_id == q,
                 ImportedProduct.external_vendor_code == q,
@@ -328,7 +350,7 @@ def register_enrichment_routes(app):
         for imp in query.all():
             has_data = any([
                 imp.photo_urls, imp.description, imp.characteristics,
-                imp.ai_seo_title, imp.ai_dimensions
+                imp.materials, imp.gender, imp.ai_seo_title, imp.ai_dimensions
             ])
             photo_count = 0
             if imp.photo_urls:
@@ -357,9 +379,10 @@ def register_enrichment_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'No seller profile'}), 403
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         from services.pricing_engine import extract_supplier_product_id
         import re as _re
@@ -379,15 +402,16 @@ def register_enrichment_routes(app):
         db_results = {}
         for c in candidates:
             imp = ImportedProduct.query.filter_by(external_id=c, seller_id=seller_id).first()
-            if not imp:
-                imp = ImportedProduct.query.filter_by(external_id=c).first()
             db_results[c] = {'found': imp is not None, 'imp_id': imp.id if imp else None}
 
         recent = ImportedProduct.query.filter_by(seller_id=seller_id).order_by(
             ImportedProduct.id.desc()
         ).limit(5).all()
 
-        fk_imp = ImportedProduct.query.filter_by(product_id=product.id).first()
+        fk_imp = ImportedProduct.query.filter_by(
+            product_id=product.id,
+            seller_id=seller_id,
+        ).first()
 
         return jsonify({
             'product_id': product.id,
@@ -441,7 +465,7 @@ def register_enrichment_routes(app):
         service = get_enrichment_service()
         matched_count = 0
         for pid in product_ids[:100]:
-            p = Product.query.get(pid)
+            p = Product.query.filter_by(id=pid, seller_id=seller_id).first()
             if p and service.find_supplier_data(p, seller_id):
                 matched_count += 1
 
@@ -576,9 +600,10 @@ def register_enrichment_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'No seller profile'}), 403
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         service = get_enrichment_service()
         imp = service.find_supplier_data(product, current_user.seller.id)
@@ -607,7 +632,9 @@ def register_enrichment_routes(app):
 
         return jsonify({
             'wb_photos': wb_photos,
-            'wb_photo_count': len(json.loads(product.photos_json or '[]')),
+            'wb_photo_count': len(
+                service._safe_json_loads(product.photos_json, []) or []
+            ),
             'supplier_photos': [
                 {
                     'index': i,
@@ -633,9 +660,10 @@ def register_enrichment_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'No seller profile'}), 403
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         data = request.get_json(silent=True) or {}
         new_order = data.get('order', [])  # Список индексов в новом порядке
@@ -655,9 +683,10 @@ def register_enrichment_routes(app):
         if not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'WB API key not configured'}), 400
 
-        product = Product.query.get_or_404(product_id)
-        if product.seller_id != current_user.seller.id:
-            return jsonify({'error': 'Access denied'}), 403
+        product = Product.query.filter_by(
+            id=product_id,
+            seller_id=current_user.seller.id,
+        ).first_or_404()
 
         data = request.get_json(silent=True) or {}
         supplier_id = data.get('supplier_id')
@@ -667,7 +696,10 @@ def register_enrichment_routes(app):
         if not supplier_id or not photo_indices:
             return jsonify({'error': 'supplier_id and photo_indices required'}), 400
 
-        imp = ImportedProduct.query.get(supplier_id)
+        imp = ImportedProduct.query.filter_by(
+            id=supplier_id,
+            seller_id=current_user.seller.id,
+        ).first()
         if not imp or not imp.photo_urls:
             return jsonify({'error': 'Supplier product not found or no photos'}), 404
 

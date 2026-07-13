@@ -1807,6 +1807,14 @@ def register_supplier_routes(app):
         page = request.args.get('page', 1, type=int)
         status = request.args.get('status', '').strip()
         search = request.args.get('search', '').strip()
+        supplier_filter = request.args.get('supplier', '').strip()
+        brand_filter = request.args.get('brand', '').strip()
+        wb_category_filter = request.args.get('wb_category', '').strip()
+        has_photos = request.args.get('has_photos', '').strip()
+        stock = request.args.get('stock', '').strip()
+        price_min = request.args.get('price_min', '').strip()
+        price_max = request.args.get('price_max', '').strip()
+        sort = request.args.get('sort', '').strip()
 
         query = ImportedProduct.query.filter_by(seller_id=seller.id)
         if status:
@@ -1823,7 +1831,70 @@ def register_supplier_routes(app):
                 )
             )
 
-        query = query.order_by(ImportedProduct.created_at.desc())
+        if supplier_filter == 'none':
+            query = query.filter(ImportedProduct.supplier_id.is_(None))
+        elif supplier_filter:
+            supplier_id = _coerce_positive_int(supplier_filter)
+            if supplier_id:
+                query = query.filter(ImportedProduct.supplier_id == supplier_id)
+
+        if brand_filter == 'none':
+            query = query.filter(
+                db.or_(ImportedProduct.brand.is_(None), ImportedProduct.brand == '')
+            )
+        elif brand_filter:
+            query = query.filter(ImportedProduct.brand == brand_filter)
+
+        if wb_category_filter == 'none':
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.mapped_wb_category.is_(None),
+                    ImportedProduct.mapped_wb_category == '',
+                )
+            )
+        elif wb_category_filter:
+            query = query.filter(ImportedProduct.mapped_wb_category == wb_category_filter)
+
+        if has_photos == 'yes':
+            query = query.filter(
+                ImportedProduct.photo_urls.isnot(None),
+                ImportedProduct.photo_urls != '',
+                ImportedProduct.photo_urls != '[]',
+            )
+        elif has_photos == 'no':
+            query = query.filter(
+                db.or_(
+                    ImportedProduct.photo_urls.is_(None),
+                    ImportedProduct.photo_urls == '',
+                    ImportedProduct.photo_urls == '[]',
+                )
+            )
+
+        if stock == 'in_stock':
+            query = query.filter(ImportedProduct.supplier_quantity > 0)
+        elif stock == 'out_of_stock':
+            query = query.filter(ImportedProduct.supplier_quantity == 0)
+        elif stock == 'unknown':
+            query = query.filter(ImportedProduct.supplier_quantity.is_(None))
+
+        if price_min:
+            try:
+                query = query.filter(ImportedProduct.supplier_price >= float(price_min))
+            except (ValueError, TypeError):
+                pass
+        if price_max:
+            try:
+                query = query.filter(ImportedProduct.supplier_price <= float(price_max))
+            except (ValueError, TypeError):
+                pass
+
+        sort_map = {
+            'oldest': ImportedProduct.created_at.asc(),
+            'price_asc': ImportedProduct.supplier_price.asc(),
+            'price_desc': ImportedProduct.supplier_price.desc(),
+            'title': ImportedProduct.title.asc(),
+        }
+        query = query.order_by(sort_map.get(sort, ImportedProduct.created_at.desc()))
         pagination = query.paginate(page=page, per_page=40, error_out=False)
 
         # Статистика
@@ -1835,6 +1906,43 @@ def register_supplier_routes(app):
             'imported': base_q.filter_by(import_status='imported').count(),
             'failed': base_q.filter_by(import_status='failed').count(),
         }
+
+        # Данные для выпадающих фильтров (в рамках текущего продавца)
+        suppliers_list = db.session.query(
+            Supplier.id, Supplier.name, db.func.count(ImportedProduct.id)
+        ).join(
+            ImportedProduct, ImportedProduct.supplier_id == Supplier.id
+        ).filter(
+            ImportedProduct.seller_id == seller.id
+        ).group_by(Supplier.id, Supplier.name).order_by(Supplier.name).all()
+        no_supplier_count = base_q.filter(ImportedProduct.supplier_id.is_(None)).count()
+
+        brands_list = [r[0] for r in db.session.query(
+            ImportedProduct.brand
+        ).filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.brand.isnot(None),
+            ImportedProduct.brand != '',
+        ).distinct().order_by(ImportedProduct.brand).all()]
+
+        wb_categories_list = [r[0] for r in db.session.query(
+            ImportedProduct.mapped_wb_category
+        ).filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.mapped_wb_category.isnot(None),
+            ImportedProduct.mapped_wb_category != '',
+        ).distinct().order_by(ImportedProduct.mapped_wb_category).all()]
+
+        # Непустые query-параметры для ссылок пагинации и вкладок статусов
+        page_args = {
+            k: v for k, v in request.args.items()
+            if k != 'page' and v
+        }
+        status_link_args = {k: v for k, v in page_args.items() if k != 'status'}
+        active_filters = sum(1 for k in (
+            'supplier', 'brand', 'wb_category', 'has_photos',
+            'stock', 'price_min', 'price_max',
+        ) if page_args.get(k))
 
         # Недавние загрузки (последние 10 импортированных или с ошибкой)
         recent_imports = ImportedProduct.query.filter(
@@ -1885,6 +1993,21 @@ def register_supplier_routes(app):
             stats=stats,
             status=status,
             search=search,
+            supplier_filter=supplier_filter,
+            brand_filter=brand_filter,
+            wb_category_filter=wb_category_filter,
+            has_photos=has_photos,
+            stock=stock,
+            price_min=price_min,
+            price_max=price_max,
+            sort=sort,
+            suppliers_list=suppliers_list,
+            no_supplier_count=no_supplier_count,
+            brands_list=brands_list,
+            wb_categories_list=wb_categories_list,
+            page_args=page_args,
+            status_link_args=status_link_args,
+            active_filters=active_filters,
             has_wb_key=seller.has_valid_api_key(),
             recent_imports=recent_imports,
             brand_category_map=brand_category_map,

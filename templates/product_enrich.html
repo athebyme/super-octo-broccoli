@@ -475,15 +475,23 @@ function supplierSearchApp(suggestedId, productId) {
     {% if preview.characteristics.has_change %}
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
       <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-gray-50/80">
-        <label class="flex items-center gap-2.5 cursor-pointer">
+        <label class="flex items-center gap-2.5 {{ 'cursor-pointer' if preview.characteristics.validation.valid else 'cursor-not-allowed opacity-70' }}">
           <input type="checkbox" x-model="selected.characteristics"
+                 {% if not preview.characteristics.validation.valid %}disabled{% endif %}
                  class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
           <span class="font-semibold text-gray-800 text-sm">Характеристики</span>
         </label>
-        <span class="text-xs text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full font-medium">
+        <span class="text-xs {{ 'text-indigo-600 bg-indigo-50' if preview.characteristics.validation.valid else 'text-red-700 bg-red-50' }} px-2.5 py-0.5 rounded-full font-medium">
+          {% if not preview.characteristics.validation.valid %}Заблокировано · {% endif %}
           WB: {{ preview.characteristics.current | length }} · Поставщик: {{ preview.characteristics.supplier_parsed | length }}
         </span>
       </div>
+      {% if not preview.characteristics.validation.valid %}
+      <div class="mx-4 mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700" role="alert">
+        Значения поставщика не пройдут обязательную проверку по словарям WB из админки:
+        {{ preview.characteristics.validation.error }}
+      </div>
+      {% endif %}
       <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 text-sm">
         <div class="p-4">
           <p class="text-xs font-semibold text-gray-400 uppercase mb-3">Текущие WB</p>
@@ -608,6 +616,15 @@ function supplierSearchApp(suggestedId, productId) {
 <script>
 function enrichApp() {
     const totalSupplierPhotos = {{ preview.photos.supplier_photos | length }};
+    const characteristicsValid = {{ 'true' if preview.characteristics.validation.valid else 'false' }};
+    const selectableFields = {
+        photos: {{ 'true' if preview.photos.has_change else 'false' }},
+        title: {{ 'true' if preview.title.has_change else 'false' }},
+        brand: {{ 'true' if preview.brand.has_change else 'false' }},
+        description: {{ 'true' if preview.description.has_change else 'false' }},
+        characteristics: {{ 'true' if preview.characteristics.has_change and preview.characteristics.validation.valid else 'false' }},
+        dimensions: {{ 'true' if preview.dimensions.has_change else 'false' }},
+    };
 
     // Инициализация: все фото выбраны по умолчанию
     const initialPhotos = {};
@@ -624,7 +641,7 @@ function enrichApp() {
             title: {{ 'true' if preview.title.has_change else 'false' }},
             brand: false,
             description: {{ 'true' if preview.description.has_change else 'false' }},
-            characteristics: {{ 'true' if preview.characteristics.has_change else 'false' }},
+            characteristics: {{ 'true' if preview.characteristics.has_change and preview.characteristics.validation.valid else 'false' }},
             dimensions: {{ 'true' if preview.dimensions.has_change else 'false' }},
         },
         toast: { show: false, success: false, message: '' },
@@ -632,11 +649,15 @@ function enrichApp() {
         lightbox: { show: false, url: '' },
 
         get selectedCount() {
-            return Object.values(this.selected).filter(Boolean).length;
+            return Object.entries(this.selected)
+                .filter(([key, value]) => selectableFields[key] && value)
+                .length;
         },
 
         get allSelected() {
-            return Object.values(this.selected).every(Boolean);
+            return Object.entries(this.selected)
+                .filter(([key]) => selectableFields[key])
+                .every(([, value]) => Boolean(value));
         },
 
         get selectedPhotoCount() {
@@ -649,7 +670,9 @@ function enrichApp() {
 
         selectAllChanged() {
             const newVal = !this.allSelected;
-            Object.keys(this.selected).forEach(k => this.selected[k] = newVal);
+            Object.keys(this.selected).forEach(k => {
+                this.selected[k] = selectableFields[k] ? newVal : false;
+            });
         },
 
         togglePhoto(index) {

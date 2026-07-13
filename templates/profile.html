@@ -181,8 +181,8 @@
 
                         <div class="flex items-center justify-between gap-5 px-4 py-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border)">
                             <div>
-                                <p class="text-sm font-medium" style="color:var(--text)">Одна модель для AI-помощника</p>
-                                <p class="text-xs mt-0.5" style="color:var(--text-muted)" x-text="ai.singleModel ? 'Все задачи выполняет выбранная модель' : 'DeepSeek V4 Flash используется только для простых read-only шагов; изменения выполняет выбранная модель'"></p>
+                                <p class="text-sm font-medium" style="color:var(--text)">Одна модель для ИИ-помощника</p>
+                                <p class="text-xs mt-0.5" style="color:var(--text-muted)" x-text="ai.singleModel ? 'Все задачи выполняет выбранная модель' : 'DeepSeek V4 Pro строит план, V4 Flash выполняет рабочие шаги'"></p>
                             </div>
                             <button type="button" @click="ai.singleModel = !ai.singleModel"
                                 :aria-pressed="ai.singleModel"
@@ -371,7 +371,7 @@ function profilePage() {
             testMessage: '',
             availableModels: [],
             modelDescription: '',
-            singleModel: true,
+            singleModel: false,
             get effectiveModel() {
                 return this.model === '__custom__' ? this.customModel : this.model;
             },
@@ -389,7 +389,7 @@ function profilePage() {
                 this.ai.provider = data.provider || 'deepseek';
                 this.ai.apiKey = data.api_key || '';
                 this.ai.apiBaseUrl = data.api_base_url || '';
-                this.ai.singleModel = data.agent_single_model !== false;
+                this.ai.singleModel = data.agent_single_model === true;
                 // Загрузим модели, потом проверим есть ли текущая модель в списке
                 await this.loadModels();
                 const savedModel = data.model || '';

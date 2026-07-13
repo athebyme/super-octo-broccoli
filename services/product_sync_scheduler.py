@@ -4,6 +4,8 @@
 """
 import json
 import logging
+import os
+import threading
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -12,6 +14,93 @@ logger = logging.getLogger(__name__)
 
 # Глобальный планировщик
 scheduler = None
+_scheduler_lock_handle = None
+_scheduler_lock_retry_thread = None
+_scheduler_lock_retry_stop = threading.Event()
+
+
+def _acquire_scheduler_process_lock() -> bool:
+    """Elect one scheduler process inside a multi-worker web container."""
+    global _scheduler_lock_handle
+
+    if _scheduler_lock_handle is not None:
+        return True
+
+    try:
+        import fcntl
+    except ImportError:
+        logger.warning("fcntl is unavailable; scheduler process lock is disabled")
+        return True
+
+    lock_path = os.environ.get(
+        'SCHEDULER_LOCK_FILE', '/tmp/seller-platform-scheduler.lock',
+    )
+    try:
+        handle = open(lock_path, 'a+', encoding='utf-8')
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        if 'handle' in locals():
+            handle.close()
+        return False
+
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()))
+    handle.flush()
+    _scheduler_lock_handle = handle
+    return True
+
+
+def _release_scheduler_process_lock() -> None:
+    global _scheduler_lock_handle
+
+    handle = _scheduler_lock_handle
+    _scheduler_lock_handle = None
+    if handle is None:
+        return
+    try:
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError):
+        pass
+    handle.close()
+
+
+def _scheduler_lock_retry_loop(flask_app, wait_fn=None) -> None:
+    """Take over scheduling after the previous Gunicorn worker exits."""
+    wait_fn = wait_fn or _scheduler_lock_retry_stop.wait
+    try:
+        retry_seconds = max(
+            1.0,
+            float(os.environ.get('SCHEDULER_LOCK_RETRY_SECONDS', '15')),
+        )
+    except (TypeError, ValueError):
+        retry_seconds = 15.0
+
+    while not wait_fn(retry_seconds):
+        if not _acquire_scheduler_process_lock():
+            continue
+        logger.info("Scheduler ownership transferred to this web worker")
+        init_scheduler(flask_app, retry_if_locked=False)
+        return
+
+
+def _start_scheduler_lock_retry(flask_app) -> None:
+    global _scheduler_lock_retry_thread
+
+    if (
+        _scheduler_lock_retry_thread is not None
+        and _scheduler_lock_retry_thread.is_alive()
+    ):
+        return
+    _scheduler_lock_retry_stop.clear()
+    _scheduler_lock_retry_thread = threading.Thread(
+        target=_scheduler_lock_retry_loop,
+        args=(flask_app,),
+        name='scheduler-lock-contender',
+        daemon=True,
+    )
+    _scheduler_lock_retry_thread.start()
 
 
 def parse_sales_funnel_ratings(api_response: dict) -> dict:
@@ -32,7 +121,7 @@ def parse_sales_funnel_ratings(api_response: dict) -> dict:
     return out
 
 
-def init_scheduler(flask_app):
+def init_scheduler(flask_app, *, retry_if_locked=True):
     """
     Инициализировать планировщик автоматической синхронизации
 
@@ -44,6 +133,12 @@ def init_scheduler(flask_app):
     if scheduler is not None:
         logger.warning("Scheduler already initialized")
         return scheduler
+
+    if not _acquire_scheduler_process_lock():
+        logger.info("Scheduler is already owned by another web worker")
+        if retry_if_locked:
+            _start_scheduler_lock_retry(flask_app)
+        return None
 
     logger.info("🕐 Initializing product sync scheduler...")
 
@@ -120,6 +215,35 @@ def init_scheduler(flask_app):
         id='sync_marketplaces_data',
         name='Sync marketplace directories and categories globally',
         replace_existing=True
+    )
+
+    # Характеристики меняются независимо от дерева категорий. Обновляем только
+    # bounded batch самых старых включённых схем, чтобы не создавать API burst.
+    scheduler.add_job(
+        func=lambda: sync_marketplace_characteristics(flask_app),
+        trigger=IntervalTrigger(hours=6),
+        id='sync_marketplace_characteristics',
+        name='Refresh stale marketplace characteristic schemas (bounded)',
+        replace_existing=True,
+    )
+
+    # Первый reference refresh не должен ждать сутки после нового deploy.
+    scheduler.add_job(
+        func=lambda: sync_marketplaces(flask_app),
+        trigger='date',
+        run_date=datetime.utcnow() + timedelta(seconds=90),
+        id='sync_marketplaces_initial',
+        name='Initial marketplace reference refresh',
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        func=lambda: sync_marketplace_characteristics(flask_app, limit=200),
+        trigger='date',
+        run_date=datetime.utcnow() + timedelta(seconds=180),
+        id='sync_marketplace_characteristics_initial',
+        name='Initial marketplace characteristic schema refresh',
+        replace_existing=True,
     )
 
     # Фоновая синхронизация брендов с WB (каждые 6 часов)
@@ -708,33 +832,97 @@ def sync_marketplaces(flask_app):
     with flask_app.app_context():
         try:
             logger.info("🌍 Starting global marketplace sync...")
-            marketplaces = Marketplace.query.filter_by(is_active=True).all()
+            marketplaces = Marketplace.query.filter_by(
+                is_active=True, code='wb',
+            ).all()
             for mp in marketplaces:
-                logger.info(f"Syncing directories for {mp.name} ({mp.code})")
-                res = MarketplaceService.sync_directories(mp.id)
-                if not res.get('success'):
-                    logger.error(f"Failed to sync directories for {mp.code}: {res.get('error')}")
+                client = MarketplaceService.get_wb_client(mp.id)
+                if not client:
+                    logger.info(f"Reference sync skipped for {mp.code}: no API key")
+                    continue
+                try:
+                    logger.info(f"Syncing categories for {mp.name} ({mp.code})")
+                    categories_result = MarketplaceService.sync_categories(
+                        mp.id, client=client,
+                    )
+                    if not categories_result.get('success'):
+                        logger.error(
+                            f"Failed to sync categories for {mp.code}: "
+                            f"{categories_result.get('error')}"
+                        )
 
-                logger.info(f"Syncing categories for {mp.name} ({mp.code})")
-                res2 = MarketplaceService.sync_categories(mp.id)
-                if not res2.get('success'):
-                    logger.error(f"Failed to sync categories for {mp.code}: {res2.get('error')}")
+                    logger.info(f"Syncing directories for {mp.name} ({mp.code})")
+                    directories_result = MarketplaceService.sync_directories(
+                        mp.id, client=client,
+                    )
+                    if not directories_result.get('success'):
+                        logger.error(
+                            f"Failed to sync directories for {mp.code}: "
+                            f"{directories_result.get('error')}"
+                        )
+
+                except Exception:
+                    logger.exception(
+                        "Marketplace reference sync failed for %s", mp.code,
+                    )
+                finally:
+                    close = getattr(client, 'close', None)
+                    if callable(close):
+                        close()
 
             logger.info("✅ Global marketplace sync finished.")
         except Exception as e:
             logger.exception(f"❌ Error in sync_marketplaces: {e}")
 
 
+def sync_marketplace_characteristics(flask_app, limit: int = 50):
+    """Refresh a bounded stale-schema batch for every active marketplace."""
+    from models import Marketplace
+    from services.marketplace_service import MarketplaceService
+
+    with flask_app.app_context():
+        for marketplace in Marketplace.query.filter_by(
+            is_active=True, code='wb',
+        ).all():
+            client = MarketplaceService.get_wb_client(marketplace.id)
+            if not client:
+                continue
+            try:
+                result = MarketplaceService.sync_stale_characteristics(
+                    marketplace.id,
+                    limit=limit,
+                    client=client,
+                )
+                if result.get('failed'):
+                    logger.warning(
+                        "Stale schema refresh for %s had %s failures",
+                        marketplace.code,
+                        result['failed'],
+                    )
+            except Exception:
+                logger.exception(
+                    "Stale characteristic refresh failed for %s", marketplace.code,
+                )
+            finally:
+                close = getattr(client, 'close', None)
+                if callable(close):
+                    close()
+
+
 
 def shutdown_scheduler():
     """Остановить планировщик"""
-    global scheduler
+    global scheduler, _scheduler_lock_retry_thread
+
+    _scheduler_lock_retry_stop.set()
 
     if scheduler is not None:
         logger.info("🛑 Shutting down product sync scheduler...")
         scheduler.shutdown(wait=False)
         scheduler = None
         logger.info("✅ Product sync scheduler stopped")
+    _release_scheduler_process_lock()
+    _scheduler_lock_retry_thread = None
 
 
 def get_scheduler_status():

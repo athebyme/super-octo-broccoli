@@ -39,11 +39,10 @@ class TestResolveAgentsFromText:
         # 'импорт' -> full_prepare pipeline
         assert len(agents) >= 4  # full_prepare has 4+ steps
 
-    def test_unknown_text_returns_full_prepare(self):
+    def test_unknown_text_requires_clarification(self):
         agents = resolve_agents_from_text('сделай что-нибудь полезное')
-        # Unknown -> default full_prepare
-        expected_steps = PIPELINES['full_prepare']['steps']
-        assert agents == expected_steps
+        # Неоднозначный запрос не должен запускать destructive pipeline.
+        assert agents == []
 
     def test_batch_uses_batch_types(self):
         agents = resolve_agents_from_text('нормализуй бренды', is_batch=True)

@@ -220,9 +220,10 @@ def migrate():
                 warning_threshold_percent, mode,
                 require_comment_for_dangerous, allow_bulk_dangerous,
                 max_products_per_batch, allow_unlimited_batch,
-                notify_on_dangerous
+                notify_on_dangerous, created_at, updated_at
             )
-            SELECT id, 1, 10.0, 20.0, 'confirm', 1, 0, 1000, 1, 1
+            SELECT id, 1, 10.0, 20.0, 'confirm', 1, 0, 1000, 1, 1,
+                   CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             FROM sellers
             WHERE id NOT IN (SELECT seller_id FROM safe_price_change_settings)
         """)

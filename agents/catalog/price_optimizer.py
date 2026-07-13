@@ -11,6 +11,11 @@ class PriceOptimizerAgent(BaseAgent):
     agent_name = 'price-optimizer'
     max_iterations = 20
     use_fallback_llm = True  # unit-экономика требует точных расчётов → Claude
+    tool_allowlist = (
+        'get_imported_products', 'get_imported_product',
+        'update_imported_product', 'batch_update_imported_products',
+        'get_pricing_settings',
+    )
 
     system_prompt = """Ты — эксперт по ценообразованию на маркетплейсе Wildberries.
 

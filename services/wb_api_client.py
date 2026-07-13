@@ -40,6 +40,49 @@ def chunk_list(items: List, chunk_size: int) -> List[List]:
     return chunks
 
 
+def normalize_cards_error_list(errors) -> tuple:
+    """Нормализует записи /content/v2/cards/error/list в индексы для матчинга.
+
+    Актуальный формат WB (проверен на живом API):
+        {"batchUUID": "...", "vendorCodes": ["VC"],
+         "errors": {"VC": ["текст"]}, "updatedAt": "..."}
+    Легаси/документационный формат:
+        {"object": "...", "nmID": 123, "vendorCode": "VC", "errors": ["текст"]}
+
+    Returns:
+        (errors_by_nm: {nm_id: [msgs]}, errors_by_vendor: {vendor_code: [msgs]})
+    """
+    errors_by_nm = {}
+    errors_by_vendor = {}
+    for err in errors or []:
+        if not isinstance(err, dict):
+            continue
+        raw = err.get('errors')
+        if isinstance(raw, dict):
+            # Актуальный формат: errors — dict {vendorCode: [messages]}
+            for vendor, msgs in raw.items():
+                if vendor and msgs:
+                    errors_by_vendor[str(vendor)] = [str(m) for m in msgs]
+            continue
+        # Легаси формат: errors — список, идентификаторы на верхнем уровне
+        msgs = [str(m) for m in (raw or [])]
+        if not msgs:
+            continue
+        nm = err.get('nmID') or err.get('nmId')
+        if nm:
+            try:
+                errors_by_nm[int(nm)] = msgs
+            except (TypeError, ValueError):
+                pass
+        vendor = err.get('vendorCode') or err.get('vendor_code')
+        if vendor:
+            errors_by_vendor[str(vendor)] = msgs
+        for vendor in (err.get('vendorCodes') or []):
+            if vendor:
+                errors_by_vendor[str(vendor)] = msgs
+    return errors_by_nm, errors_by_vendor
+
+
 class WBAPIException(Exception):
     """Базовое исключение для WB API"""
     pass
@@ -120,11 +163,13 @@ class WildberriesAPIClient:
 
     # Наши бюджеты держим ЧУТЬ НИЖЕ официальных лимитов WB — запас на
     # параллельные обновления цен/остатков и на правило «4XX считается за 10».
-    # Отдельные лимиты WB для конкретных методов (у WB — по 10/мин каждый).
+    # Отдельные лимиты WB для конкретных методов. Integer values retain the
+    # legacy per-minute window; tuples explicitly define (requests, seconds).
     ENDPOINT_RATE_LIMITS = {
         '/content/v2/cards/update': 8,
         '/content/v2/cards/upload': 8,
         '/content/v2/cards/upload/add': 8,
+        '/api/content/v1/brands': (1, 1),
     }
 
     # Бюджеты по категориям API: (запросов, окно в секундах).
@@ -134,6 +179,10 @@ class WildberriesAPIClient:
         'discounts': (8, 6),
         'marketplace': (240, 60),
     }
+    # Content API additionally enforces roughly 600 ms between requests and
+    # permits a burst of five. This shared short-window bucket prevents a
+    # scheduler batch from consuming the whole minute bucket at once.
+    CONTENT_BURST_RATE_LIMIT = (5, 3)
 
     # Лимитеры общие для ВСЕХ инстансов клиента с одним токеном (в рамках
     # процесса): параллельные джобы цен/остатков и фото делят один бюджет WB.
@@ -213,10 +262,16 @@ class WildberriesAPIClient:
 
     def _limiter_for_endpoint(self, endpoint: str):
         """Общий RateLimiter для методов с собственным лимитом WB (или None)."""
-        limit = self.ENDPOINT_RATE_LIMITS.get(endpoint)
-        if limit is None:
+        config = self.ENDPOINT_RATE_LIMITS.get(endpoint)
+        if config is None:
             return None
-        return self._shared_limiter((self.api_key, 'endpoint', endpoint), limit, 60)
+        if isinstance(config, tuple):
+            limit, window = config
+        else:
+            limit, window = config, 60
+        return self._shared_limiter(
+            (self.api_key, 'endpoint', endpoint), limit, window,
+        )
 
     def _limiter_for_category(self, api_type: str):
         """Общий RateLimiter категории API (content/discounts/marketplace) или None."""
@@ -226,6 +281,16 @@ class WildberriesAPIClient:
         max_requests, time_window = cfg
         return self._shared_limiter(
             (self.api_key, 'category', api_type), max_requests, time_window)
+
+    def _limiter_for_content_burst(self, api_type: str):
+        if api_type != 'content':
+            return None
+        max_requests, time_window = self.CONTENT_BURST_RATE_LIMIT
+        return self._shared_limiter(
+            (self.api_key, 'category', 'content_burst'),
+            max_requests,
+            time_window,
+        )
 
     def _get_base_url(self, api_type: str) -> str:
         """Получить базовый URL для типа API"""
@@ -269,6 +334,9 @@ class WildberriesAPIClient:
         category_limiter = self._limiter_for_category(api_type)
         if category_limiter is not None:
             category_limiter.wait_if_needed()
+        content_burst_limiter = self._limiter_for_content_burst(api_type)
+        if content_burst_limiter is not None:
+            content_burst_limiter.wait_if_needed()
         endpoint_limiter = self._limiter_for_endpoint(endpoint)
         if endpoint_limiter is not None:
             endpoint_limiter.wait_if_needed()
@@ -332,7 +400,11 @@ class WildberriesAPIClient:
             elif response.status_code == 429:
                 retry_after = None
                 try:
-                    retry_after = int(response.headers.get('X-Ratelimit-Retry', ''))
+                    retry_after = int(
+                        response.headers.get('X-Ratelimit-Retry')
+                        or response.headers.get('Retry-After')
+                        or ''
+                    )
                 except (TypeError, ValueError):
                     pass
                 suffix = f" Повтор через {retry_after}с." if retry_after else ""
@@ -860,6 +932,7 @@ class WildberriesAPIClient:
         """
         from services.wb_validators import prepare_card_for_update, validate_and_log_errors, clean_characteristics_for_update
 
+        updates = dict(updates or {})
         logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
         logger.debug(f"Update data: {updates}")
 
@@ -874,20 +947,46 @@ class WildberriesAPIClient:
                 )
                 if not full_card:
                     raise WBAPIException(f"Card nmID={nm_id} not found in WB API")
-
-                # Очищаем и валидируем характеристики если они есть в обновлениях
-                if 'characteristics' in updates and updates['characteristics']:
-                    updates['characteristics'] = clean_characteristics_for_update(updates['characteristics'])
-
-                # Подготавливаем карточку для обновления (удаляем нередактируемые поля)
-                card_to_send = prepare_card_for_update(full_card, updates)
-
             except Exception as e:
                 logger.error(f"❌ Failed to fetch full card for merging: {str(e)}")
+                if 'characteristics' in updates:
+                    raise WBAPIException(
+                        f"Нельзя проверить характеристики nmID={nm_id}: "
+                        "не удалось получить категорию карточки WB"
+                    ) from e
                 logger.warning("⚠️ Trying to update with partial data (may fail)")
                 card_to_send = {"nmID": nm_id, **updates}
+            else:
+                # Supplier/AI characteristics обязаны пройти строгую проверку
+                # по category schema + dictionaries, синхронизированным в админке.
+                if 'characteristics' in updates:
+                    from services.marketplace_validator import (
+                        build_wb_characteristic_patch,
+                    )
+                    updates['characteristics'] = build_wb_characteristic_patch(
+                        full_card.get('subjectID'), updates['characteristics'])
+                    updates['characteristics'] = clean_characteristics_for_update(
+                        updates['characteristics'])
+
+                # Подготавливаем полную карточку; characteristic patch мержится по id.
+                card_to_send = prepare_card_for_update(full_card, updates)
         else:
+            if 'characteristics' in updates:
+                raise WBAPIException(
+                    'Обновление характеристик без merge_with_existing запрещено: '
+                    'невозможно подтвердить WB-категорию и сохранить остальные значения'
+                )
             card_to_send = {"nmID": nm_id, **updates}
+
+        # prepare_card_for_update переносит внутренний category/patch context
+        # до batch-boundary. Одиночный update уже прошёл проверку выше, поэтому
+        # служебные поля нужно удалить до wire payload.
+        from services.wb_validators import (
+            WB_SUBJECT_CONTEXT_KEY,
+            WB_CHARACTERISTICS_CHANGED_KEY,
+        )
+        card_to_send.pop(WB_SUBJECT_CONTEXT_KEY, None)
+        card_to_send.pop(WB_CHARACTERISTICS_CHANGED_KEY, None)
 
         # Валидация данных перед отправкой
         if validate:
@@ -1010,7 +1109,11 @@ class WildberriesAPIClient:
         import json as _json
         from services.wb_validators import (
             prepare_card_for_update, validate_card_update,
-            clean_characteristics_for_update,
+            clean_characteristics_for_update, WBValidationError,
+        )
+        from services.marketplace_validator import (
+            WBCharacteristicValidationError,
+            build_wb_characteristic_patch,
         )
 
         result = {'sent': [], 'missing': [], 'invalid': {}, 'failed': {}, 'requests': 0}
@@ -1022,15 +1125,28 @@ class WildberriesAPIClient:
             list(nm_updates), log_to_db=log_to_db, seller_id=seller_id)
 
         prepared: List[Dict[str, Any]] = []
+        characteristic_validation_cache = {}
         for nm, updates in nm_updates.items():
             full_card = cards_map.get(nm)
             if not full_card:
                 result['missing'].append(nm)
                 continue
             upd = dict(updates)
-            if upd.get('characteristics'):
-                upd['characteristics'] = clean_characteristics_for_update(upd['characteristics'])
-            merged = prepare_card_for_update(full_card, upd)
+            try:
+                if 'characteristics' in upd:
+                    upd['characteristics'] = build_wb_characteristic_patch(
+                        full_card.get('subjectID'),
+                        upd['characteristics'],
+                        validation_cache=characteristic_validation_cache,
+                    )
+                    upd['characteristics'] = clean_characteristics_for_update(
+                        upd['characteristics'])
+                merged = prepare_card_for_update(full_card, upd)
+            except (WBCharacteristicValidationError, WBValidationError) as exc:
+                result['invalid'][nm] = str(exc)
+                logger.warning(
+                    f"Card nmID={nm} failed WB dictionary validation: {exc}")
+                continue
             is_valid, errors = validate_card_update(merged)
             if not is_valid:
                 result['invalid'][nm] = '; '.join(errors)
@@ -1147,11 +1263,94 @@ class WildberriesAPIClient:
             logger.warning("⚠️ Empty cards list provided to update_cards_batch")
             return {'success': True, 'updated': 0}
 
+        # Dictionary validation выполняется всегда, независимо от флага
+        # validate (он управляет только общей shape-валидацией). Подготовленные
+        # карточки несут internal subject/patch context; прямой caller обязан
+        # передать subjectID, иначе characteristics считаются непроверяемыми.
+        from services.marketplace_validator import (
+            build_wb_characteristic_patch,
+            merge_wb_characteristics,
+        )
+        from services.wb_validators import (
+            WB_SUBJECT_CONTEXT_KEY,
+            WB_CHARACTERISTICS_CHANGED_KEY,
+            clean_characteristics_for_update,
+        )
+        characteristic_validation_cache = {}
+        guarded_cards = []
+        for index, raw_card in enumerate(cards):
+            if not isinstance(raw_card, dict):
+                raise WBAPIException(f'Card #{index + 1} must be an object')
+            card = dict(raw_card)
+            internal_subject_id = card.pop(WB_SUBJECT_CONTEXT_KEY, None)
+            wire_subject_id = card.pop('subjectID', None)
+            subject_id = internal_subject_id or wire_subject_id
+            has_internal_patch_context = WB_CHARACTERISTICS_CHANGED_KEY in card
+            changed_ids = card.pop(WB_CHARACTERISTICS_CHANGED_KEY, None)
+
+            proposed_patch = None
+            requires_characteristic_validation = False
+            if has_internal_patch_context:
+                if not isinstance(changed_ids, list):
+                    raise WBAPIException(
+                        f'Card #{index + 1}: invalid characteristic patch context')
+                if changed_ids:
+                    requires_characteristic_validation = True
+                    chars = card.get('characteristics')
+                    if not isinstance(chars, list):
+                        raise WBAPIException(
+                            f'Card #{index + 1}: characteristics must be an array')
+                    changed_set = set()
+                    try:
+                        changed_set = {int(value) for value in changed_ids}
+                    except (TypeError, ValueError) as exc:
+                        raise WBAPIException(
+                            f'Card #{index + 1}: invalid characteristic id context') from exc
+                    proposed_patch = []
+                    found_ids = set()
+                    for item in chars:
+                        if not isinstance(item, dict):
+                            continue
+                        try:
+                            charc_id = int(item.get('id'))
+                        except (TypeError, ValueError):
+                            continue
+                        if charc_id in changed_set:
+                            proposed_patch.append(item)
+                            found_ids.add(charc_id)
+                    if found_ids != changed_set:
+                        raise WBAPIException(
+                            f'Card #{index + 1}: characteristic patch was lost during merge')
+            elif 'characteristics' in card:
+                # Не подготовленный центральным builder payload: проверяем весь
+                # массив и не разрешаем обход через прямой public batch method.
+                if card.get('characteristics') in ([], {}):
+                    raise WBAPIException(
+                        f'Card #{index + 1}: empty characteristics are allowed '
+                        'only as a patch merged with the current WB card')
+                requires_characteristic_validation = True
+                proposed_patch = card.get('characteristics')
+
+            if requires_characteristic_validation:
+                if subject_id is None:
+                    raise WBAPIException(
+                        f'Card #{index + 1}: subjectID is required for mandatory '
+                        'WB admin-dictionary validation')
+                normalized_patch = build_wb_characteristic_patch(
+                    subject_id,
+                    proposed_patch,
+                    validation_cache=characteristic_validation_cache,
+                )
+                card['characteristics'] = merge_wb_characteristics(
+                    card.get('characteristics'), normalized_patch)
+            guarded_cards.append(card)
+
         from services.wb_content_payload import normalize_update_card_payload
-        cards = [normalize_update_card_payload(card) for card in cards]
-        from services.wb_validators import clean_characteristics_for_update
+        cards = [normalize_update_card_payload(card) for card in guarded_cards]
         for card in cards:
-            if card.get('characteristics'):
+            if 'characteristics' in card:
+                if not isinstance(card['characteristics'], list):
+                    raise WBAPIException("Field 'characteristics' must be an array")
                 card['characteristics'] = clean_characteristics_for_update(card['characteristics'])
 
         # Проверка размера запроса
@@ -2311,12 +2510,16 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get VAT rates: {str(e)}")
             raise
 
-    def get_directory_tnved(self, locale: str = 'ru') -> Dict[str, Any]:
-        """Получить справочник кодов ТНВЭД"""
+    def get_directory_tnved(self, subject_id: int, locale: str = 'ru') -> Dict[str, Any]:
+        """Получить справочник кодов ТНВЭД для конкретного предмета WB."""
+        if not subject_id:
+            raise ValueError('subject_id is required for the TNVED directory')
         endpoint = "/content/v2/directory/tnved"
-        params = {'locale': locale} if locale else {}
+        params = {'subjectID': int(subject_id)}
+        if locale:
+            params['locale'] = locale
 
-        logger.info(f"📋 Getting TNVED codes directory (locale={locale})")
+        logger.info(f"📋 Getting TNVED codes directory (subjectID={subject_id}, locale={locale})")
         try:
             response = self._make_request('GET', 'content', endpoint, params=params)
             result = response.json()
@@ -2327,117 +2530,87 @@ class WildberriesAPIClient:
             raise
 
     def get_brands_by_subject(self, subject_id: int, top: int = 5000) -> Dict[str, Any]:
-        """
-        Получить бренды по ID предмета (категории) из WB API.
-
-        Эндпоинт: GET /api/content/v1/brands
-        Обязательные параметры: subjectId, pattern, top.
-
-        Перебирает буквы алфавита (а-я, a-z, 0-9) как pattern,
-        чтобы собрать максимум брендов для данной категории.
-
-        Args:
-            subject_id: ID предмета (subjectID) — обязателен
-            top: максимальное количество брендов на запрос
-
-        Returns:
-            {"data": [{"id": 123, "name": "Brand Name"}, ...]}
-        """
-        endpoint = "/api/content/v1/brands"
-        all_brands = {}  # id -> brand_data
-
-        # Перебираем буквы алфавита для полноты покрытия
-        patterns = list('абвгдежзиклмнопрстуфхцчшщэюя') + list('abcdefghijklmnopqrstuvwxyz') + list('0123456789')
-
-        for pattern in patterns:
-            params = {
-                'subjectId': subject_id,
-                'top': top,
-                'pattern': pattern,
-                'locale': 'ru',
-            }
-
-            try:
-                response = self._make_request('GET', 'content', endpoint, params=params)
-                result = response.json()
-                brands = result.get('brands', [])
-                for b in brands:
-                    bid = b.get('id')
-                    if bid and bid not in all_brands:
-                        all_brands[bid] = b
-                time.sleep(0.3)
-            except WBRateLimitException:
-                logger.warning(f"Rate limited on brands subjectId={subject_id} pattern='{pattern}', waiting 60s")
-                time.sleep(60)
-                try:
-                    response = self._make_request('GET', 'content', endpoint, params=params)
-                    for b in response.json().get('brands', []):
-                        bid = b.get('id')
-                        if bid and bid not in all_brands:
-                            all_brands[bid] = b
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.warning(f"Failed brands subjectId={subject_id} pattern='{pattern}': {e}")
-
-        brands_list = list(all_brands.values())
-        logger.info(f"Found {len(brands_list)} unique brands for subjectId={subject_id}")
-        return {'data': brands_list}
+        """Получить полный bounded snapshot брендов одной категории."""
+        result = self.fetch_all_brands([subject_id], top=top)
+        return {
+            **result,
+            'brands': result.get('data', []),
+        }
 
     def get_brands_by_subject_quick(self, subject_id: int, pattern: str = 'а',
                                      top: int = 5000) -> Dict[str, Any]:
         """
-        Быстрый запрос брендов для одной категории (один запрос).
+        Первый cursor page брендов одной категории (один запрос).
 
         Args:
             subject_id: ID предмета (обязателен)
-            pattern: строка поиска
-            top: макс. результатов
+            pattern: legacy argument, игнорируется
+            top: legacy argument, игнорируется
         """
         endpoint = "/api/content/v1/brands"
-        params = {
-            'subjectId': subject_id,
-            'top': top,
-            'pattern': pattern,
-            'locale': 'ru',
-        }
+        params = {'subjectId': subject_id}
         response = self._make_request('GET', 'content', endpoint, params=params)
         return response.json()
 
     def fetch_all_brands(self, subject_ids: list, top: int = 5000,
-                         progress_callback=None) -> Dict[str, Any]:
+                         progress_callback=None, max_requests: int = 200,
+                         max_pages_per_subject: int = 25) -> Dict[str, Any]:
         """
-        Получить бренды из WB по списку категорий.
-
-        Для каждой категории перебирает несколько ключевых букв алфавита
-        (а, е, к, о, с, a, e, o, s, 1) как pattern для покрытия.
+        Получить бренды из WB по списку категорий через cursor pagination.
 
         Args:
             subject_ids: список ID предметов (subjectID)
-            top: макс. результатов на один запрос
+            top: legacy argument, больше не отправляется в актуальный WB API
             progress_callback: callable(done, total, brands_so_far)
+            max_requests: hard budget на весь sweep
+            max_pages_per_subject: защита от бесконечной пагинации
         """
         endpoint = "/api/content/v1/brands"
         all_brands = {}  # id -> brand_data
         self._fetch_debug = None
+        fetch_errors = []
+        request_count = 0
+        completed_subjects = 0
+        normalized_subject_ids = []
+        seen_subject_ids = set()
+        for raw_subject_id in subject_ids or []:
+            try:
+                subject_id = int(raw_subject_id)
+            except (TypeError, ValueError):
+                continue
+            if subject_id <= 0 or subject_id in seen_subject_ids:
+                continue
+            normalized_subject_ids.append(subject_id)
+            seen_subject_ids.add(subject_id)
+        total = len(normalized_subject_ids)
 
-        # Ключевые буквы для покрытия (гласные + частые согласные + цифра)
-        key_patterns = list('аеиокстнрabcdemost1')
-        total = len(subject_ids)
+        budget_exhausted = False
+        for subject_id in normalized_subject_ids:
+            cursor = None
+            seen_cursors = set()
+            subject_brand_ids = set()
+            expected_total = None
+            subject_complete = False
 
-        for i, subject_id in enumerate(subject_ids):
-            for pattern in key_patterns:
-                params = {
-                    'subjectId': subject_id,
-                    'top': top,
-                    'pattern': pattern,
-                    'locale': 'ru',
-                }
+            for page_index in range(max(1, int(max_pages_per_subject))):
+                if request_count >= max(1, int(max_requests)):
+                    fetch_errors.append({
+                        'subject_id': subject_id,
+                        'code': 'request_budget_exhausted',
+                        'error': f'Brand sweep exceeded {max_requests} requests',
+                    })
+                    budget_exhausted = True
+                    break
 
+                params = {'subjectId': subject_id}
+                if cursor is not None:
+                    params['next'] = cursor
+
+                request_count += 1
                 try:
-                    response = self._make_request('GET', 'content', endpoint, params=params)
-
-                    # Диагностика первого успешного запроса
+                    response = self._make_request(
+                        'GET', 'content', endpoint, params=params,
+                    )
                     if not self._fetch_debug:
                         self._fetch_debug = {
                             'url': response.url,
@@ -2446,74 +2619,133 @@ class WildberriesAPIClient:
                         }
 
                     result = response.json()
-                    brands = result.get('brands', [])
-                    for b in brands:
-                        bid = b.get('id')
-                        if bid and bid not in all_brands:
-                            all_brands[bid] = b
-                    time.sleep(0.3)
-                except WBRateLimitException:
-                    if not self._fetch_debug:
-                        self._fetch_debug = {'error': 'WBRateLimitException', 'pattern': pattern, 'subjectId': subject_id}
-                    logger.warning(f"Rate limited on brands, waiting 60s")
-                    time.sleep(60)
+                    brands = result.get('brands') if isinstance(result, dict) else None
+                    if not isinstance(brands, list):
+                        raise ValueError('WB brand page has no brands list')
                     try:
-                        response = self._make_request('GET', 'content', endpoint, params=params)
-                        for b in response.json().get('brands', []):
-                            bid = b.get('id')
-                            if bid and bid not in all_brands:
-                                all_brands[bid] = b
-                    except Exception:
-                        pass
-                except Exception as e:
-                    if not self._fetch_debug:
-                        self._fetch_debug = {'error': f'{type(e).__name__}: {str(e)[:300]}', 'pattern': pattern, 'subjectId': subject_id}
-                    logger.warning(f"Failed brands subjectId={subject_id} pattern='{pattern}': {e}")
+                        page_total = int(result.get('total'))
+                    except (TypeError, ValueError):
+                        raise ValueError('WB brand page has no valid total')
+                    if page_total < 0:
+                        raise ValueError('WB brand page returned negative total')
+                    if expected_total is None:
+                        expected_total = page_total
+                    elif page_total != expected_total:
+                        raise ValueError('WB brand total changed during pagination')
+                    for brand in brands:
+                        if not isinstance(brand, dict):
+                            continue
+                        try:
+                            brand_id = int(brand.get('id'))
+                        except (TypeError, ValueError):
+                            continue
+                        name = str(brand.get('name') or '').strip()
+                        if brand_id > 0 and name:
+                            brand['id'] = brand_id
+                            all_brands[brand_id] = brand
+                            subject_brand_ids.add(brand_id)
 
+                    next_cursor = result.get('next')
+                    if next_cursor in (None, 0, '0', ''):
+                        if len(subject_brand_ids) != expected_total:
+                            raise ValueError(
+                                'WB brand pagination ended before declared total'
+                            )
+                        subject_complete = True
+                        break
+                    try:
+                        next_cursor = int(next_cursor)
+                    except (TypeError, ValueError):
+                        raise ValueError('WB brand page returned invalid next cursor')
+                    if next_cursor in seen_cursors or next_cursor == cursor:
+                        raise ValueError('WB brand pagination repeated cursor')
+                    if not brands:
+                        raise ValueError('WB brand page is empty before pagination end')
+                    seen_cursors.add(next_cursor)
+                    cursor = next_cursor
+                except Exception as error:
+                    if not self._fetch_debug:
+                        self._fetch_debug = {
+                            'error': f'{type(error).__name__}: {str(error)[:300]}',
+                            'subjectId': subject_id,
+                            'next': cursor,
+                        }
+                    logger.warning(
+                        'Failed brand page subjectId=%s next=%s: %s',
+                        subject_id, cursor, error,
+                    )
+                    fetch_errors.append({
+                        'subject_id': subject_id,
+                        'next': cursor,
+                        'code': 'page_error',
+                        'error': str(error)[:300],
+                    })
+                    break
+            else:
+                fetch_errors.append({
+                    'subject_id': subject_id,
+                    'code': 'page_budget_exhausted',
+                    'error': (
+                        f'Brand pagination exceeded {max_pages_per_subject} pages'
+                    ),
+                })
+
+            if subject_complete:
+                completed_subjects += 1
             if progress_callback:
-                progress_callback(i + 1, total, len(all_brands))
+                progress_callback(
+                    completed_subjects, total, len(all_brands),
+                )
+            if budget_exhausted:
+                break
 
         brands_list = list(all_brands.values())
-        logger.info(f"Fetched {len(brands_list)} unique brands from {total} categories")
-        return {'data': brands_list}
+        logger.info(
+            'Fetched %s unique brands from %s/%s categories in %s requests',
+            len(brands_list), completed_subjects, total, request_count,
+        )
+        return {
+            'data': brands_list,
+            'complete': (
+                total > 0
+                and completed_subjects == total
+                and not fetch_errors
+            ),
+            'errors': fetch_errors[:100],
+            'requests': request_count,
+            'categories_completed': completed_subjects,
+            'categories_total': total,
+        }
 
-    def search_brands(self, pattern: str, top: int = 50) -> Dict[str, Any]:
+    def search_brands(self, pattern: str, top: int = 50,
+                      subject_id: int = None) -> Dict[str, Any]:
         """
-        Поиск брендов по названию через WB API автокомплит.
+        Bounded поиск по полному cursor snapshot конкретной категории.
 
         Args:
             pattern: Строка поиска (часть названия бренда)
             top: Максимальное количество результатов
+            subject_id: ID категории WB, обязателен
 
         Returns:
             Dict с данными о брендах: {"data": [...]}
         """
         if not pattern or not pattern.strip():
-            return {'data': []}
+            return {'data': [], 'complete': True}
+        if not subject_id:
+            raise ValueError('subject_id is required for WB brand search')
 
-        logger.info(f"Searching brands with pattern: '{pattern}'")
-        endpoint = "/api/content/v1/brands"
-
-        # subjectId обязателен — берём распространённый subject для широкого поиска
-        # Используем переданный subject_id или дефолтный (Футболки = 1)
-        search_subject = getattr(self, '_default_subject_id', None) or 1
-
-        params = {
-            'subjectId': search_subject,
-            'top': top,
-            'pattern': pattern.strip(),
-            'locale': 'ru',
+        snapshot = self.get_brands_by_subject(subject_id)
+        needle = pattern.strip().casefold()
+        matches = [
+            brand for brand in snapshot.get('data', [])
+            if needle in str(brand.get('name') or '').casefold()
+        ][:max(1, min(int(top), 200))]
+        return {
+            'data': matches,
+            'complete': snapshot.get('complete') is True,
+            'errors': snapshot.get('errors') or [],
         }
-
-        try:
-            response = self._make_request('GET', 'content', endpoint, params=params)
-            result = response.json()
-            brands = result.get('brands', [])
-            logger.info(f"Found {len(brands)} brands matching '{pattern}'")
-            return {'data': brands}
-        except Exception as e:
-            logger.error(f"Failed to search brands '{pattern}': {str(e)}")
-            raise
 
     def validate_brand(self, brand_name: str, subject_id: int = None) -> Dict[str, Any]:
         """
@@ -2536,86 +2768,57 @@ class WildberriesAPIClient:
         """
         logger.info(f"🔍 Validating brand: '{brand_name}'" + (f" (subjectId={subject_id})" if subject_id else ""))
 
+        if not subject_id:
+            return {
+                'valid': False,
+                'exact_match': None,
+                'suggestions': [],
+                'complete': False,
+                'error': 'category_scope_required',
+            }
+
         try:
-            all_brands = []
-            seen_ids = set()
-
-            if subject_id:
-                # Проверяем конкретную категорию
-                subject_ids = [subject_id]
-            else:
-                # Берём несколько популярных категорий для поиска
-                subjects_result = self.get_subjects_list(limit=100)
-                subjects = subjects_result.get('data', [])
-                subject_ids = [s.get('subjectID') for s in subjects[:30] if s.get('subjectID')]
-
-            for sid in subject_ids:
-                try:
-                    result = self.get_brands_by_subject(sid)
-                    for brand in result.get('brands', result.get('data', [])):
-                        brand_id = brand.get('id')
-                        if brand_id and brand_id not in seen_ids:
-                            seen_ids.add(brand_id)
-                            all_brands.append(brand)
-                    time.sleep(0.1)
-                except Exception as e:
-                    logger.warning(f"   Brands for subjectId={sid} failed: {e}")
-                    continue
-
-                # Проверяем, нашли ли уже точное совпадение (для ранней остановки)
-                brand_lower = brand_name.lower().strip()
-                brand_normalized = ''.join(c.lower() for c in brand_name if c.isalnum())
-                for b in all_brands:
-                    b_name = b.get('name', '')
-                    if b_name.lower().strip() == brand_lower:
-                        logger.info(f"✅ Brand '{brand_name}' found: exact match '{b_name}'")
-                        return {
-                            'valid': True,
-                            'exact_match': b,
-                            'suggestions': [],
-                        }
-
-            # Полный поиск по собранным брендам
-            brand_lower = brand_name.lower().strip()
-            brand_normalized = ''.join(c.lower() for c in brand_name if c.isalnum())
-
+            snapshot = self.get_brands_by_subject(subject_id)
+            all_brands = snapshot.get('data', [])
+            brand_lower = brand_name.casefold().strip()
+            brand_normalized = ''.join(
+                char.casefold() for char in brand_name if char.isalnum()
+            )
             exact_match = None
-            close_match = None
             suggestions = []
 
             for brand in all_brands:
-                brand_wb_name = brand.get('name', '')
-                wb_name_lower = brand_wb_name.lower().strip()
-                wb_name_normalized = ''.join(c.lower() for c in brand_wb_name if c.isalnum())
+                brand_wb_name = str(brand.get('name') or '')
+                wb_name_lower = brand_wb_name.casefold().strip()
+                wb_name_normalized = ''.join(
+                    char.casefold() for char in brand_wb_name if char.isalnum()
+                )
 
-                if wb_name_lower == brand_lower:
+                if (
+                    wb_name_lower == brand_lower
+                    or wb_name_normalized == brand_normalized
+                ):
                     exact_match = brand
-                    continue
-
-                if wb_name_normalized == brand_normalized and not exact_match:
-                    exact_match = brand
-                    logger.info(f"   Found normalized match: '{brand_wb_name}' for '{brand_name}'")
-                    continue
-
-                if brand_normalized in wb_name_normalized or wb_name_normalized in brand_normalized:
-                    if not close_match:
-                        close_match = brand
-
-                suggestions.append(brand)
-
-            if not exact_match and close_match:
-                exact_match = close_match
-                logger.info(f"   Using close match: '{close_match.get('name')}' for '{brand_name}'")
+                    break
+                if (
+                    brand_normalized
+                    and (
+                        brand_normalized in wb_name_normalized
+                        or wb_name_normalized in brand_normalized
+                    )
+                ):
+                    suggestions.append(brand)
 
             is_valid = exact_match is not None
-
-            logger.info(f"{'✅' if is_valid else '⚠️'} Brand '{brand_name}' validation: {'found' if is_valid else 'not found'}, exact='{exact_match.get('name') if exact_match else None}', {len(suggestions)} suggestions")
-
-            return {
+            response = {
                 'valid': is_valid,
                 'exact_match': exact_match,
-                'suggestions': suggestions[:15]
+                'suggestions': suggestions[:15],
+                'complete': snapshot.get('complete') is True,
             }
+            if not is_valid and snapshot.get('complete') is not True:
+                response['error'] = 'incomplete_brand_snapshot'
+            return response
         except Exception as e:
             logger.error(f"❌ Failed to validate brand: {str(e)}")
             return {
@@ -2686,9 +2889,23 @@ class WildberriesAPIClient:
         endpoint = "/content/v2/cards/upload"
 
         # Формируем тело запроса согласно спецификации WB API
+        from services.marketplace_validator import build_wb_characteristic_patch
+        characteristic_validation_cache = {}
+        validated_variants = []
+        for variant in variants:
+            validated_variant = dict(variant)
+            if 'characteristics' in validated_variant:
+                validated_variant['characteristics'] = (
+                    build_wb_characteristic_patch(
+                        subject_id,
+                        validated_variant['characteristics'],
+                        validation_cache=characteristic_validation_cache,
+                    )
+                )
+            validated_variants.append(validated_variant)
         request_body = [{
             'subjectID': subject_id,
-            'variants': variants
+            'variants': validated_variants,
         }]
 
         from services.wb_validators import prepare_create_cards_for_wb
@@ -2762,10 +2979,33 @@ class WildberriesAPIClient:
 
         endpoint = "/content/v2/cards/upload"
 
+        # Центральный safety boundary для всех create-paths, включая ручной
+        # UI и supplier batch: характеристики проверяются до HTTP-вызова.
+        from services.marketplace_validator import build_wb_characteristic_patch
+        characteristic_validation_cache = {}
+        validated_cards = []
+        for card in cards:
+            validated_card = dict(card)
+            subject_id = validated_card.get('subjectID')
+            validated_variants = []
+            for variant in validated_card.get('variants') or []:
+                validated_variant = dict(variant)
+                if 'characteristics' in validated_variant:
+                    validated_variant['characteristics'] = (
+                        build_wb_characteristic_patch(
+                            subject_id,
+                            validated_variant['characteristics'],
+                            validation_cache=characteristic_validation_cache,
+                        )
+                    )
+                validated_variants.append(validated_variant)
+            validated_card['variants'] = validated_variants
+            validated_cards.append(validated_card)
+
         logger.info(f"📤 Batch creating {len(cards)} product cards")
 
         from services.wb_validators import prepare_create_cards_for_wb
-        cards = prepare_create_cards_for_wb(cards)
+        cards = prepare_create_cards_for_wb(validated_cards)
 
         try:
             start_time = time.time()

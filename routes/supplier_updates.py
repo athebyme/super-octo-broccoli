@@ -13,8 +13,8 @@ from flask_login import login_required, current_user
 
 from models import db, Product, BackgroundJob
 from services.supplier_update_hub import (
-    JOB_TYPE, query_update_rows, get_supplier_chips,
-    expand_filter_to_ids, run_photos_job,
+    JOB_TYPE, VERIFY_JOB_TYPE, query_update_rows, get_supplier_chips,
+    expand_filter_to_ids, run_photos_job, run_verify_job,
 )
 
 logger = logging.getLogger(__name__)
@@ -132,6 +132,72 @@ def register_supplier_updates_routes(app):
         flask_app = current_app._get_current_object()
         t = threading.Thread(
             target=run_photos_job,
+            args=(flask_app, job_uid, seller.id, product_ids),
+            daemon=True,
+        )
+        t.start()
+
+        return jsonify({'success': True, 'job_uid': job_uid,
+                        'total': len(product_ids)})
+
+    @app.route('/api/supplier-updates/verify/start', methods=['POST'])
+    @login_required
+    def supplier_updates_verify_start():
+        """Сверка карточек с WB: применились ли обновления, нет ли ошибок обработки."""
+        seller = _current_seller_or_none()
+        if not seller:
+            return jsonify({'success': False, 'error': 'Нет профиля продавца'}), 403
+        if not seller.has_valid_api_key():
+            return jsonify({'success': False,
+                            'error': 'Не задан API ключ Wildberries'}), 403
+
+        body = request.get_json(silent=True) or {}
+
+        # Один активный verify-job на продавца
+        existing = (BackgroundJob.query
+                    .filter_by(seller_id=seller.id, job_type=VERIFY_JOB_TYPE)
+                    .filter(BackgroundJob.status.in_(ACTIVE_STATUSES))
+                    .first())
+        if existing:
+            return jsonify({'success': False, 'job_uid': existing.job_uid,
+                            'error': 'Проверка уже выполняется'}), 409
+
+        if body.get('select_all'):
+            supplier_id = body.get('supplier_id') or None
+            only_new = bool(body.get('only_new', True))
+            search = (body.get('search') or '').strip()
+            product_ids = expand_filter_to_ids(
+                seller.id, supplier_id=supplier_id,
+                only_new=only_new, search=search,
+            )
+        else:
+            raw_ids = body.get('product_ids') or []
+            if not isinstance(raw_ids, list):
+                return jsonify({'success': False, 'error': 'product_ids должен быть списком'}), 400
+            try:
+                raw_ids = [int(x) for x in raw_ids]
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'Некорректные product_ids'}), 400
+            product_ids = [
+                p.id for p in Product.query
+                .filter(Product.id.in_(raw_ids), Product.seller_id == seller.id)
+                .all()
+            ]
+
+        if not product_ids:
+            return jsonify({'success': False, 'error': 'Нет карточек для проверки'}), 400
+
+        job_uid = uuid.uuid4().hex
+        job = BackgroundJob(
+            job_uid=job_uid, seller_id=seller.id, job_type=VERIFY_JOB_TYPE,
+            status='pending', total=len(product_ids),
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        flask_app = current_app._get_current_object()
+        t = threading.Thread(
+            target=run_verify_job,
             args=(flask_app, job_uid, seller.id, product_ids),
             daemon=True,
         )

@@ -48,7 +48,7 @@ from agents.catalog.card_doctor import CardDoctorAgent
 from agents.catalog.review_analyst import ReviewAnalystAgent
 from agents.catalog.auto_importer import AutoImporterAgent
 from agents.catalog.brand_resolver import BrandResolverAgent
-from agents.catalog.orchestrator import OrchestratorAgent
+from agents.unified import UnifiedSellerAgent
 from agents.catalog.photo_optimizer import PhotoOptimizerAgent
 
 
@@ -116,9 +116,9 @@ AGENT_REGISTRY = {
         'category': 'content',
     },
     'orchestrator': {
-        'class': OrchestratorAgent,
-        'display_name': 'AI-помощник',
-        'description': 'Оркестратор: координирует агентов через pipeline',
+        'class': UnifiedSellerAgent,
+        'display_name': 'ИИ-помощник',
+        'description': 'Единый runtime с внутренними domain skills',
         'category': 'orchestration',
     },
 }

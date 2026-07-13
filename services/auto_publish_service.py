@@ -153,7 +153,11 @@ class AutoPublishService:
                     else:
                         consecutive_failures += 1
 
-                # 3. Финализация запуска
+                # 3. Сверка с WB: карточка принимается асинхронно (202),
+                # ошибки обработки видны только в cards/error/list
+                self._check_wb_processing_errors(run)
+
+                # 4. Финализация запуска
                 self._finalize_run(run)
                 return run
 
@@ -190,10 +194,25 @@ class AutoPublishService:
         if limit <= 0:
             return []
 
-        # Базовый запрос: validated товары этого продавца
+        # Self-heal: прайс поставщика мог прийти позже импорта карточки —
+        # подтягиваем цену из SupplierProduct до отбора, чтобы товар не
+        # выпадал из выборки из-за устаревшего NULL.
+        self._backfill_supplier_prices()
+
+        # Базовый запрос: validated товары этого продавца.
+        # Товары с заведомо непубликуемыми данными (нет цены, фото или
+        # категории WB) отсекаются на уровне SQL — они не должны занимать
+        # слоты батча и порождать бесконечные skip/retry. Полная валидация
+        # в _validate_product остаётся последним рубежом.
         query = ImportedProduct.query.filter(
             ImportedProduct.seller_id == self.seller.id,
             ImportedProduct.import_status == 'validated',
+            ImportedProduct.supplier_price.isnot(None),
+            ImportedProduct.supplier_price > 0,
+            ImportedProduct.wb_subject_id.isnot(None),
+            ImportedProduct.photo_urls.isnot(None),
+            ImportedProduct.photo_urls != '',
+            ImportedProduct.photo_urls != '[]',
         )
 
         # Фильтр по поставщикам
@@ -249,6 +268,47 @@ class AutoPublishService:
         self.logger.info(f"Отобрано {len(items)} кандидатов для публикации")
         return items
 
+    def _backfill_supplier_prices(self) -> int:
+        """Подтягивает закупочную цену из каталога поставщика для validated-товаров без цены.
+
+        Прайс-файл поставщика приходит отдельно от каталога: карточка могла
+        импортироваться до появления цены и остаться с supplier_price = NULL.
+        Один bulk-запрос на запуск; розничная цена пересчитается в
+        _validate_product по PricingSettings.
+        """
+        from models import SupplierProduct
+        try:
+            rows = (
+                db.session.query(ImportedProduct, SupplierProduct)
+                .join(SupplierProduct, SupplierProduct.id == ImportedProduct.supplier_product_id)
+                .filter(
+                    ImportedProduct.seller_id == self.seller.id,
+                    ImportedProduct.import_status == 'validated',
+                    db.or_(
+                        ImportedProduct.supplier_price.is_(None),
+                        ImportedProduct.supplier_price <= 0,
+                    ),
+                    SupplierProduct.supplier_price.isnot(None),
+                    SupplierProduct.supplier_price > 0,
+                )
+                .all()
+            )
+            if not rows:
+                return 0
+            for imported, sp in rows:
+                imported.supplier_price = sp.supplier_price
+                if imported.supplier_quantity is None and sp.supplier_quantity is not None:
+                    imported.supplier_quantity = sp.supplier_quantity
+                # Сбрасываем устаревший расчёт — цена изменилась с NULL
+                imported.calculated_price = None
+            db.session.commit()
+            self.logger.info(f"Backfill закупочных цен из каталога поставщика: {len(rows)} товаров")
+            return len(rows)
+        except Exception as e:
+            self.logger.warning(f"Backfill цен не удался: {e}")
+            db.session.rollback()
+            return 0
+
     def _get_previous_retry_count(self, imported_product_id: int) -> int:
         """Возвращает retry_count последней failed/skipped попытки товара."""
         previous = AutoPublishItem.query.filter(
@@ -289,11 +349,13 @@ class AutoPublishService:
             item.status = 'skipped'
             item.step = 'skipped'
             item.completed_at = datetime.utcnow()
-            # Cooldown: чтобы не дёргать товар на каждом 5-минутном тике
-            # пока проблема не починена вручную, ставим next_retry_at в будущее.
-            # Фильтр в _select_candidates исключит этот товар до cooldown'а.
+            # Cooldown c эскалацией: повторный skip той же карточки означает,
+            # что проблему ещё не починили руками — каждая следующая попытка
+            # отодвигается вдвое (cap 24 часа). Без эскалации карточки с
+            # постоянно битыми данными возвращались в выборку каждые 15 минут
+            # и вытесняли публикуемые товары из батча.
             item.next_retry_at = datetime.utcnow() + timedelta(
-                minutes=max(self.settings.retry_delay_minutes, 15)
+                minutes=self._validation_skip_cooldown_minutes(item)
             )
             imported_product.import_status = 'validated'  # Разблокируем
             self._get_run(item.run_id).total_skipped += 1
@@ -417,6 +479,23 @@ class AutoPublishService:
                 )
             return False
 
+    def _validation_skip_cooldown_minutes(self, current_item: AutoPublishItem) -> int:
+        """Кулдаун перед следующей попыткой после skip по валидации.
+
+        Экспоненциальная эскалация по числу прошлых validation-скипов товара:
+        base, base*2, base*4, ... с капом в 24 часа. После успешной публикации
+        товар уходит из 'validated' и история скипов перестаёт влиять.
+        """
+        base = max(self.settings.retry_delay_minutes, 15)
+        previous_skips = AutoPublishItem.query.filter(
+            AutoPublishItem.seller_id == self.seller.id,
+            AutoPublishItem.imported_product_id == current_item.imported_product_id,
+            AutoPublishItem.status == 'skipped',
+            AutoPublishItem.error_step == 'validating',
+            AutoPublishItem.id != current_item.id,
+        ).count()
+        return min(base * (2 ** min(previous_skips, 7)), 24 * 60)
+
     def _validate_product(self, item: AutoPublishItem, product: ImportedProduct) -> bool:
         """Валидация товара перед загрузкой. Возвращает True если можно загружать."""
         try:
@@ -528,6 +607,70 @@ class AutoPublishService:
                 f"Verify: исключение при проверке vendor_code={vendor_code}: {e}"
             )
             return 'unverified'
+
+    def _check_wb_processing_errors(self, run: AutoPublishRun) -> int:
+        """Сверяет успешные items запуска со списком ошибок обработки WB.
+
+        WB принимает карточку сразу (202), а отклонить может позже при
+        асинхронной обработке — такие ошибки видны только в
+        /content/v2/cards/error/list. Один запрос на весь запуск.
+        Item остаётся completed (карточка ушла), но помечается
+        step='wb_processing_error' с текстом ошибок WB — это сигнал
+        для ручного исправления, а не для повторной публикации.
+        """
+        completed_items = AutoPublishItem.query.filter_by(
+            run_id=run.id, status='completed'
+        ).all()
+        if not completed_items:
+            return 0
+
+        try:
+            from services.wb_api_client import WildberriesAPIClient, normalize_cards_error_list
+            api_key = self.seller.wb_api_key
+            if not api_key:
+                return 0
+            client = WildberriesAPIClient(api_key=api_key)
+            wb_errors = client.get_cards_error_list(seller_id=self.seller.id)
+        except Exception as e:
+            self.logger.warning(f"Не удалось получить cards/error/list: {e}")
+            return 0
+
+        if not wb_errors:
+            return 0
+
+        errors_by_nm, errors_by_vendor = normalize_cards_error_list(wb_errors)
+
+        flagged = 0
+        for item in completed_items:
+            msgs = None
+            if item.wb_nm_id and int(item.wb_nm_id) in errors_by_nm:
+                msgs = errors_by_nm[int(item.wb_nm_id)]
+            elif item.product and getattr(item.product, 'vendor_code', None):
+                msgs = errors_by_vendor.get(str(item.product.vendor_code))
+            if not msgs:
+                continue
+            item.step = 'wb_processing_error'
+            item.error_step = 'wb_processing'
+            item.error_message = (
+                'WB отклонил обработку карточки: '
+                + '; '.join(str(m) for m in msgs[:3])
+            )[:500]
+            flagged += 1
+
+        if flagged:
+            db.session.commit()
+            self.logger.warning(
+                f"WB сообщил об ошибках обработки для {flagged} карточек запуска #{run.id}"
+            )
+            if self.settings.notify_on_failure:
+                self._create_notification(
+                    'warning',
+                    'WB отклонил карточки после приёма',
+                    f'{flagged} карточек из запуска автопубликации получили '
+                    f'ошибки обработки на стороне WB. Проверьте раздел автопубликации.',
+                    link='/auto-publish'
+                )
+        return flagged
 
     # ================================================================
     # CIRCUIT BREAKER & FINALIZATION
