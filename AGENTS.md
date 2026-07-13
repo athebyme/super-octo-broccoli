@@ -50,6 +50,26 @@ WB Seller Platform, или Seller Hub, автоматизирует работу
 
 Structured batch (brand/SEO) также является Python-owned write path. Выбранные IDs и prefetch обязаны совпасть exact-set до LLM; raw model `results` до postprocess содержит каждый ID текущего чанка ровно один раз, без чужих и дублей. После mapper update IDs могут быть unique subset чанка, но `failed` считается как `chunk_size - confirmed_saved`, включая пропущенные updates и `updated=0` без error rows. API/token-truncated хвост учитывается как deferred. Run token allocation резервирует практическую оценку повторяемого input (`ceil(utf8_bytes/2) + 256`) и функциональный structured output до вызова; output cap не превышает `LLM_MAX_TOKENS`. Для structured output резерв равен минимум 64 и 128 токенов на карточку, ограниченным provider cap. ReAct перед каждым model call повторно вычитает оценку полного `system + messages + tool schemas`; если input и хотя бы один output token не помещаются в chunk share, вызов не выполняется.
 
+Раздел «Качество карточек» (`routes/card_quality.py`, `services/card_quality_scorer.py`,
+`services/subject_charcs_cache.py`) не вызывает legacy-агентов. Quality Score v2 —
+детерминированный: контент относительно конфига категории WB (кэш
+`wb_subject_charcs_cache`, TTL 7 дней) плюс метрики воронки продаж, которые парсятся
+из того же ответа sales-funnel, что и рейтинги (без дополнительных API-вызовов).
+Причины «требует внимания» хранятся CSV в `Product.attention_reasons`
+(коды в `card_quality_scorer.ATTENTION_REASONS`), приоритет — `Product.quality_impact`.
+Кнопка «Исправить с ИИ» передаёт выбранные карточки в единый чат только через
+существующие endpoints (`POST /agents/api/conversations`, `.../messages` с
+`entity_kind='product'` + `product_ids`, лимит 50); write-путь остаётся
+план → подтверждение → proposal. Рантайм читает quality-данные через
+read-only internal endpoint `products/quality-brief` (agent-auth, до 50
+карточек, protected fields не возвращаются): детерминированный skill
+`quality-audit` агрегирует причины и отдаёт приоритетные карточки как
+collection (`selected_product_ids` + `entity_kind='product'`), tool
+`get_card_quality` доступен ReAct-skills только через allowlist. Явная выборка
+`product_ids` в quality-brief не обрезается дефолтным limit; `quality-audit`
+входит в `_CHAINING_SOURCE_SKILLS` и передаёт `selected_product_ids` следующему
+шагу плана.
+
 ## Локальный запуск
 
 Требуется Python 3.11. Проект не имеет Makefile, `pyproject.toml`, `package.json` или frontend build step.
