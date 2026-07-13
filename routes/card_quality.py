@@ -10,7 +10,8 @@ from flask_login import login_required, current_user
 
 from models import db, Product, CardRatingHistory, BulkEditHistory, CardEditHistory
 from models import get_standard_media, get_min_photos
-from services.card_quality_scorer import card_quality_detail, compute_quality_summary, ATTENTION_REASONS
+from services.card_quality_scorer import (card_quality_detail, compute_quality_summary,
+                                          score_status, ATTENTION_REASONS)
 from services.wb_api_client import WildberriesAPIClient
 from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
                                      apply_card_updates_bulk,
@@ -22,6 +23,41 @@ logger = logging.getLogger('card_quality')
 
 BULK_IMPROVE_LIMIT = 30
 STANDARD_PHOTOS_BULK_LIMIT = 30
+
+
+def _first_photo_url(product) -> str:
+    """URL превью карточки: photos_json хранит либо http-URL, либо WB-индексы фото."""
+    try:
+        photos = json.loads(product.photos_json) if product.photos_json else []
+    except (ValueError, TypeError):
+        photos = []
+    if not isinstance(photos, list) or not photos:
+        return ''
+    first = photos[0]
+    if isinstance(first, str):
+        return first if first.startswith('http') else ''
+    if isinstance(first, int) and product.nm_id:
+        from services.wb_media import wb_photo_url
+        return wb_photo_url(product.nm_id, first, 'c246x328')
+    return ''
+
+
+def _list_item(product) -> dict:
+    """Компактный элемент очереди — без тяжёлых JSON-полей и без пересчёта скора."""
+    score = product.quality_score
+    return {
+        'product_id': product.id,
+        'nm_id': product.nm_id,
+        'vendor_code': product.vendor_code,
+        'title': product.title,
+        'quality_score': score,
+        'quality_status': score_status(score) if score is not None else None,
+        'quality_impact': product.quality_impact,
+        'attention_reasons': [r for r in (product.attention_reasons or '').split(',') if r],
+        'wb_product_rating': product.nm_rating,
+        'wb_feedback_rating': product.wb_feedback_rating,
+        'first_photo_url': _first_photo_url(product),
+    }
 
 
 def _parse_ids_param(raw: str, limit: int):
@@ -157,11 +193,22 @@ def register_card_quality_routes(app):
                    'wb_feedback_rating': Product.wb_feedback_rating,
                    'impact': Product.quality_impact}.get(sort, Product.quality_impact)
             ordered = col.asc().nullslast() if order == 'asc' else col.desc().nullslast()
-            q = q.order_by(ordered, Product.id.asc())
+            from sqlalchemy.orm import load_only
+            q = q.options(load_only(
+                Product.id, Product.nm_id, Product.vendor_code, Product.title,
+                Product.quality_score, Product.attention_reasons, Product.quality_impact,
+                Product.nm_rating, Product.wb_feedback_rating, Product.photos_json,
+            )).order_by(ordered, Product.id.asc())
             pagination = q.paginate(page=page, per_page=per_page, error_out=False)
-            items = [card_quality_detail(p) for p in pagination.items]
+            items = [_list_item(p) for p in pagination.items]
 
-            summary = compute_quality_summary(current_user.seller.id)
+            # Сводка — общий TTL-кэш с summary-роутом; копия, чтобы не
+            # мутировать кэшированный объект фильтрованным total.
+            from services.ttl_cache import cache
+            seller_id = current_user.seller.id
+            summary = dict(cache.get_or_load(
+                f'cq-summary:{seller_id}', 60,
+                lambda: compute_quality_summary(seller_id)))
             summary['total'] = pagination.total
             return jsonify({'success': True, 'items': items, 'summary': summary,
                             'page': page, 'pages': pagination.pages})

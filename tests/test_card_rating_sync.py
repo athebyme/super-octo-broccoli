@@ -40,6 +40,25 @@ class TestParseSalesFunnelMetrics(unittest.TestCase):
         self.assertEqual(parse_sales_funnel_metrics({'data': {}}), {})
         self.assertEqual(parse_sales_funnel_metrics(_resp([{}, 'мусор', {'product': {}}])), {})
 
+    def test_real_wb_v3_schema_statistic_selected(self):
+        # Фактическая схема WB v3: statistic.selected{openCount, orderCount,
+        # conversions{addToCartPercent, cartToOrderPercent, buyoutPercent}}
+        resp = _resp([{
+            'product': {'nmId': 55, 'productRating': 7.1, 'feedbackRating': 4.2},
+            'statistic': {'selected': {
+                'openCount': 340, 'orderCount': 12,
+                'conversions': {'addToCartPercent': 5.5,
+                                'cartToOrderPercent': 33.0,
+                                'buyoutPercent': 61.0},
+            }},
+        }])
+        out = parse_sales_funnel_metrics(resp)
+        self.assertEqual(out[55], {
+            'product_rating': 7.1, 'feedback_rating': 4.2,
+            'views': 340, 'orders': 12,
+            'cart_conv': 5.5, 'order_conv': 33.0, 'buyout_rate': 61.0,
+        })
+
     def test_nmid_alt_key(self):
         out = parse_sales_funnel_metrics(_resp([{'product': {'nmID': 11}}]))
         self.assertIn(11, out)

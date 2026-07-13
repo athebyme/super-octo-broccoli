@@ -66,6 +66,11 @@ class TestCardQualitySummaryRoute(unittest.TestCase):
             cls.db.drop_all()
         cls._engine.dispose()
 
+    def setUp(self):
+        # Общий процессный TTL-кэш сводки не должен переносить данные между тестами
+        from services.ttl_cache import cache
+        cache.invalidate('cq-summary')
+
     def _client_logged_in(self):
         client = self.app.test_client()
         with client.session_transaction() as sess:

@@ -63,12 +63,14 @@ class TestCardQualityListFilters(unittest.TestCase):
         cls.db.session.add_all([
             Product(seller_id=seller.id, nm_id=101, vendor_code='LOW', is_active=True,
                     quality_score=80, nm_rating=9.0,
+                    photos_json='["https://cdn.example.com/photo1.jpg"]',
                     attention_reasons='low_rating', quality_impact=5),
             Product(seller_id=seller.id, nm_id=102, vendor_code='MID', is_active=True,
                     quality_score=60, nm_rating=7.0,
                     attention_reasons='weak_chars', quality_impact=20),
             Product(seller_id=seller.id, nm_id=103, vendor_code='HIGH', is_active=True,
                     quality_score=30, nm_rating=5.0,
+                    photos_json='[1, 2, 3]',
                     attention_reasons='few_photos,weak_chars', quality_impact=40),
             # Other seller's product — must never appear in own seller's results
             Product(seller_id=other_seller.id, nm_id=999, vendor_code='OTHER', is_active=True,
@@ -83,6 +85,11 @@ class TestCardQualityListFilters(unittest.TestCase):
             cls.db.session.remove()
             cls.db.drop_all()
         cls._engine.dispose()
+
+    def setUp(self):
+        # Общий процессный TTL-кэш сводки не должен переносить данные между тестами
+        from services.ttl_cache import cache
+        cache.invalidate('cq-summary')
 
     def _client_logged_in(self):
         client = self.app.test_client()
@@ -138,6 +145,30 @@ class TestCardQualityListFilters(unittest.TestCase):
     def test_requires_login(self):
         resp = self.app.test_client().get('/api/card-quality/list')
         self.assertIn(resp.status_code, (302, 401))
+
+    def test_first_photo_url_built_from_wb_indices_and_passthrough(self):
+        client = self._client_logged_in()
+        resp = client.get('/api/card-quality/list')
+        self.assertEqual(resp.status_code, 200)
+        by_nm = {item['nm_id']: item for item in resp.get_json()['items']}
+        # photos_json с WB-индексами [1,2,3] → CDN-URL с nm_id и первым индексом
+        url_103 = by_nm[103]['first_photo_url']
+        self.assertIn('/103/', url_103)
+        self.assertTrue(url_103.endswith('/1.webp'))
+        # photos_json с готовым http-URL → возвращается как есть
+        self.assertEqual(by_nm[101]['first_photo_url'], 'https://cdn.example.com/photo1.jpg')
+        # без фото → пустая строка
+        self.assertEqual(by_nm[102]['first_photo_url'], '')
+
+    def test_summary_cached_copy_not_mutated_by_filtered_total(self):
+        from services.ttl_cache import cache
+        client = self._client_logged_in()
+        # Первый запрос с фильтром кладёт сводку в кэш; total в ответе — фильтрованный
+        resp1 = client.get('/api/card-quality/list?reason=few_photos')
+        self.assertEqual(resp1.get_json()['summary']['total'], 1)
+        # Кэшированный объект не должен унаследовать фильтрованный total
+        cached = cache.get_or_load(f'cq-summary:{self.seller_id}', 60, lambda: {'total': -1})
+        self.assertNotEqual(cached.get('total'), 1)
 
 
 if __name__ == '__main__':

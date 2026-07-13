@@ -107,8 +107,10 @@ def _start_scheduler_lock_retry(flask_app) -> None:
 def parse_sales_funnel_metrics(api_response: dict) -> dict:
     """Извлечь рейтинги и метрики воронки {nm_id: {...}} из ответа sales-funnel v3.
 
-    Все поля опциональны (None = нет данных); структура ответа защищённо
-    разбирается: statistics.selectedPeriod{...conversions{...}}.
+    Все поля опциональны (None = нет данных). Фактическая схема WB v3
+    (проверена живым вызовом): item.statistic.selected{openCount, orderCount,
+    conversions{addToCartPercent, cartToOrderPercent, buyoutPercent}}.
+    Допускается и старая форма statistics.selectedPeriod{openCardCount, ...}.
     """
     out = {}
     data = (api_response or {}).get('data') or {}
@@ -121,17 +123,20 @@ def parse_sales_funnel_metrics(api_response: dict) -> dict:
         nm = prod.get('nmId', prod.get('nmID'))
         if nm is None:
             continue
-        stats = item.get('statistics') if isinstance(item.get('statistics'), dict) else {}
-        sel = stats.get('selectedPeriod') if isinstance(stats.get('selectedPeriod'), dict) else {}
+        stat = item.get('statistic') if isinstance(item.get('statistic'), dict) else {}
+        sel = stat.get('selected') if isinstance(stat.get('selected'), dict) else {}
+        if not sel:
+            stats = item.get('statistics') if isinstance(item.get('statistics'), dict) else {}
+            sel = stats.get('selectedPeriod') if isinstance(stats.get('selectedPeriod'), dict) else {}
         conv = sel.get('conversions') if isinstance(sel.get('conversions'), dict) else {}
         out[int(nm)] = {
             'product_rating': prod.get('productRating'),
             'feedback_rating': prod.get('feedbackRating'),
-            'views': sel.get('openCardCount'),
-            'orders': sel.get('ordersCount'),
+            'views': sel.get('openCount', sel.get('openCardCount')),
+            'orders': sel.get('orderCount', sel.get('ordersCount')),
             'cart_conv': conv.get('addToCartPercent'),
             'order_conv': conv.get('cartToOrderPercent'),
-            'buyout_rate': conv.get('buyoutsPercent'),
+            'buyout_rate': conv.get('buyoutPercent', conv.get('buyoutsPercent')),
         }
     return out
 
