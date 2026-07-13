@@ -141,8 +141,9 @@ SQLite приемлемы), `quality_impact` (FLOAT). `quality_breakdown_json`
 
 ## 4. ИИ-handoff
 
-Только фронтенд, существующие endpoints чата (никаких изменений в
-harness/orchestrator — параллельная разработка помощника не затрагивается):
+Передача — только фронтенд через существующие endpoints чата; harness и
+endpoints чата не меняются (параллельная разработка помощника не
+затрагивается). Расширение агентного рантайма — аддитивное (блок 5):
 
 1. `POST /agents/api/conversations` → `conversation_id`.
 2. `POST /agents/api/conversations/<id>/messages` с телом:
@@ -160,6 +161,25 @@ harness/orchestrator — параллельная разработка помо�
 (`ai-analyze`, agent-часть `improve`) и импорт `agent_service`;
 детерминированная часть `improve`/`proposal` (supplier diff, стандартные фото)
 сохраняется.
+
+## 5. Quality-данные в агентном рантайме
+
+Единый помощник (и его внутренние skills) должен читать данные качества и
+работать с ними после handoff:
+
+- **Internal API** (read-only, agent-auth + assignment-to-seller):
+  `POST /sellers/<id>/products/quality-brief` в `routes/internal_api.py` —
+  по `product_ids` (до 50) или топ проблемных по `quality_impact` с фильтром
+  `?reason=<код>`. Возвращает score, причины, impact, метрики воронки и топ-3
+  рекомендации из сохранённого breakdown. Protected fields не возвращаются.
+- **Platform client**: `get_card_quality_brief(seller_id, product_ids, reason, limit)`.
+- **Tool** `get_card_quality` в реестре platform tools (`agents/tools.py`) —
+  read-only, до 50 карточек; ReAct-skills получают его только через allowlist.
+- **Skill `quality-audit`** в `agents/unified.py`: детерминированный (без LLM),
+  агрегирует причины по выборке, возвращает приоритетные карточки как
+  collection (`selected_product_ids` + `entity_kind='product'`) для следующего
+  шага плана (например, content-writer). Регистрируется в `SKILL_CLASSES`
+  и каталоге semantic planner.
 
 ## Миграция и rollout
 
@@ -185,7 +205,11 @@ harness/orchestrator — параллельная разработка помо�
 - Bulk-флоу с предвыбранными `product_ids`: чужой `product_id` игнорируется.
 - Handoff: фронтенд-логика покрывается проверкой контракта (сообщение содержит
   entity_kind + product_ids) на уровне существующих тестов harness — новые
-  backend-тесты не требуются, т.к. backend не меняется.
+  backend-тесты не требуются, т.к. backend чата не меняется.
+- Internal quality-brief: agent-auth обязателен, tenant denial, лимит 50 ids,
+  неизвестный reason → 400, protected fields отсутствуют в ответе.
+- Skill `quality-audit`: агрегация причин, пустая выборка, collection-контракт
+  (`selected_product_ids` + `entity_kind`), детерминированный `_usage`.
 
 ## Инварианты (не ослабляются)
 
