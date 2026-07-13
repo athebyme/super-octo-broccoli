@@ -19,7 +19,7 @@ def _make_app():
 
 
 def _product(seller_id, nm_id, quality_score=None, nm_rating=None, is_active=True,
-             vendor_code=None, title='Товар'):
+             vendor_code=None, title='Товар', attention_reasons=None, quality_impact=None):
     return Product(
         seller_id=seller_id,
         nm_id=nm_id,
@@ -30,6 +30,8 @@ def _product(seller_id, nm_id, quality_score=None, nm_rating=None, is_active=Tru
         quality_score=quality_score,
         nm_rating=nm_rating,
         is_active=is_active,
+        attention_reasons=attention_reasons,
+        quality_impact=quality_impact,
     )
 
 
@@ -42,25 +44,34 @@ class TestCollectBulkCandidatesRealDB(unittest.TestCase):
         self.ctx.push()
         db.create_all()
 
+        # "Weak" is now defined by a non-empty attention_reasons (not raw quality_score/
+        # nm_rating thresholds) — see services/card_quality_scorer.compute_attention.
         # seller 1 products:
-        #   quality_score=20 → weak (quality<50)
-        #   quality_score=35, nm_rating=5 → weak (both conditions)
-        #   quality_score=40 → weak (quality<50)
-        #   quality_score=60, nm_rating=5 → weak (nm_rating<6)
-        #   quality_score=70, nm_rating=8 → NOT weak
-        #   quality_score=80, nm_rating=9 → NOT weak
-        #   is_active=False, quality_score=10 → excluded (inactive)
+        #   quality_score=20, attention_reasons='weak_chars', impact=35 → weak
+        #   quality_score=35, nm_rating=5, attention_reasons='low_rating,weak_chars',
+        #       impact=80 → weak
+        #   quality_score=40, attention_reasons='weak_description', impact=50 → weak
+        #   quality_score=60, nm_rating=5, attention_reasons='low_rating', impact=65 → weak
+        #   quality_score=70, nm_rating=8, no attention_reasons → NOT weak
+        #   quality_score=80, nm_rating=9, no attention_reasons → NOT weak
+        #   is_active=False, attention_reasons='few_photos' → excluded (inactive)
         # seller 2 products:
-        #   quality_score=10, nm_rating=3 → weak for seller 2, NOT for seller 1
+        #   attention_reasons='low_rating' → weak for seller 2, NOT for seller 1
         db.session.add_all([
-            _product(1, nm_id=1001, quality_score=20.0, nm_rating=None),
-            _product(1, nm_id=1002, quality_score=35.0, nm_rating=5.0),
-            _product(1, nm_id=1003, quality_score=40.0, nm_rating=8.0),
-            _product(1, nm_id=1004, quality_score=60.0, nm_rating=5.0),
+            _product(1, nm_id=1001, quality_score=20.0, nm_rating=None,
+                     attention_reasons='weak_chars', quality_impact=35.0),
+            _product(1, nm_id=1002, quality_score=35.0, nm_rating=5.0,
+                     attention_reasons='low_rating,weak_chars', quality_impact=80.0),
+            _product(1, nm_id=1003, quality_score=40.0, nm_rating=8.0,
+                     attention_reasons='weak_description', quality_impact=50.0),
+            _product(1, nm_id=1004, quality_score=60.0, nm_rating=5.0,
+                     attention_reasons='low_rating', quality_impact=65.0),
             _product(1, nm_id=1005, quality_score=70.0, nm_rating=8.0),
             _product(1, nm_id=1006, quality_score=80.0, nm_rating=9.0),
-            _product(1, nm_id=1007, quality_score=10.0, nm_rating=3.0, is_active=False),
-            _product(2, nm_id=2001, quality_score=10.0, nm_rating=3.0),
+            _product(1, nm_id=1007, quality_score=10.0, nm_rating=3.0, is_active=False,
+                     attention_reasons='few_photos', quality_impact=90.0),
+            _product(2, nm_id=2001, quality_score=10.0, nm_rating=3.0,
+                     attention_reasons='low_rating', quality_impact=99.0),
         ])
         db.session.commit()
 
@@ -92,7 +103,7 @@ class TestCollectBulkCandidatesRealDB(unittest.TestCase):
             return _collect_bulk_candidates(seller_id=seller_id, limit=limit)
 
     def test_only_weak_rows_returned(self):
-        """Only products with quality_score<50 OR nm_rating<6 are returned."""
+        """Only products with a non-empty attention_reasons are returned."""
         res = self._run(seller_id=1, limit=30)
         nm_ids = {c['nm_id'] for c in res['candidates']}
         # weak: 1001, 1002, 1003, 1004
@@ -116,19 +127,23 @@ class TestCollectBulkCandidatesRealDB(unittest.TestCase):
         nm_ids = {c['nm_id'] for c in res['candidates']}
         self.assertNotIn(2001, nm_ids)
 
-    def test_ordered_by_quality_score_asc(self):
-        """Candidates are ordered by quality_score ascending (weakest first)."""
+    def test_ordered_by_quality_impact_desc(self):
+        """Candidates are ordered by quality_impact descending (highest-impact fix first)."""
         res = self._run(seller_id=1, limit=30)
-        scores = [c['quality_score'] for c in res['candidates']]
-        self.assertEqual(scores, sorted(scores))
+        nm_ids = [c['nm_id'] for c in res['candidates']]
+        # impacts: 1001=35, 1002=80, 1003=50, 1004=65 -> desc order by impact
+        self.assertEqual(nm_ids, [1002, 1004, 1003, 1001])
 
     def test_total_weak_vs_shown_when_more_than_limit(self):
         """When total_weak > limit, shown == limit and total_weak reports full count."""
         # Add more weak products to seller 1 so we exceed limit=3
         db.session.add_all([
-            _product(1, nm_id=1010, quality_score=10.0),
-            _product(1, nm_id=1011, quality_score=11.0),
-            _product(1, nm_id=1012, quality_score=12.0),
+            _product(1, nm_id=1010, quality_score=10.0,
+                     attention_reasons='weak_title', quality_impact=10.0),
+            _product(1, nm_id=1011, quality_score=11.0,
+                     attention_reasons='weak_title', quality_impact=11.0),
+            _product(1, nm_id=1012, quality_score=12.0,
+                     attention_reasons='weak_title', quality_impact=12.0),
         ])
         db.session.commit()
 

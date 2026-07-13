@@ -10,7 +10,7 @@ from flask_login import login_required, current_user
 
 from models import db, Product, CardRatingHistory, AgentTask, BulkEditHistory, CardEditHistory
 from models import get_standard_media, get_min_photos
-from services.card_quality_scorer import card_quality_detail, compute_quality_summary
+from services.card_quality_scorer import card_quality_detail, compute_quality_summary, ATTENTION_REASONS
 from services import agent_service
 from services.wb_api_client import WildberriesAPIClient
 from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
@@ -73,16 +73,19 @@ def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS
     return candidates, total_m
 
 
-def _collect_bulk_candidates(seller_id: int, limit: int = BULK_IMPROVE_LIMIT) -> dict:
-    """Собирает top-N слабых карточек продавца с весами и (если есть) диффом поставщика."""
+def _collect_bulk_candidates(seller_id: int, limit: int = BULK_IMPROVE_LIMIT,
+                             product_ids=None) -> dict:
+    """Top-N карточек с причинами (или явно выбранные) + дифф поставщика."""
     base = Product.query.filter(
-        Product.seller_id == seller_id, Product.is_active == True
-    ).filter(
-        (Product.quality_score < 50) | (Product.nm_rating < 6)
+        Product.seller_id == seller_id, Product.is_active == True  # noqa: E712
     )
-
+    if product_ids:
+        base = base.filter(Product.id.in_(list(product_ids)[:limit]))
+    else:
+        base = base.filter(Product.attention_reasons.isnot(None),
+                           Product.attention_reasons != '')
     total_weak = base.count()
-    rows = base.order_by(Product.quality_score.asc()).limit(limit).all()
+    rows = base.order_by(Product.quality_impact.desc().nullslast()).limit(limit).all()
 
     es = get_enrichment_service()
     candidates = []
@@ -123,15 +126,28 @@ def register_card_quality_routes(app):
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'API ключ WB не настроен'}), 403
         try:
-            sort = request.args.get('sort', 'quality_score')
-            order = request.args.get('order', 'asc')
+            sort = request.args.get('sort', 'impact')
+            order = request.args.get('order', 'desc' if sort == 'impact' else 'asc')
             page = request.args.get('page', 1, type=int)
             per_page = min(request.args.get('per_page', 50, type=int), 200)
+            reason = request.args.get('reason')
+            bucket = request.args.get('bucket')
 
             q = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True)
-            col = {'quality_score': Product.quality_score, 'nm_rating': Product.nm_rating,
-                   'wb_feedback_rating': Product.wb_feedback_rating}.get(sort, Product.quality_score)
-            q = q.order_by(col.asc() if order == 'asc' else col.desc())
+            if reason in ATTENTION_REASONS:
+                q = q.filter(Product.attention_reasons.like(f'%{reason}%'))
+            if bucket == 'poor':
+                q = q.filter(Product.quality_score < 50)
+            elif bucket == 'average':
+                q = q.filter(Product.quality_score >= 50, Product.quality_score < 70)
+            elif bucket == 'good':
+                q = q.filter(Product.quality_score >= 70)
+            col = {'quality_score': Product.quality_score,
+                   'nm_rating': Product.nm_rating,
+                   'wb_feedback_rating': Product.wb_feedback_rating,
+                   'impact': Product.quality_impact}.get(sort, Product.quality_impact)
+            ordered = col.asc().nullslast() if order == 'asc' else col.desc().nullslast()
+            q = q.order_by(ordered, Product.id.asc())
             pagination = q.paginate(page=page, per_page=per_page, error_out=False)
             items = [card_quality_detail(p) for p in pagination.items]
 
