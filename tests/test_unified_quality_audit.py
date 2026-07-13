@@ -2,7 +2,7 @@
 """Тесты детерминированного skill quality-audit."""
 import unittest
 
-from agents.unified import QualityAuditSkill, SKILL_CLASSES
+from agents.unified import QualityAuditSkill, SKILL_CLASSES, _CHAINING_SOURCE_SKILLS
 
 
 class _FakePlatform:
@@ -68,6 +68,20 @@ class TestQualityAuditSkill(unittest.TestCase):
         skill.execute_task({'id': 't1', 'seller_id': 7, 'input_data': {
             'params': {'product_ids': [5, 6], 'reason': 'few_photos', 'limit': 10}}})
         self.assertEqual(skill.platform.calls[0], (7, [5, 6], 'few_photos', 10))
+
+    def test_chaining_source_skills_includes_quality_audit(self):
+        # Multi-step plan_request execution in UnifiedSellerAgent._plan_request
+        # forwards selected_product_ids from one step's result into the next
+        # step's product_ids only for skills in this source set. quality-audit
+        # returns a selected_product_ids collection (see
+        # test_aggregates_reasons_and_collection above) and per the card-quality
+        # v2 spec must chain into a following step (e.g. content-writer), so it
+        # belongs in the set alongside the existing sources.
+        self.assertIn('quality-audit', _CHAINING_SOURCE_SKILLS)
+        self.assertEqual(
+            _CHAINING_SOURCE_SKILLS,
+            {'candidate-selector', 'supplier-audit', 'quality-audit'},
+        )
 
 
 if __name__ == '__main__':

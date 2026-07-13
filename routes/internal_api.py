@@ -440,6 +440,10 @@ def internal_products_quality_brief(seller_id):
     if reason and reason not in ATTENTION_REASONS:
         return jsonify({'error': 'unknown reason'}), 400
     limit = min(max(request.args.get('limit', 30, type=int), 1), 50)
+    if ids:
+        # Explicit product_ids (already capped at 50 above) must never be
+        # truncated by the default top-N limit meant for the reason-scan path.
+        limit = max(limit, len(ids))
 
     q = Product.query.filter_by(seller_id=seller_id, is_active=True)
     if ids:

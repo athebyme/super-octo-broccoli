@@ -1029,6 +1029,13 @@ class ContentWriterSkill(BaseAgent):
 DescriptionWriterSkill = ContentWriterSkill
 
 
+# Skills whose result's selected_product_ids chains forward as the next
+# step's product_ids in a _plan_request multi-step workflow (and whose empty
+# selection stops that workflow early instead of running later steps on an
+# unfiltered scope). See docs/superpowers/specs/2026-07-13-card-quality-v2-design.md.
+_CHAINING_SOURCE_SKILLS = {'candidate-selector', 'supplier-audit', 'quality-audit'}
+
+
 SKILL_CLASSES: dict[str, Type[BaseAgent]] = {
     'seo-writer': SEOWriterAgent,
     'category-mapper': CategoryMapperAgent,
@@ -1468,7 +1475,7 @@ class UnifiedSellerAgent(BaseAgent):
                         'results': results,
                         '_usage': _build_usage(usage_totals, mode='unified_skills'),
                     }
-                if skill_name in {'candidate-selector', 'supplier-audit'}:
+                if skill_name in _CHAINING_SOURCE_SKILLS:
                     product_ids = [int(value) for value in compact.get('selected_product_ids') or []]
 
                 results.append({
@@ -1478,7 +1485,7 @@ class UnifiedSellerAgent(BaseAgent):
                     'result': compact,
                 })
                 completed_indexes.add(index)
-                if skill_name in {'candidate-selector', 'supplier-audit'} and not product_ids and index < len(steps) - 1:
+                if skill_name in _CHAINING_SOURCE_SKILLS and not product_ids and index < len(steps) - 1:
                     self.platform.log_result(
                         task['id'], f'{step_label}: нет кандидатов',
                         compact.get('message') or 'Подходящие карточки не найдены',

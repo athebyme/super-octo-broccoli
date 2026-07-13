@@ -151,6 +151,37 @@ class InternalCardQualityBriefTestCase(unittest.TestCase):
         for product in payload['products']:
             self.assertTrue(forbidden_keys.isdisjoint(product.keys()))
 
+    def test_explicit_product_ids_beyond_default_limit_are_not_truncated(self):
+        # 35 explicit ids without a query ?limit must all come back, even
+        # though the default limit=30 would otherwise cut the SQL .limit().
+        extra_products = []
+        for i in range(4, 40):
+            extra_products.append(Product(
+                seller_id=self.seller1.id, nm_id=1000 + i, vendor_code=f'SKU-{i}',
+                title=f'Карточка {i}', price=100, quantity=1,
+                quality_score=50.0, quality_impact=float(i),
+                attention_reasons='no_views',
+            ))
+        db.session.add_all(extra_products)
+        db.session.commit()
+
+        all_ids = [self.product1.id, self.product2.id, self.product3.id] + [
+            p.id for p in extra_products
+        ]
+        self.assertEqual(len(all_ids), 39)
+        explicit_ids = all_ids[:35]
+
+        response = self._post(
+            self.seller1.id, headers=self.task_headers(),
+            json={'product_ids': explicit_ids},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['total'], 35)
+        self.assertEqual(
+            sorted(p['id'] for p in payload['products']), sorted(explicit_ids),
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
