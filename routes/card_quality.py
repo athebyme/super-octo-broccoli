@@ -24,7 +24,17 @@ BULK_IMPROVE_LIMIT = 30
 STANDARD_PHOTOS_BULK_LIMIT = 30
 
 
-def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS_BULK_LIMIT):
+def _parse_ids_param(raw: str, limit: int):
+    ids = []
+    for chunk in (raw or '').split(','):
+        chunk = chunk.strip()
+        if chunk.isdigit():
+            ids.append(int(chunk))
+    return ids[:limit] or None
+
+
+def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS_BULK_LIMIT,
+                                product_ids=None):
     """Возвращает (candidates, total_M) для «Дополнить фото» слабым карточкам.
 
     candidates — list[(Product, composed_urls)] длиной <= limit, отсортированный
@@ -36,10 +46,11 @@ def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS
     """
     min_photos = get_min_photos(seller.id)
 
-    # Загружаем все активные карточки продавца
-    active_products = Product.query.filter_by(
-        seller_id=seller.id, is_active=True
-    ).all()
+    # Загружаем все активные карточки продавца (или явно выбранные)
+    query = Product.query.filter_by(seller_id=seller.id, is_active=True)
+    if product_ids:
+        query = query.filter(Product.id.in_(product_ids))
+    active_products = query.all()
 
     all_candidates = []  # (photo_count, product, composed_urls)
     for product in active_products:
@@ -318,7 +329,9 @@ def register_card_quality_routes(app):
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             flash('Для массового улучшения необходимо настроить API ключ WB', 'warning')
             return redirect(url_for('api_settings'))
-        data = _collect_bulk_candidates(current_user.seller.id, BULK_IMPROVE_LIMIT)
+        product_ids = _parse_ids_param(request.args.get('ids', ''), BULK_IMPROVE_LIMIT)
+        data = _collect_bulk_candidates(current_user.seller.id, BULK_IMPROVE_LIMIT,
+                                        product_ids=product_ids)
         return render_template('card_quality_bulk_confirm.html',
                                candidates=data['candidates'],
                                total_weak=data['total_weak'],
@@ -419,8 +432,10 @@ def register_card_quality_routes(app):
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             flash('Для дополнения фото необходимо настроить API ключ WB', 'warning')
             return redirect(url_for('api_settings'))
+        product_ids = _parse_ids_param(request.args.get('ids', ''), STANDARD_PHOTOS_BULK_LIMIT)
         candidates, total_m = get_sparse_photo_candidates(
-            current_user.seller, db.session, limit=STANDARD_PHOTOS_BULK_LIMIT
+            current_user.seller, db.session, limit=STANDARD_PHOTOS_BULK_LIMIT,
+            product_ids=product_ids
         )
         # Подготовим данные для шаблона: добавим удобные поля
         min_photos = get_min_photos(current_user.seller.id)

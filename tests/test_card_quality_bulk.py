@@ -2,6 +2,7 @@
 """Real-DB tests for _collect_bulk_candidates (bulk «Улучшить слабые» flow)."""
 
 import json
+import os
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -196,6 +197,153 @@ class TestCollectBulkCandidatesRealDB(unittest.TestCase):
             for c in res['candidates']:
                 self.assertTrue(c['has_supplier'])
                 self.assertEqual(c['supplier_diff']['title']['supplier'], 'New')
+
+
+class TestParseIdsParam(unittest.TestCase):
+    """Unit tests for the _parse_ids_param helper (GET ?ids=1,2,3 parsing)."""
+
+    def _parse(self, raw, limit=30):
+        from routes.card_quality import _parse_ids_param
+        return _parse_ids_param(raw, limit)
+
+    def test_parses_comma_separated_digits(self):
+        self.assertEqual(self._parse('1,2,3'), [1, 2, 3])
+
+    def test_trims_whitespace_around_chunks(self):
+        self.assertEqual(self._parse(' 1 , 2 ,3'), [1, 2, 3])
+
+    def test_ignores_non_digit_chunks(self):
+        self.assertEqual(self._parse('1,abc,3'), [1, 3])
+
+    def test_empty_string_returns_none(self):
+        self.assertIsNone(self._parse(''))
+
+    def test_none_input_returns_none(self):
+        self.assertIsNone(self._parse(None))
+
+    def test_only_non_digit_chunks_returns_none(self):
+        self.assertIsNone(self._parse('a,b,c'))
+
+    def test_caps_at_limit(self):
+        self.assertEqual(self._parse('1,2,3,4,5', limit=2), [1, 2])
+
+
+class TestBulkImprovePageIdsParam(unittest.TestCase):
+    """HTTP-level tests: GET /card-quality/bulk-improve?ids=... wiring + tenant scope."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ['DISABLE_SECURE_COOKIE'] = '1'
+        import sqlalchemy as _sa
+        from sqlalchemy.pool import StaticPool
+        import seller_platform  # noqa
+        cls.app = seller_platform.app
+        cls.app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+        cls.app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+        cls.app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {}
+        cls.app.config['SECRET_KEY'] = 'test-secret-key-for-unit-tests'
+        cls.app.config['WTF_CSRF_ENABLED'] = False
+        cls.app.config['TESTING'] = True
+        cls._engine = _sa.create_engine(
+            'sqlite:///:memory:',
+            connect_args={'check_same_thread': False},
+            poolclass=StaticPool,
+        )
+        db._app_engines[cls.app] = {None: cls._engine}
+        cls.db = db
+        with cls.app.app_context():
+            db.create_all()
+            cls._seed()
+
+    @classmethod
+    def _seed(cls):
+        from models import User, Seller
+
+        user = User(username='bulkseller1', email='bulkseller1@example.com', password_hash='x')
+        cls.db.session.add(user)
+        cls.db.session.flush()
+        seller = Seller(user_id=user.id, company_name='ООО Тест', wb_seller_id='321')
+        seller.wb_api_key = 'test-api-key'
+        cls.db.session.add(seller)
+        cls.db.session.flush()
+        cls.user_id = user.id
+        cls.seller_id = seller.id
+
+        other_user = User(username='bulkseller2', email='bulkseller2@example.com', password_hash='x')
+        cls.db.session.add(other_user)
+        cls.db.session.flush()
+        other_seller = Seller(user_id=other_user.id, company_name='ООО Чужой', wb_seller_id='654')
+        other_seller.wb_api_key = 'other-api-key'
+        cls.db.session.add(other_seller)
+        cls.db.session.flush()
+        cls.other_seller_id = other_seller.id
+
+        p1 = _product(seller.id, nm_id=5001, attention_reasons='weak_chars', quality_impact=10.0)
+        p2 = _product(seller.id, nm_id=5002, attention_reasons='low_rating', quality_impact=20.0)
+        p3 = _product(seller.id, nm_id=5003, attention_reasons='weak_description', quality_impact=30.0)
+        other = _product(other_seller.id, nm_id=6001, attention_reasons='low_rating', quality_impact=99.0)
+        cls.db.session.add_all([p1, p2, p3, other])
+        cls.db.session.commit()
+        cls.p1_id, cls.p2_id, cls.p3_id = p1.id, p2.id, p3.id
+        cls.other_id = other.id
+
+    @classmethod
+    def tearDownClass(cls):
+        with cls.app.app_context():
+            cls.db.session.remove()
+            cls.db.drop_all()
+        cls._engine.dispose()
+
+    def _client_logged_in(self):
+        client = self.app.test_client()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(self.user_id)
+            sess['_fresh'] = True
+        return client
+
+    def _get(self, client, ids):
+        with patch('routes.card_quality.render_template', return_value='OK') as mock_render, \
+             patch('routes.card_quality.card_quality_detail') as mock_detail, \
+             patch('routes.card_quality.collect_weak_dimensions', return_value=[]), \
+             patch('routes.card_quality.get_enrichment_service') as mock_es:
+
+            def _detail(p):
+                return {'product_id': p.id, 'nm_id': p.nm_id,
+                        'quality_score': p.quality_score, 'title': p.title,
+                        'vendor_code': p.vendor_code}
+            mock_detail.side_effect = _detail
+            svc = MagicMock()
+            svc.find_supplier_data.return_value = None
+            mock_es.return_value = svc
+
+            resp = client.get(f'/card-quality/bulk-improve?ids={ids}')
+            return resp, mock_render
+
+    def test_ids_param_selects_exactly_own_two_cards(self):
+        client = self._client_logged_in()
+        resp, mock_render = self._get(client, f'{self.p1_id},{self.p2_id}')
+        self.assertEqual(resp.status_code, 200)
+        candidates = mock_render.call_args.kwargs['candidates']
+        nm_ids = {c['nm_id'] for c in candidates}
+        self.assertEqual(nm_ids, {5001, 5002})
+
+    def test_foreign_product_id_in_ids_is_dropped(self):
+        client = self._client_logged_in()
+        resp, mock_render = self._get(client, f'{self.p1_id},{self.other_id}')
+        self.assertEqual(resp.status_code, 200)
+        candidates = mock_render.call_args.kwargs['candidates']
+        nm_ids = {c['nm_id'] for c in candidates}
+        self.assertEqual(nm_ids, {5001})
+        self.assertNotIn(6001, nm_ids)
+
+    def test_without_ids_falls_back_to_top_impact(self):
+        client = self._client_logged_in()
+        resp, mock_render = self._get(client, '')
+        self.assertEqual(resp.status_code, 200)
+        candidates = mock_render.call_args.kwargs['candidates']
+        nm_ids = {c['nm_id'] for c in candidates}
+        # Prior behaviour preserved: all own weak cards returned (top-impact), none foreign.
+        self.assertEqual(nm_ids, {5001, 5002, 5003})
 
 
 if __name__ == '__main__':
