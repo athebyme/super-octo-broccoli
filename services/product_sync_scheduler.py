@@ -103,20 +103,34 @@ def _start_scheduler_lock_retry(flask_app) -> None:
     _scheduler_lock_retry_thread.start()
 
 
-def parse_sales_funnel_ratings(api_response: dict) -> dict:
-    """Извлечь {nm_id: {product_rating, feedback_rating}} из ответа sales-funnel."""
+def parse_sales_funnel_metrics(api_response: dict) -> dict:
+    """Извлечь рейтинги и метрики воронки {nm_id: {...}} из ответа sales-funnel v3.
+
+    Все поля опциональны (None = нет данных); структура ответа защищённо
+    разбирается: statistics.selectedPeriod{...conversions{...}}.
+    """
     out = {}
     data = (api_response or {}).get('data') or {}
     for item in data.get('products', []) or []:
-        prod = item.get('product') if isinstance(item, dict) else None
+        if not isinstance(item, dict):
+            continue
+        prod = item.get('product')
         if not isinstance(prod, dict):
             continue
         nm = prod.get('nmId', prod.get('nmID'))
         if nm is None:
             continue
+        stats = item.get('statistics') if isinstance(item.get('statistics'), dict) else {}
+        sel = stats.get('selectedPeriod') if isinstance(stats.get('selectedPeriod'), dict) else {}
+        conv = sel.get('conversions') if isinstance(sel.get('conversions'), dict) else {}
         out[int(nm)] = {
             'product_rating': prod.get('productRating'),
             'feedback_rating': prod.get('feedbackRating'),
+            'views': sel.get('openCardCount'),
+            'orders': sel.get('ordersCount'),
+            'cart_conv': conv.get('addToCartPercent'),
+            'order_conv': conv.get('cartToOrderPercent'),
+            'buyout_rate': conv.get('buyoutsPercent'),
         }
     return out
 
@@ -510,7 +524,10 @@ def sync_card_ratings_for_seller(flask_app, seller_id):
     from datetime import timedelta
     from models import Seller, Product, CardRatingHistory, APILog, db
     from services.wb_api_client import WildberriesAPIClient
-    from services.card_quality_scorer import compute_card_quality, product_to_card_input
+    from services.card_quality_scorer import (
+        compute_card_quality, compute_attention, product_to_card_input,
+        build_seller_scoring_context)
+    from services.subject_charcs_cache import refresh_subject_charcs
 
     with flask_app.app_context():
         try:
@@ -545,24 +562,52 @@ def sync_card_ratings_for_seller(flask_app, seller_id):
                         nm_ids=batch, limit=1000,
                         log_to_db=True, seller_id=seller.id
                     )
-                    ratings = parse_sales_funnel_ratings(resp)
-                    for nm_id, r in ratings.items():
+                    metrics = parse_sales_funnel_metrics(resp)
+                    for nm_id, m in metrics.items():
                         p = by_nm.get(nm_id)
                         if not p:
                             continue
-                        if r['product_rating'] is not None:
-                            p.nm_rating = r['product_rating']
-                        if r['feedback_rating'] is not None:
-                            p.wb_feedback_rating = r['feedback_rating']
+                        if m['product_rating'] is not None:
+                            p.nm_rating = m['product_rating']
+                        if m['feedback_rating'] is not None:
+                            p.wb_feedback_rating = m['feedback_rating']
                         p.nm_rating_checked_at = now
+                        if m['views'] is not None:
+                            p.wb_views_30d = int(m['views'])
+                        if m['orders'] is not None:
+                            p.wb_orders_30d = int(m['orders'])
+                        if m['cart_conv'] is not None:
+                            p.wb_cart_conv = float(m['cart_conv'])
+                        if m['order_conv'] is not None:
+                            p.wb_order_conv = float(m['order_conv'])
+                        if m['buyout_rate'] is not None:
+                            p.wb_buyout_rate = float(m['buyout_rate'])
+                        p.funnel_checked_at = now
                     if i + 1000 < len(nm_ids):
                         time.sleep(20)  # лимит 3 req/min
 
-                # Пересчёт Quality Score для всех активных карточек (дёшево)
+                # Ленивое обновление кэша конфигов категорий (TTL 7 дней)
+                try:
+                    refresh_subject_charcs(
+                        client, {p.subject_id for p in products if p.subject_id})
+                except Exception as e:
+                    logger.warning(f"charcs cache refresh failed: {e}")
+
+                # Пересчёт Quality Score v2 + причины + impact (дёшево, один контекст)
+                context = build_seller_scoring_context(seller.id)
                 for p in products:
-                    cq = compute_card_quality(product_to_card_input(p))
+                    card = product_to_card_input(p, context)
+                    cq = compute_card_quality(card)
+                    att = compute_attention(
+                        card, cq['dimensions'],
+                        nm_rating=p.nm_rating, feedback_rating=p.wb_feedback_rating,
+                        views_30d=p.wb_views_30d, orders_30d=p.wb_orders_30d,
+                        cart_conv=p.wb_cart_conv, buyout_rate=p.wb_buyout_rate,
+                    )
                     p.quality_score = cq['score']
                     p.quality_breakdown_json = json.dumps(cq['dimensions'], ensure_ascii=False)
+                    p.attention_reasons = ','.join(att['reasons'])
+                    p.quality_impact = att['impact']
                     p.quality_checked_at = now
                     db.session.add(CardRatingHistory(
                         seller_id=seller.id, product_id=p.id, nm_id=p.nm_id,
@@ -958,8 +1003,9 @@ def sync_brands_background(flask_app):
     """Фоновая синхронизация брендов через API маркетплейсов."""
     with flask_app.app_context():
         try:
-            from models import Seller, Marketplace
+            from models import Marketplace
             from services.brand_engine import get_brand_engine
+            from services.marketplace_service import MarketplaceService
 
             # Находим WB маркетплейс
             wb = Marketplace.query.filter_by(code='wb').first()
@@ -967,14 +1013,12 @@ def sync_brands_background(flask_app):
                 logger.info("Brand sync skipped: WB marketplace not found")
                 return
 
-            # Находим продавца с WB API ключом
-            seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
-            if not seller or not seller.wb_api_key:
-                logger.info("Brand sync skipped: no WB API key available")
+            wb_client = MarketplaceService.get_wb_client(wb.id)
+            if not wb_client:
+                logger.info("Brand sync skipped: marketplace API key is not configured")
                 return
 
-            from services.wb_api_client import WildberriesAPIClient
-            with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+            with wb_client:
                 engine = get_brand_engine(flask_app)
                 stats = engine.sync_marketplace_brands(wb.id, wb_client)
                 logger.info(f"Brand sync completed: {stats}")
@@ -987,8 +1031,9 @@ def auto_resolve_pending_brands(flask_app):
     """Фоновый авто-резолв pending брендов."""
     with flask_app.app_context():
         try:
-            from models import Seller, Marketplace
+            from models import Marketplace
             from services.brand_engine import get_brand_engine
+            from services.marketplace_service import MarketplaceService
 
             # Находим WB маркетплейс
             wb = Marketplace.query.filter_by(code='wb').first()
@@ -996,13 +1041,12 @@ def auto_resolve_pending_brands(flask_app):
                 logger.info("Brand auto-resolve skipped: WB marketplace not found")
                 return
 
-            seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
-            if not seller or not seller.wb_api_key:
-                logger.info("Brand auto-resolve skipped: no WB API key available")
+            wb_client = MarketplaceService.get_wb_client(wb.id)
+            if not wb_client:
+                logger.info("Brand auto-resolve skipped: marketplace API key is not configured")
                 return
 
-            from services.wb_api_client import WildberriesAPIClient
-            with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+            with wb_client:
                 engine = get_brand_engine(flask_app)
                 stats = engine.auto_resolve_pending(wb_client, marketplace_id=wb.id)
                 logger.info(f"Brand auto-resolve completed: {stats}")

@@ -1,26 +1,45 @@
 # -*- coding: utf-8 -*-
-"""Тест парсинга ответа sales-funnel в карту рейтингов."""
-
+"""Тесты парсера sales-funnel: рейтинги + метрики воронки."""
 import unittest
 
-from services.product_sync_scheduler import parse_sales_funnel_ratings
+from services.product_sync_scheduler import parse_sales_funnel_metrics
 
 
-class TestParseSalesFunnelRatings(unittest.TestCase):
-    def test_extracts_ratings_keyed_by_nm_id(self):
-        resp = {'data': {'products': [
-            {'product': {'nmId': 105146863, 'productRating': 8, 'feedbackRating': 4.8}},
-            {'product': {'nmId': 100142591, 'productRating': 6, 'feedbackRating': 0}},
-        ]}}
-        result = parse_sales_funnel_ratings(resp)
-        self.assertEqual(result[105146863], {'product_rating': 8, 'feedback_rating': 4.8})
-        self.assertEqual(result[100142591], {'product_rating': 6, 'feedback_rating': 0})
+def _resp(products):
+    return {'data': {'products': products}}
 
-    def test_handles_missing_and_malformed(self):
-        self.assertEqual(parse_sales_funnel_ratings({}), {})
-        self.assertEqual(parse_sales_funnel_ratings({'data': {}}), {})
-        self.assertEqual(parse_sales_funnel_ratings({'data': {'products': [{}]}}), {})
 
-    def test_supports_nmID_alias(self):
-        resp = {'data': {'products': [{'product': {'nmID': 42, 'productRating': 9.3, 'feedbackRating': 5}}]}}
-        self.assertEqual(parse_sales_funnel_ratings(resp), {42: {'product_rating': 9.3, 'feedback_rating': 5}})
+class TestParseSalesFunnelMetrics(unittest.TestCase):
+    def test_full_item(self):
+        resp = _resp([{
+            'product': {'nmId': 42, 'productRating': 9.3, 'feedbackRating': 5},
+            'statistics': {'selectedPeriod': {
+                'openCardCount': 1200, 'ordersCount': 40,
+                'conversions': {'addToCartPercent': 6.5,
+                                'cartToOrderPercent': 40.0,
+                                'buyoutsPercent': 55.0},
+            }},
+        }])
+        out = parse_sales_funnel_metrics(resp)
+        self.assertEqual(out[42], {
+            'product_rating': 9.3, 'feedback_rating': 5,
+            'views': 1200, 'orders': 40,
+            'cart_conv': 6.5, 'order_conv': 40.0, 'buyout_rate': 55.0,
+        })
+
+    def test_missing_statistics(self):
+        out = parse_sales_funnel_metrics(_resp([
+            {'product': {'nmId': 7, 'productRating': 8.0, 'feedbackRating': 4.5}},
+        ]))
+        self.assertEqual(out[7]['product_rating'], 8.0)
+        self.assertIsNone(out[7]['views'])
+        self.assertIsNone(out[7]['cart_conv'])
+
+    def test_empty_and_garbage(self):
+        self.assertEqual(parse_sales_funnel_metrics({}), {})
+        self.assertEqual(parse_sales_funnel_metrics({'data': {}}), {})
+        self.assertEqual(parse_sales_funnel_metrics(_resp([{}, 'мусор', {'product': {}}])), {})
+
+    def test_nmid_alt_key(self):
+        out = parse_sales_funnel_metrics(_resp([{'product': {'nmID': 11}}]))
+        self.assertIn(11, out)
