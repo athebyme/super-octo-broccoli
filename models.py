@@ -2165,7 +2165,8 @@ class WbSubjectCharcsCache(db.Model):
 
     subject_id = db.Column(db.Integer, primary_key=True)
     charcs_json = db.Column(db.Text)  # JSON [{'name','required'}]
-    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False,
+                           server_default=db.text('CURRENT_TIMESTAMP'))
 
 
 class BlockedCardsSyncSettings(db.Model):
