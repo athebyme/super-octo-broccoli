@@ -522,11 +522,10 @@ def sync_card_ratings_for_seller(flask_app, seller_id):
     Лимит sales-funnel: 3 req/min → пауза 20с между батчами по 1000 nmId."""
     import time
     from datetime import timedelta
-    from models import Seller, Product, CardRatingHistory, APILog, db
+    from models import Seller, Product, APILog, db
     from services.wb_api_client import WildberriesAPIClient
     from services.card_quality_scorer import (
-        compute_card_quality, compute_attention, product_to_card_input,
-        build_seller_scoring_context)
+        build_seller_scoring_context, recompute_and_persist)
     from services.subject_charcs_cache import refresh_subject_charcs
 
     with flask_app.app_context():
@@ -596,24 +595,7 @@ def sync_card_ratings_for_seller(flask_app, seller_id):
                 # Пересчёт Quality Score v2 + причины + impact (дёшево, один контекст)
                 context = build_seller_scoring_context(seller.id)
                 for p in products:
-                    card = product_to_card_input(p, context)
-                    cq = compute_card_quality(card)
-                    att = compute_attention(
-                        card, cq['dimensions'],
-                        nm_rating=p.nm_rating, feedback_rating=p.wb_feedback_rating,
-                        views_30d=p.wb_views_30d, orders_30d=p.wb_orders_30d,
-                        cart_conv=p.wb_cart_conv, buyout_rate=p.wb_buyout_rate,
-                    )
-                    p.quality_score = cq['score']
-                    p.quality_breakdown_json = json.dumps(cq['dimensions'], ensure_ascii=False)
-                    p.attention_reasons = ','.join(att['reasons'])
-                    p.quality_impact = att['impact']
-                    p.quality_checked_at = now
-                    db.session.add(CardRatingHistory(
-                        seller_id=seller.id, product_id=p.id, nm_id=p.nm_id,
-                        wb_product_rating=p.nm_rating, wb_feedback_rating=p.wb_feedback_rating,
-                        quality_score=cq['score'], captured_at=now,
-                    ))
+                    recompute_and_persist(p, capture_history=True, context=context)
                 db.session.commit()
                 logger.info(f"✅ Card ratings synced for seller {seller.id}: {len(products)} products")
             except Exception as e:
