@@ -7,18 +7,19 @@
 «как поднять». Чистые функции без БД — пригодны для unit-тестов.
 """
 import json
+import re
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 WEIGHTS = {
     'characteristics': 25,
     'photos': 20,
-    'description': 15,
-    'title': 10,
-    'brand': 10,
-    'barcodes': 10,
-    'price': 5,
-    'category': 5,
+    'description': 20,
+    'title': 15,
+    'brand': 8,
+    'barcodes': 6,
+    'price': 3,
+    'category': 3,
 }
 
 
@@ -32,16 +33,25 @@ def score_status(score: float) -> str:
     return 'poor'
 
 
+_WORD_RE = re.compile(r'[а-яёa-z0-9]+')
+
+
+def _significant_words(text: str) -> list:
+    """Значимые слова: ≥3 символов, не чисто цифровые, lower-case."""
+    return [w for w in _WORD_RE.findall((text or '').lower())
+            if len(w) >= 3 and not w.isdigit()]
+
+
 def _dim_photos(card) -> tuple:
     count = len(card.get('photos') or [])
-    sub = min(100, count * 100 // 8)
     if count == 0:
         return 0, 'error', 'Нет фото — добавьте минимум 5 (до 30 на WB)'
+    sub = min(100, count * 10)
     if count < 5:
-        return sub, 'warning', f'Мало фото ({count}) — рекомендуем 8+ (до 30)'
-    if count < 8:
-        return sub, 'ok', f'Можно добавить фото ({count}/8+)'
-    return sub, 'ok', ''
+        return min(sub, 40), 'warning', f'Мало фото ({count}) — минимум 5, рекомендуем 10+'
+    if count < 10:
+        return sub, 'ok', f'Можно добавить фото ({count}/10)'
+    return 100, 'ok', ''
 
 
 def _count_characteristics(chars) -> int:
@@ -65,24 +75,52 @@ def _dim_characteristics(card) -> tuple:
 
 
 def _dim_description(card) -> tuple:
-    length = len(card.get('description') or '')
-    sub = min(100, length * 100 // 400)
+    text = card.get('description') or ''
+    length = len(text)
     if length == 0:
         return 0, 'error', 'Добавьте описание товара'
-    if length < 200:
-        return sub, 'warning', 'Короткое описание — расширьте до 400+ символов'
-    return sub, 'ok', ''
+    sub = min(100, length * 100 // 600)
+    hints = []
+    if card.get('description_dup'):
+        sub = int(sub * 0.4)
+        hints.append('Описание дублируется у нескольких карточек — сделайте уникальным')
+    if len(set(_significant_words(text))) < 15:
+        sub = int(sub * 0.6)
+        hints.append('Описание малосодержательное — добавьте конкретики')
+    if length < 300:
+        hints.append('Короткое описание — расширьте до 600+ символов')
+    if hints:
+        return sub, 'warning', '; '.join(hints)
+    return sub, 'ok', ('' if sub >= 100 else 'Можно расширить описание до 600+ символов')
 
 
 def _dim_title(card) -> tuple:
-    length = len(card.get('title') or '')
+    title = card.get('title') or ''
+    length = len(title)
     if length == 0:
         return 0, 'error', 'Нет заголовка'
     if length > 60:
         return 50, 'warning', 'Заголовок длиннее 60 символов — WB обрежет'
-    if length < 25:
-        return min(100, length * 100 // 25), 'warning', 'Короткий заголовок — добавьте деталей'
-    return 100, 'ok', ''
+    sub = 100 if length >= 25 else min(100, length * 100 // 25)
+    hints = [] if length >= 25 else ['Короткий заголовок — добавьте деталей']
+    words = _significant_words(title)
+    if len(words) < 4:
+        sub -= 30
+        hints.append('Мало значимых слов в заголовке (нужно 4+)')
+    counts = {}
+    for w in words:
+        counts[w] = counts.get(w, 0) + 1
+    if counts and max(counts.values()) >= 3:
+        sub -= 20
+        hints.append('Слово повторяется 3+ раз — уберите спам')
+    letters = [c for c in title if c.isalpha()]
+    if len(letters) >= 10 and all(c.isupper() for c in letters):
+        sub -= 20
+        hints.append('Заголовок капсом — снижает доверие')
+    sub = max(0, sub)
+    if hints:
+        return sub, 'warning', '; '.join(hints)
+    return sub, 'ok', ''
 
 
 def _dim_brand(card) -> tuple:

@@ -12,10 +12,26 @@ from services.card_quality_scorer import (
 
 def _perfect_card():
     return {
-        'photos': ['u'] * 8,
-        'characteristics': {f'k{i}': 'v' for i in range(10)},
-        'title': 'x' * 40,
-        'description': 'y' * 400,
+        'photos': ['u'] * 10,
+        'characteristics': {f'Характеристика {i}': 'знач' for i in range(10)},
+        'available_charcs': [
+            {'name': f'Характеристика {i}', 'required': i < 3} for i in range(10)
+        ],
+        'title': 'Платье летнее женское хлопковое миди с поясом',
+        'description': (
+            'Лёгкое летнее платье из натурального хлопка свободного кроя. '
+            'Дышащая ткань подходит для жаркой погоды, приталенный силуэт '
+            'подчёркивает фигуру. Длина миди, съёмный пояс в комплекте. '
+            'Машинная стирка при тридцати градусах, материал не мнётся и '
+            'сохраняет цвет после многочисленных стирок. Подходит для '
+            'офиса, прогулок и отпуска. Карманы по бокам, скрытая молния '
+            'на спине, подкладка из вискозы. Размерная сетка соответствует '
+            'российским стандартам, при сомнениях берите размер больше. '
+            'Производство Россия, сертификат соответствия имеется. '
+            'В комплекте чехол для хранения и инструкция по уходу за тканью. '
+            'Модель хорошо сочетается с босоножками и лёгким жакетом в '
+            'прохладную погоду.'
+        ),
         'brand': 'BrandX',
         'barcodes': ['1234567890123'],
         'price': 999,
@@ -62,7 +78,7 @@ class TestComputeCardQuality(unittest.TestCase):
         card = _perfect_card()
         card['photos'] = ['u', 'u', 'u']  # 3 photos
         dim = compute_card_quality(card)['dimensions']['photos']
-        self.assertEqual(dim['score'], 37)        # 3 * 100 // 8
+        self.assertEqual(dim['score'], 30)        # min(3 * 10, 40)
         self.assertEqual(dim['status'], 'warning')
         self.assertTrue(dim['hint'])
 
@@ -71,7 +87,7 @@ class TestComputeCardQuality(unittest.TestCase):
         self.assertEqual(set(dims.keys()), set(WEIGHTS.keys()))
 
     def test_recommendations_sorted_by_impact(self):
-        # missing photos (weight 20) must rank above missing brand (weight 10)
+        # missing photos (weight 20) must rank above missing brand (weight 8)
         card = _perfect_card()
         card['photos'] = []
         card['brand'] = ''
@@ -79,6 +95,66 @@ class TestComputeCardQuality(unittest.TestCase):
         joined = ' || '.join(recs)
         self.assertIn('фото', joined.lower())
         self.assertLess(joined.lower().index('фото'), joined.lower().index('бренд'))
+
+
+class TestPhotosV2(unittest.TestCase):
+    def test_zero_photos_is_error(self):
+        card = _perfect_card(); card['photos'] = []
+        d = compute_card_quality(card)['dimensions']['photos']
+        self.assertEqual(d['score'], 0); self.assertEqual(d['status'], 'error')
+
+    def test_under_5_photos_capped_at_40(self):
+        card = _perfect_card(); card['photos'] = ['u'] * 4
+        d = compute_card_quality(card)['dimensions']['photos']
+        self.assertEqual(d['score'], 40); self.assertEqual(d['status'], 'warning')
+
+    def test_10_photos_is_100(self):
+        card = _perfect_card(); card['photos'] = ['u'] * 10
+        self.assertEqual(compute_card_quality(card)['dimensions']['photos']['score'], 100)
+
+
+class TestDescriptionV2(unittest.TestCase):
+    def test_length_scale_600(self):
+        card = _perfect_card()
+        self.assertEqual(compute_card_quality(card)['dimensions']['description']['score'], 100)
+
+    def test_duplicate_penalty(self):
+        card = _perfect_card(); card['description_dup'] = True
+        d = compute_card_quality(card)['dimensions']['description']
+        self.assertEqual(d['score'], 40)  # 100 * 0.4
+        self.assertEqual(d['status'], 'warning')
+
+    def test_low_unique_words_penalty(self):
+        card = _perfect_card()
+        card['description'] = ('слово другое ' * 60)[:650]  # длина 600+, но 2 уникальных слова
+        d = compute_card_quality(card)['dimensions']['description']
+        self.assertEqual(d['score'], 60)  # 100 * 0.6
+        self.assertEqual(d['status'], 'warning')
+
+
+class TestTitleV2(unittest.TestCase):
+    def test_good_title_100(self):
+        self.assertEqual(compute_card_quality(_perfect_card())['dimensions']['title']['score'], 100)
+
+    def test_few_significant_words_penalty(self):
+        card = _perfect_card(); card['title'] = 'Ааааааааааааа ббббббббббббб'  # 2 слова, длина 27
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 70); self.assertEqual(d['status'], 'warning')
+
+    def test_word_spam_penalty(self):
+        card = _perfect_card(); card['title'] = 'платье платье платье красное летнее'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 80)  # 100 - 20 за повтор ≥3
+        self.assertEqual(d['status'], 'warning')
+
+    def test_caps_penalty(self):
+        card = _perfect_card(); card['title'] = 'ПЛАТЬЕ ЛЕТНЕЕ ЖЕНСКОЕ ХЛОПКОВОЕ МИДИ'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 80); self.assertEqual(d['status'], 'warning')
+
+    def test_over_60_still_50(self):
+        card = _perfect_card(); card['title'] = 'х' * 61
+        self.assertEqual(compute_card_quality(card)['dimensions']['title']['score'], 50)
 
 
 class TestProductToCardInput(unittest.TestCase):
