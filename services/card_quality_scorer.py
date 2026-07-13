@@ -62,15 +62,57 @@ def _count_characteristics(chars) -> int:
     return 0
 
 
+def _norm_char_name(name) -> str:
+    return str(name or '').strip().lower()
+
+
+def _filled_char_names(chars) -> set:
+    names = set()
+    if isinstance(chars, dict):
+        for k, v in chars.items():
+            if not str(k).startswith('_') and v:
+                names.add(_norm_char_name(k))
+    elif isinstance(chars, list):
+        for item in chars:
+            if isinstance(item, dict):
+                nm = item.get('name') or item.get('charcName')
+                if nm and (item.get('value') or item.get('values')):
+                    names.add(_norm_char_name(nm))
+    return names
+
+
 def _dim_characteristics(card) -> tuple:
+    available = card.get('available_charcs')
     count = _count_characteristics(card.get('characteristics'))
-    sub = min(100, count * 10)
-    if count == 0:
-        return 0, 'error', 'Заполните характеристики товара'
-    if count < 3:
-        return sub, 'warning', f'Мало характеристик ({count}) — WB может отклонить'
-    if count < 10:
-        return sub, 'ok', f'Добавьте характеристики ({count}/10)'
+    if not available:
+        # Fallback без конфига категории: полноту подтвердить нельзя — потолок 70
+        sub = min(70, count * 10)
+        if count == 0:
+            return 0, 'error', 'Заполните характеристики товара'
+        if count < 3:
+            return sub, 'warning', f'Мало характеристик ({count}) — WB может отклонить'
+        return sub, 'ok', f'Заполнено {count}; для точной оценки нужен конфиг категории'
+    filled = _filled_char_names(card.get('characteristics'))
+    total_w = filled_w = total_n = filled_n = 0
+    for ch in available:
+        name = _norm_char_name(ch.get('name'))
+        if not name:
+            continue
+        w = 3 if ch.get('required') else 1
+        total_w += w
+        total_n += 1
+        if name in filled:
+            filled_w += w
+            filled_n += 1
+    if total_w == 0:
+        return (100, 'ok', '') if count else (0, 'error', 'Заполните характеристики товара')
+    sub = round(100 * filled_w / total_w)
+    if filled_n == 0:
+        return 0, 'error', f'Заполните характеристики (0 из {total_n})'
+    if sub < 60:
+        return sub, 'warning', f'Заполнено {filled_n} из {total_n} характеристик категории'
+    if sub < 100:
+        return sub, 'ok', f'Можно заполнить ещё ({filled_n}/{total_n})'
     return sub, 'ok', ''
 
 

@@ -157,6 +157,45 @@ class TestTitleV2(unittest.TestCase):
         self.assertEqual(compute_card_quality(card)['dimensions']['title']['score'], 50)
 
 
+class TestCharacteristicsV2(unittest.TestCase):
+    def _card(self, chars, available):
+        card = _perfect_card()
+        card['characteristics'] = chars
+        card['available_charcs'] = available
+        return card
+
+    def test_full_fill_is_100(self):
+        av = [{'name': 'Цвет', 'required': True}, {'name': 'Состав', 'required': False}]
+        d = compute_card_quality(self._card({'Цвет': 'красный', 'Состав': 'хлопок'}, av))
+        self.assertEqual(d['dimensions']['characteristics']['score'], 100)
+
+    def test_required_weighted_x3(self):
+        av = [{'name': 'Цвет', 'required': True}, {'name': 'Состав', 'required': False}]
+        # заполнен только optional: 1 / (3+1) = 25
+        d = compute_card_quality(self._card({'Состав': 'хлопок'}, av))
+        self.assertEqual(d['dimensions']['characteristics']['score'], 25)
+
+    def test_name_match_case_insensitive(self):
+        av = [{'name': 'Цвет', 'required': False}]
+        d = compute_card_quality(self._card({'цвет ': 'красный'}, av))
+        self.assertEqual(d['dimensions']['characteristics']['score'], 100)
+
+    def test_zero_filled_is_error(self):
+        av = [{'name': 'Цвет', 'required': True}]
+        d = compute_card_quality(self._card({}, av))['dimensions']['characteristics']
+        self.assertEqual(d['score'], 0); self.assertEqual(d['status'], 'error')
+
+    def test_fallback_without_config_capped_70(self):
+        d = compute_card_quality(self._card({f'k{i}': 'v' for i in range(10)}, None))
+        self.assertEqual(d['dimensions']['characteristics']['score'], 70)
+
+    def test_list_format_characteristics(self):
+        av = [{'name': 'Цвет', 'required': False}]
+        chars = [{'name': 'Цвет', 'value': 'красный'}]
+        d = compute_card_quality(self._card(chars, av))
+        self.assertEqual(d['dimensions']['characteristics']['score'], 100)
+
+
 class TestProductToCardInput(unittest.TestCase):
     def test_reads_product_attributes(self):
         product = types.SimpleNamespace(
