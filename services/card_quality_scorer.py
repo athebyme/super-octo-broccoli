@@ -9,7 +9,7 @@
 import json
 import re
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 WEIGHTS = {
     'characteristics': 25,
@@ -334,44 +334,32 @@ def card_quality_detail(product) -> Dict[str, Any]:
     }
 
 
-WEAK_QUALITY_THRESHOLD = 50.0
-WEAK_WB_RATING_THRESHOLD = 6.0
-
-
-def is_weak(quality_score: Optional[float], nm_rating: Optional[float]) -> bool:
-    """Карточка «слабая», если Quality Score < 50 ИЛИ WB-рейтинг карточки < 6.
-
-    None-значения игнорируются (не делают карточку слабой сами по себе).
-    """
-    if quality_score is not None and quality_score < WEAK_QUALITY_THRESHOLD:
-        return True
-    if nm_rating is not None and nm_rating < WEAK_WB_RATING_THRESHOLD:
-        return True
-    return False
-
-
 def compute_quality_summary(seller_id: int) -> Dict[str, Any]:
-    """Сводка по качеству карточек продавца для кокпита.
+    """Сводка по качеству карточек продавца для кокпита и виджета дашборда.
 
-    distribution — бакеты по score_status(quality_score): poor/average/good/excellent.
-    need_attention — число «слабых» карточек по is_weak(quality_score, nm_rating).
+    distribution — бакеты по score_status(quality_score);
+    need_attention — карточки с непустым attention_reasons;
+    reason_counts — счётчик карточек по каждой причине;
+    trend — средний quality_score по дням за 30 дней (CardRatingHistory).
     """
-    from models import db, Product
+    from datetime import timedelta
+    from sqlalchemy import func
+    from models import db, Product, CardRatingHistory
 
-    rows = db.session.query(Product.quality_score, Product.nm_rating).filter(
+    rows = db.session.query(
+        Product.quality_score, Product.nm_rating, Product.attention_reasons,
+    ).filter(
         Product.seller_id == seller_id,
         Product.is_active == True,  # noqa: E712
     ).all()
 
     distribution = {'poor': 0, 'average': 0, 'good': 0, 'excellent': 0}
+    reason_counts = {r: 0 for r in ATTENTION_REASONS}
     total = len(rows)
     need_attention = 0
-    q_sum = 0.0
-    q_cnt = 0
-    r_sum = 0.0
-    r_cnt = 0
+    q_sum = q_cnt = r_sum = r_cnt = 0
 
-    for quality_score, nm_rating in rows:
+    for quality_score, nm_rating, reasons_csv in rows:
         if quality_score is not None:
             distribution[score_status(quality_score)] += 1
             q_sum += quality_score
@@ -379,8 +367,25 @@ def compute_quality_summary(seller_id: int) -> Dict[str, Any]:
         if nm_rating is not None:
             r_sum += nm_rating
             r_cnt += 1
-        if is_weak(quality_score, nm_rating):
+        reasons = [r for r in (reasons_csv or '').split(',') if r]
+        if reasons:
             need_attention += 1
+            for r in reasons:
+                if r in reason_counts:
+                    reason_counts[r] += 1
+
+    since = datetime.utcnow() - timedelta(days=30)
+    trend_rows = db.session.query(
+        func.date(CardRatingHistory.captured_at),
+        func.avg(CardRatingHistory.quality_score),
+    ).filter(
+        CardRatingHistory.seller_id == seller_id,
+        CardRatingHistory.captured_at >= since,
+        CardRatingHistory.quality_score.isnot(None),
+    ).group_by(func.date(CardRatingHistory.captured_at)) \
+     .order_by(func.date(CardRatingHistory.captured_at)).all()
+    trend = [{'date': str(d), 'avg_quality': round(v, 1)}
+             for d, v in trend_rows if v is not None]
 
     return {
         'avg_quality': round(q_sum / q_cnt, 1) if q_cnt else None,
@@ -388,6 +393,9 @@ def compute_quality_summary(seller_id: int) -> Dict[str, Any]:
         'total': total,
         'need_attention': need_attention,
         'distribution': distribution,
+        'reason_counts': reason_counts,
+        'reason_labels': REASON_LABELS,
+        'trend': trend,
     }
 
 

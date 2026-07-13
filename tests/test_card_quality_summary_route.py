@@ -46,16 +46,16 @@ class TestCardQualitySummaryRoute(unittest.TestCase):
         cls.db.session.flush()
         cls.user_id = user.id
         cls.seller_id = seller.id
-        # 2 хорошие, 1 слабая по quality, 1 слабая по nm_rating
+        # 2 хорошие (без причин), 1 с причиной по характеристикам, 1 с низким рейтингом
         cls.db.session.add_all([
             Product(seller_id=seller.id, nm_id=1, vendor_code='A', is_active=True,
                     quality_score=90, nm_rating=9.0),
             Product(seller_id=seller.id, nm_id=2, vendor_code='B', is_active=True,
                     quality_score=75, nm_rating=8.0),
             Product(seller_id=seller.id, nm_id=3, vendor_code='C', is_active=True,
-                    quality_score=40, nm_rating=7.0),
+                    quality_score=40, nm_rating=7.0, attention_reasons='weak_chars'),
             Product(seller_id=seller.id, nm_id=4, vendor_code='D', is_active=True,
-                    quality_score=80, nm_rating=5.0),
+                    quality_score=80, nm_rating=5.0, attention_reasons='low_rating'),
         ])
         cls.db.session.commit()
 
@@ -81,7 +81,7 @@ class TestCardQualitySummaryRoute(unittest.TestCase):
         self.assertTrue(payload['success'])
         data = payload['data']
         self.assertEqual(data['total'], 4)
-        self.assertEqual(data['need_attention'], 2)  # quality<50 ИЛИ nm_rating<6
+        self.assertEqual(data['need_attention'], 2)  # карточки с непустым attention_reasons
         self.assertIn('distribution', data)
         self.assertIn('avg_quality', data)
 
