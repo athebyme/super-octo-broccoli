@@ -2,7 +2,7 @@
 """Тесты apply_card_updates_bulk: тексты — одним батчем cards/update, фото — по карточке."""
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 class FakeWBClient:
@@ -68,11 +68,14 @@ def _product(pid, nm_id):
 class BulkApplyTestBase(unittest.TestCase):
     def setUp(self):
         self.history_records = []
+        self.recompute_calls = []
+        self.fake_context = {'dup_descriptions': set(), 'charcs_by_subject': {}}
 
         def fake_snapshot(product):
             return {'title': product.title, 'brand': product.brand}
 
-        def fake_recompute(product, capture_history=True):
+        def fake_recompute(product, capture_history=True, context=None):
+            self.recompute_calls.append({'product_id': product.id, 'context': context})
             return {'score': 60.0, 'dimensions': {}}
 
         class FakeHistory:
@@ -88,12 +91,16 @@ class BulkApplyTestBase(unittest.TestCase):
             def commit(self):
                 pass
 
+        self.mock_build_context = MagicMock(return_value=self.fake_context)
+
         self.patches = [
             patch('services.card_improver._create_product_snapshot', side_effect=fake_snapshot),
             patch('services.card_improver.recompute_and_persist', side_effect=fake_recompute),
             patch('services.card_improver.CardEditHistory',
                   lambda **kw: FakeHistory(**kw)),
             patch('services.card_improver.db'),
+            patch('services.card_improver.build_seller_scoring_context',
+                  new=self.mock_build_context),
         ]
         started = [p.start() for p in self.patches]
         started[3].session = FakeSession()
@@ -168,6 +175,30 @@ class TestBulkTextUpdates(BulkApplyTestBase):
         p1, p2 = _product(1, 111), _product(2, 222)
         self._run([(p1, {'title': 'Новый 1'}), (p2, {'brand': 'B'})])
         self.assertEqual(len(self.history_records), 2)
+
+
+class TestBulkSharedScoringContext(BulkApplyTestBase):
+    """recompute_and_persist не должен строить контекст скоринга по каталогу
+    отдельно на каждый товар в bulk-вызове (N+1) — контекст строится один
+    раз и передаётся в каждый вызов recompute_and_persist."""
+
+    def test_context_built_once_and_shared_across_products(self):
+        p1, p2, p3 = _product(1, 111), _product(2, 222), _product(3, 333)
+        results, _client = self._run([
+            (p1, {'title': 'Новый 1'}),
+            (p2, {'brand': 'NewBrand'}),
+            (p3, {'description': 'Новое описание'}),
+        ])
+
+        self.mock_build_context.assert_called_once_with(FakeSeller.id)
+
+        self.assertEqual(len(self.recompute_calls), 3)
+        for call in self.recompute_calls:
+            self.assertIs(call['context'], self.fake_context)
+
+        self.assertTrue(results[1]['success'])
+        self.assertTrue(results[2]['success'])
+        self.assertTrue(results[3]['success'])
 
 
 class TestBulkPhotos(BulkApplyTestBase):

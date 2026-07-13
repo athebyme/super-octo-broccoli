@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from models import db, CardEditHistory
 from services.supplier_enrichment import _create_product_snapshot
-from services.card_quality_scorer import recompute_and_persist
+from services.card_quality_scorer import build_seller_scoring_context, recompute_and_persist
 
 logger = logging.getLogger('card_improver')
 
@@ -163,6 +163,12 @@ def apply_card_updates_bulk(
     missing = {int(x) for x in (batch.get('missing') or [])}
     failed_send = {int(k): v for k, v in (batch.get('failed') or {}).items()}
 
+    # Контекст скоринга (дубликаты описаний + конфиги характеристик по каталогу
+    # продавца) строится ОДИН раз на весь bulk-вызов, а не на каждый товар —
+    # без этого recompute_and_persist делает полный скан каталога на каждой
+    # карточке (N+1 DB scans).
+    shared_context = build_seller_scoring_context(seller.id) if per_product else None
+
     results: Dict[int, Dict[str, Any]] = {}
     for product, clean, wb_updates, validation_error in per_product:
         old_quality: Optional[float] = getattr(product, 'quality_score', None)
@@ -226,7 +232,7 @@ def apply_card_updates_bulk(
 
         new_quality: Optional[float] = old_quality
         if fields_applied:
-            cq = recompute_and_persist(product, capture_history=True)
+            cq = recompute_and_persist(product, capture_history=True, context=shared_context)
             new_quality = cq['score']
 
         snapshot_after = _create_product_snapshot(product)
