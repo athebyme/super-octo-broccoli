@@ -181,6 +181,8 @@ def migrate(db_path):
             # Brand registry
             ("resolved_brand_id", "INTEGER REFERENCES brands(id)"),
             ("brand_status", "VARCHAR(20)"),
+            # nmID карточки WB (дубль-детект по баркодам, история загрузок)
+            ("wb_nm_id", "INTEGER"),
         ]
 
         for col_name, col_type in products_columns:
@@ -190,6 +192,29 @@ def migrate(db_path):
         # Индексы для brand registry
         try:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ip_resolved_brand ON imported_products(resolved_brand_id)')
+        except sqlite3.OperationalError:
+            pass
+
+        # Индекс + backfill wb_nm_id из связанных products
+        try:
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS ix_imported_products_wb_nm_id '
+                'ON imported_products(wb_nm_id)'
+            )
+            cursor.execute(
+                """
+                UPDATE imported_products
+                SET wb_nm_id = (
+                    SELECT nm_id FROM products
+                    WHERE products.id = imported_products.product_id
+                )
+                WHERE wb_nm_id IS NULL
+                  AND product_id IS NOT NULL
+                  AND import_status = 'imported'
+                """
+            )
+            if cursor.rowcount:
+                print(f"   ~ Backfill wb_nm_id: {cursor.rowcount} строк")
         except sqlite3.OperationalError:
             pass
 
@@ -674,6 +699,22 @@ def migrate(db_path):
             print(f"  ⚠️  Индекс: {e}")
 
         # ============================================================
+        # Миграция products (card-quality v2: воронка продаж, причины attention)
+        # ============================================================
+        print("\n📋 Таблица: products (card-quality v2)")
+        print("-" * 40)
+
+        existing_products = get_existing_columns(cursor, 'products')
+        for col_name, col_type in [
+            ('wb_views_30d', 'INTEGER'), ('wb_orders_30d', 'INTEGER'),
+            ('wb_cart_conv', 'FLOAT'), ('wb_order_conv', 'FLOAT'),
+            ('wb_buyout_rate', 'FLOAT'), ('funnel_checked_at', 'DATETIME'),
+            ('attention_reasons', 'TEXT'), ('quality_impact', 'FLOAT'),
+        ]:
+            if add_column_if_missing(cursor, 'products', col_name, col_type, existing_products):
+                total_added += 1
+
+        # ============================================================
         # Таблица prohibited_brands (запрещённые бренды по маркетплейсам)
         # ============================================================
         print("\n📋 Таблица: prohibited_brands")
@@ -975,6 +1016,17 @@ def migrate(db_path):
                 cursor.execute(idx_sql)
             except sqlite3.OperationalError:
                 pass
+
+        # Marketplace reference freshness/version metadata. Keep this wired
+        # into the comprehensive path as well as the standalone migration.
+        try:
+            try:
+                from migrate_add_marketplace_reference_freshness import apply_migration
+            except ImportError:
+                from migrations.migrate_add_marketplace_reference_freshness import apply_migration
+            total_added += apply_migration(conn, verbose=False)
+        except sqlite3.OperationalError as exc:
+            print(f"   ! Marketplace reference freshness skipped: {exc}")
 
         # ============================================================
         # Auto-publish tables

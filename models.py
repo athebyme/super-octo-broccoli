@@ -222,6 +222,18 @@ class Product(db.Model):
     quality_breakdown_json = db.Column(db.Text)  # JSON разбивки по измерениям
     quality_checked_at = db.Column(db.DateTime, nullable=True)  # Когда пересчитан Quality Score
 
+    # Воронка продаж WB за 30 дней (sales-funnel v3, без отдельных API-вызовов)
+    wb_views_30d = db.Column(db.Integer, nullable=True)     # просмотры карточки
+    wb_orders_30d = db.Column(db.Integer, nullable=True)    # заказы
+    wb_cart_conv = db.Column(db.Float, nullable=True)       # % просмотр→корзина
+    wb_order_conv = db.Column(db.Float, nullable=True)      # % корзина→заказ
+    wb_buyout_rate = db.Column(db.Float, nullable=True)     # % выкупа
+    funnel_checked_at = db.Column(db.DateTime, nullable=True)
+
+    # Причины «требует внимания» (CSV кодов из card_quality_scorer.ATTENTION_REASONS)
+    attention_reasons = db.Column(db.Text, nullable=True)
+    quality_impact = db.Column(db.Float, nullable=True)  # потенциал фикса для сортировки
+
     # Метаданные
     is_active = db.Column(db.Boolean, default=True)  # Активна ли карточка
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -768,6 +780,10 @@ class AutoImportSettings(db.Model):
     ai_api_key = db.Column(db.String(500))  # API ключ для AI
     ai_api_base_url = db.Column(db.String(500))  # Базовый URL API (для custom провайдеров)
     ai_model = db.Column(db.String(100), default='gpt-4o-mini')  # Модель AI
+    # Agent harness policy. True keeps every model call on the seller-selected
+    # primary model. False allows a cheaper fast model for explicitly safe,
+    # read-only work while all writes and verification stay on the primary.
+    agent_single_model = db.Column(db.Boolean, default=False, nullable=False)
     ai_temperature = db.Column(db.Float, default=0.3)  # Температура для AI
     ai_max_tokens = db.Column(db.Integer, default=2000)  # Максимум токенов
     ai_timeout = db.Column(db.Integer, default=60)  # Таймаут запросов в секундах
@@ -1103,6 +1119,9 @@ class ImportedProduct(db.Model):
     import_status = db.Column(db.String(50), default='pending')  # 'pending', 'validated', 'imported', 'failed'
     validation_errors = db.Column(db.Text)  # Ошибки валидации (JSON)
     import_error = db.Column(db.Text)  # Ошибка импорта
+    # nmID карточки на WB: пишется при публикации и дубль-детекте по баркоду,
+    # читается валидатором уникальности баркодов и историей загрузок
+    wb_nm_id = db.Column(db.Integer, nullable=True, index=True)
 
     # AI-оптимизация (кэшированные результаты)
     ai_keywords = db.Column(db.Text)  # Ключевые слова (JSON)
@@ -2140,6 +2159,15 @@ class CardRatingHistory(db.Model):
         return f'<CardRatingHistory nm_id={self.nm_id} q={self.quality_score} at={self.captured_at}>'
 
 
+class WbSubjectCharcsCache(db.Model):
+    """Кэш конфигов характеристик категорий WB (TTL обновления — 7 дней)."""
+    __tablename__ = 'wb_subject_charcs_cache'
+
+    subject_id = db.Column(db.Integer, primary_key=True)
+    charcs_json = db.Column(db.Text)  # JSON [{'name','required'}]
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
 class BlockedCardsSyncSettings(db.Model):
     """Настройки и статус синхронизации заблокированных карточек"""
     __tablename__ = 'blocked_cards_sync_settings'
@@ -2900,11 +2928,22 @@ class Marketplace(db.Model):
     # Category sync state
     categories_synced_at = db.Column(db.DateTime)
     categories_sync_status = db.Column(db.String(50))         # success/failed/running
+    categories_sync_error = db.Column(db.Text)
+    categories_version = db.Column(db.Integer, default=0, nullable=False)
     total_categories = db.Column(db.Integer, default=0)
     total_characteristics = db.Column(db.Integer, default=0)
 
     # Directories sync
     directories_synced_at = db.Column(db.DateTime)
+    directories_sync_status = db.Column(db.String(50))        # success/partial/failed/running
+    directories_sync_error = db.Column(db.Text)
+    directories_version = db.Column(db.Integer, default=0, nullable=False)
+
+    # Brand reference sync
+    brands_synced_at = db.Column(db.DateTime)
+    brands_sync_status = db.Column(db.String(50))
+    brands_sync_error = db.Column(db.Text)
+    brands_version = db.Column(db.Integer, default=0, nullable=False)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -2959,9 +2998,15 @@ class MarketplaceCategory(db.Model):
     # Hierarchy management
     is_enabled = db.Column(db.Boolean, default=False)          # Admin toggle
     is_leaf = db.Column(db.Boolean, default=True)
+    is_available = db.Column(db.Boolean, default=True, nullable=False)  # Present in latest complete WB snapshot
+    last_seen_at = db.Column(db.DateTime)
 
     # Characteristics cache state
     characteristics_synced_at = db.Column(db.DateTime)
+    characteristics_sync_status = db.Column(db.String(50))     # success/failed/running
+    characteristics_sync_error = db.Column(db.Text)
+    characteristics_schema_hash = db.Column(db.String(64))
+    characteristics_version = db.Column(db.Integer, default=0, nullable=False)
     characteristics_count = db.Column(db.Integer, default=0)
     required_count = db.Column(db.Integer, default=0)
 
@@ -3004,10 +3049,13 @@ class MarketplaceCategoryCharacteristic(db.Model):
 
     # AI parsing instruction — auto-generated or admin-customized
     ai_instruction = db.Column(db.Text)                        # Per-field AI instruction
+    ai_instruction_source = db.Column(db.String(20), default='generated', nullable=False)
     ai_example_value = db.Column(db.String(500))               # Example for AI prompt
 
     # Admin customization
     is_enabled = db.Column(db.Boolean, default=True)           # Include in AI parsing
+    is_available = db.Column(db.Boolean, default=True, nullable=False)  # Present in latest complete schema
+    last_seen_at = db.Column(db.DateTime)
     display_order = db.Column(db.Integer, default=0)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -3049,6 +3097,10 @@ class MarketplaceDirectory(db.Model):
     directory_type = db.Column(db.String(50), nullable=False)  # colors/countries/kinds/seasons/vat/tnved
     data_json = db.Column(db.Text, nullable=False)             # Cached response from API
     synced_at = db.Column(db.DateTime)
+    sync_status = db.Column(db.String(50))                     # success/failed/running
+    sync_error = db.Column(db.Text)
+    data_hash = db.Column(db.String(64))
+    version = db.Column(db.Integer, default=0, nullable=False)
     items_count = db.Column(db.Integer, default=0)
 
     marketplace = db.relationship('Marketplace', backref=db.backref('directories', lazy='dynamic', cascade='all, delete-orphan'))
@@ -3241,6 +3293,8 @@ class MarketplaceBrand(db.Model):
     marketplace_brand_id = db.Column(db.Integer)  # ID бренда в справочнике площадки (wb_brand_id, ozon_brand_id...)
     status = db.Column(db.String(20), nullable=False, default='pending')  # pending/verified/rejected/needs_review
     verified_at = db.Column(db.DateTime)
+    is_available = db.Column(db.Boolean, default=False, nullable=False)
+    last_seen_at = db.Column(db.DateTime)
     notes = db.Column(db.Text)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -3263,6 +3317,8 @@ class MarketplaceBrand(db.Model):
             'marketplace_brand_id': self.marketplace_brand_id,
             'status': self.status,
             'verified_at': self.verified_at.isoformat() if self.verified_at else None,
+            'is_available': self.is_available,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
             'marketplace_code': self.marketplace.code if self.marketplace else None,
             'marketplace_name': self.marketplace.name if self.marketplace else None,
         }
@@ -3993,6 +4049,7 @@ class AgentTask(db.Model):
     # Результат
     result_data = db.Column(db.Text, default='{}')  # JSON
     error_message = db.Column(db.Text)
+    checkpoint_json = db.Column(db.Text, default='{}')
 
     # Таймстампы
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -4039,6 +4096,13 @@ class AgentTask(db.Model):
         except Exception:
             return {}
 
+    def get_checkpoint(self):
+        import json as _json
+        try:
+            return _json.loads(self.checkpoint_json or '{}')
+        except Exception:
+            return {}
+
     @property
     def is_pipeline(self):
         """True если это задача-оркестратор с подзадачами."""
@@ -4061,6 +4125,7 @@ class AgentTask(db.Model):
             'progress_percent': self.progress_percent,
             'duration_seconds': self.duration_seconds,
             'result': self.get_result(),
+            'checkpoint': self.get_checkpoint(),
             'error_message': self.error_message,
             'parent_task_id': self.parent_task_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -4122,6 +4187,133 @@ class AgentTaskStep(db.Model):
 
     def __repr__(self):
         return f'<AgentTaskStep #{self.step_number} [{self.step_type}] {self.title[:30]}>'
+
+
+class AgentConversation(db.Model):
+    """Persistent user-facing conversation with the unified agent."""
+    __tablename__ = 'agent_conversations'
+
+    id = db.Column(db.String(36), primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    title = db.Column(db.String(160), nullable=False, default='Новый диалог')
+    status = db.Column(db.String(20), nullable=False, default='active')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_message_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller', foreign_keys=[seller_id])
+    owner = db.relationship('User', foreign_keys=[user_id])
+    messages = db.relationship(
+        'AgentMessage', backref='conversation', lazy='dynamic',
+        cascade='all, delete-orphan', order_by='AgentMessage.created_at',
+    )
+
+    __table_args__ = (
+        db.Index('idx_agent_conversation_seller_recent', 'seller_id', 'last_message_at'),
+        db.Index('idx_agent_conversation_user_status', 'user_id', 'status'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'title': self.title,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_message_at': self.last_message_at.isoformat() if self.last_message_at else None,
+        }
+
+
+class AgentMessage(db.Model):
+    """Typed chat message or run projection for the unified agent UI."""
+    __tablename__ = 'agent_messages'
+
+    id = db.Column(db.String(36), primary_key=True)
+    conversation_id = db.Column(
+        db.String(36), db.ForeignKey('agent_conversations.id'), nullable=False, index=True,
+    )
+    role = db.Column(db.String(20), nullable=False)  # user, assistant, system
+    kind = db.Column(db.String(30), nullable=False, default='text')
+    content = db.Column(db.Text, nullable=False, default='')
+    task_id = db.Column(db.String(36), db.ForeignKey('agent_tasks.id'), nullable=True, index=True)
+    metadata_json = db.Column(db.Text, nullable=False, default='{}')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    task = db.relationship('AgentTask', foreign_keys=[task_id])
+
+    __table_args__ = (
+        db.Index('idx_agent_message_conversation_created', 'conversation_id', 'created_at'),
+    )
+
+    def get_metadata(self):
+        try:
+            return json.loads(self.metadata_json or '{}')
+        except (TypeError, ValueError):
+            return {}
+
+    def set_metadata(self, value):
+        self.metadata_json = json.dumps(value or {}, ensure_ascii=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'conversation_id': self.conversation_id,
+            'role': self.role,
+            'kind': self.kind,
+            'content': self.content,
+            'task_id': self.task_id,
+            'metadata': self.get_metadata(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AgentReviewProposal(db.Model):
+    """Protected agent suggestion that requires an explicit human decision."""
+    __tablename__ = 'agent_review_proposals'
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.String(36), db.ForeignKey('agent_tasks.id'), nullable=False, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=False, index=True)
+    proposal_type = db.Column(db.String(40), nullable=False, default='protected_fields')
+    changes_json = db.Column(db.Text, nullable=False, default='{}')
+    reason = db.Column(db.Text)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    reviewed_at = db.Column(db.DateTime)
+
+    task = db.relationship('AgentTask', foreign_keys=[task_id])
+    product = db.relationship('ImportedProduct', foreign_keys=[imported_product_id])
+    reviewer = db.relationship('User', foreign_keys=[reviewed_by_user_id])
+
+    __table_args__ = (
+        db.Index('idx_agent_proposal_seller_status', 'seller_id', 'status'),
+        db.Index('idx_agent_proposal_task_status', 'task_id', 'status'),
+    )
+
+    def get_changes(self):
+        try:
+            return json.loads(self.changes_json or '{}')
+        except (TypeError, ValueError):
+            return {}
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'product_id': self.imported_product_id,
+            'product_title': self.product.title if self.product else None,
+            'proposal_type': self.proposal_type,
+            'changes': self.get_changes(),
+            'reason': self.reason,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'reviewed_at': self.reviewed_at.isoformat() if self.reviewed_at else None,
+        }
 
 
 # ============================================================================
