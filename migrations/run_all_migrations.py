@@ -714,6 +714,24 @@ def migrate(db_path):
             if add_column_if_missing(cursor, 'products', col_name, col_type, existing_products):
                 total_added += 1
 
+        # Кэш конфигов характеристик категорий (card-quality v2). Тот же
+        # IF NOT EXISTS-паттерн, что в migrate_add_card_quality_v2.py.
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='wb_subject_charcs_cache'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE wb_subject_charcs_cache (
+                    subject_id INTEGER PRIMARY KEY,
+                    charcs_json TEXT,
+                    fetched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            print("  ✅ Таблица wb_subject_charcs_cache создана")
+            total_added += 1
+        else:
+            print("  ⏭️  wb_subject_charcs_cache уже существует")
+
         # ============================================================
         # Таблица prohibited_brands (запрещённые бренды по маркетплейсам)
         # ============================================================

@@ -2,7 +2,6 @@
 Планировщик автоматической синхронизации товаров
 Использует APScheduler для запуска синхронизации по расписанию
 """
-import json
 import logging
 import os
 import threading

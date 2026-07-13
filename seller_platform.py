@@ -1378,10 +1378,11 @@ def products_list():
             except (ValueError, TypeError):
                 pass
 
-        # Фильтр «Только слабые карточки» (Quality Score < 50 ИЛИ WB-рейтинг < 6)
+        # Фильтр «Только слабые карточки» (v2: есть непустые причины внимания,
+        # см. services/card_quality_scorer.compute_attention/ATTENTION_REASONS)
         if filter_quality_weak:
             query = query.filter(
-                (Product.quality_score < 50) | (Product.nm_rating < 6)
+                Product.attention_reasons.isnot(None), Product.attention_reasons != ''
             )
 
         # Фильтр по поставщику (карточки, созданные из каталога поставщика)

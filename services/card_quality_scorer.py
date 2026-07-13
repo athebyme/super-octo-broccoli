@@ -306,11 +306,52 @@ def build_seller_scoring_context(seller_id) -> Dict[str, Any]:
     return {'dup_descriptions': dups, 'charcs_by_subject': charcs}
 
 
+def _persisted_recommendations(dimensions: Dict[str, Any]) -> list:
+    """Пересобрать recommendations из persisted breakdown той же сортировкой,
+    что compute_card_quality: weight*(100-score) убыв., затем имя измерения."""
+    rec_candidates = []
+    for name, dim in dimensions.items():
+        if not isinstance(dim, dict):
+            continue
+        hint = dim.get('hint')
+        if hint:
+            weight = dim.get('weight') or 0
+            sub = dim.get('score') or 0
+            rec_candidates.append((weight * (100 - sub), name, hint))
+    rec_candidates.sort(key=lambda t: (-t[0], t[1]))
+    return [hint for _, _, hint in rec_candidates]
+
+
 def card_quality_detail(product) -> Dict[str, Any]:
-    """Полный payload карточки для UI: WB-рейтинг + Quality Score + рекомендации."""
+    """Полный payload карточки для UI: WB-рейтинг + Quality Score + рекомендации.
+
+    Показанный score обязан совпадать с персистентным v2 (product.quality_score),
+    по которому работают фильтры/бакеты списка. Если он ещё не посчитан или
+    breakdown повреждён — используется прежний live fallback (без category
+    schema context, с потолком 70 по характеристикам).
+    """
     card_input = product_to_card_input(product)
-    cq = compute_card_quality(card_input)
     photos = card_input.get('photos') or []
+
+    persisted_score = getattr(product, 'quality_score', None)
+    persisted_breakdown = None
+    if persisted_score is not None:
+        parsed = _loads(getattr(product, 'quality_breakdown_json', None), None)
+        if isinstance(parsed, dict) and parsed:
+            persisted_breakdown = parsed
+
+    if persisted_breakdown is not None:
+        score = persisted_score
+        status = score_status(score)
+        dimensions = persisted_breakdown
+        recommendations = _persisted_recommendations(dimensions)
+    else:
+        cq = compute_card_quality(card_input)
+        score = cq['score']
+        status = cq['status']
+        dimensions = cq['dimensions']
+        recommendations = cq['recommendations']
+
     checked = getattr(product, 'nm_rating_checked_at', None)
     return {
         'product_id': getattr(product, 'id', None),
@@ -321,10 +362,10 @@ def card_quality_detail(product) -> Dict[str, Any]:
         'wb_feedback_rating': getattr(product, 'wb_feedback_rating', None),  # 0-5
         'nm_rating_checked_at': checked.isoformat() if checked else None,
         'photos': photos,
-        'quality_score': cq['score'],
-        'quality_status': cq['status'],
-        'dimensions': cq['dimensions'],
-        'recommendations': cq['recommendations'],
+        'quality_score': score,
+        'quality_status': status,
+        'dimensions': dimensions,
+        'recommendations': recommendations,
         'attention_reasons': [r for r in (getattr(product, 'attention_reasons', None) or '').split(',') if r],
         'quality_impact': getattr(product, 'quality_impact', None),
         'wb_views_30d': getattr(product, 'wb_views_30d', None),

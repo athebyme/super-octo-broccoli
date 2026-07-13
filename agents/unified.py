@@ -1035,6 +1035,18 @@ DescriptionWriterSkill = ContentWriterSkill
 # unfiltered scope). See docs/superpowers/specs/2026-07-13-card-quality-v2-design.md.
 _CHAINING_SOURCE_SKILLS = {'candidate-selector', 'supplier-audit', 'quality-audit'}
 
+# Skills that accept a WB Product-kind selection (entity_kind='product'), e.g.
+# from quality-audit. Every other skill still operates on legacy
+# ImportedProduct rows, so silently chaining Product IDs into it would be the
+# untyped-ID scope confusion AGENTS.md forbids ("числовой ID без entity_kind
+# нельзя передавать из Product collection в legacy ImportedProduct skills").
+_PRODUCT_KIND_SAFE_SKILLS = {'content-writer', 'batch-audit', 'card-insight', 'quality-audit'}
+
+
+def _product_kind_chain_blocked(entity_kind, next_skill: str) -> bool:
+    """True if a Product-kind chained selection cannot safely feed next_skill."""
+    return entity_kind == 'product' and next_skill not in _PRODUCT_KIND_SAFE_SKILLS
+
 
 SKILL_CLASSES: dict[str, Type[BaseAgent]] = {
     'seo-writer': SEOWriterAgent,
@@ -1476,6 +1488,21 @@ class UnifiedSellerAgent(BaseAgent):
                         '_usage': _build_usage(usage_totals, mode='unified_skills'),
                     }
                 if skill_name in _CHAINING_SOURCE_SKILLS:
+                    next_skill = steps[index + 1]['agent'] if index < len(steps) - 1 else None
+                    if next_skill and _product_kind_chain_blocked(compact.get('entity_kind'), next_skill):
+                        self.platform.log_error(
+                            task['id'], f'{step_label}: несовместимый chaining',
+                            f'{next_skill} не принимает выбор карточек WB (Product)',
+                        )
+                        return {
+                            'status': 'needs_clarification',
+                            'message': (
+                                f'Шаг {next_skill} не принимает выбор карточек WB (Product) '
+                                '— уточните запрос.'
+                            ),
+                            'results': results,
+                            '_usage': _build_usage(usage_totals, mode='unified_skills'),
+                        }
                     product_ids = [int(value) for value in compact.get('selected_product_ids') or []]
 
                 results.append({

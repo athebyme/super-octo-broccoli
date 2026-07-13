@@ -493,6 +493,8 @@ function cardQualityPage() {
           return;
         }
         window.location.href = '/agents?conversation=' + cid;
+      } catch (e) {
+        this.$store.toasts.error('Ошибка сети — не удалось передать карточки помощнику');
       } finally {
         this.aiHandoffRunning = false;
       }

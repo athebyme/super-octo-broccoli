@@ -45,12 +45,28 @@ class TestProductsQualityFilter(unittest.TestCase):
         cls.db.session.flush()
         cls.user_id = user.id
         cls.db.session.add_all([
+            # v2 "weak" definition: non-empty attention_reasons (see
+            # services/card_quality_scorer.compute_attention). A high raw
+            # quality_score/nm_rating with NO attention reasons must NOT be
+            # treated as weak, and an empty-string attention_reasons (legacy
+            # default) must behave the same as NULL.
             Product(seller_id=seller.id, nm_id=1, vendor_code='STRONG-1', is_active=True,
-                    quality_score=90, nm_rating=9.0),
+                    quality_score=90, nm_rating=9.0, attention_reasons=None),
             Product(seller_id=seller.id, nm_id=2, vendor_code='WEAK-QUALITY', is_active=True,
-                    quality_score=40, nm_rating=8.0),
+                    quality_score=40, nm_rating=8.0, attention_reasons='weak_chars,weak_description'),
             Product(seller_id=seller.id, nm_id=3, vendor_code='WEAK-RATING', is_active=True,
-                    quality_score=80, nm_rating=5.0),
+                    quality_score=80, nm_rating=5.0, attention_reasons='low_rating'),
+            Product(seller_id=seller.id, nm_id=4, vendor_code='STRONG-EMPTY-REASONS', is_active=True,
+                    quality_score=95, nm_rating=9.5, attention_reasons=''),
+            # Discriminates v1 vs v2: low score/rating but NO attention
+            # reasons — the removed v1 definition (`quality_score < 50 |
+            # nm_rating < 6`) would wrongly flag this as weak.
+            Product(seller_id=seller.id, nm_id=5, vendor_code='LOW-SCORE-NO-REASONS', is_active=True,
+                    quality_score=10, nm_rating=2.0, attention_reasons=None),
+            # Discriminates v1 vs v2: high score/rating but HAS attention
+            # reasons (e.g. behavioral signal) — v1 would wrongly skip this.
+            Product(seller_id=seller.id, nm_id=6, vendor_code='HIGH-SCORE-HAS-REASONS', is_active=True,
+                    quality_score=95, nm_rating=9.5, attention_reasons='no_views'),
         ])
         cls.db.session.commit()
 
@@ -76,6 +92,10 @@ class TestProductsQualityFilter(unittest.TestCase):
         self.assertIn('WEAK-QUALITY', html)
         self.assertIn('WEAK-RATING', html)
         self.assertNotIn('STRONG-1', html)
+        # High score/rating alone is not "weak" in v2 — only attention_reasons is.
+        self.assertNotIn('STRONG-EMPTY-REASONS', html)
+        self.assertNotIn('LOW-SCORE-NO-REASONS', html)
+        self.assertIn('HIGH-SCORE-HAS-REASONS', html)
 
     def test_no_filter_returns_all(self):
         client = self._client()
@@ -84,6 +104,7 @@ class TestProductsQualityFilter(unittest.TestCase):
         html = resp.get_data(as_text=True)
         self.assertIn('WEAK-QUALITY', html)
         self.assertIn('STRONG-1', html)
+        self.assertIn('STRONG-EMPTY-REASONS', html)
 
 
 if __name__ == '__main__':

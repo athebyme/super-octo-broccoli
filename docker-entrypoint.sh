@@ -137,7 +137,7 @@ python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field m
 python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
-python migrations/migrate_add_card_quality_v2.py /app/data/seller_platform.db || echo "⚠️ Card quality v2 migration skipped (already applied or error)"
+python migrations/migrate_add_card_quality_v2.py /app/data/seller_platform.db
 python migrations/migrate_add_agent_chat.py /app/data/seller_platform.db || echo "⚠️ Unified agent chat migration skipped (already applied or error)"
 python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
 python migrations/migrate_add_imported_wb_nm_id.py /app/data/seller_platform.db || echo "⚠️ Imported wb_nm_id migration skipped (already applied or error)"

@@ -2,7 +2,10 @@
 """Тесты детерминированного skill quality-audit."""
 import unittest
 
-from agents.unified import QualityAuditSkill, SKILL_CLASSES, _CHAINING_SOURCE_SKILLS
+from agents.unified import (
+    QualityAuditSkill, SKILL_CLASSES, _CHAINING_SOURCE_SKILLS,
+    _PRODUCT_KIND_SAFE_SKILLS, _product_kind_chain_blocked,
+)
 
 
 class _FakePlatform:
@@ -82,6 +85,38 @@ class TestQualityAuditSkill(unittest.TestCase):
             _CHAINING_SOURCE_SKILLS,
             {'candidate-selector', 'supplier-audit', 'quality-audit'},
         )
+
+
+class TestProductKindChainingGuard(unittest.TestCase):
+    """quality-audit chains WB Product IDs (entity_kind='product'). Silently
+    handing those to a legacy ImportedProduct skill is a typed-scope bug the
+    repo policy forbids — see AGENTS.md "числовой ID без entity_kind нельзя
+    передавать из Product collection в legacy ImportedProduct skills"."""
+
+    def test_product_kind_safe_skills_set(self):
+        self.assertEqual(
+            _PRODUCT_KIND_SAFE_SKILLS,
+            {'content-writer', 'batch-audit', 'card-insight', 'quality-audit'},
+        )
+
+    def test_blocks_product_kind_into_legacy_imported_product_skill(self):
+        for legacy_skill in (
+            'seo-writer', 'characteristics-filler', 'category-mapper',
+            'brand-resolver', 'size-normalizer', 'card-doctor',
+            'price-optimizer', 'photo-optimizer',
+        ):
+            self.assertTrue(
+                _product_kind_chain_blocked('product', legacy_skill),
+                f'{legacy_skill} should be blocked from a product-kind chain',
+            )
+
+    def test_allows_product_kind_into_safe_skill(self):
+        for safe_skill in _PRODUCT_KIND_SAFE_SKILLS:
+            self.assertFalse(_product_kind_chain_blocked('product', safe_skill))
+
+    def test_non_product_kind_is_never_blocked(self):
+        self.assertFalse(_product_kind_chain_blocked(None, 'seo-writer'))
+        self.assertFalse(_product_kind_chain_blocked('imported_product', 'seo-writer'))
 
 
 if __name__ == '__main__':
