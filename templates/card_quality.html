@@ -87,7 +87,7 @@
   <div x-show="!loading" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
     <button class="sh-btn sh-btn--sm"
             :class="!activeReason ? 'sh-btn--accent' : 'sh-btn--white-outline'"
-            @click="setReason(null)">
+            @click="setReason(null); setBucket(null)">
       Все · <span x-text="summary.need_attention ?? 0"></span>
     </button>
     <template x-for="rc in reasonChips" :key="rc.code">
@@ -96,6 +96,10 @@
               @click="setReason(rc.code)"
               x-text="rc.label + ' · ' + rc.count"></button>
     </template>
+    <button class="sh-btn sh-btn--sm sh-btn--accent" x-show="activeBucket" x-cloak
+            @click="setBucket(null)">
+      <span x-text="BUCKET_LABELS[activeBucket] || activeBucket"></span> ✕
+    </button>
   </div>
 
   {# ── Очередь исправлений ── #}
@@ -378,7 +382,8 @@ function cardQualityPage() {
     improveRunning: false, improveStatus: '', applyRunning: false,
     supplierDiff: null, proposal: {}, selected: {},
     history: [], historyLoading: false,
-    page: 1, pages: 1, activeReason: null,
+    page: 1, pages: 1, activeReason: null, activeBucket: null,
+    BUCKET_LABELS: { poor: 'Слабые', average: 'Средние', good: 'Хорошие' },
     selectedMap: {}, aiHandoffRunning: false,
     get selectedCount() { return Object.keys(this.selectedMap).length; },
     get reasonChips() {
@@ -408,6 +413,12 @@ function cardQualityPage() {
       if (code) url.searchParams.set('reason', code); else url.searchParams.delete('reason');
       history.replaceState(null, '', url);
     },
+    setBucket(code) {
+      this.activeBucket = code; this.page = 1; this.clearSelection(); this.load();
+      const url = new URL(window.location);
+      if (code) url.searchParams.set('bucket', code); else url.searchParams.delete('bucket');
+      history.replaceState(null, '', url);
+    },
     toggleSelect(id) {
       if (this.selectedMap[id]) delete this.selectedMap[id]; else this.selectedMap[id] = true;
     },
@@ -422,6 +433,7 @@ function cardQualityPage() {
       try {
         let url = '/api/card-quality/list?sort=impact&order=desc&per_page=50&page=' + this.page;
         if (this.activeReason) url += '&reason=' + encodeURIComponent(this.activeReason);
+        if (this.activeBucket) url += '&bucket=' + encodeURIComponent(this.activeBucket);
         const r = await fetch(url);
         const d = await r.json();
         this.items = d.items || []; this.summary = d.summary || {};
@@ -433,6 +445,8 @@ function cardQualityPage() {
     async init() {
       const params = new URLSearchParams(window.location.search);
       this.activeReason = params.get('reason') || null;
+      const bucket = params.get('bucket');
+      this.activeBucket = ['poor', 'average', 'good'].includes(bucket) ? bucket : null;
       await this.load();
     },
     async fixWithAI(ids) {
