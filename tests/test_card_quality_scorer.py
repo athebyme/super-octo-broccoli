@@ -7,6 +7,7 @@ import unittest
 
 from services.card_quality_scorer import (
     WEIGHTS, score_status, compute_card_quality, product_to_card_input,
+    compute_attention, ATTENTION_REASONS,
 )
 
 
@@ -211,3 +212,72 @@ class TestProductToCardInput(unittest.TestCase):
         self.assertEqual(card['barcodes'], ['111', '222'])
         self.assertEqual(card['title'], 'Товар')
         self.assertEqual(card['subject_id'], 64)
+
+
+class TestComputeAttention(unittest.TestCase):
+    def _dims(self, card):
+        return compute_card_quality(card)['dimensions']
+
+    def test_perfect_card_no_content_reasons(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=500,
+                                orders_30d=20, cart_conv=8.0, buyout_rate=60.0)
+        self.assertEqual(att['reasons'], [])
+        self.assertEqual(att['impact'], 0.0)
+
+    def test_few_photos(self):
+        card = _perfect_card(); card['photos'] = ['u'] * 4
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=500)
+        self.assertIn('few_photos', att['reasons'])
+
+    def test_no_views(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=10)
+        self.assertIn('no_views', att['reasons'])
+
+    def test_views_none_is_not_no_views(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=None)
+        self.assertNotIn('no_views', att['reasons'])
+
+    def test_low_cart_conv_needs_min_views(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=9.0,
+                                views_30d=99, cart_conv=1.0)
+        self.assertNotIn('low_cart_conv', att['reasons'])
+        att = compute_attention(card, self._dims(card), nm_rating=9.0,
+                                views_30d=100, cart_conv=3.9)
+        self.assertIn('low_cart_conv', att['reasons'])
+
+    def test_low_buyout(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=500,
+                                orders_30d=5, buyout_rate=29.0)
+        self.assertIn('low_buyout', att['reasons'])
+
+    def test_low_rating_by_feedback(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=8.0,
+                                feedback_rating=3.9, views_30d=500)
+        self.assertIn('low_rating', att['reasons'])
+
+    def test_no_sales_signal(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=None, views_30d=0)
+        self.assertIn('no_sales_signal', att['reasons'])
+
+    def test_impact_includes_boost(self):
+        card = _perfect_card()
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=10)
+        self.assertEqual(att['impact'], 10.0)  # контент идеален, буст no_views
+
+    def test_weak_content_reasons(self):
+        card = _perfect_card()
+        card['photos'] = ['u'] * 3
+        card['description'] = 'коротко'
+        card['title'] = 'аб'
+        card['characteristics'] = {}
+        att = compute_attention(card, self._dims(card), nm_rating=9.0, views_30d=500)
+        for r in ('few_photos', 'weak_chars', 'weak_description', 'weak_title'):
+            self.assertIn(r, att['reasons'])
+        self.assertGreater(att['impact'], 50)

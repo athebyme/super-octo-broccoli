@@ -342,6 +342,75 @@ def compute_quality_summary(seller_id: int) -> Dict[str, Any]:
     }
 
 
+# ── Причины «требует внимания» и приоритет фикса ──────────────────────
+
+ATTENTION_REASONS = (
+    'few_photos', 'weak_chars', 'weak_description', 'weak_title',
+    'no_views', 'low_cart_conv', 'low_buyout', 'low_rating', 'no_sales_signal',
+)
+
+REASON_LABELS = {
+    'few_photos': 'Мало фото',
+    'weak_chars': 'Слабые характеристики',
+    'weak_description': 'Слабое описание',
+    'weak_title': 'Слабый заголовок',
+    'no_views': 'Нет просмотров',
+    'low_cart_conv': 'Не кладут в корзину',
+    'low_buyout': 'Низкий выкуп',
+    'low_rating': 'Низкий рейтинг',
+    'no_sales_signal': 'Нет данных о продажах',
+}
+
+NO_VIEWS_THRESHOLD = 30
+LOW_CART_CONV_MIN_VIEWS = 100
+LOW_CART_CONV_THRESHOLD = 4.0
+LOW_BUYOUT_MIN_ORDERS = 5
+LOW_BUYOUT_THRESHOLD = 30.0
+LOW_NM_RATING = 6.0
+LOW_FEEDBACK_RATING = 4.0
+
+_REASON_BOOSTS = {'no_views': 10.0, 'low_cart_conv': 8.0, 'low_buyout': 5.0, 'low_rating': 5.0}
+_WEAK_DIM_SUB = 60
+
+
+def compute_attention(card, dimensions, nm_rating=None, feedback_rating=None,
+                      views_30d=None, orders_30d=None, cart_conv=None,
+                      buyout_rate=None) -> Dict[str, Any]:
+    """Причины «требует внимания» и impact (потенциал фикса) карточки.
+
+    None-значения поведенческих метрик означают «нет данных» и не создают
+    причин (кроме no_sales_signal: нет ни рейтинга, ни просмотров).
+    """
+    reasons = []
+    if len(card.get('photos') or []) < 5:
+        reasons.append('few_photos')
+    if dimensions['characteristics']['score'] < _WEAK_DIM_SUB:
+        reasons.append('weak_chars')
+    if dimensions['description']['score'] < _WEAK_DIM_SUB:
+        reasons.append('weak_description')
+    if dimensions['title']['score'] < _WEAK_DIM_SUB:
+        reasons.append('weak_title')
+    if views_30d is not None and views_30d < NO_VIEWS_THRESHOLD:
+        reasons.append('no_views')
+    if (views_30d is not None and cart_conv is not None
+            and views_30d >= LOW_CART_CONV_MIN_VIEWS
+            and cart_conv < LOW_CART_CONV_THRESHOLD):
+        reasons.append('low_cart_conv')
+    if (orders_30d is not None and buyout_rate is not None
+            and orders_30d >= LOW_BUYOUT_MIN_ORDERS
+            and buyout_rate < LOW_BUYOUT_THRESHOLD):
+        reasons.append('low_buyout')
+    if ((nm_rating is not None and nm_rating < LOW_NM_RATING)
+            or (feedback_rating is not None and feedback_rating < LOW_FEEDBACK_RATING)):
+        reasons.append('low_rating')
+    if nm_rating is None and not views_30d:
+        reasons.append('no_sales_signal')
+
+    impact = sum(d['weight'] * (100 - d['score']) / 100.0 for d in dimensions.values())
+    impact += sum(_REASON_BOOSTS.get(r, 0.0) for r in reasons)
+    return {'reasons': reasons, 'impact': round(impact, 1)}
+
+
 def recompute_and_persist(product, capture_history: bool = True) -> Dict[str, Any]:
     """Пересчитать Quality Score карточки и записать его в Product.
 
