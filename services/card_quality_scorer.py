@@ -228,8 +228,13 @@ def _loads(raw, default):
         return default
 
 
-def product_to_card_input(product) -> Dict[str, Any]:
-    """Построить нормализованный dict из опубликованной карточки Product."""
+def product_to_card_input(product, context=None) -> Dict[str, Any]:
+    """Построить нормализованный dict из опубликованной карточки Product.
+
+    context (см. build_seller_scoring_context) — опционально; если передан,
+    добавляет description_dup и available_charcs. Без context поведение
+    прежнее (обратная совместимость).
+    """
     photos = _loads(getattr(product, 'photos_json', None), [])
     chars = _loads(getattr(product, 'characteristics_json', None), {})
     sizes = _loads(getattr(product, 'sizes_json', None), [])
@@ -251,7 +256,7 @@ def product_to_card_input(product) -> Dict[str, Any]:
         except (TypeError, ValueError):
             price = 0
 
-    return {
+    card = {
         'photos': photos if isinstance(photos, list) else [],
         'characteristics': chars,
         'title': getattr(product, 'title', '') or '',
@@ -261,6 +266,44 @@ def product_to_card_input(product) -> Dict[str, Any]:
         'price': price,
         'subject_id': getattr(product, 'subject_id', None),
     }
+
+    if context:
+        desc = (getattr(product, 'description', '') or '').strip()
+        card['description_dup'] = bool(
+            desc and desc in (context.get('dup_descriptions') or ()))
+        card['available_charcs'] = (context.get('charcs_by_subject') or {}).get(
+            getattr(product, 'subject_id', None))
+    return card
+
+
+DUP_DESCRIPTION_MIN_LEN = 50
+DUP_DESCRIPTION_MIN_COUNT = 3
+
+
+def build_seller_scoring_context(seller_id) -> Dict[str, Any]:
+    """Контекст скоринга по каталогу продавца: дубликаты описаний + конфиги категорий.
+
+    Один проход по (description, subject_id) активных карточек; конфиги — из кэша.
+    """
+    from models import db, Product
+    from services.subject_charcs_cache import get_available_charcs
+
+    rows = db.session.query(Product.description, Product.subject_id).filter(
+        Product.seller_id == seller_id,
+        Product.is_active == True,  # noqa: E712
+    ).all()
+    counter = {}
+    subjects = set()
+    for desc, subj in rows:
+        if desc:
+            key = desc.strip()
+            if len(key) >= DUP_DESCRIPTION_MIN_LEN:
+                counter[key] = counter.get(key, 0) + 1
+        if subj:
+            subjects.add(subj)
+    dups = {k for k, v in counter.items() if v >= DUP_DESCRIPTION_MIN_COUNT}
+    charcs = {s: get_available_charcs(s) for s in subjects}
+    return {'dup_descriptions': dups, 'charcs_by_subject': charcs}
 
 
 def card_quality_detail(product) -> Dict[str, Any]:
@@ -282,6 +325,12 @@ def card_quality_detail(product) -> Dict[str, Any]:
         'quality_status': cq['status'],
         'dimensions': cq['dimensions'],
         'recommendations': cq['recommendations'],
+        'attention_reasons': [r for r in (getattr(product, 'attention_reasons', None) or '').split(',') if r],
+        'quality_impact': getattr(product, 'quality_impact', None),
+        'wb_views_30d': getattr(product, 'wb_views_30d', None),
+        'wb_orders_30d': getattr(product, 'wb_orders_30d', None),
+        'wb_cart_conv': getattr(product, 'wb_cart_conv', None),
+        'wb_buyout_rate': getattr(product, 'wb_buyout_rate', None),
     }
 
 
@@ -411,20 +460,36 @@ def compute_attention(card, dimensions, nm_rating=None, feedback_rating=None,
     return {'reasons': reasons, 'impact': round(impact, 1)}
 
 
-def recompute_and_persist(product, capture_history: bool = True) -> Dict[str, Any]:
-    """Пересчитать Quality Score карточки и записать его в Product.
+def recompute_and_persist(product, capture_history: bool = True,
+                          context=None) -> Dict[str, Any]:
+    """Пересчитать Quality Score v2 карточки и записать в Product.
 
-    Выставляет product.quality_score, product.quality_breakdown_json (JSON разбивки
-    по измерениям) и product.quality_checked_at. При capture_history=True добавляет
-    снимок CardRatingHistory в сессию. НЕ делает commit — коммитит вызывающий код.
-    Возвращает результат compute_card_quality (score, status, dimensions, recommendations).
+    Выставляет quality_score, quality_breakdown_json, attention_reasons (CSV),
+    quality_impact, quality_checked_at. context=None → строится по продавцу
+    (полный проход по каталогу; для батчей передавайте готовый context).
+    НЕ делает commit — коммитит вызывающий код.
     """
     from models import db, CardRatingHistory
 
-    cq = compute_card_quality(product_to_card_input(product))
+    if context is None and getattr(product, 'seller_id', None):
+        context = build_seller_scoring_context(product.seller_id)
+
+    card = product_to_card_input(product, context)
+    cq = compute_card_quality(card)
+    att = compute_attention(
+        card, cq['dimensions'],
+        nm_rating=getattr(product, 'nm_rating', None),
+        feedback_rating=getattr(product, 'wb_feedback_rating', None),
+        views_30d=getattr(product, 'wb_views_30d', None),
+        orders_30d=getattr(product, 'wb_orders_30d', None),
+        cart_conv=getattr(product, 'wb_cart_conv', None),
+        buyout_rate=getattr(product, 'wb_buyout_rate', None),
+    )
 
     product.quality_score = cq['score']
     product.quality_breakdown_json = json.dumps(cq['dimensions'], ensure_ascii=False)
+    product.attention_reasons = ','.join(att['reasons'])
+    product.quality_impact = att['impact']
     product.quality_checked_at = datetime.utcnow()
 
     if capture_history:
@@ -437,4 +502,6 @@ def recompute_and_persist(product, capture_history: bool = True) -> Dict[str, An
             quality_score=cq['score'],
         ))
 
+    cq['reasons'] = att['reasons']
+    cq['impact'] = att['impact']
     return cq
