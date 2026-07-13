@@ -87,7 +87,7 @@
   <div x-show="!loading" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
     <button class="sh-btn sh-btn--sm"
             :class="!activeReason ? 'sh-btn--accent' : 'sh-btn--white-outline'"
-            @click="setReason(null); setBucket(null)">
+            @click="resetFilters()">
       Все · <span x-text="summary.need_attention ?? 0"></span>
     </button>
     <template x-for="rc in reasonChips" :key="rc.code">
@@ -406,6 +406,13 @@ function cardQualityPage() {
       ];
       const total = defs.reduce((s, x) => s + x.count, 0) || 1;
       return defs.map(x => ({ ...x, pct: (x.count / total * 100) }));
+    },
+    resetFilters() {
+      this.activeReason = null; this.activeBucket = null;
+      this.page = 1; this.clearSelection(); this.load();
+      const url = new URL(window.location);
+      url.searchParams.delete('reason'); url.searchParams.delete('bucket');
+      history.replaceState(null, '', url);
     },
     setReason(code) {
       this.activeReason = code; this.page = 1; this.clearSelection(); this.load();
