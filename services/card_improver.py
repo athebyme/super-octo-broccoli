@@ -216,16 +216,21 @@ def apply_card_updates_bulk(
             fields_applied.append('subject_id')
 
         if 'photos' in clean and isinstance(clean['photos'], list) and clean['photos']:
-            try:
-                wb_client.upload_photos_by_url(
-                    product.nm_id, clean['photos'], seller_id=seller.id)
-                product.photos_json = json.dumps(clean['photos'], ensure_ascii=False)
-                fields_applied.append('photos')
-                wb_sync_success = True
-            except Exception as e:
-                wb_error = str(e)
-                logger.error(
-                    f"[Improve/{source}] WB media/save error nmID={product.nm_id}: {e}")
+            from services.wb_media import normalize_photo_urls
+            photos_to_send = normalize_photo_urls(product.nm_id, clean['photos'])
+            if not photos_to_send:
+                wb_error = 'Некорректные URL фото — media/save не выполнен'
+            else:
+                try:
+                    wb_client.upload_photos_by_url(
+                        product.nm_id, photos_to_send, seller_id=seller.id)
+                    product.photos_json = json.dumps(photos_to_send, ensure_ascii=False)
+                    fields_applied.append('photos')
+                    wb_sync_success = True
+                except Exception as e:
+                    wb_error = str(e)
+                    logger.error(
+                        f"[Improve/{source}] WB media/save error nmID={product.nm_id}: {e}")
 
         if hasattr(product, 'updated_at'):
             product.updated_at = datetime.utcnow()
@@ -376,23 +381,28 @@ def apply_card_updates(
     # Вызов upload_photos_by_url заменяет набор фото в карточке; порядок сохраняется.
     # При ошибке — фиксируем wb_error / статус 'failed' (аналогично текстовым полям).
     if 'photos' in clean and isinstance(clean['photos'], list) and clean['photos']:
-        try:
-            wb_client.upload_photos_by_url(
-                product.nm_id,
-                clean['photos'],
-                seller_id=seller.id,
-            )
-            wb_sync_success = True
-            product.photos_json = json.dumps(clean['photos'], ensure_ascii=False)
-            fields_applied.append('photos')
-            logger.info(
-                f"[Improve/{source}] WB media/save nmID={product.nm_id}: {len(clean['photos'])} фото"
-            )
-        except Exception as e:
-            wb_error = str(e)
-            logger.error(
-                f"[Improve/{source}] WB media/save error nmID={product.nm_id}: {e}"
-            )
+        from services.wb_media import normalize_photo_urls
+        photos_to_send = normalize_photo_urls(product.nm_id, clean['photos'])
+        if not photos_to_send:
+            wb_error = 'Некорректные URL фото — media/save не выполнен'
+        else:
+            try:
+                wb_client.upload_photos_by_url(
+                    product.nm_id,
+                    photos_to_send,
+                    seller_id=seller.id,
+                )
+                wb_sync_success = True
+                product.photos_json = json.dumps(photos_to_send, ensure_ascii=False)
+                fields_applied.append('photos')
+                logger.info(
+                    f"[Improve/{source}] WB media/save nmID={product.nm_id}: {len(photos_to_send)} фото"
+                )
+            except Exception as e:
+                wb_error = str(e)
+                logger.error(
+                    f"[Improve/{source}] WB media/save error nmID={product.nm_id}: {e}"
+                )
 
     # Обновляем метку времени карточки
     if hasattr(product, 'updated_at'):

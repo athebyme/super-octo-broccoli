@@ -102,7 +102,10 @@ def get_sparse_photo_candidates(seller, db_session, limit: int = STANDARD_PHOTOS
         # Получаем стандартные медиа для категории
         media = get_standard_media(seller.id, product.subject_id)
 
-        # Пробуем скомпоновать
+        # Пробуем скомпоновать (свои фото — к строковым URL: в photos_json
+        # у WB-карточек могут лежать целочисленные индексы CDN)
+        from services.wb_media import normalize_photo_urls
+        own = normalize_photo_urls(product.nm_id, own)
         composed = compose_card_photo_urls(own, media, seller.id, min_photos)
         if not composed:
             continue  # нечего добавлять
@@ -310,6 +313,8 @@ def register_card_quality_routes(app):
             except (ValueError, TypeError):
                 own = []
             try:
+                from services.wb_media import normalize_photo_urls
+                own = normalize_photo_urls(product.nm_id, own)
                 media = get_standard_media(current_user.seller.id, product.subject_id)
                 composed = compose_card_photo_urls(own, media, current_user.seller.id,
                                                    get_min_photos(current_user.seller.id))
@@ -565,6 +570,8 @@ def register_card_quality_routes(app):
                 own = json.loads(product.photos_json) if product.photos_json else []
             except (ValueError, TypeError):
                 own = []
+            from services.wb_media import normalize_photo_urls
+            own = normalize_photo_urls(product.nm_id, own)
             media = get_standard_media(current_user.seller.id, product.subject_id)
             composed = compose_card_photo_urls(own, media, current_user.seller.id, min_photos)
             if not composed:

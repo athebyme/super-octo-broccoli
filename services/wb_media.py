@@ -182,3 +182,20 @@ def wb_basket_base_url(nm_id: int) -> str:
     vol = nm_id // 100000
     part = nm_id // 1000
     return f"https://basket-{int(basket):02d}.wbbasket.ru/vol{vol}/part{part}/{nm_id}"
+
+
+def normalize_photo_urls(nm_id, photos, size: str = 'big') -> list:
+    """Список фото карточки → строковые URL.
+
+    photos_json у WB-карточек хранит либо URL-строки, либо целочисленные
+    индексы фото CDN; индексы разворачиваются через wb_photo_url. Строки
+    передаются как есть (абсолютные и относительные URL), остальные типы
+    отбрасываются — в WB media/save нельзя отправлять не-URL.
+    """
+    result = []
+    for item in photos or []:
+        if isinstance(item, str) and item.strip():
+            result.append(item)
+        elif isinstance(item, int) and not isinstance(item, bool) and nm_id:
+            result.append(wb_photo_url(nm_id, item, size))
+    return result
